@@ -1,6 +1,6 @@
 # Source
 
-Repository: local `.refs/9Router` (`9router-go`; its own [AGENTS.md](../../.refs/9Router/AGENTS.md) identifies `decolua/9router` as a separate upstream, not inspected here).
+Repository: local `.refs/9Router` (`9router-go`; its own `AGENTS.md` identifies `decolua/9router` as a separate upstream, not inspected here).
 Revision/commit: `14bb4f241350076984ad9a2ec639dd6cf7ae9de0`.
 Date: 2026-09-28 (research date; source commit date 2026-09-28).
 

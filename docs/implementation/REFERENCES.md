@@ -39,7 +39,7 @@ OpenAI-compatible does not mean full support for the Responses API. For each ups
 
 ## Migration from 9Router
 
-The exact repository and commit of 9Router have not yet been recorded. Before starting the migration, add a reference, revision, license, and map of needed files. The project name alone is insufficient for source selection.
+Local source research is recorded in the [9Router map](../references/9router-migration.md), [9Gateway map](../references/9gateway-migration.md), and [source-evidence matrix](../references/compatibility-matrix.md), including inspected commit IDs. These maps refer to ignored local checkouts, not vendored dependencies or verified PestiRoute capabilities. The inspected `9router-go` checkout is distinct from its cited upstream `decolua/9router`. Before copying code, establish reproducible repository provenance and resolve the unknown licenses; before compatibility claims, validate the selected client/provider versions. The project name alone is insufficient for source selection.
 
 **9Router migration principle: provider code is migrated, not architecture.** Reuse provider adapters, OAuth flows, request builders, stream parsers, usage extraction, model handling, and protocol knowledge. Do not migrate old routing, old core abstractions, or old internal LLM models.
 

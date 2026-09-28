@@ -23,7 +23,7 @@ The conformance harness runs the same scenarios against different connectors and
 | Usage | Exact, estimated, missing, and partial | Unknown values are not converted to zero; no double counting |
 | Early errors | Auth failure, 429, unavailable | Correct status and retry disposition |
 | Late errors | Disconnect after Head/first chunk | No fallback and no new HTTP response |
-| Cancellation | Client stops reading | Upstream and internal resources are released |
+| Cancellation | Client disconnects or cancels the request | Upstream and internal resources are released |
 | Backpressure | Slow client and long stream | Queues and memory remain bounded |
 | Limits | Concurrent admission and repeated finalize | No limit bypass and no duplicate accounting |
 | Runtime | Crash, malformed frames, version mismatch | The core continues serving other requests |
@@ -32,6 +32,11 @@ The conformance harness runs the same scenarios against different connectors and
 | Adapter boundary | Decode failure, pre-stream error, Encode write failure | Common error metadata; no backend call on invalid input; write failure cancels producer |
 | Retry metadata | Retryable error with unsafe/unknown disposition, or safe error after commit | No replay; a status code or transient flag alone cannot trigger fallback |
 | Capability scope | Missing capability, parent-only support, incompatible protocol/model/account | Required capability must match exactly and be confirmed in the applicable scope |
+| HTTP replay | Inference redirect, SDK retry configuration, dropped reused connection with replayable body/idempotency headers | One Execute does not silently replay inference; redirect destination receives no request or credentials |
+| Native HTTP bytes | Encoded response body, explicit/absent Accept-Encoding, transport length changes | Body bytes remain unchanged; content encoding/length describe the forwarded bytes |
+| Header isolation | Gateway Authorization and Connection-nominated headers in requests/responses | Gateway credentials never reach upstream; hop-by-hop fields are removed; only selected account credentials are used |
+
+A client that merely stops reading exercises backpressure, not necessarily cancellation: the server may not observe a disconnect. Cancellation tests explicitly close/cancel the client connection or request and assert producer cleanup; stalled-reader tests verify bounded buffering and configured deadlines separately.
 
 ## Capability-Aware Suite
 

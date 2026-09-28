@@ -27,6 +27,8 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 
 Project documents define intent; CONTRACT defines accepted internal semantics. Concrete bindings, configuration, and stack choices remain drafts until verified by code. Consult CURRENT for actual support. Keep each fact in its owning document and link rather than copying it into other files.
 
+The [2026-09-28 pre-implementation review](references/project-review.md) records reviewed scope, corrected risks, and remaining verification gates; it does not replace the owning specifications.
+
 ## Glossary
 
 **Northbound** — client-facing API. **Upstream / Backend Provider** — backend contacted by a Connector. **Protocol Adapter** — client-protocol boundary. **Core Runtime** — provider-agnostic execution infrastructure. **Connector** — backend implementation. **Instance** — configured Connector with endpoint and parameters. **Account** — upstream identity with a credential reference. **Virtual key** — gateway client's key. **Attempt** — one execution on a Connector instance/account pair.
