@@ -1,48 +1,48 @@
-# Референсы и порядок исследования
+# References and Research Process
 
-## Как использовать источники
+## How to Use Sources
 
-Ниже — исходные точки исследования, а не обещание поддержки всех описанных возможностей. При реализации connector следует фиксировать дату, API/client version или commit источника и превращать нужное поведение в fixtures. Документация API, код официального клиента и наблюдаемый trace отвечают на разные вопросы; один источник не заменяет остальные.
+Below are research starting points, not a promise to support all described capabilities. When implementing a connector, record the date, API/client version, or commit of the source and convert the needed behavior into fixtures. API documentation, official client code, and observed traces answer different questions; one source does not replace the others.
 
-## Протоколы и официальные реализации
+## Protocols and Official Implementations
 
-| Источник | Что изучать |
+| Source | What to Study |
 | --- | --- |
 | [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses) | Request/response contract, tool items, usage, stateful operations |
-| [OpenAI streaming events](https://platform.openai.com/docs/api-reference/responses-streaming) | Event lifecycle, deltas, completion и error events |
-| [OpenAI Codex](https://github.com/openai/codex) | Клиентский transport, auth и точный scope совместимости выбранной версии |
-| [Anthropic API documentation](https://docs.anthropic.com/) | Messages, streaming, tools, token counting и usage |
-| [Claude Code](https://github.com/anthropics/claude-code) | Публичные материалы, releases и issues; полноту исходников проверять отдельно |
-| [Gemini API](https://ai.google.dev/gemini-api/docs) | Официальный API, multimodal inputs, tools и streaming |
-| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Реальный клиентский протокол и auth flows конкретной версии |
-| [Ollama documentation](https://docs.ollama.com/) | Native API и фактический scope OpenAI compatibility |
-| [vLLM documentation](https://docs.vllm.ai/) | Serving endpoints, supported fields и ограничения моделей |
-| [llama.cpp](https://github.com/ggml-org/llama.cpp) | Server implementation и поддерживаемые compatibility endpoints |
-| [Agent Client Protocol](https://agentclientprotocol.com/) | Agent-process lifecycle и отличие от provider API |
+| [OpenAI streaming events](https://platform.openai.com/docs/api-reference/responses-streaming) | Event lifecycle, deltas, completion and error events |
+| [OpenAI Codex](https://github.com/openai/codex) | Client transport, auth, and exact compatibility scope of the selected version |
+| [Anthropic API documentation](https://docs.anthropic.com/) | Messages, streaming, tools, token counting, and usage |
+| [Claude Code](https://github.com/anthropics/claude-code) | Public materials, releases, and issues; verify source completeness separately |
+| [Gemini API](https://ai.google.dev/gemini-api/docs) | Official API, multimodal inputs, tools, and streaming |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Real client protocol and auth flows of specific version |
+| [Ollama documentation](https://docs.ollama.com/) | Native API and actual scope of OpenAI compatibility |
+| [vLLM documentation](https://docs.vllm.ai/) | Serving endpoints, supported fields, and model limitations |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) | Server implementation and supported compatibility endpoints |
+| [Agent Client Protocol](https://agentclientprotocol.com/) | Agent-process lifecycle and distinction from provider API |
 
-OpenAI-compatible не означает полную поддержку Responses. Для каждого upstream отдельно проверяются endpoint, streaming, tools, reasoning и session semantics. Аналогично официальный public API не обязательно совпадает с backend protocol подписочного клиента.
+OpenAI-compatible does not mean full Responses support. For each upstream, endpoint, streaming, tools, reasoning, and session semantics are verified separately. Similarly, the official public API does not necessarily match the backend protocol of a subscription client.
 
-## Инфраструктура
+## Infrastructure
 
-| Источник | Применение |
+| Source | Application |
 | --- | --- |
-| [Go net/http](https://pkg.go.dev/net/http) | Streaming, transports, cancellation и server lifecycle |
-| [Go context](https://pkg.go.dev/context) | Передача deadline и отмены между слоями |
-| [SQLite WAL](https://www.sqlite.org/wal.html) | Конкурентный доступ и operational особенности storage |
-| [SQLite Online Backup](https://www.sqlite.org/backup.html) | Согласованные backups активной БД |
-| [gRPC flow control](https://grpc.io/docs/guides/flow-control/) | Backpressure для external runtime |
-| [Protocol Buffers](https://protobuf.dev/programming-guides/) | Эволюция control contract без изменения opaque payload |
-| [OAuth 2.0, RFC 6749](https://www.rfc-editor.org/rfc/rfc6749) | Общие роли и lifecycle authorization flows |
-| [PKCE, RFC 7636](https://www.rfc-editor.org/rfc/rfc7636) | Общая часть auth runtime |
-| [Device Authorization, RFC 8628](https://www.rfc-editor.org/rfc/rfc8628) | Основа device flows там, где они используются backend |
-| [SSE specification](https://html.spec.whatwg.org/multipage/server-sent-events.html) | Framing, multiline data и обработка event stream |
+| [Go net/http](https://pkg.go.dev/net/http) | Streaming, transports, cancellation, and server lifecycle |
+| [Go context](https://pkg.go.dev/context) | Passing deadlines and cancellation between layers |
+| [SQLite WAL](https://www.sqlite.org/wal.html) | Concurrent access and operational storage characteristics |
+| [SQLite Online Backup](https://www.sqlite.org/backup.html) | Consistent backups of active database |
+| [gRPC flow control](https://grpc.io/docs/guides/flow-control/) | Backpressure for external runtime |
+| [Protocol Buffers](https://protobuf.dev/programming-guides/) | Control contract evolution without changing opaque payload |
+| [OAuth 2.0, RFC 6749](https://www.rfc-editor.org/rfc/rfc6749) | General roles and authorization flow lifecycle |
+| [PKCE, RFC 7636](https://www.rfc-editor.org/rfc/rfc7636) | Common part of auth runtime |
+| [Device Authorization, RFC 8628](https://www.rfc-editor.org/rfc/rfc8628) | Foundation for device flows where used by backend |
+| [SSE specification](https://html.spec.whatwg.org/multipage/server-sent-events.html) | Framing, multiline data, and event stream handling |
 
-## Миграция из 9Router
+## Migration from 9Router
 
-Точный репозиторий и commit 9Router пока не зафиксированы. До начала переноса нужно добавить ссылку, revision, лицензию и карту нужных файлов. Название проекта само по себе недостаточно для выбора исходников.
+The exact repository and commit of 9Router are not yet recorded. Before starting the migration, add a reference, revision, license, and map of needed files. The project name alone is insufficient for source selection.
 
-Для каждого adapter исследуются auth flow, сборка request, stream parser, usage extraction, обработка model IDs и известные regression tests. Сначала формируется минимальный trace и список особенностей, затем код адаптируется к новому контракту. Старые routing policies и внутренние LLM abstractions не переносятся вместе с полезными protocol helpers.
+For each adapter, investigate auth flow, request assembly, stream parser, usage extraction, model ID handling, and known regression tests. First, form a minimal trace and list of features, then adapt the code to the new contract. Old routing policies and internal LLM abstractions are not migrated along with useful protocol helpers.
 
-## Шаблон исследования connector
+## Connector Research Template
 
-Короткая заметка должна содержать backend/client version, источник протокола, способы auth, поддерживаемые northbound features, native/translation mode, retry semantics и statefulness. Завершается она минимальным воспроизводимым request/response fixture и списком ещё неизвестных свойств. Это достаточное основание для оценки implementation milestone.
+A brief note should contain backend/client version, protocol source, auth methods, supported northbound features, native/translation mode, retry semantics, and statefulness. It concludes with a minimal reproducible request/response fixture and a list of still-unknown properties. This provides sufficient basis for implementation milestone estimation.

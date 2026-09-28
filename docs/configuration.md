@@ -1,14 +1,14 @@
-# Данные и конфигурация
+# Data and Configuration
 
-## Разделение состояния
+## State Separation
 
-YAML описывает желаемую топологию: listener, connector instances, routes и policy defaults. SQLite хранит изменяемое состояние: accounts, credentials, virtual keys, auth sessions, attempts и usage. Secrets в YAML заменяются credential references. При старте configuration validation должна находить несуществующие ссылки и несовместимые сочетания protocol/mode до первого клиентского запроса.
+YAML describes the desired topology: listener, connector instances, routes, and policy defaults. SQLite stores mutable state: accounts, credentials, virtual keys, auth sessions, attempts, and usage. Secrets in YAML are replaced with credential references. On startup, configuration validation must identify missing references and incompatible protocol/mode combinations before the first client request.
 
-Hot reload не нужен для первого MVP. Конфигурация применяется целиком при старте; административные операции над ключами и аккаунтами используют storage и runtime services. Первый интерфейс управления — локальные CLI-команды, позже возможен отдельный admin API.
+Hot reload is not required for the initial MVP. Configuration is applied in full at startup; administrative operations on keys and accounts use storage and runtime services. The first management interface is local CLI commands; a separate admin API may be added later.
 
-## Предлагаемый YAML
+## Proposed YAML
 
-Это целевая схема M3. Значения в `settings` принадлежат connector и валидируются им; Core не интерпретирует `base_url` или upstream protocol. Credentials и accounts из примера предварительно создаются через административный интерфейс.
+This is the target schema for M3. Values in `settings` belong to the connector and are validated by it; Core does not interpret `base_url` or upstream protocol. Credentials and accounts from the example are pre-created through the administrative interface.
 
 ```yaml
 version: 1
@@ -51,37 +51,37 @@ policies:
     unknown_usage: reject
 ```
 
-Имена моделей в native route передаются без замены. Requirements маршрута — явное требование оператора, а не автоматическое заключение, что каждый запрос использует tools. Значения limits приведены как пример, а не как рекомендуемые лимиты любого провайдера.
+Model names in native routes are passed without substitution. Route requirements are explicit operator requirements, not automatic inference that every request uses tools. Limit values are provided as examples, not as recommended limits for any specific provider.
 
-## Основные сущности
+## Core Entities
 
-| Сущность | Назначение и важные поля |
+| Entity | Purpose and Key Fields |
 | --- | --- |
 | `accounts` | Connector instance, credential reference, enabled state, health/cooldown |
-| `credentials` | Encrypted payload, format version, key version, expiry и revision |
-| `virtual_keys` | Public ID, digest, enabled/revoked state, policy и timestamps |
-| `key_policies` | Model/connector allowlists, RPM, TPM и дополнительные ограничения |
-| `auth_sessions` | Flow ID, account, срок жизни и защищённое временное состояние |
-| `requests` | Request ID, virtual key ID, route и итоговый outcome |
-| `attempts` | Attempt ID, account, timings, commit state, error и retry reason |
-| `usage_records` | Counters, source, completeness, estimate и связь с attempt |
-| `reservations` | Зарезервированный budget, lifecycle и reconciliation state |
-| `schema_migrations` | Применённые версии схемы |
+| `credentials` | Encrypted payload, format version, key version, expiry and revision |
+| `virtual_keys` | Public ID, digest, enabled/revoked state, policy and timestamps |
+| `key_policies` | Model/connector allowlists, RPM, TPM and additional restrictions |
+| `auth_sessions` | Flow ID, account, lifetime and protected temporary state |
+| `requests` | Request ID, virtual key ID, route and final outcome |
+| `attempts` | Attempt ID, account, timings, commit state, error and retry reason |
+| `usage_records` | Counters, source, completeness, estimate and attempt association |
+| `reservations` | Reserved budget, lifecycle and reconciliation state |
+| `schema_migrations` | Applied schema versions |
 
-Модель рассчитана на один gateway process. Все timestamps хранятся в UTC. Request/attempt identifiers позволяют расследовать fallback без хранения prompt. Удаление аккаунта не должно каскадно уничтожать исторические usage records.
+The model is designed for a single gateway process. All timestamps are stored in UTC. Request/attempt identifiers allow investigating fallback without storing prompts. Account deletion must not cascade-delete historical usage records.
 
-## Virtual keys и доступ
+## Virtual Keys and Access
 
-Ключ идентифицирует policy, по которой проверяются модели и connector targets до выполнения. Ограничение на model alias применяется к имени клиента; connector restriction проверяется и для первоначального target, и для fallback. Неизвестный или отозванный ключ отклоняется до обращения к upstream.
+A key identifies the policy used to verify models and connector targets before execution. Model alias restrictions apply to the client-provided name; connector restrictions are checked for both the initial target and fallback. Unknown or revoked keys are rejected before contacting upstream.
 
-Admin interface отделён от публичных inference endpoints. Для первого этапа достаточно CLI с доступом к локальному data directory; operations создания и отзыва ключей фиксируются без вывода secrets в общий лог.
+The admin interface is separated from public inference endpoints. For the initial phase, a CLI with access to the local data directory is sufficient; key creation and revocation operations are logged without exposing secrets to the general log.
 
-## Limits и reconciliation
+## Limits and Reconciliation
 
-Admission состоит из атомарной проверки RPM и reservation token budget. В MVP RPM считается по принятым клиентским запросам; upstream attempts учитываются отдельно, чтобы fallback не скрывал реальную нагрузку. TPM считается по input + output, без повторного сложения cached/reasoning detail counters.
+Admission consists of atomic RPM checking and token budget reservation. In MVP, RPM is counted by accepted client requests; upstream attempts are tracked separately so that fallback does not hide real load. TPM is counted by input + output, without double-counting cached/reasoning detail counters.
 
-Оценка не гарантирует жёсткую верхнюю границу upstream consumption. Если backend поддерживает execution budget, connector применяет его в соответствии с выбранным режимом; native passthrough не позволяет незаметно добавить ограничение в body. После завершения reservation заменяется фактическим usage, а превышение уменьшает доступный бюджет последующих запросов.
+Estimation does not guarantee a hard upper bound on upstream consumption. If the backend supports execution budget, the connector applies it according to the selected mode; native passthrough does not allow silently adding restrictions to the body. After completion, the reservation is replaced with actual usage, and overages reduce the available budget for subsequent requests.
 
-Для неизвестной оценки нужны явные policies: `reject` или фиксированный консервативный reservation. Молчаливое резервирование нуля запрещено. Точная величина conservative budget задаётся оператором для маршрута, а не угадывается Core.
+For unknown estimates, explicit policies are required: `reject` or a fixed conservative reservation. Silent reservation of zero is prohibited. The exact conservative budget value is set by the operator for the route, not guessed by Core.
 
-Reconciliation идемпотентен по attempt ID. Если gateway перезапустился с активными reservations, startup recovery помечает attempts как interrupted, сохраняет conservative charge и не выдаёт неизвестный upstream результат за отменённое выполнение. Refresh и лимиты не держат SQL transactions открытыми на время сетевых вызовов.
+Reconciliation is idempotent by attempt ID. If the gateway restarts with active reservations, startup recovery marks attempts as interrupted, preserves conservative charges, and does not present unknown upstream results as canceled executions. Refresh and limits do not keep SQL transactions open during network calls.

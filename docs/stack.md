@@ -1,47 +1,47 @@
-# Технологический стек
+# Technology Stack
 
-## Базовый выбор
+## Core Choices
 
-Предлагаемый стек рассчитан на один self-hosted процесс, простой запуск и предсказуемый streaming. Основной язык — **Go**: он подходит для HTTP proxy, конкурентных запросов, отмены через `context.Context` и сборки небольшого бинарника. Конкретную поддерживаемую версию фиксируем в `go.mod` и CI при создании проекта, не привязывая план к плавающему `latest`.
+The proposed stack is designed for a single self-hosted process with simple deployment and predictable streaming. The primary language is **Go**: it's well-suited for HTTP proxying, concurrent requests, cancellation via `context.Context`, and building compact binaries. The specific supported version is pinned in `go.mod` and CI during project setup, avoiding reliance on a floating `latest`.
 
-| Область | Предлагаемое решение | Причина |
+| Area | Proposed Solution | Rationale |
 | --- | --- | --- |
-| HTTP server и client | `net/http`, `http.Transport` | Управляемые соединения, cancellation и streaming без большого framework |
-| Маршруты API | `http.ServeMux` | Для первого набора endpoints достаточно стандартной библиотеки |
-| JSON | `encoding/json` на API-границе и внутри connectors | Core передаёт исходные bytes, а не сериализует запрос заново |
-| Конфигурация | YAML через `go.yaml.in/yaml/v3` | Читаемая конфигурация с явной схемой и проверкой неизвестных ключей |
-| Storage | SQLite через `database/sql` и `modernc.org/sqlite` | Локальное хранение без отдельного database service и без CGO |
-| SQL | Явные запросы и версионируемые SQL migrations | Небольшая схема, прозрачные транзакции; ORM пока не нужен |
-| Логи | `log/slog` | Структурированные события без дополнительного logging framework |
-| Метрики | Prometheus client | Counters, gauges и latency histograms для эксплуатации |
-| Тестирование | `testing`, `httptest`, Go fuzzing и race detector | Большая часть протокольных проверок выполняется локально |
-| Упаковка | Go binary и контейнер | Удобный запуск на сервере или локальной машине |
-| External connectors | Предварительно gRPC + Protobuf поверх Unix socket | Версионирование, streaming и cancellation через типизированный transport |
+| HTTP server and client | `net/http`, `http.Transport` | Managed connections, cancellation, and streaming without a large framework |
+| API routing | `http.ServeMux` | Standard library is sufficient for the initial set of endpoints |
+| JSON | `encoding/json` at API boundaries and within connectors | Core passes raw bytes without re-serializing requests |
+| Configuration | YAML via `go.yaml.in/yaml/v3` | Human-readable configuration with explicit schema and unknown key validation |
+| Storage | SQLite via `database/sql` and `modernc.org/sqlite` | Local storage without a separate database service and without CGO |
+| SQL | Explicit queries and versioned SQL migrations | Small schema, transparent transactions; no need for ORM yet |
+| Logging | `log/slog` | Structured events without an additional logging framework |
+| Metrics | Prometheus client | Counters, gauges, and latency histograms for operations |
+| Testing | `testing`, `httptest`, Go fuzzing, and race detector | Most protocol validation runs locally |
+| Packaging | Go binary and container | Convenient deployment on servers or local machines |
+| External connectors | Tentatively gRPC + Protobuf over Unix socket | Versioning, streaming, and cancellation through typed transport |
 
-Это стартовые предпочтения. SQLite driver проверяется небольшим spike на migrations, конкурентных записях и поддерживаемых платформах. Выбор IPC закрепляется только после сравнения вариантов на реальном streaming-сценарии в M6.
+These are initial preferences. The SQLite driver will be validated with a small spike on migrations, concurrent writes, and supported platforms. The IPC choice is finalized only after comparing alternatives on a real streaming scenario in M6.
 
-## HTTP и streaming
+## HTTP and Streaming
 
-У каждого connector instance переиспользуемый HTTP client с connection pooling. Таймауты разделяются на установление соединения, TLS handshake, получение response headers и idle time активного потока. Один короткий общий `Client.Timeout` не подходит для длинных agent responses.
+Each connector instance has a reusable HTTP client with connection pooling. Timeouts are separated for connection establishment, TLS handshake, response header reception, and idle time for active streams. A single short global `Client.Timeout` is unsuitable for long agent responses.
 
-На стороне server задаются ограничения размера request body, время чтения headers и graceful shutdown. Полное тело входного JSON можно прочитать в ограниченный buffer, поскольку контракт использует `[]byte`. Запрет на response buffering относится к выходному потоку: ответ передаётся клиенту по мере поступления.
+On the server side, constraints are set for request body size, header read time, and graceful shutdown. The full body of incoming JSON can be read into a bounded buffer since the contract uses `[]byte`. The prohibition on response buffering applies to the outgoing stream: responses are forwarded to the client as they arrive.
 
-SSE parser находится в connector или его protocol helper. Он обязан корректно обрабатывать разбиение UTF-8 и JSON между сетевыми chunks, multiline events и события больше стандартного лимита `bufio.Scanner`. Core работает с bytes и не разбирает SSE.
+The SSE parser resides in the connector or its protocol helper. It must correctly handle UTF-8 and JSON splitting across network chunks, multiline events, and events exceeding the standard `bufio.Scanner` limit. Core works with bytes and does not parse SSE.
 
-## Хранение и secrets
+## Storage and Secrets
 
-SQLite хранит аккаунты, encrypted credentials, virtual keys, usage и журнал migrations. Режим WAL, busy timeout и короткие транзакции уменьшают конкуренцию; сетевой вызов никогда не выполняется внутри SQL transaction. Для одного процесса допускается сериализованный writer, если нагрузочные проверки подтверждают достаточную пропускную способность.
+SQLite stores accounts, encrypted credentials, virtual keys, usage data, and the migration journal. WAL mode, busy timeout, and short transactions reduce contention; network calls are never made inside SQL transactions. For a single process, a serialized writer is acceptable if load tests confirm sufficient throughput.
 
-Credentials шифруются средствами стандартной библиотеки, например AES-GCM с уникальным nonce и AAD, связывающим ciphertext с credential ID и версией формата. Master key поступает из отдельного файла или окружения и не сохраняется в той же БД. Virtual keys генерируются из криптографически случайных bytes, показываются при создании и хранятся только как digest с отдельным публичным идентификатором.
+Credentials are encrypted using standard library primitives, such as AES-GCM with unique nonce and AAD binding the ciphertext to the credential ID and format version. The master key comes from a separate file or environment and is not stored in the same database. Virtual keys are generated from cryptographically random bytes, displayed upon creation, and stored only as a digest with a separate public identifier.
 
 ## Observability
 
-Каждому запросу и attempt назначается ID. В логах нужны route, connector instance, account ID, execution mode, status, latency, time to first byte, причина fallback и итог usage. Тела prompts, ответы и secrets по умолчанию не логируются.
+Each request and attempt is assigned an ID. Logs should include route, connector instance, account ID, execution mode, status, latency, time to first byte, fallback reason, and final usage. Prompt bodies, responses, and secrets are not logged by default.
 
-Метрики отражают число запросов, активные streams, ошибки, время выполнения, first-byte latency, отказы limits и сбои connectors. Request IDs, произвольные model names и account IDs не используются как неограниченные metric labels. Tracing через OpenTelemetry можно добавить после появления устойчивого request lifecycle.
+Metrics track request count, active streams, errors, execution time, first-byte latency, limit rejections, and connector failures. Request IDs, arbitrary model names, and account IDs are not used as unbounded metric labels. Tracing via OpenTelemetry can be added after a stable request lifecycle emerges.
 
-## Сборка и рабочий цикл
+## Build and Workflow
 
-Начинаем с одного Go module и одного основного binary `gateway`. Минимальный CI выполняет проверку `gofmt`, `go vet ./...`, `go test ./...`, `go test -race ./...` и сборку. Protocol fixtures не требуют сетевых credentials. Реальные upstream smoke tests запускаются отдельно и имеют явно ограниченный объём запросов.
+We start with a single Go module and one main binary `gateway`. Minimal CI runs `gofmt`, `go vet ./...`, `go test ./...`, `go test -race ./...`, and build checks. Protocol fixtures do not require network credentials. Real upstream smoke tests run separately and have explicitly limited request volumes.
 
-Контейнер запускается от непривилегированного пользователя, получает конфигурацию и persistent data directory через mounts и содержит CA certificates для upstream TLS. SQLite backup выполняется согласованным snapshot/backup способом; простое копирование одного файла активной WAL-базы не считается корректной процедурой.
+The container runs as an unprivileged user, receives configuration and persistent data directory via mounts, and includes CA certificates for upstream TLS. SQLite backups are performed using consistent snapshot/backup methods; simple file copying of an active WAL database is not considered a proper procedure.

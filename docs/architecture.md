@@ -1,10 +1,10 @@
-# Архитектура и путь запроса
+# Architecture and Request Path
 
-## Три явные границы
+## Three Explicit Boundaries
 
-В системе есть внешний protocol adapter, инфраструктурный Core и backend connectors. Adapter понимает клиентский контракт OpenAI Responses, извлекает минимальные metadata и формирует ошибки самого gateway. Core знает только execution envelope, политики доступа и состояние исполнения. Connector понимает upstream и при необходимости переводит его протокол.
+The system has an external protocol adapter, infrastructure Core, and backend connectors. The adapter understands the client-facing OpenAI Responses contract, extracts minimal metadata, and formats gateway-level errors. Core only knows about the execution envelope, access policies, and execution state. Connectors understand the upstream and translate its protocol when necessary.
 
-Так разрешается важное противоречие: шлюз предоставляет OpenAI-compatible API, но его routing, limits и runtime не зависят от OpenAI JSON. Northbound adapter — отдельный пакет, а не набор условных веток внутри Core.
+This resolves an important contradiction: the gateway provides an OpenAI-compatible API, but its routing, limits, and runtime are independent of OpenAI JSON. The northbound adapter is a separate package, not a set of conditional branches inside Core.
 
 ```text
 HTTP client
@@ -20,64 +20,64 @@ Northbound adapter ── original body + metadata ──► Core executor
                                                    Backend
 ```
 
-## Предлагаемая структура проекта
+## Proposed Project Structure
 
 ```text
-cmd/gateway/                 composition root и запуск
-internal/northbound/openai/  Responses endpoint и ошибки внешнего API
-internal/core/               request lifecycle и orchestration
-internal/routing/            маршруты, eligibility и account selection
-internal/limits/             admission и reconciliation
-internal/auth/               virtual keys и общий auth runtime
-internal/storage/sqlite/     repositories и migrations
-internal/runtime/            registry и исполнение connectors
-internal/config/             загрузка и валидация конфигурации
-internal/observability/      логи и метрики
-connector/                  общий контракт и runtime services
+cmd/gateway/                 composition root and startup
+internal/northbound/openai/  Responses endpoint and external API errors
+internal/core/               request lifecycle and orchestration
+internal/routing/            routes, eligibility, and account selection
+internal/limits/             admission and reconciliation
+internal/auth/               virtual keys and shared auth runtime
+internal/storage/sqlite/     repositories and migrations
+internal/runtime/            registry and connector execution
+internal/config/             configuration loading and validation
+internal/observability/      logs and metrics
+connector/                  shared contract and runtime services
 connectors/                 backend implementations
-conformance/                общий набор проверок
-testdata/                   fixtures без secrets
-docs/                       проектная документация
+conformance/                shared test suite
+testdata/                   fixtures without secrets
+docs/                       project documentation
 ```
 
-Папки появляются по мере реализации. Core и routing не импортируют `connectors/*` или `internal/northbound/openai`. Concrete implementations связываются только в composition root. Общие helpers для OpenAI JSON и SSE допустимы в connector-слое, но не становятся универсальной моделью LLM.
+Directories appear as features are implemented. Core and routing do not import `connectors/*` or `internal/northbound/openai`. Concrete implementations are wired only at the composition root. Shared helpers for OpenAI JSON and SSE are acceptable in the connector layer but should not become a universal LLM model.
 
-## Lifecycle запроса
+## Request Lifecycle
 
-Northbound adapter проверяет virtual key, ограничивает размер тела и извлекает `model`, `stream` и явно распознаваемые требования. Исходные bytes сохраняются. Неизвестные поля остаются в payload; adapter не пытается полностью описать Responses API собственной схемой.
+The northbound adapter validates the virtual key, limits body size, and extracts `model`, `stream`, and explicitly recognized requirements. Original bytes are preserved. Unknown fields remain in the payload; the adapter does not attempt to fully describe the Responses API with its own schema.
 
-Core применяет ограничения ключа и находит подходящие route targets по protocol, model, capabilities и состоянию accounts. Connector оценивает usage для выбранного target; limits атомарно резервируют доступный бюджет. Создаётся attempt, после чего runtime вызывает `Execute`.
+Core applies key constraints and finds suitable route targets based on protocol, model, capabilities, and account state. The connector estimates usage for the selected target; limits atomically reserve available budget. An attempt is created, after which the runtime invokes `Execute`.
 
-До отправки response headers connector сообщает status и безопасный набор headers. Затем Core передаёт chunks с backpressure. При завершении usage и outcome записываются, а reservation корректируется. Client disconnect отменяет upstream, закрывает stream и завершает attempt ровно один раз.
+Before sending response headers, the connector reports status and a safe set of headers. Core then streams chunks with backpressure. On completion, usage and outcome are recorded, and the reservation is reconciled. Client disconnect cancels the upstream, closes the stream, and completes the attempt exactly once.
 
-## Native passthrough и model mapping
+## Native Passthrough and Model Mapping
 
-В native mode тело проходит побайтно неизменным. Допустимы замена gateway Authorization на upstream credential, удаление hop-by-hop headers и пересчёт transport headers. Обещание passthrough не означает передачу всех входящих headers провайдеру.
+In native mode, the body passes through byte-for-byte unchanged. Replacing the gateway Authorization with upstream credentials, removing hop-by-hop headers, and recalculating transport headers are permitted. The passthrough promise does not mean forwarding all incoming headers to the provider.
 
-Model mapping имеет два разных смысла. **Выбор маршрута** по исходному имени модели не меняет payload и совместим с passthrough. **Замена имени модели** в JSON уже является преобразованием; её выполняет connector в явно включённом режиме translation/rewrite. Конфигурация native mode с несовпадающим upstream model отклоняется при старте.
+Model mapping has two distinct meanings. **Route selection** based on the original model name does not change the payload and is compatible with passthrough. **Model name replacement** in JSON is already a transformation; it is performed by the connector in explicitly enabled translation/rewrite mode. A native mode configuration with a mismatched upstream model is rejected at startup.
 
-Общий `openai-compatible` connector не может считать, что наличие Chat Completions означает поддержку Responses. Его instance явно объявляет upstream protocol. Responses-native backend допускает passthrough; Chat-only backend требует отдельного translator внутри connector и собственной матрицы поддерживаемых возможностей.
+The generic `openai-compatible` connector cannot assume that Chat Completions support implies Responses support. Its instance explicitly declares the upstream protocol. Responses-native backends allow passthrough; Chat-only backends require a separate translator inside the connector and their own capability matrix.
 
-## Streaming и backpressure
+## Streaming and Backpressure
 
-После первого response head status и headers считаются committed. Core не накапливает полный ответ и не переставляет chunks. Очереди bounded; медленный клиент замедляет чтение upstream вместо неограниченного роста памяти. Completion control message содержит outcome и usage отдельно от пользовательских bytes.
+After the first response head, status and headers are considered committed. Core does not buffer the complete response or reorder chunks. Queues are bounded; a slow client slows upstream reads instead of allowing unbounded memory growth. The completion control message contains outcome and usage separately from user-facing bytes.
 
-Ошибка до commit может быть превращена в HTTP error. После commit нельзя заменить ответ новым JSON с другим status. Connector может выдать корректное для внешнего протокола terminal error event; при повреждённом потоке или падении процесса transport закрывается, а attempt фиксируется как incomplete. Core не синтезирует provider-specific SSE events.
+An error before commit can be converted to an HTTP error. After commit, you cannot replace the response with new JSON and a different status. The connector may emit a protocol-appropriate terminal error event; on a corrupted stream or process crash, the transport closes and the attempt is recorded as incomplete. Core does not synthesize provider-specific SSE events.
 
-## Fallback и повторные попытки
+## Fallback and Retries
 
-Fallback допустим только до commit и при подтверждённой возможности безопасного повтора. Ошибка соединения до отправки запроса, локальная недоступность connector и явно классифицированный отказ upstream — разные случаи. Потеря соединения после отправки тела имеет неизвестный результат и по умолчанию не повторяется автоматически, даже если клиент ещё не получил bytes.
+Fallback is only permitted before commit and with confirmed safe retry capability. Connection errors before sending the request, local connector unavailability, and explicitly classified upstream rejections are different cases. Connection loss after sending the body has unknown outcome and by default is not automatically retried, even if the client has not yet received bytes.
 
-Connector сообщает категорию ошибки и retry disposition: `safe`, `unsafe` или `unknown`. Core применяет policy с ограничением числа attempts и общим deadline. Провайдерские error codes и `Retry-After` интерпретирует connector. После commit fallback запрещён: склейка ответов разных попыток нарушает tool IDs, порядок событий и usage.
+The connector reports error category and retry disposition: `safe`, `unsafe`, or `unknown`. Core applies policy with attempt count limits and an overall deadline. Provider error codes and `Retry-After` are interpreted by the connector. After commit, fallback is forbidden: stitching together responses from different attempts violates tool IDs, event ordering, and usage.
 
 ## Stateful Responses
 
-`previous_response_id`, session resume, stored responses и background execution не становятся автоматически переносимыми между бэкендами. В первом native slice они могут проходить к тому же upstream как opaque fields, но это не обещание полной реализации Responses resource API.
+`previous_response_id`, session resume, stored responses, and background execution do not automatically become portable across backends. In the first native slice, they may pass through to the same upstream as opaque fields, but this is not a promise of full Responses resource API implementation.
 
-Для session-bound запросов нужна affinity к исходным connector instance, account и backend. До реализации affinity конфигурация использует один target для таких сценариев, а cross-account fallback отключён. Translation connector явно отклоняет неподдерживаемые stateful features. Retrieval, deletion, cancellation по response ID и background execution получают отдельный scope после базового POST и streaming.
+Session-bound requests require affinity to the original connector instance, account, and backend. Until affinity is implemented, configuration uses a single target for such scenarios and cross-account fallback is disabled. The translation connector explicitly rejects unsupported stateful features. Retrieval, deletion, cancellation by response ID, and background execution receive separate scope after basic POST and streaming.
 
-## Изоляция
+## Isolation
 
-До M6 встроенные first-party connectors исполняются в процессе gateway за тем же контрактом. Это упрощает проверку архитектуры, но не обеспечивает process isolation. Внешние сторонние connectors подключаются после появления process runtime.
+Until M6, built-in first-party connectors execute in-process with the gateway under the same contract. This simplifies architecture validation but does not provide process isolation. External third-party connectors are integrated after the process runtime is available.
 
-Process isolation защищает Core от падения connector. Ограничение CPU, памяти, filesystem и network access — отдельные возможности sandbox; один IPC transport не даёт таких гарантий. Runtime должен хотя бы ограничивать размеры messages, очереди и время завершения process.
+Process isolation protects Core from connector crashes. CPU, memory, filesystem, and network access restrictions are separate sandbox capabilities; IPC transport alone does not provide such guarantees. The runtime should at least limit message sizes, queues, and process termination timeouts.

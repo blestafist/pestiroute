@@ -1,8 +1,8 @@
-# Контракт connector
+# Connector Contract
 
-## Назначение
+## Purpose
 
-Контракт описывает исполнение opaque protocol request. Он не содержит общих `Message`, `Tool`, `Reasoning` или провайдерских методов. Приведённые Go signatures — проект интерфейса, который уточняется в M2 на работающем native connector и fake backend.
+The contract describes the execution of an opaque protocol request. It does not contain common `Message`, `Tool`, `Reasoning`, or provider-specific methods. The provided Go signatures are an interface draft that will be refined in M2 with a working native connector and fake backend.
 
 ```go
 type Connector interface {
@@ -35,13 +35,13 @@ type Stream interface {
 }
 ```
 
-`Execute` выполняет одну попытку на уже выбранном account. Connector не делает скрытый fallback между аккаунтами. Отмена context распространяется на HTTP requests и runtime calls; `Close` идемпотентен и освобождает ресурсы даже при частично прочитанном ответе. Параллельные `Execute` должны быть безопасны; один stream читает один consumer.
+`Execute` performs a single attempt on an already selected account. The connector does not perform hidden fallback between accounts. Context cancellation propagates to HTTP requests and runtime calls; `Close` is idempotent and releases resources even with a partially read response. Concurrent `Execute` calls must be safe; a single stream is read by a single consumer.
 
-## Descriptor и Models
+## Descriptor and Models
 
-Descriptor содержит stable ID, implementation version, contract version, тип connector, принимаемые protocols и способы auth. Версия реализации и версия IPC/SDK — разные значения. `Models` возвращает доступность моделей для настроенного instance/account и их capabilities, а не универсальное описание внутреннего устройства моделей.
+The descriptor contains a stable ID, implementation version, contract version, connector type, accepted protocols, and authentication methods. The implementation version and IPC/SDK version are different values. `Models` returns the availability of models for a configured instance/account and their capabilities, not a universal description of the internal model architecture.
 
-Capabilities имеют три значения: `supported`, `unsupported`, `unknown`. Требование запроса удовлетворяется только первым. Итоговая поддержка определяется сочетанием protocol, execution mode, connector, model и account; широкое заявление connector не должно перекрывать ограничение конкретной модели.
+Capabilities have three values: `supported`, `unsupported`, `unknown`. A request requirement is satisfied only by the first. The final support is determined by a combination of protocol, execution mode, connector, model, and account; a broad connector declaration should not override a specific model limitation.
 
 ```yaml
 id: openai-compatible
@@ -57,46 +57,46 @@ capabilities:
 auth: [api_key]
 ```
 
-Это уточнение раннего manifest из PLAN: там `true`, `false` и `unknown` иллюстрируют ту же трёхзначную семантику. Для первой реализации выбираем один canonical формат и валидируем его строго.
+This refines the early manifest from PLAN: there `true`, `false`, and `unknown` illustrate the same three-valued semantics. For the first implementation, we choose one canonical format and validate it strictly.
 
-## Execution stream
+## Execution Stream
 
-`Frame` — tagged union транспортных и контрольных сообщений, а не LLM events. У него ровно один variant:
+`Frame` is a tagged union of transport and control messages, not LLM events. It has exactly one variant:
 
-| Variant | Данные | Семантика |
+| Variant | Data | Semantics |
 | --- | --- | --- |
-| `Head` | HTTP status и response headers | Единожды, до любого body chunk |
-| `Body` | Непустой набор bytes | Исходный или уже переведённый connector ответ |
-| `Complete` | Outcome и финальный UsageReport | Единожды; закрывает успешный транспортный lifecycle |
+| `Head` | HTTP status and response headers | Once, before any body chunk |
+| `Body` | Non-empty set of bytes | Original or already translated connector response |
+| `Complete` | Outcome and final UsageReport | Once; closes successful transport lifecycle |
 
-Допустимая последовательность — `Head → Body* → Complete → EOF`. `Complete` может описывать upstream HTTP error, а не только успешную генерацию. До `Head` connector может вернуть typed error; после `Head` неожиданный `Next` error означает неполный поток. EOF без `Complete` также считается incomplete.
+The valid sequence is `Head → Body* → Complete → EOF`. `Complete` can describe an upstream HTTP error, not just a successful generation. Before `Head`, the connector may return a typed error; after `Head`, an unexpected `Next` error indicates an incomplete stream. EOF without `Complete` is also considered incomplete.
 
-Body chunks не обязаны совпадать с границами SSE events. Core не должен переинтерпретировать их содержимое. Non-streaming JSON передаётся через тот же механизм. При native passthrough connector может параллельно разбирать ограниченную копию событий для usage, но передаваемые bytes остаются неизменными.
+Body chunks do not need to align with SSE event boundaries. Core must not reinterpret their contents. Non-streaming JSON is transmitted through the same mechanism. With native passthrough, the connector may parse a limited copy of events in parallel for usage, but the transmitted bytes remain unchanged.
 
 ## Usage
 
-`UsageEstimate` содержит известную оценку input/output budget, признак неизвестного значения и метод оценки. `UsageReport` содержит nullable counters `input_tokens`, `output_tokens`, `reasoning_tokens`, `cached_tokens`, источник (`provider`, `estimate`, `unknown`) и признак полноты. Неизвестное значение не равно нулю.
+`UsageEstimate` contains a known estimate of input/output budget, an unknown value indicator, and an estimation method. `UsageReport` contains nullable counters `input_tokens`, `output_tokens`, `reasoning_tokens`, `cached_tokens`, a source (`provider`, `estimate`, `unknown`), and a completeness indicator. An unknown value is not equal to zero.
 
-Input/output counters считаются верхнеуровневыми величинами. Cached и reasoning tokens — детализация, которая может уже входить в totals; их нельзя безусловно прибавлять ещё раз. Connector нормализует только accounting semantics и сохраняет backend-specific детали в namespaced diagnostics при необходимости.
+Input/output counters are considered top-level quantities. Cached and reasoning tokens are details that may already be included in totals; they cannot be unconditionally added again. The connector normalizes only accounting semantics and preserves backend-specific details in namespaced diagnostics when necessary.
 
-Если клиент отключился до получения usage, Core сохраняет partial/unknown outcome и применённую оценку отдельно. Отсутствие usage не превращает выполненный запрос в бесплатный и не позволяет удалить reservation без следа.
+If the client disconnects before receiving usage, Core saves the partial/unknown outcome and applied estimate separately. The absence of usage does not turn an executed request into a free one and does not allow deletion of the reservation without a trace.
 
-## Ошибки
+## Errors
 
-Typed error описывает инфраструктурную категорию: `invalid_request`, `unsupported_feature`, `unauthenticated`, `permission_denied`, `rate_limited`, `unavailable`, `timeout`, `cancelled` или `internal`. Дополнительно передаются retry disposition, опциональный retry delay и безопасное сообщение для клиента.
+A typed error describes an infrastructure category: `invalid_request`, `unsupported_feature`, `unauthenticated`, `permission_denied`, `rate_limited`, `unavailable`, `timeout`, `cancelled`, or `internal`. Additionally, retry disposition, optional retry delay, and a safe message for the client are transmitted.
 
-Native connector может вернуть исходный upstream error как `Head` и `Body`, сохраняя внешний протокол. Если Core рассматривает fallback, решение и retry metadata должны быть доступны до пересылки `Head` клиенту. Translation connector преобразует upstream error в northbound-compatible bytes; ошибки самого gateway кодирует northbound adapter.
+A native connector can return the original upstream error as `Head` and `Body`, preserving the external protocol. If Core considers fallback, the decision and retry metadata must be available before forwarding `Head` to the client. A translation connector converts the upstream error to northbound-compatible bytes; the gateway's own errors are encoded by the northbound adapter.
 
-## Runtime services и auth
+## Runtime Services and Auth
 
-Runtime предоставляет выбранные instance/account context, scoped доступ к credential, HTTP transport, logger и общий auth runtime. Он не передаёт connector всю БД или credentials других аккаунтов. Connector может использовать secret во время вызова, но не сохраняет его самостоятельно.
+Runtime provides selected instance/account context, scoped credential access, HTTP transport, logger, and common auth runtime. It does not pass the entire database or credentials of other accounts to the connector. The connector can use the secret during invocation but does not store it independently.
 
-`Authenticate` работает как state machine: начать flow, продолжить после callback/device polling или выполнить refresh. `AuthResult` описывает следующую action, завершение с обновлённым credential либо ошибку. Конкретные endpoints, scopes и обмен токенов остаются внутри connector. Core отвечает за state validation, PKCE storage, срок жизни auth session и атомарное сохранение результата.
+`Authenticate` works as a state machine: start a flow, continue after callback/device polling, or perform a refresh. `AuthResult` describes the next action, completion with updated credential, or an error. Specific endpoints, scopes, and token exchanges remain inside the connector. Core is responsible for state validation, PKCE storage, auth session lifetime, and atomic result persistence.
 
-Refresh сериализуется для одного account. При ротации refresh token новое значение сохраняется атомарно с expiry; параллельный запрос не должен затереть его старым. Ошибка storage после обмена токенов фиксируется как отдельный auth failure.
+Refresh is serialized for a single account. When rotating a refresh token, the new value is saved atomically with expiry; a parallel request must not overwrite it with the old one. A storage error after token exchange is recorded as a separate auth failure.
 
-## Переход к IPC
+## Transition to IPC
 
-В IPC переносятся opaque request bytes, metadata, descriptor и те же stream frames. Для вызовов Runtime со стороны внешнего connector потребуется отдельный scoped host-service channel; одного server-streaming `Execute` RPC для этого недостаточно. В M6 нужно проверить lifecycle обоих направлений, authentication локального канала и отзыв доступа при завершении attempt.
+Opaque request bytes, metadata, descriptor, and the same stream frames are transferred to IPC. For Runtime calls from an external connector, a separate scoped host-service channel is required; a single server-streaming `Execute` RPC is insufficient for this. In M6, the lifecycle of both directions, authentication of the local channel, and access revocation upon attempt completion need to be verified.
 
-Handshake проверяет совместимость major contract version до выполнения запросов. Unknown control frame нельзя пропускать так же, как unknown JSON field: transport contract должен оставаться однозначным. Совместимость payload обеспечивается его непрозрачностью, совместимость IPC — отдельными правилами версионирования.
+The handshake verifies major contract version compatibility before executing requests. An unknown control frame cannot be skipped the same way as an unknown JSON field: the transport contract must remain unambiguous. Payload compatibility is ensured by its opacity; IPC compatibility is ensured by separate versioning rules.
