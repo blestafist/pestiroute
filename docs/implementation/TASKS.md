@@ -25,20 +25,20 @@ Normal path: `DRAFT → READY → ACTIVE → DONE`. BLOCKED returns to READY whe
 
 ## M0 — Foundation
 
-High-level planning candidates covering [M0](ROADMAP.md#m0--project-foundation) and its handoff to M1. All remain DRAFT: the Planner will turn each bounded outcome into a task card, resolve relevant choices, and define concrete acceptance and checks before READY. No task cards have been prepared and no implementation work is claimed complete.
+Candidates covering [M0](ROADMAP.md#m0--project-foundation) and its handoff to M1. FND-001 and FND-005 have executable cards; the dependent candidates remain DRAFT until their inputs and checks are concrete. No implementation work is claimed complete.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| FND-001 | DRAFT | — | — | Reproducible Go scaffold: module identity, pinned toolchain, minimal `gateway` entrypoint and clean-checkout build instructions | — | Documented build succeeds on the selected toolchain from a clean checkout |
+| [FND-001](tasks/FND-001.md) | READY | — | — | Reproducible Go scaffold: module identity, pinned toolchain, minimal `gateway` entrypoint and clean-checkout build instructions | — | `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build ./...` with Go 1.27.1 from a clean checkout |
 | FND-002 | DRAFT | — | FND-001 | Runnable startup slice: minimal configuration, health/readiness, clear startup failures and bounded graceful shutdown | — | Local lifecycle scenarios cover valid/invalid configuration, readiness and shutdown |
 | FND-003 | DRAFT | — | FND-001 | Controllable local fake upstream for M1: JSON and incremental SSE, request capture, gated delivery, connection failures and cancellation observation | — | Deterministic HTTP scenarios prove byte capture, controlled delivery, failures and cleanup without provider credentials |
 | FND-004 | DRAFT | — | FND-001 | Shared local/CI verification baseline: formatting, vet, tests, race detection and build on the pinned toolchain | — | The same documented checks run locally and in CI |
-| FND-005 | DRAFT | — | — | Select the M1 compatibility baseline: Responses-native backend, client/version and reproducible tool/parallel-tool scenario | — | Baseline choice, prerequisites and intended smoke procedure are recorded; unknown compatibility is explicit |
+| [FND-005](tasks/FND-005.md) | READY | — | — | Select the M1 compatibility baseline: Responses-native backend, client/version and reproducible tool/parallel-tool scenario | — | Review source-linked baseline note and reproducible smoke procedure against the card's acceptance checklist |
 | FND-006 | DRAFT | — | FND-002, FND-003, FND-004, FND-005 | Verify M0 acceptance and prepare the M1 handoff from actual scaffold, fixture and check results | — | Assembled M0 passes documented clean-checkout startup, invalid-config and local/CI checks without provider credentials; evidence supports bounded M1 candidates |
 
 ### Planner Handoff
 
-Prepare cards just ahead of execution using [the template](tasks/TEMPLATE.md). Keep these outcomes high-level until the existing code and preceding results support concrete package names, configuration fields, fixture controls and commands. Resolve module/toolchain choices in FND-001 and the startup configuration subset in FND-002; the [M3 YAML example](CONFIGURATION.md#proposed-yaml) is not an M0 implementation checklist.
+Prepare cards just ahead of execution using [the template](tasks/TEMPLATE.md). Keep dependent outcomes high-level until preceding results support concrete package names, configuration fields, fixture controls and commands. FND-001 fixes module/toolchain choices; FND-002 resolves the startup configuration subset after the scaffold. The [M3 YAML example](CONFIGURATION.md#proposed-yaml) is not an M0 implementation checklist.
 
 FND-002, FND-003 and FND-004 can proceed independently after the scaffold. FND-005 is a research/planning deliverable and can proceed independently of code. FND-006 checks their combined outcome before handing off to M1. Preserve existing IDs if refinement requires splitting a candidate; register additional bounded work rather than silently repurposing an ID.
 
