@@ -24,6 +24,7 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | [Configuration](implementation/CONFIGURATION.md) | Target configuration schema, persistent state, access and accounting |
 | [Testing](implementation/TESTING.md) | Behavioral verification, conformance, fixtures, smoke tests |
 | [References](implementation/REFERENCES.md) | Protocol sources and connector/migration research workflow |
+| [Development tooling](implementation/TOOLING.md) | When to add OpenCode MCPs, plugins, commands, and local tools |
 
 Project documents define intent; CONTRACT defines accepted internal semantics. Concrete bindings, configuration, and stack choices remain drafts until verified by code. Consult CURRENT for actual support. Keep each fact in its owning document and link rather than copying it into other files.
 
