@@ -69,7 +69,7 @@ These accepted ADRs explain the existing constraints and establish the internal 
 | Question | When to Decide | How to Validate |
 | --- | --- | --- |
 | Which upstream and client provide the first baseline? | M0 | Choose a Responses-native endpoint and reproducible tool scenario |
-| Where are the required 9Router sources located? | Before migration | Record repository, commit, license, and adapter list |
+| What is the reproducible provenance and code-reuse license of the inspected sources? | Before code migration | Resolve repository identity and licenses for the local revisions in the [source maps](../implementation/REFERENCES.md#migration-from-9router) |
 | Which Responses features are included in the first public compatibility claim? | M1 | Publish endpoint/feature matrix, including unsupported stateful operations |
 | How do public model IDs map to upstream IDs? | M2 | Native identity mapping; rewrite only as explicit connector mode |
 | How to extract requirements without full payload parsing? | M2 | Route policy plus minimal northbound extractor; unknown fields preserved |

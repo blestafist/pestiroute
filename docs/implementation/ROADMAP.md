@@ -25,13 +25,13 @@ Create Go module, entrypoint, configuration loader, and minimal health/readiness
 
 ## M1 · Transparent Responses Proxy
 
-Implement `POST /v1/responses` with one explicitly configured target, bounded request body, native forwarding, and cancellation. Place backend-specific code in a separate package from day one, even before the final Connector API. Use existing upstream model ID without alias rewrite for smoke tests.
+Implement `POST /v1/responses` with one explicitly configured target, bounded request body, native forwarding, and cancellation. Follow the accepted [v1 execution contract](CONTRACT.md) from the first slice: keep backend-specific code separate, payloads opaque, and stream lifecycle, commit and cleanup semantics intact. M1 may implement only the scoped native path; it must not introduce a competing temporary execution contract. Use existing upstream model ID without alias rewrite for smoke tests.
 
 **Done when:** request body bytes, including unknown fields, reach the fake upstream unchanged; response bytes are preserved; first chunk reaches client before upstream response completes; tool IDs and event order are unchanged. Client disconnect closes upstream request; late upstream failure does not trigger second response. One documented smoke test is executed with a real client using tools and parallel tool calls.
 
 ## M2 · Connector API and Conformance Baseline
 
-Extract execution envelope, registry, descriptor, stream frames, typed errors, and runtime services. Move M1 connector behind a common interface. Add model/capability eligibility, explicit routing, and attempt recording. Implement a test connector with predictable failures so routing is not only verified by a successful HTTP proxy.
+Complete the common language binding, registry, descriptor, and runtime services around M1's contract-aligned execution path. Validate the existing envelope, stream frames, and typed errors rather than redesigning their accepted semantics. Add model/capability eligibility, explicit routing, and attempt recording. Implement a test connector with predictable failures so routing is not only verified by a successful HTTP proxy.
 
 **Done when:** Core does not import concrete connectors and protocol parsers; conformance harness runs against native and fake implementations; M1 native regression suite stays green. An unknown capability does not satisfy a mandatory requirement, and a malformed stream sequence is recorded as a runtime error. The scoped contract is concrete enough for implementation without hidden global state.
 

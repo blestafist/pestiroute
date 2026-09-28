@@ -24,6 +24,10 @@ These are initial preferences. The SQLite driver will be validated with a small 
 
 Each connector instance has a reusable HTTP client with connection pooling. Timeouts are separated into connection establishment, TLS handshake, response header reception, and idle time for active streams. A single short global `Client.Timeout` is unsuitable for long agent responses.
 
+Transport and SDK defaults must preserve the [one-attempt and replay rules](CONTRACT.md#connector-contract). Inference clients must disable automatic redirect following and SDK retries; audit `http.Transport` replay behavior, including replayable bodies and idempotency headers, so one Execute cannot silently resend inference. A redirect or transient transport error is classified by the Connector under the existing retry rules, not automatically followed. Scoped credentials must not travel to an unselected redirect target.
+
+Native forwarding must not automatically decompress or recompress bodies. Configure compression behavior explicitly (including Go transport's automatic gzip handling), and keep content encoding and length headers consistent with the bytes actually forwarded. Header filtering excludes gateway credentials and hop-by-hop headers, including fields named by `Connection`; blindly copying headers is not passthrough.
+
 On the server side, constraints are set for request body size, header read time, and graceful shutdown. The full body of incoming JSON can be read into a bounded buffer since the contract uses `[]byte`. Response buffering is prohibited for the outgoing stream: responses are forwarded to the client as they arrive.
 
 The SSE parser is located in the connector or its protocol helper. It must correctly handle UTF-8 and JSON splitting across network chunks, multiline events, and events exceeding the standard `bufio.Scanner` limit. Core works with bytes and does not parse SSE.

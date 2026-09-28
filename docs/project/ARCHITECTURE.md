@@ -37,7 +37,7 @@ Each adapter is responsible for:
 - Parsing incoming protocol requests.
 - Validating protocol-specific fields while preserving opaque payloads and unknown extensions where allowed by that protocol.
 - Converting requests into a minimal internal execution envelope.
-- Converting connector output streams back into the client protocol format, including client-facing framing and gateway-level errors. Already compatible bytes can pass through unchanged.
+- Encoding the client transport and gateway-level errors. Connector output already conforms to the admitted client protocol; the adapter preserves compatible body bytes and must not repeat semantic translation.
 
 Core **MUST NOT** know OpenAI or Anthropic request structures, convert Responses to Chat Completions, or understand tool call or reasoning formats. It routes and executes opaque envelopes and manages transport lifecycle. Protocol adapters are not implemented inside Core or mixed with connectors.
 
@@ -155,7 +155,7 @@ Reverse-engineered connectors are first-class citizens: subscription access, exi
 
 ## Request Lifecycle
 
-The northbound adapter validates the virtual key, limits body size, and extracts `model`, `stream`, and other explicitly recognized requirements. Original bytes are preserved. Unknown fields remain in the payload; the adapter does not attempt to fully describe the Responses API with its own schema.
+The northbound boundary extracts the virtual key for verification by Core-owned authentication services, limits body size, and extracts `model`, `stream`, and other explicitly recognized requirements. Gateway credentials are not placed in the execution envelope or forwarded upstream. Original bytes are preserved. Unknown fields remain in the payload; the adapter does not attempt to fully describe the Responses API with its own schema.
 
 Core applies key constraints and finds suitable route targets based on protocol, model, capabilities, and account state. The connector estimates usage for the selected target; limits atomically reserve the available budget. An attempt is created, after which the runtime invokes `Execute`.
 
