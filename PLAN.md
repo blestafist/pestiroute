@@ -30,13 +30,10 @@ The OpenAI-compatible API is the gateway's external contract, not justification 
                             |
                     Connector Interface
                             |
-             +--------------+--------------+
-             |              |              |
-       API Connector  Agent Connector  Local Connector
-             |              |              |
-       OpenAI API      Claude Code        Ollama
-       Anthropic API   Codex              vLLM
-       Gemini API      Gemini CLI         llama.cpp
+                             +-- API Connector → OpenAI / Anthropic / Gemini APIs
+                             +-- OpenAI-Compatible Connector → OpenRouter / vLLM OpenAI endpoint
+                             +-- Agent Protocol Connector → Claude Code / Codex / Gemini CLI / ACP
+                             +-- Local Runtime Connector → Ollama native API / llama.cpp / vLLM native endpoints
 ```
 
 ## 2. External API
@@ -47,7 +44,7 @@ Additionally, `POST /v1/chat/completions` can be supported. This compatibility e
 
 ## 3. What is a Connector
 
-A connector is an isolated implementation for interacting with one backend or a family of compatible backends. It receives a request in a declared protocol and independently determines the delivery method: direct API call, OpenAI-compatible proxy, official client protocol, or local runtime access.
+A connector is an isolated implementation for interacting with one backend or a family of compatible backends. It receives a request in a declared protocol and may internally use direct API calls, protocol emulation, or local process communication. Core does not care which approach is used.
 
 Proposed implementation structure:
 
@@ -64,13 +61,14 @@ connectors/
   vllm/
 ```
 
-### Native API Connectors
+### Connector Types
 
-A native API connector directly interacts with a provider's API. It handles upstream authentication, request formation, response parsing, streaming, and usage extraction. For example, the path to OpenAI API looks like `Core → OpenAI Connector → OpenAI API`.
+1. **API Connector** — direct communication with official provider APIs, such as OpenAI API, Anthropic API, and Gemini API. It handles upstream authentication, request formation, response parsing, streaming, and usage extraction. For example: `Core → OpenAI API Connector → OpenAI API`.
+2. **OpenAI-Compatible Connector** — connects existing backends exposing OpenAI-compatible APIs, such as OpenRouter, vLLM, Ollama's OpenAI endpoint, LM Studio, Together, and Groq. Connecting a compatible service should require minimal configuration without writing new code.
+3. **Agent Protocol Connector** — exposes existing AI client/subscription protocols through the gateway, such as Claude Code, Codex, Gemini CLI, and ACP-based agents.
+4. **Local Runtime Connector** — connects local inference runtimes, such as Ollama's native API, llama.cpp, and vLLM native endpoints.
 
-### OpenAI-Compatible Connector
-
-A generic OpenAI-compatible connector connects backends that already implement a compatible API: OpenRouter, Together, Groq, LM Studio, vLLM, and other local or remote servers. Connecting a compatible service should require minimal configuration without writing new code.
+A connector may internally use direct API calls, protocol emulation, or local process communication; Core does not care which approach is used.
 
 ```yaml
 connector: openai-compatible
@@ -81,13 +79,23 @@ models:
   - model-b
 ```
 
-### Agent Protocol Connectors
+### Agent Protocol Connector
 
-An agent protocol connector reproduces how an official AI client communicates with its backend. Instead of running the client itself, the gateway transforms an OpenAI Responses request into the protocol of Claude Code, Codex, Gemini CLI, or another supported client and directly accesses the backend.
+An Agent Protocol Connector reproduces how an official AI client communicates with its backend. It does not necessarily run an agent: the Claude Code Protocol Connector, for example, does not run Claude Code itself. It reproduces the client/backend communication contract. It may use reverse-engineered protocols, existing authentication flows, hidden parameters, and provider-specific interaction patterns. ACP-based connectors may instead communicate with an agent process, as scoped for that protocol. These details remain inside the connector.
 
-Knowledge of these protocols is obtained partly through reverse engineering. The connector reproduces the official client's behavior, including OAuth flow, access through existing subscriptions, required hidden parameters, and provider-specific interaction details. All these implementation details remain inside the connector.
+```text
+OpenAI Responses API
+        |
+        v
+Claude Code Protocol Connector
+        |
+        v
+Anthropic backend
+```
 
-A typical request path: `OpenAI Responses API → Claude Code Connector → Provider backend`.
+### Reverse-Engineered Connectors
+
+Reverse-engineered connectors are first-class citizens. The gateway may support backends where official API access is unavailable, subscription access exists, and official clients already implement authentication and transport. The connector owns protocol implementation, authentication behavior, request generation, streaming handling, and provider-specific quirks. Core remains unchanged.
 
 ### Local Runtime Connectors
 
@@ -199,7 +207,7 @@ Each connector provides a manifest with identifier, type, version, accepted prot
 
 ```yaml
 id: claude-code
-type: agent
+type: agent-protocol
 version: "1.0"
 protocols:
   accepts:
@@ -228,9 +236,9 @@ These implementations should use the same infrastructure contract without requir
 
 ## 17. Migration from 9Router
 
-From 9Router, provider adapters, OAuth flows, stream parsers, usage extraction, model handling, and accumulated protocol knowledge should be reused. This code is transferred into corresponding connectors.
+**9Router migration principle: provider code is migrated, not architecture.** Reuse provider adapters, OAuth flows, request builders, stream parsers, usage extraction, model handling, and protocol knowledge inside corresponding connectors.
 
-Old routing, the old core, and previous abstractions are not transferred. Each migrated connector must pass the conformance suite: working code in 9Router alone does not confirm compatibility with the new gateway.
+Do not migrate old routing, old core abstractions, or old internal LLM models. Every migrated connector must pass direct-vs-gateway compatibility tests as well as the conformance suite: working code in 9Router alone does not confirm compatibility with the new gateway.
 
 ## 18. MVP Implementation Order
 
@@ -250,9 +258,9 @@ Add credentials, accounts, virtual keys, usage, and limits. Connect pre-executio
 
 Add the Anthropic API connector and implement translation from OpenAI Responses. This phase verifies that all request, response, and streaming transformations remain within the connector.
 
-### Phase 5 — Agent Connectors
+### Phase 5 — Agent Protocol Connectors
 
-Add connectors for Claude Code, Codex, and ACP. Implement required client protocols and authentication methods through common runtime infrastructure.
+Add connectors for Claude Code, Codex, Gemini CLI, and ACP. Research each client protocol before implementing its connector separately, using common runtime infrastructure for authentication. Local runtime connectors are tracked separately in M5.2.
 
 ### Phase 6 — External Plugin Runtime
 
