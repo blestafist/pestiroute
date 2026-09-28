@@ -16,7 +16,7 @@ Backend Provider
 
 The Core Runtime is the execution runtime: it manages infrastructure and execution without interpreting provider payloads. A Protocol Adapter owns the client-facing API format. A Connector owns Backend Provider communication and provider-specific translation. Raw payloads remain opaque to the Core Runtime, and native passthrough preserves body bytes.
 
-This document extends the [architecture](architecture.md) with extension points intended to avoid future breaking changes. It defines architectural constraints, not concrete interfaces, wire formats, or implementation milestones. The existing [connector contract](connector-contract.md) remains the transport-oriented baseline; optional extensions do not change the connector model or introduce a universal LLM abstraction.
+This document extends the [architecture](ARCHITECTURE.md) with extension points intended to avoid future breaking changes. It defines architectural constraints, not concrete interfaces, wire formats, or implementation milestones. The existing [connector contract](../implementation/CONTRACT.md) remains the transport-oriented baseline; optional extensions do not change the connector model or introduce a universal LLM abstraction.
 
 ## 1. Component Lifecycle
 

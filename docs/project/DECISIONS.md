@@ -2,7 +2,7 @@
 
 ## Statuses
 
-**Accepted** means a constraint from PLAN or direct clarification of its boundaries. **Proposed** is a working choice for the first implementation that needs validation through code. **Open** is a question with a concrete decision milestone. Changing an accepted constraint requires updating PLAN and related documents.
+**Accepted** means a project constraint or direct clarification of its boundaries. **Proposed** is a working choice for the first implementation that needs validation through code. **Open** is a question with a concrete decision milestone. A change to an accepted constraint must be recorded here and reflected in the affected project/specification documents; a task card cannot silently override it.
 
 ## Decision Registry
 
