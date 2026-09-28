@@ -46,6 +46,15 @@ Implement the assigned task end to end. Follow AGENTS.md, the accepted contract,
 
 Do not create new tasks, change acceptance to match an incomplete implementation, or take over adjacent work. Do not commit or push unless requested. Do not spawn subagents: you are the implementation worker.
 
+## Debugging Runtime Behavior
+
+Use docs/implementation/TESTING.md for the expected invariants and evidence requirements:
+
+1. Record the failing input, relevant client/backend versions, expected invariant, and observed behavior. Keep credentials and private payloads out of fixtures and logs.
+2. Reduce the failure to a minimal reproduction, preferably using the controllable fake upstream when available. Distinguish a local reproduction from real-provider verification.
+3. Trace the request, response, and lifecycle across the affected Adapter / Core Runtime / Connector boundaries. Find the first divergence; for streams inspect event order, early delivery, commit, cancellation, and finalization as relevant. A matching final body does not prove streaming correctness, and independently generated model text need not match.
+4. Test a concrete root-cause hypothesis, fix it at the responsible boundary, and retain a regression check that fails before the fix and passes afterward. Record any behavior that remains unverified.
+
 ## Applying Ponytail Here
 
 The full user-supplied Ponytail rules follow below and apply to coding work. These project-specific clarifications resolve conflicts:
