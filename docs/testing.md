@@ -1,51 +1,51 @@
-# Проверка совместимости
+# Compatibility Testing
 
-## Что доказывают тесты
+## What Tests Prove
 
-Главный объект проверки — наблюдаемое поведение gateway. Для native mode проверяется сохранение bytes и transport lifecycle; для translation — семантика внешнего протокола в пределах заявленных capabilities. Совпадение сгенерированного текста между двумя реальными запросами не является корректным критерием: модель может отвечать недетерминированно.
+Tests primarily verify the observable behavior of the gateway. For native mode, byte preservation and transport lifecycle are verified; for translation, the semantics of the external protocol within declared capabilities are tested. Matching generated text between two real requests is not a valid criterion: the model may respond non-deterministically.
 
-## Уровни проверки
+## Testing Levels
 
-Unit tests полезны для routing eligibility, retry decisions, auth state transitions и limits reconciliation. Интеграционные tests используют fake HTTP upstream и настоящие server/client connections: cancellation и streaming нельзя убедительно проверить только вызовом handler с recorder.
+Unit tests are useful for routing eligibility, retry decisions, auth state transitions, and limit reconciliation. Integration tests use a fake HTTP upstream and real server/client connections: cancellation and streaming cannot be convincingly verified by merely calling a handler with a recorder.
 
-Conformance harness запускает одни сценарии против разных connectors и transports. Real upstream smoke tests проверяют актуальный backend и конкретную версию клиента отдельно от обычного CI. Они не заменяют детерминированные fixtures.
+The conformance harness runs the same scenarios against different connectors and transports. Real upstream smoke tests verify the actual backend and specific client versions separately from regular CI. They do not replace deterministic fixtures.
 
-| Область | Обязательный сценарий | Проверяемый результат |
+| Area | Required Scenario | Verified Result |
 | --- | --- | --- |
-| Passthrough | JSON с неизвестными вложенными полями и нестандартным whitespace | Body совпадает побайтно |
-| Streaming | Несколько chunks с паузой | Первый chunk доступен до окончания ответа |
-| Parsing | UTF-8, JSON и SSE delimiters разбиты между chunks | Нет потерь или повторов bytes/events |
-| Tools | Один вызов и tool result в следующем запросе | Call ID сохраняет связь между раундами |
-| Parallel tools | Несколько interleaved tool argument streams | IDs, индексы и порядок каждого item корректны |
-| Multi-round | Несколько tool rounds | Контекст и идентификаторы остаются согласованными |
-| Tool choice | Auto, forced tool и отключение tools | Заявленные режимы соблюдаются или явно отклоняются |
-| Reasoning | Reasoning events и связанные counters | Заявленная семантика не теряется |
-| Usage | Exact, estimated, missing и partial | Unknown не превращается в ноль, нет double counting |
-| Early errors | Auth failure, 429, unavailable | Корректные status и retry disposition |
-| Late errors | Disconnect после Head/первого chunk | Нет fallback и нового HTTP response |
-| Cancellation | Клиент прекращает чтение | Upstream и внутренние ресурсы освобождены |
-| Backpressure | Медленный клиент и длинный поток | Очереди и память остаются bounded |
-| Limits | Конкурентный admission и повторный finalize | Нет обхода лимитов и duplicate accounting |
-| Runtime | Crash, malformed frames, version mismatch | Core продолжает обслуживать другие requests |
+| Passthrough | JSON with unknown nested fields and non-standard whitespace | Body matches byte-for-byte |
+| Streaming | Multiple chunks with pause | First chunk available before response completes |
+| Parsing | UTF-8, JSON, and SSE delimiters split across chunks | No loss or duplication of bytes/events |
+| Tools | One call and tool result in next request | Call ID preserves the relationship between rounds |
+| Parallel tools | Multiple interleaved tool argument streams | IDs, indices, and order of each item are correct |
+| Multi-round | Multiple tool rounds | Context and identifiers remain consistent |
+| Tool choice | Auto, forced tool, and tools disabled | Declared modes are honored or explicitly rejected |
+| Reasoning | Reasoning events and associated counters | Declared semantics are not lost |
+| Usage | Exact, estimated, missing, and partial | Unknown values are not converted to zero; no double counting |
+| Early errors | Auth failure, 429, unavailable | Correct status and retry disposition |
+| Late errors | Disconnect after Head/first chunk | No fallback and no new HTTP response |
+| Cancellation | Client stops reading | Upstream and internal resources are released |
+| Backpressure | Slow client and long stream | Queues and memory remain bounded |
+| Limits | Concurrent admission and repeated finalize | No limit bypass and no duplicate accounting |
+| Runtime | Crash, malformed frames, version mismatch | The core continues serving other requests |
 
-## Capability-aware suite
+## Capability-Aware Suite
 
-Базовые проверки lifecycle, errors и cancellation обязательны для всех implementations. Проверки features запускаются согласно manifest. `Unsupported` проверяется отрицательным сценарием с ожидаемой ошибкой; `unknown` отображается как непроверенная возможность и не считается успешным прохождением.
+Basic checks for lifecycle, errors, and cancellation are mandatory for all implementations. Feature checks run according to the manifest. `Unsupported` is verified by a negative scenario with the expected error; `unknown` is displayed as an unverified capability and does not count as a successful pass.
 
-Translation имеет отдельную feature matrix: images, hosted tools, reasoning variants, background execution и session resume не признаются поддержанными только потому, что обычный текст прошёл тест. Unknown fields гарантированно сохраняются в native mode; для translation документируется, какие поля можно переносить, а какие требуют явного отказа.
+Translation has a separate feature matrix: images, hosted tools, reasoning variants, background execution, and session resume are not considered supported merely because plain text passed the test. Unknown fields are guaranteed to be preserved in native mode; for translation, documentation specifies which fields can be transferred and which require explicit rejection.
 
-## Fixtures и traces
+## Fixtures and Traces
 
-Fixtures группируются по connector, upstream protocol и версии исследованного клиента/API. Рядом хранятся описание сценария, источник и ожидаемые invariants. Из записей удаляются credentials, cookies, личные prompts и account identifiers; после sanitization fixtures должны оставаться валидными для тестируемого протокола.
+Fixtures are grouped by connector, upstream protocol, and the version of the client/API under investigation. Stored alongside them are the scenario description, source, and expected invariants. Credentials, cookies, personal prompts, and account identifiers are removed from recordings; after sanitization, fixtures must remain valid for the tested protocol.
 
-Для dynamic IDs и timestamps используется структурное сопоставление: сами значения могут отличаться, но ссылки между tool call и tool result обязаны совпадать. Native byte-equality проверяется на одной и той же записи, без такой нормализации.
+For dynamic IDs and timestamps, structural matching is used: the values themselves may differ, but references between tool calls and tool results must match. Native byte-equality is verified on the same recording without such normalization.
 
-## Direct versus gateway
+## Direct versus Gateway
 
-Один сценарий запускается напрямую к backend и через gateway с той же моделью, настройками и версией клиента. Сравниваются допустимая последовательность events, завершённость items, tool IDs relationships, количество раундов и accounting semantics. Ошибки и unsupported features тоже входят в сравнение.
+One scenario is run both directly to the backend and through the gateway with the same model, settings, and client version. The comparison covers the permissible event sequence, item completeness, tool ID relationships, number of rounds, and accounting semantics. Errors and unsupported features are also included in the comparison.
 
-Результат smoke test фиксируется с датой, connector version, upstream/client version и scope. Он подтверждает проверенную комбинацию, а не пожизненную совместимость со всеми моделями провайдера.
+Smoke test results are recorded with the date, connector version, upstream/client version, and scope. They confirm the verified combination, not lifetime compatibility with all provider models.
 
-## Definition of done
+## Definition of Done
 
-Изменение готово, когда целевой сценарий воспроизводим, соответствующие conformance проверки проходят, capabilities и документация согласованы с поведением. Performance baseline фиксируется для native path: latency overhead, time to first byte, memory per active stream и отсутствие утечек после cancellation. Численные budgets задаются после M1 на указанной машине и нагрузке, а не придумываются заранее.
+A change is ready when the target scenario is reproducible, corresponding conformance checks pass, and capabilities and documentation are aligned with behavior. A performance baseline is recorded for the native path: latency overhead, time to first byte, memory per active stream, and absence of leaks after cancellation. Numerical budgets are established after M1 on specified hardware and load, not invented beforehand.

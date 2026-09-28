@@ -1,20 +1,20 @@
 # Universal AI Gateway Runtime
 
-> Практический план разработки, стек, контракты и критерии готовности собраны в [docs/README.md](docs/README.md).
+> The practical development plan, stack, contracts, and readiness criteria are collected in [docs/README.md](docs/README.md).
 
-## Видение проекта
+## Project Vision
 
-Мы строим лёгкий self-hosted AI protocol gateway, который предоставляет OpenAI-compatible API и подключает любые AI-бэкенды через расширяемую систему connectors. Это не просто шлюз к LLM API: он должен работать с обычными API-провайдерами, существующими AI-подписками, локальными моделями и протоколами официальных AI-клиентов, в том числе восстановленными через reverse engineering.
+We are building a lightweight self-hosted AI protocol gateway that provides an OpenAI-compatible API and connects to any AI backends through an extensible connector system. This is not just an LLM API gateway: it must work with regular API providers, existing AI subscriptions, local models, and official AI client protocols, including those recovered through reverse engineering.
 
-Gateway централизует маршрутизацию между бэкендами, управление credentials, аккаунтами, лимитами и usage. При этом ядро остаётся минимальным: оно управляет инфраструктурой, а вся специфика конкретного бэкенда находится внутри connector.
+The gateway centralizes routing between backends, credential management, accounts, limits, and usage tracking. The core remains minimal: it manages infrastructure while all backend-specific logic resides in connectors.
 
-Главное архитектурное ограничение — не создавать внутренний «универсальный LLM-язык». Внешний контракт уже существует: OpenAI Responses API. Connector самостоятельно решает, как доставить такой запрос своему бэкенду и вернуть совместимый ответ.
+The primary architectural constraint is to avoid creating an internal "universal LLM language." The external contract already exists: OpenAI Responses API. Each connector independently decides how to deliver such a request to its backend and return a compatible response.
 
-## 1. Граница между Core и connectors
+## 1. Boundary Between Core and Connectors
 
-Core отвечает за API server, аутентификацию клиентов, virtual keys, routing, limits, usage, жизненный цикл connectors и plugin runtime. Core ничего не знает о конкретных провайдерах: в нём не должно быть кода OpenAI, Anthropic или Gemini, провайдерских OAuth flows, форматов запросов и ответов, правил токенизации и форматов streaming конкретных бэкендов.
+Core handles API serving, client authentication, virtual keys, routing, limits, usage, connector lifecycle, and plugin runtime. Core knows nothing about specific providers: it should contain no OpenAI, Anthropic, or Gemini code, no provider OAuth flows, no request/response formats, no tokenization rules, and no backend-specific streaming formats.
 
-OpenAI-compatible API — внешний контракт шлюза, а не основание для появления провайдерской логики внутри инфраструктурного ядра. Обработка внешнего API должна оставаться отделённой от знаний о том, как устроен тот или иной upstream.
+The OpenAI-compatible API is the gateway's external contract, not justification for introducing provider logic into the infrastructure core. External API processing must remain independent of any particular upstream's structure.
 
 ```text
                          Clients
@@ -39,17 +39,17 @@ OpenAI-compatible API — внешний контракт шлюза, а не о
        Gemini API      Gemini CLI         llama.cpp
 ```
 
-## 2. Внешний API
+## 2. External API
 
-Основной endpoint — `POST /v1/responses`. Он должен быть совместим с OpenAI Responses API, Codex clients, OpenCode и другими agent frameworks. Responses выбран основным контрактом, поскольку поддерживает reasoning, tool calls, parallel tools, streaming events и многошаговые agent workflows.
+The primary endpoint is `POST /v1/responses`. It must be compatible with OpenAI Responses API, Codex clients, OpenCode, and other agent frameworks. Responses was chosen as the primary contract because it supports reasoning, tool calls, parallel tools, streaming events, and multi-step agent workflows.
 
-Дополнительно можно поддержать `POST /v1/chat/completions`. Этот compatibility endpoint должен преобразовывать запрос во внешний контракт Responses, а не создавать вторую независимую внутреннюю модель работы с LLM.
+Additionally, `POST /v1/chat/completions` can be supported. This compatibility endpoint should transform the request into the external Responses contract, rather than creating a parallel internal abstraction.
 
-## 3. Что такое Connector
+## 3. What is a Connector
 
-Connector — изолированная реализация взаимодействия с одним бэкендом или семейством совместимых бэкендов. Он принимает запрос в объявленном протоколе и самостоятельно определяет способ доставки: прямой API-вызов, OpenAI-compatible proxy, протокол официального клиента или обращение к локальному runtime.
+A connector is an isolated implementation for interacting with one backend or a family of compatible backends. It receives a request in a declared protocol and independently determines the delivery method: direct API call, OpenAI-compatible proxy, official client protocol, or local runtime access.
 
-Предполагаемая структура implementations:
+Proposed implementation structure:
 
 ```text
 connectors/
@@ -64,13 +64,13 @@ connectors/
   vllm/
 ```
 
-### Native API connectors
+### Native API Connectors
 
-Native API connector напрямую взаимодействует с API провайдера. Он отвечает за upstream-аутентификацию, формирование запросов, разбор ответов, streaming и извлечение usage. Например, путь к OpenAI API выглядит как `Core → OpenAI Connector → OpenAI API`.
+A native API connector directly interacts with a provider's API. It handles upstream authentication, request formation, response parsing, streaming, and usage extraction. For example, the path to OpenAI API looks like `Core → OpenAI Connector → OpenAI API`.
 
-### OpenAI-compatible connector
+### OpenAI-Compatible Connector
 
-Общий OpenAI-compatible connector подключает бэкенды, уже реализующие совместимый API: OpenRouter, Together, Groq, LM Studio, vLLM и другие локальные или удалённые серверы. Подключение совместимого сервиса должно требовать минимальной конфигурации, без написания нового кода.
+A generic OpenAI-compatible connector connects backends that already implement a compatible API: OpenRouter, Together, Groq, LM Studio, vLLM, and other local or remote servers. Connecting a compatible service should require minimal configuration without writing new code.
 
 ```yaml
 connector: openai-compatible
@@ -81,23 +81,23 @@ models:
   - model-b
 ```
 
-### Agent protocol connectors
+### Agent Protocol Connectors
 
-Agent protocol connector воспроизводит способ общения официального AI-клиента с его бэкендом. Вместо запуска самого клиента gateway преобразует OpenAI Responses request в протокол Claude Code, Codex, Gemini CLI или другого поддерживаемого клиента и самостоятельно обращается к backend.
+An agent protocol connector reproduces how an official AI client communicates with its backend. Instead of running the client itself, the gateway transforms an OpenAI Responses request into the protocol of Claude Code, Codex, Gemini CLI, or another supported client and directly accesses the backend.
 
-Знания об этом протоколе получают в том числе через reverse engineering. Connector воспроизводит поведение официального клиента, включая OAuth flow, доступ через существующую подписку, необходимые скрытые параметры и особенности взаимодействия с провайдером. Все эти детали остаются внутри connector.
+Knowledge of these protocols is obtained partly through reverse engineering. The connector reproduces the official client's behavior, including OAuth flow, access through existing subscriptions, required hidden parameters, and provider-specific interaction details. All these implementation details remain inside the connector.
 
-Типичный путь запроса: `OpenAI Responses API → Claude Code Connector → Provider backend`.
+A typical request path: `OpenAI Responses API → Claude Code Connector → Provider backend`.
 
-### Local runtime connectors
+### Local Runtime Connectors
 
-Local runtime connectors обеспечивают работу с Ollama, vLLM и llama.cpp. Если runtime уже предоставляет подходящий OpenAI-compatible API, его можно подключать через общий compatible connector; отдельная реализация нужна для специфичного протокола или поведения.
+Local runtime connectors enable working with Ollama, vLLM, and llama.cpp. If a runtime already provides a suitable OpenAI-compatible API, it can be connected through the generic compatible connector; a separate implementation is only needed for specific protocols or behaviors.
 
 ## 4. Connector API
 
-Интерфейс connector должен быть небольшим и инфраструктурным. Нельзя добавлять в него методы вроде `ChatCompletion()`, `Responses()`, `AnthropicMessages()` или `GeminiGenerate()`: такая форма протаскивает провайдерские модели в Core.
+The connector interface should be small and infrastructural. Methods like `ChatCompletion()`, `Responses()`, `AnthropicMessages()`, or `GeminiGenerate()` must not be added: such forms leak provider-specific models into Core.
 
-Предварительный контракт на Go:
+Preliminary Go contract:
 
 ```go
 type Connector interface {
@@ -110,11 +110,11 @@ type Connector interface {
 }
 ```
 
-`Describe` сообщает возможности connector, `Authenticate` выполняет его часть аутентификации, `EstimateUsage` оценивает расход перед выполнением, а `Execute` возвращает поток результата. `Models` предоставляет доступные модели, `Health` — состояние connector. Конкретные типы и механика ошибок уточняются при реализации без расширения интерфейса провайдерскими методами.
+`Describe` reports connector capabilities, `Authenticate` performs the connector's authentication portion, `EstimateUsage` estimates usage before execution, and `Execute` returns a result stream. `Models` provides available models, `Health` reports connector status. Specific types and error handling mechanics are clarified during implementation without extending the interface with provider-specific methods.
 
-## 5. Request model и native passthrough
+## 5. Request Model and Native Passthrough
 
-Запрос передаётся как opaque payload с указанием протокола и небольшим набором инфраструктурных metadata. Не нужно вводить универсальные `Messages[]`, `Tools[]`, `Reasoning{}` или `Images{}`: провайдеры развиваются независимо, и такая абстракция быстро начнёт ограничивать доступные возможности.
+A request is passed as an opaque payload with protocol indication and a minimal set of infrastructure metadata. There is no need for universal `Messages[]`, `Tools[]`, `Reasoning{}`, or `Images{}`: providers evolve independently, and such abstraction would quickly become limiting.
 
 ```go
 type Request struct {
@@ -130,21 +130,21 @@ type Request struct {
 }
 ```
 
-Например, `Protocol` содержит `openai.responses/v1`, а `Body` — исходный JSON. Metadata используется для routing и управления выполнением, но не заменяет payload внутренней LLM-моделью.
+For example, `Protocol` contains `openai.responses/v1`, and `Body` contains the original JSON. Metadata is used for routing and execution management but does not replace the payload with an internal LLM model.
 
-Native passthrough — обязательное требование. Если connector нативно поддерживает входящий протокол, тело запроса проходит путь `Client → Core → Connector → Provider` без изменений. Core не должен разбирать, пересобирать, нормализовывать payload или удалять неизвестные поля. Получение необходимых routing metadata на границе внешнего API не должно превращаться в реконструкцию тела запроса внутри Core.
+Native passthrough is a mandatory requirement. If a connector natively supports the incoming protocol, the request body flows through `Client → Core → Connector → Provider` unchanged. Core must not parse, reassemble, normalize the payload, or remove unknown fields. Extracting necessary routing metadata at the external API boundary must not turn into request body reconstruction inside Core.
 
-Это сохраняет tool calls, parallel tool calls, reasoning и provider extensions, включая поля, о которых gateway ещё ничего не знает.
+This preserves tool calls, parallel tool calls, reasoning, and provider extensions, including fields the gateway does not yet recognize.
 
 ## 6. Translation
 
-Если backend не поддерживает входящий протокол, преобразование выполняется исключительно внутри connector. Например, Anthropic connector переводит OpenAI Responses в Anthropic Messages и возвращает результат в совместимом с внешним API виде.
+If a backend does not support the incoming protocol, transformation is performed exclusively within the connector. For example, the Anthropic connector translates OpenAI Responses into Anthropic Messages and returns a result compatible with the external API.
 
-Только connector знает правила сопоставления полей, преобразования tools, streaming events, ошибок и usage. Core не участвует в семантическом переводе между API и не хранит промежуточную универсальную модель ответа или запроса.
+Only the connector knows field mapping rules, tool transformations, streaming events, errors, and usage. Core does not participate in semantic translation between APIs and does not maintain an intermediate universal response or request model.
 
 ## 7. Capabilities
 
-Каждый connector декларирует свои возможности. Описание должно позволять различать подтверждённую поддержку, отсутствие поддержки и неизвестный статус.
+Each connector declares its capabilities. The description should distinguish between confirmed support, lack of support, and unknown status.
 
 ```yaml
 capabilities:
@@ -157,45 +157,45 @@ capabilities:
   exact_usage: true
 ```
 
-Routing учитывает требования запроса: если нужны `tools`, `parallel_tools` и `reasoning`, выбирать можно только connectors, которые поддерживают все необходимые возможности. В MVP эти требования могут быть явно заданы metadata и конфигурацией маршрута; автоматический подбор по capabilities развивается позднее.
+Routing considers request requirements: if `tools`, `parallel_tools`, and `reasoning` are needed, only connectors supporting all required capabilities can be selected. In MVP, these requirements may be explicitly set in metadata and route configuration; automatic capability matching is developed later.
 
-## 8. Authentication и credentials
+## 8. Authentication and Credentials
 
-Core владеет secret storage, шифрованием, credential references и управлением аккаунтами. Он также предоставляет общую инфраструктуру OAuth: callback server, PKCE и планирование refresh. При этом провайдерские OAuth endpoints, scopes, token exchange и реализация refresh принадлежат connector.
+Core owns secret storage, encryption, credential references, and account management. It also provides common OAuth infrastructure: callback server, PKCE, and refresh scheduling. However, provider OAuth endpoints, scopes, token exchange, and refresh implementation belong to the connector.
 
-Поток аутентификации выглядит как `User → Core Auth Runtime → Connector Authenticate() → Provider → Credential Store`. Connector выполняет специфичную часть протокола через runtime, но самостоятельно не хранит secrets. Такое разделение позволяет централизованно управлять credentials, не добавляя в Core знания об отдельных провайдерах.
+The authentication flow looks like `User → Core Auth Runtime → Connector Authenticate() → Provider → Credential Store`. The connector executes the protocol-specific portion through the runtime but does not store secrets itself. This separation enables centralized credential management without adding provider-specific knowledge to Core.
 
-## 9. Usage и подсчёт токенов
+## 9. Usage and Token Counting
 
-Токенизация принадлежит connector, поскольку одинаковый запрос может занимать, например, 12 тысяч токенов у OpenAI и 13 тысяч у Anthropic. Core не должен выбирать tokenizer или интерпретировать провайдерские правила подсчёта.
+Tokenization belongs to the connector, since the same request might consume, for example, 12 thousand tokens with OpenAI and 13 thousand with Anthropic. Core should not select a tokenizer or interpret provider-specific counting rules.
 
-Перед выполнением Core вызывает `connector.EstimateUsage()` и использует оценку для проверки лимитов. После выполнения connector извлекает фактический usage из ответа backend и передаёт его в Core Usage Storage. Отчёт включает `input_tokens`, `output_tokens`, `reasoning_tokens` и `cached_tokens`; capability `exact_usage` описывает наличие точного учёта.
+Before execution, Core calls `connector.EstimateUsage()` and uses the estimate to check limits. After execution, the connector extracts actual usage from the backend response and passes it to Core Usage Storage. The report includes `input_tokens`, `output_tokens`, `reasoning_tokens`, and `cached_tokens`; the `exact_usage` capability indicates whether precise tracking is available.
 
-## 10. Virtual keys
+## 10. Virtual Keys
 
-Gateway предоставляет собственные virtual API keys. Их можно создавать, отзывать, включать и отключать; для каждого ключа доступны ограничения по моделям и connectors, лимиты RPM и TPM, а также учёт usage. Клиент получает только virtual key и никогда не получает credentials провайдера.
+The gateway provides its own virtual API keys. They can be created, revoked, enabled, and disabled; each key supports restrictions by models and connectors, RPM and TPM limits, and usage tracking. Clients receive only virtual keys and never access provider credentials.
 
 ## 11. Routing
 
-В MVP routing строится на явном сопоставлении моделей, выборе connector и аккаунта, fallback и учёте лимитов. Для каждого запроса gateway должен определить подходящий маршрут и проверить необходимые возможности connector.
+In MVP, routing is built on explicit model mapping, connector and account selection, fallback, and limit checking. For each request, the gateway must determine a suitable route and verify the connector has the required capabilities.
 
-Позднее можно добавить выбор по latency и стоимости, а также автоматический capability matching. Эти механизмы не должны менять границу ответственности: Core выбирает исполнителя, connector понимает backend.
+Later, selection by latency and cost can be added, along with automatic capability matching. These mechanisms should not change the responsibility boundary: Core selects the executor, the connector understands the backend.
 
 ## 12. Streaming
 
-Streaming обязателен с первой рабочей версии. Поток идёт по цепочке `Provider Stream → Connector → Core → Client`, без буферизации полного ответа. Gateway должен поддерживать SSE, передачу отмены выполнения от клиента до upstream, tool streaming, reasoning streaming и usage events.
+Streaming is mandatory from the first working version. The stream flows through the chain `Provider Stream → Connector → Core → Client` without buffering the complete response. The gateway must support SSE, cancellation propagation from client to upstream, tool streaming, reasoning streaming, and usage events.
 
-Провайдерский streaming format разбирает connector. Core передаёт результат клиенту и управляет жизненным циклом запроса, не интерпретируя внутренний протокол backend.
+Provider streaming format is parsed by the connector. Core passes the result to the client and manages the request lifecycle without interpreting the backend's internal protocol.
 
-## 13. Plugin runtime
+## 13. Plugin Runtime
 
-Сторонний connector не должен иметь возможность обрушить Core своим падением. Поэтому Go native plugins не используются; целевая модель — отдельный connector process, связанный с Core через версионируемый IPC protocol.
+A third-party connector should not be able to crash Core with its failure. Therefore, Go native plugins are not used; the target model is a separate connector process communicating with Core through a versioned IPC protocol.
 
-Возможные transports — stdio, Unix socket или gRPC/Connect. Окончательный выбор должен обеспечивать streaming, cancellation, health checks, версионирование и изоляцию процессов. Внешний plugin runtime выделяется отдельным этапом, но граница connector проектируется с учётом такого исполнения с самого начала.
+Possible transports include stdio, Unix socket, or gRPC/Connect. The final choice must provide streaming, cancellation, health checks, versioning, and process isolation. External plugin runtime is a separate phase, but the connector boundary is designed with this execution model in mind from the start.
 
-## 14. Connector manifest
+## 14. Connector Manifest
 
-Каждый connector предоставляет manifest с идентификатором, типом, версией, принимаемыми протоколами, capabilities и доступными способами аутентификации.
+Each connector provides a manifest with identifier, type, version, accepted protocols, capabilities, and available authentication methods.
 
 ```yaml
 id: claude-code
@@ -212,58 +212,58 @@ auth:
   - oauth
 ```
 
-Manifest позволяет Core обнаруживать и использовать connector без знания его внутренней реализации.
+The manifest allows Core to discover and use connectors without knowing their internal implementation.
 
-## 15. Testing и conformance
+## 15. Testing and Conformance
 
-Для connectors нужна общая conformance suite. Она проверяет basic request, streaming, tool calls, parallel tool calls, несколько последовательных tool rounds, reasoning, tool choice, usage, ошибки, cancellation и сохранение неизвестных полей. Проверки возможностей соотносятся с manifest; неподдерживаемая возможность не должна выглядеть как успешно поддерживаемая.
+Connectors need a common conformance suite. It verifies basic requests, streaming, tool calls, parallel tool calls, multiple sequential tool rounds, reasoning, tool choice, usage, errors, cancellation, and preservation of unknown fields. Capability checks align with the manifest; unsupported capabilities should not appear as successfully supported.
 
-Ключевая регрессия — сравнение прямого подключения `OpenCode → Provider` с подключением `OpenCode → Gateway → Provider`. Поведение должно оставаться эквивалентным, особенно для параллельных tool calls, идентификаторов tools и порядка событий. Native passthrough отдельно проверяется на сохранение тела запроса без изменений.
+A key regression test compares direct `OpenCode → Provider` connection with `OpenCode → Gateway → Provider` connection. Behavior must remain equivalent, especially for parallel tool calls, tool identifiers, and event ordering. Native passthrough is separately verified to ensure request body preservation without modifications.
 
-## 16. Первые connectors
+## 16. First Connectors
 
-Первым нужен общий OpenAI-compatible connector: он покрывает большую часть совместимых сервисов. OpenAI API и Codex дают reference implementations для прямого API и клиентского протокола соответственно. Anthropic API нужен для проверки архитектуры translation, Claude Code — для subscription-backed usage, а Ollama/vLLM — для локальных моделей.
+The first connector needed is a generic OpenAI-compatible one: it covers most compatible services. OpenAI API and Codex provide reference implementations for direct API and client protocol respectively. Anthropic API is needed to verify the translation architecture, Claude Code for subscription-backed usage, and Ollama/vLLM for local models.
 
-Эти реализации должны пользоваться одним инфраструктурным контрактом, не требуя провайдерских исключений в Core.
+These implementations should use the same infrastructure contract without requiring provider-specific exceptions in Core.
 
-## 17. Миграция из 9Router
+## 17. Migration from 9Router
 
-Из 9Router следует переиспользовать provider adapters, OAuth flows, stream parsers, извлечение usage, обработку моделей и накопленные знания о протоколах. Этот код переносится внутрь соответствующих connectors.
+From 9Router, provider adapters, OAuth flows, stream parsers, usage extraction, model handling, and accumulated protocol knowledge should be reused. This code is transferred into corresponding connectors.
 
-Старый routing, старое ядро и прежние абстракции не переносятся. Каждый мигрированный connector обязан пройти conformance suite: наличие работающего кода в 9Router само по себе не подтверждает совместимость с новым gateway.
+Old routing, the old core, and previous abstractions are not transferred. Each migrated connector must pass the conformance suite: working code in 9Router alone does not confirm compatibility with the new gateway.
 
-## 18. Порядок реализации MVP
+## 18. MVP Implementation Order
 
-### Phase 1 — Transparent proxy
+### Phase 1 — Transparent Proxy
 
-Собрать минимальный рабочий путь `OpenCode → Gateway → OpenAI Responses`. Главная цель — подтвердить прозрачную передачу запросов, streaming, tools и parallel tools. Эта версия задаёт baseline поведения для последующих изменений.
+Build a minimal working path `OpenCode → Gateway → OpenAI Responses`. The main goal is to confirm transparent request passing, streaming, tools, and parallel tools. This version establishes the behavior baseline for subsequent changes.
 
 ### Phase 2 — Connector API
 
-Оформить минимальный Connector API и перенести OpenAI implementation в connector. Проверить, что инфраструктурное ядро больше не зависит от устройства upstream и сохраняет native passthrough.
+Formalize a minimal Connector API and move the OpenAI implementation into a connector. Verify that the infrastructure core no longer depends on upstream structure and maintains native passthrough.
 
-### Phase 3 — Управление доступом и расходом
+### Phase 3 — Access and Usage Management
 
-Добавить credentials, accounts, virtual keys, usage и limits. Связать оценку usage перед выполнением с проверкой лимитов и сохранением фактического usage после выполнения.
+Add credentials, accounts, virtual keys, usage, and limits. Connect pre-execution usage estimation with limit checking and actual usage storage after execution.
 
-### Phase 4 — Anthropic connector
+### Phase 4 — Anthropic Connector
 
-Добавить Anthropic API connector и реализовать translation из OpenAI Responses. Этим этапом проверить, что все преобразования запросов, ответов и streaming остаются внутри connector.
+Add the Anthropic API connector and implement translation from OpenAI Responses. This phase verifies that all request, response, and streaming transformations remain within the connector.
 
-### Phase 5 — Agent connectors
+### Phase 5 — Agent Connectors
 
-Добавить connectors для Claude Code, Codex и ACP. Реализовать необходимые клиентские протоколы и способы аутентификации через общую инфраструктуру runtime.
+Add connectors for Claude Code, Codex, and ACP. Implement required client protocols and authentication methods through common runtime infrastructure.
 
-### Phase 6 — External plugin runtime
+### Phase 6 — External Plugin Runtime
 
-Выделить выполнение connectors в отдельные процессы. Реализовать IPC, версионирование, health checks, streaming, cancellation и изоляцию с сохранением уже проверенного поведения API.
+Move connector execution into separate processes. Implement IPC, versioning, health checks, streaming, cancellation, and isolation while preserving the already verified API behavior.
 
-## 19. Что не входит в задачи проекта
+## 19. What is Not in Project Scope
 
-Не следует начинать с UI, строить marketplace, billing, Kubernetes-инфраструктуру или распределённый кластер. Gateway также не должен становиться agent framework, системой prompt management или универсальной LLM-абстракцией. Приоритет — небольшой runtime с надёжным внешним контрактом и расширяемыми connectors.
+Do not start with UI, building a marketplace, billing, Kubernetes infrastructure, or distributed clusters. The gateway should also not become an agent framework, prompt management system, or universal LLM abstraction. The priority is a lightweight runtime with a reliable external contract and extensible connectors.
 
-## Итоговое архитектурное правило
+## Final Architectural Rule
 
-**Core управляет инфраструктурой. Connector понимает backend. Эти обязанности нельзя смешивать.**
+**Core manages infrastructure. Connector understands backend. These responsibilities must not be mixed.**
 
-OpenAI Responses остаётся внешним контрактом. Все особенности API, подписок, клиентских протоколов и локальных runtime изолируются внутри connectors, а не превращаются в новый универсальный язык внутри gateway.
+OpenAI Responses remains the external contract. All specifics of APIs, subscriptions, client protocols, and local runtimes are isolated inside connectors, not turned into a new universal language inside the gateway.

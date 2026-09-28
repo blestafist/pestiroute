@@ -1,32 +1,32 @@
-# Документация разработки
+# Development Documentation
 
-**Universal AI Gateway Runtime** — self-hosted шлюз с OpenAI-compatible API и подключаемыми AI-бэкендами. Core управляет исполнением запросов; connectors понимают протоколы бэкендов.
+**Universal AI Gateway Runtime** — a self-hosted gateway with an OpenAI-compatible API and pluggable AI backends. The Core manages request execution; connectors understand backend protocols.
 
-[PLAN.md](../PLAN.md) описывает видение и архитектурные принципы. Эта папка превращает их в проект реализации: какие компоненты нужны, как они взаимодействуют и по каким признакам этап можно считать завершённым.
+[PLAN.md](../PLAN.md) describes the vision and architectural principles. This folder translates them into an implementation roadmap: which components are needed, how they interact, and what criteria define a completed stage.
 
-Документация подготовлена до начала реализации. Указанные пакеты, команды, конфигурация и интерфейсы — **предлагаемый дизайн**, а не описание уже работающего приложения. Базовые ограничения наследуются из PLAN; решения о библиотеках и деталях контрактов можно уточнять по результатам первых прототипов.
+The documentation was prepared before implementation began. The specified packages, commands, configuration, and interfaces represent a **proposed design**, not a description of a working application. Core constraints are inherited from the PLAN; decisions about libraries and contract details can be refined based on early prototype results.
 
-## Карта документов
+## Document Map
 
-| Документ | Что в нём находится |
+| Document | What it contains |
 | --- | --- |
-| [Стек](stack.md) | Go, HTTP, storage, observability, инструменты сборки и будущий IPC |
-| [Архитектура](architecture.md) | Границы пакетов, путь запроса, passthrough, streaming и routing |
-| [Контракт connector](connector-contract.md) | Execution envelope, события потока, capabilities, ошибки и runtime services |
-| [Данные и конфигурация](configuration.md) | Модели хранения, credentials, virtual keys, limits и пример YAML |
-| [Milestones](milestones.md) | Порядок реализации, результаты этапов и критерии готовности |
-| [Проверка совместимости](testing.md) | Conformance suite, fixtures, сценарии streaming и сравнение с прямым подключением |
-| [Референсы](references.md) | Первичные источники и порядок изучения существующих реализаций |
-| [Решения и открытые вопросы](decisions.md) | Зафиксированные ограничения, рабочие предложения и нерешённые вопросы |
+| [Stack](stack.md) | Go, HTTP, storage, observability, build tools, and future IPC |
+| [Architecture](architecture.md) | Package boundaries, request path, passthrough, streaming, and routing |
+| [Connector contract](connector-contract.md) | Execution envelope, stream events, capabilities, errors, and runtime services |
+| [Data and configuration](configuration.md) | Storage models, credentials, virtual keys, limits, and YAML examples |
+| [Milestones](milestones.md) | Implementation order, stage deliverables and acceptance criteria |
+| [Compatibility testing](testing.md) | Conformance suite, fixtures, streaming scenarios, and comparison with direct connection |
+| [References](references.md) | Primary sources and review order for existing implementations |
+| [Decisions and open questions](decisions.md) | Fixed constraints, working proposals, and unresolved questions |
 
-## Как пользоваться
+## How to Use
 
-Перед первой реализацией достаточно прочитать архитектуру, стек и M0–M2 из milestones. При разработке connector основными документами становятся его контракт и conformance suite. Изменения, затрагивающие границы Core, semantics passthrough или внешний API, сначала отражаются в решениях, затем в соответствующих документах.
+Before the first implementation, it's sufficient to read the architecture, stack, and M0–M2 sections from milestones. During connector development, the contract and conformance suite become the primary documents. Changes affecting Core boundaries, passthrough semantics, or the external API are first reflected in the decisions document, then in the corresponding technical documents.
 
-Работу ведём небольшими вертикальными срезами: работающий путь от клиента до тестового backend важнее большого набора интерфейсов без исполнения. У каждого milestone есть проверяемый результат; переход к следующему этапу не должен ломать baseline предыдущего.
+We work in small vertical slices: a working path from client to test backend is more valuable than a large set of interfaces without execution. Each milestone has a verifiable result; moving to the next stage must not break the baseline established by the previous one.
 
-## Словарь
+## Glossary
 
-**Northbound** — API, которое видит клиент gateway. **Upstream** — backend, к которому обращается connector. **Connector** — реализация протокола; **instance** — её настроенный экземпляр с endpoint и параметрами; **account** — отдельная upstream-идентичность с credential reference. **Virtual key** — ключ клиента gateway, не ключ провайдера. **Attempt** — одна попытка выполнения на конкретной связке connector instance и account.
+**Northbound** — the API exposed to the gateway client. **Upstream** — the backend contacted by the connector. **Connector** — a protocol implementation; **instance** — its configured instance with an endpoint and parameters; **account** — a separate upstream identity with a credential reference. **Virtual key** — the gateway client's key, not the provider's key. **Attempt** — a single execution attempt on a specific connector instance and account pair.
 
-**Passthrough** означает сохранение байтов тела запроса и ответа в нативном режиме; транспортные headers могут меняться. **Translation** означает явное преобразование внешнего протокола внутри connector. Эти режимы имеют разные гарантии совместимости и должны быть различимы в диагностике.
+**Passthrough** means preserving the request and response body bytes in native mode; transport headers may change. **Translation** means explicit protocol transformation within the connector. These modes have different compatibility guarantees and must be distinguishable in diagnostics.
