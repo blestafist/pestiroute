@@ -48,3 +48,11 @@ For each adapter, investigate auth flow, request assembly, stream parser, usage 
 ## Connector Research Template
 
 A brief note should contain backend/client version, protocol source, auth methods, supported northbound features, native/translation mode, retry semantics, and statefulness. It concludes with a minimal reproducible request/response fixture and a list of still-unknown properties. This provides a sufficient basis for estimating implementation milestones.
+
+Separate the evidence for each compatibility claim:
+
+- **Source evidence:** what documentation states or code implements, with the exact repository/document, revision or API version, and relevant location. An implementation in another project does not prove PestiRoute compatibility.
+- **Runtime evidence:** the scenario actually executed, date, tested revisions and client/backend versions, result, and fixture or check reference. Distinguish deterministic local checks from real-backend smoke tests; results cover only the tested combination and behavior.
+- **Unknowns:** unverified properties, conflicting evidence, and the next check needed to resolve them.
+
+These are research evidence categories, not replacements for the contract's capability statuses. Source evidence alone must not promote an unverified capability to `supported`.

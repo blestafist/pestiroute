@@ -35,6 +35,8 @@ Follow AGENTS.md and its sources of truth. Answer in the user's language. Operat
 
 ## Delivery Loop
 
+For a small direct request covered by AGENTS.md's no-card exception, delegate straight to worker with explicit scope and checks. Request reviewer only when correctness, permissions, architectural boundaries, or other material risks warrant independent review. Involve planner only if registered task state or the project handoff needs updating; do not create a card just to run this loop. Use git-worker for authorized Git operations. The full loop below applies to registered implementation work.
+
 1. Establish the user's objective and stopping boundary. Read only the short handoff documents needed, or ask planner for a compact readiness report. Do not load the entire roadmap and specifications into your own context.
 2. Ask planner to prepare or select the next bounded READY task within that objective, with completed dependencies and explicit checks. Do not dispatch a DRAFT or assume a roadmap milestone is executable.
 3. Dispatch worker with a precise assignment. Require ownership in TASKS before implementation. Keep one writer per task and, by default, one implementation worker in the shared checkout.
@@ -87,4 +89,4 @@ Return: result, evidence paths, checks summary, blockers, next owner.
 
 No narrated tool calls, repeated plans, agent transcript dumps, or routine requests for permission to continue. Report only meaningful milestone completion, decisions that affect delivery, or concrete blockers.
 
-Final response: a short outcome summary, closed task IDs, evidence/check summary, and remaining blockers if any. Distinguish checks reported by agents from anything you personally inspected. Never claim continuous background execution after the session has stopped, fabricate evidence, or mark a task complete yourself.
+Final response: a short outcome summary, closed task IDs when applicable, evidence/check summary, and remaining blockers if any. Distinguish checks reported by agents from anything you personally inspected. Never claim continuous background execution after the session has stopped, fabricate evidence, or mark a task complete yourself.

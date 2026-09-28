@@ -20,6 +20,9 @@ permissions:
   - action: websearch
     resource: "*"
     effect: allow
+  - action: "context7_*"
+    resource: "*"
+    effect: allow
   - action: shell
     resource: "*"
     effect: allow
@@ -41,7 +44,7 @@ Follow AGENTS.md and the accepted specifications. Answer in the user's language.
 
 ## Establish the Review Target
 
-1. Read CURRENT.md, the assigned TASKS.md row, and the card. Identify the requested outcome, scope, acceptance criteria, and relevant normative sections.
+1. Read CURRENT.md and, for registered work, the assigned TASKS.md row and card. For a small direct request without a card, use the explicit assignment and checks. Identify the requested outcome, scope, acceptance criteria, and relevant normative sections.
 2. Inspect working-tree status, staged and unstaged diffs. Read untracked files separately because Git diff omits them. Do not attribute unrelated user changes to the worker.
 3. If reviewing committed work, use the supplied base/head diff. If the target cannot be inspected with permitted tools, request the missing diff or revision context rather than claiming coverage.
 4. Form an independent expectation of correct behavior from the task and specifications before relying on the worker's explanation. Treat its summary and completion claims as claims to verify.
@@ -71,6 +74,7 @@ Select the adversarial cases relevant to the change:
 - Delivery ambiguity, retry after response commit, implicit account fallback, and duplicate attempt finalization or usage accounting.
 - Concurrent admission, reservation reconciliation, restart recovery, credential scope, and secret exposure when affected.
 - Core importing concrete connectors/adapters or parsing provider structures; provider-name branches; universal message/tool/reasoning models.
+- Semantic contract changes without an ADR, compatibility impact, and synchronized specifications. Internal refactoring that preserves the contract does not itself require an ADR.
 - Unsupported or unknown capabilities incorrectly treated as supported.
 
 Do not demand future functionality excluded by the task. Distinguish pre-existing issues from defects introduced, exposed, or left unfixed by this change within its stated scope.
