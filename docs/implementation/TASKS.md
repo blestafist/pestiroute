@@ -25,15 +25,23 @@ Normal path: `DRAFT → READY → ACTIVE → DONE`. BLOCKED returns to READY whe
 
 ## M0 — Foundation
 
-Initial planning candidates decomposed from the existing M0 scope. No task cards have been prepared and no implementation work is claimed complete.
+High-level planning candidates covering [M0](ROADMAP.md#m0--project-foundation) and its handoff to M1. All remain DRAFT: the Planner will turn each bounded outcome into a task card, resolve relevant choices, and define concrete acceptance and checks before READY. No task cards have been prepared and no implementation work is claimed complete.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| FND-001 | DRAFT | — | — | Go module, pinned toolchain, minimal `gateway` entrypoint, clean-checkout build instructions | — | Clean-checkout build on pinned Go; exact command set in card |
-| FND-002 | DRAFT | — | FND-001 | Minimal startup configuration, health/readiness endpoints, invalid-config failure and graceful shutdown | — | Local startup/lifecycle integration scenarios; exact command set in card |
-| FND-003 | DRAFT | — | FND-001 | Controllable fake upstream: JSON/SSE, gated chunks, disconnects, cancellation observation | — | Deterministic fake-upstream behavior checks; exact command set in card |
-| FND-004 | DRAFT | — | FND-002, FND-003 | CI baseline for formatting, vet, tests, race detection and build | — | Same documented checks pass locally and in CI |
+| FND-001 | DRAFT | — | — | Reproducible Go scaffold: module identity, pinned toolchain, minimal `gateway` entrypoint and clean-checkout build instructions | — | Documented build succeeds on the selected toolchain from a clean checkout |
+| FND-002 | DRAFT | — | FND-001 | Runnable startup slice: minimal configuration, health/readiness, clear startup failures and bounded graceful shutdown | — | Local lifecycle scenarios cover valid/invalid configuration, readiness and shutdown |
+| FND-003 | DRAFT | — | FND-001 | Controllable local fake upstream for M1: JSON and incremental SSE, gated delivery, connection failures and cancellation observation | — | Deterministic HTTP scenarios prove controlled delivery, failures and cleanup without provider credentials |
+| FND-004 | DRAFT | — | FND-001 | Shared local/CI verification baseline: formatting, vet, tests, race detection and build on the pinned toolchain | — | The same documented checks run locally and in CI |
+| FND-005 | DRAFT | — | — | Select the M1 compatibility baseline: Responses-native backend, client/version and reproducible tool/parallel-tool scenario | — | Baseline choice, prerequisites and intended smoke procedure are recorded; unknown compatibility is explicit |
+| FND-006 | DRAFT | — | FND-002, FND-003, FND-004, FND-005 | Verify M0 acceptance and prepare the M1 handoff from actual scaffold, fixture and check results | — | Clean-checkout M0 verification evidence and bounded M1 planning candidates match the implemented foundation |
+
+### Planner Handoff
+
+Prepare cards just ahead of execution using [the template](tasks/TEMPLATE.md). Keep these outcomes high-level until the existing code and preceding results support concrete package names, configuration fields, fixture controls and commands. Resolve module/toolchain choices in FND-001 and the startup configuration subset in FND-002; the [M3 YAML example](CONFIGURATION.md#proposed-yaml) is not an M0 implementation checklist.
+
+FND-002, FND-003 and FND-004 can proceed independently after the scaffold. FND-005 is a research/planning deliverable and can proceed independently of code. FND-006 checks their combined outcome before handing off to M1. Preserve existing IDs if refinement requires splitting a candidate; register additional bounded work rather than silently repurposing an ID.
 
 ## Next Planning Boundary
 
-Before closing M0, verify every [M0 acceptance criterion](ROADMAP.md#m0--project-foundation), select the real-client/backend baseline from CURRENT, and decompose the M1 native proxy into bounded cards. The first end-to-end regression must cover unknown-field preservation, early chunk delivery, and cancellation. Later milestones are not implicitly ready because they appear in ROADMAP.
+FND-006 verifies every [M0 acceptance criterion](ROADMAP.md#m0--project-foundation) and uses the selected baseline to outline bounded M1 candidates. The Planner prepares executable M1 cards when their prerequisites and checks are concrete. The first end-to-end regression must cover unknown-field preservation, early chunk delivery, and cancellation. Later milestones are not implicitly ready because they appear in ROADMAP.
