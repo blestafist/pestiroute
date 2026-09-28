@@ -42,6 +42,15 @@ docs/                        project documentation
 
 Directories appear as features are implemented. Core and routing do not import `connectors/*` or `internal/northbound/openai`. Concrete implementations are wired only at the composition root. Shared helpers for OpenAI JSON and SSE are acceptable in the connector layer but should not become a universal LLM model.
 
+## Connector Types
+
+1. **API Connector** — direct communication with official provider APIs: OpenAI API, Anthropic API, Gemini API.
+2. **OpenAI-Compatible Connector** — connects existing backends exposing OpenAI-compatible APIs: OpenRouter, vLLM, Ollama OpenAI endpoint, LM Studio, Together, Groq.
+3. **Agent Protocol Connector** — exposes existing AI client/subscription protocols: Claude Code, Codex, Gemini CLI, ACP-based agents. It reproduces how an official client communicates with its backend; it does not necessarily run that client or an agent. For example, `OpenAI Responses API → Claude Code Protocol Connector → Anthropic backend` does not run Claude Code. ACP may involve communication with an agent process.
+4. **Local Runtime Connector** — connects local inference runtimes: Ollama native API, llama.cpp, vLLM native endpoints.
+
+A connector may internally use direct API calls, protocol emulation, or local process communication. Core does not care which approach is used; payloads stay opaque across its boundary.
+
 ## Request Lifecycle
 
 The northbound adapter validates the virtual key, limits body size, and extracts `model`, `stream`, and other explicitly recognized requirements. Original bytes are preserved. Unknown fields remain in the payload; the adapter does not attempt to fully describe the Responses API with its own schema.

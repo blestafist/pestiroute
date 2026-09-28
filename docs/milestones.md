@@ -11,7 +11,8 @@ Work progresses from transparent request path to managed runtime. M1–M6 corres
 | M2 | Working Connector API boundary | 4–7 days |
 | M3 | Accounts, virtual keys, usage and limits | 8–12 days |
 | M4 | Anthropic translation and compatibility matrix | 8–15 days |
-| M5 | Codex / Claude Code and local backends | Separate spike and estimate per protocol |
+| M5.1 | Agent Protocol Connectors: Codex, Claude Code, Gemini CLI, ACP | Separate spike and estimate per protocol |
+| M5.2 | Local Runtime Connectors: Ollama, vLLM, llama.cpp | Separate spike and estimate per runtime |
 | M6 | External connector process runtime | 8–15 days after IPC spike |
 
 M3 completes a minimally viable native version for standalone use. M4 validates the core architectural assumption about translation. Support for external third-party plugins appears after M6.
@@ -36,7 +37,7 @@ Extract execution envelope, registry, descriptor, stream frames, typed errors, a
 
 ## M3 · Access, Accounts and Accounting
 
-Add SQLite schema/migrations, secret storage, accounts, and a CLI for managing virtual keys, key policies, and usage records. Implement reservations, reconciliation, recovery after restart, and bounded fallback only for safe failures. OAuth runtime interfaces are prepared here; real provider flows are validated in M5.
+Add SQLite schema/migrations, secret storage, accounts, and a CLI for managing virtual keys, key policies, and usage records. Implement reservations, reconciliation, recovery after restart, and bounded fallback only for safe failures. OAuth runtime interfaces are prepared here; real provider flows are validated in M5.1.
 
 **Done when:** a revoked key does not reach upstream; concurrent requests do not bypass the admission limit; usage is not duplicated on repeated completion; interrupted attempts recover correctly. Credentials survive restart in encrypted storage; the master key is not stored in the database. Fallback respects key restrictions and does not execute after commit or ambiguous delivery.
 
@@ -46,15 +47,19 @@ Implement Anthropic API connector as explicit Responses ↔ Messages transformat
 
 **Done when:** conformance suite confirms claimed capabilities; tool call IDs and tool results are correctly linked across rounds; streaming events have a proper lifecycle. Unsupported fields with significant semantics are rejected with a clear error, not silently lost. No Anthropic model or error code branches appear in Core.
 
-## M5 · Subscriptions and Local Models
+## M5.1 · Agent Protocol Connectors
 
-For Codex and Claude Code, start with a short research spike: pin client sources/version, auth flow, request format, streaming, and minimal trace. After that, implement each connector separately, including refresh and account affinity. Gemini CLI follows the same process by priority.
+Scope: Codex, Claude Code, Gemini CLI, and ACP. Research each protocol first: record the official client version, capture its authentication flow, request format, and streaming behavior, and create a minimal trace. Implement each connector separately, including refresh and account affinity where applicable.
 
-Ollama/vLLM are first verified through a common compatible connector. If a backend only provides Chat Completions, either a declared Responses translator or a separate connector is needed; URL-style match alone does not mean ready support.
+ACP is a protocol for communicating with an agent process, not equivalent to a subscription backend API. Its spike must identify a concrete agent, transport, and owner of the agent/tool loop before implementation.
 
-ACP is considered separately: it is a protocol for communicating with an agent process, not equivalent to a subscription backend API. The spike must identify a concrete agent, transport, and owner of the agent/tool loop before including ACP in the implementation scope.
+**Done for each connector when:** applicable authorization, expiry, and concurrent refresh are verified; the connector does not persist its own secrets; versioned fixtures and a capability matrix are added; the direct-versus-gateway smoke test is reproducible. Unknown stateful capabilities are explicitly marked. Each connector can be released independently of others.
 
-**Done for each connector when:** fresh authorization, expiry, and concurrent refresh are verified; connector does not persist its own secrets; versioned fixtures and a capability matrix are added; the direct-versus-gateway smoke test is reproducible. Unknown stateful capabilities are explicitly marked. Each connector can be released independently of others.
+## M5.2 · Local Runtime Connectors
+
+Scope: Ollama, vLLM, and llama.cpp. First verify available OpenAI-compatible endpoints through the common compatible connector; use a local runtime connector for native protocols or behavior. If a backend only provides Chat Completions, either a declared Responses translator or a separate connector is needed; URL-style match alone does not mean ready support. Track these separately from client protocols because their complexity differs fundamentally.
+
+**Done for each connector when:** versioned fixtures and a capability matrix are added, the direct-versus-gateway smoke test is reproducible, and unsupported Responses features are explicitly marked. Each connector can be released independently.
 
 ## M6 · External Plugin Runtime
 

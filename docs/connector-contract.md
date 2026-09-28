@@ -39,13 +39,13 @@ type Stream interface {
 
 ## Descriptor and Models
 
-The descriptor contains a stable ID, implementation version, contract version, connector type, accepted protocols, and authentication methods. The implementation version and IPC/SDK version are distinct values. `Models` returns available models for a configured instance/account along with their capabilities, not a universal description of internal model architecture.
+The descriptor contains a stable ID, implementation version, contract version, connector type, accepted protocols, and authentication methods. Types are API Connector, OpenAI-Compatible Connector, Agent Protocol Connector, and Local Runtime Connector; the last two distinguish client-protocol emulation from local inference. An Agent Protocol Connector does not necessarily run an agent or the official client. The implementation version and IPC/SDK version are distinct values. `Models` returns available models for a configured instance/account along with their capabilities, not a universal description of internal model architecture.
 
 Capabilities have three values: `supported`, `unsupported`, `unknown`. A request requirement is satisfied only by the first. Final support is determined by a combination of protocol, execution mode, connector, model, and account; a broad connector declaration should not override a specific model limitation.
 
 ```yaml
 id: openai-compatible
-type: api
+type: openai-compatible
 version: "0.1.0"
 contract_version: "1"
 protocols:

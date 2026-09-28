@@ -33,7 +33,7 @@
 | What does output budget look like with unknown usage? | M3 | Choose rejection/conservative policy and validate concurrency |
 | How is account affinity preserved for response IDs? | Before multi-account stateful routing | Validate scope IDs and lifetime without rewriting native response |
 | Which reasoning capabilities can be transferred without losing semantics? | M4 | Real fixtures and explicit negative cases |
-| Is a Responses → Chat translator needed in the first local connector? | M5 | Validate capabilities of specific Ollama/vLLM versions |
+| Is a Responses → Chat translator needed in the first local connector? | M5.2 | Validate capabilities of specific Ollama/vLLM versions |
 | What exactly does the ACP connector execute? | Before ACP implementation | Choose agent process, transport, and tool loop owner |
 | How does an external connector call host runtime services? | M6 | Prototype scoped bidirectional lifecycle and cancellation |
 

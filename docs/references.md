@@ -41,7 +41,9 @@ OpenAI-compatible does not mean full support for the Responses API. For each ups
 
 The exact repository and commit of 9Router have not yet been recorded. Before starting the migration, add a reference, revision, license, and map of needed files. The project name alone is insufficient for source selection.
 
-For each adapter, investigate auth flow, request assembly, stream parser, usage extraction, model ID handling, and known regression tests. First, form a minimal trace and list of features, then adapt the code to the new contract. Old routing policies and internal LLM abstractions should not be migrated along with the useful protocol helpers.
+**9Router migration principle: provider code is migrated, not architecture.** Reuse provider adapters, OAuth flows, request builders, stream parsers, usage extraction, model handling, and protocol knowledge. Do not migrate old routing, old core abstractions, or old internal LLM models.
+
+For each adapter, investigate auth flow, request assembly, stream parser, usage extraction, model ID handling, and known regression tests. First, form a minimal trace and list of features, then adapt the code to the new connector contract. Every migrated connector must pass direct-vs-gateway compatibility tests.
 
 ## Connector Research Template
 
