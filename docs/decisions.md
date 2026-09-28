@@ -12,7 +12,7 @@
 | D02 | Accepted | Core contains no backend-specific code | Enables extension through connectors |
 | D03 | Accepted | Payload is opaque; native body is preserved byte-for-byte | Ensures compatibility with unknown fields and extensions |
 | D04 | Accepted | Northbound adapter is separated from Core | Keeps API parsing separate from routing and limits |
-| D05 | Accepted | Translation and tokenizer belong to the connector | Prevents API differences from being normalized inside the core |
+| D05 | Accepted | Provider-specific translation and tokenizer belong to the connector | Prevents API differences from being normalized inside the core |
 | D06 | Accepted | Third-party connectors execute out-of-process | Ensures their failure does not bring down the gateway |
 | D07 | Proposed | Go, `net/http`, single module | Provides minimal infrastructure for M0–M3 |
 | D08 | Proposed | SQLite for single-node state | Enables self-hosted deployment without separate database |
@@ -20,6 +20,8 @@
 | D10 | Proposed | gRPC over Unix socket for IPC | Will validate overhead and host-service lifecycle in M6 |
 | D11 | Accepted | Model rewrite is not a native passthrough | Requires body modification to be explicit |
 | D12 | Proposed | CLI for initial admin operations | Enables account/key management without UI milestone |
+| D13 | Accepted | Client Protocol Adapters own client request parsing, protocol validation, envelope creation, and client response formatting | Supports multiple northbound protocols without protocol structures or conversions in Core; provider-specific translation remains in connectors |
+| D14 | Accepted | Responses is primary for agents; Chat Completions is a compatibility protocol; both are first-class northbound interfaces | Adds client compatibility through adapters while preserving the opaque transport envelope and connector model |
 
 ## Questions Before Implementation
 
