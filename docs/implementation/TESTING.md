@@ -27,6 +27,11 @@ The conformance harness runs the same scenarios against different connectors and
 | Backpressure | Slow client and long stream | Queues and memory remain bounded |
 | Limits | Concurrent admission and repeated finalize | No limit bypass and no duplicate accounting |
 | Runtime | Crash, malformed frames, version mismatch | The core continues serving other requests |
+| Contract lifecycle | Duplicate Head/Complete, Body before Head or after Complete, unknown frame, EOF without Complete | Invalid sequences fail the attempt; accounting finalizes once |
+| Component lifecycle | Failed Init, repeated Close, shutdown with active work | No execution before readiness; partial resources released; drain/cancel respects deadline |
+| Adapter boundary | Decode failure, pre-stream error, Encode write failure | Common error metadata; no backend call on invalid input; write failure cancels producer |
+| Retry metadata | Retryable error with unsafe/unknown disposition, or safe error after commit | No replay; a status code or transient flag alone cannot trigger fallback |
+| Capability scope | Missing capability, parent-only support, incompatible protocol/model/account | Required capability must match exactly and be confirmed in the applicable scope |
 
 ## Capability-Aware Suite
 

@@ -20,12 +20,12 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | [Task template](implementation/tasks/TEMPLATE.md) | Planner's format for bounded task cards in `implementation/tasks/` |
 | [Roadmap](implementation/ROADMAP.md) | Milestones and acceptance gates; not a task checklist |
 | [Stack](implementation/STACK.md) | Toolchain, libraries, build and operational conventions |
-| [Contract](implementation/CONTRACT.md) | Draft Connector API, execution frames, errors, runtime services |
+| [Contract](implementation/CONTRACT.md) | Normative v1 Adapter–Core Runtime–Connector boundary, frames, capabilities, errors and lifecycle |
 | [Configuration](implementation/CONFIGURATION.md) | Target configuration schema, persistent state, access and accounting |
 | [Testing](implementation/TESTING.md) | Behavioral verification, conformance, fixtures, smoke tests |
 | [References](implementation/REFERENCES.md) | Protocol sources and connector/migration research workflow |
 
-Project documents define intent; implementation specifications are drafts until verified by code. Consult CURRENT for actual support. Keep each fact in its owning document and link rather than copying it into other files.
+Project documents define intent; CONTRACT defines accepted internal semantics. Concrete bindings, configuration, and stack choices remain drafts until verified by code. Consult CURRENT for actual support. Keep each fact in its owning document and link rather than copying it into other files.
 
 ## Glossary
 

@@ -4,7 +4,7 @@
 
 - Repository contains architecture and implementation documentation only.
 - No Go module, application source, executable, test suite, CI workflow, or verified run command exists yet.
-- Protocol Adapter and Connector boundaries are documented; interface signatures, configuration, and stack choices remain design drafts.
+- [CONTRACT.md](CONTRACT.md) is the accepted v1 semantic boundary for Protocol Adapters, Core Runtime, and Connectors, with ADR change control. Language/IPC bindings are not implemented; configuration and stack choices remain drafts.
 - Documentation is organized by project intent and implementation; the root [AGENTS.md](../../AGENTS.md) defines the agent entry path.
 
 ## Immediate Focus
