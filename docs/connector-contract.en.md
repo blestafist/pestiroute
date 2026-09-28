@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The contract describes the execution of an opaque protocol request. It does not contain common `Message`, `Tool`, `Reasoning`, or provider-specific methods. The provided Go signatures are an interface draft that will be refined in M2 with a working native connector and fake backend.
+This contract describes the execution of an opaque protocol request. It does not contain general `Message`, `Tool`, `Reasoning`, or provider-specific methods. The provided Go signatures are an interface draft that will be refined in M2 with a working native connector and mock backend.
 
 ```go
 type Connector interface {
@@ -35,13 +35,13 @@ type Stream interface {
 }
 ```
 
-`Execute` performs a single attempt on an already selected account. The connector does not perform hidden fallback between accounts. Context cancellation propagates to HTTP requests and runtime calls; `Close` is idempotent and releases resources even with a partially read response. Concurrent `Execute` calls must be safe; a single stream is read by a single consumer.
+`Execute` performs a single attempt with an already selected account. The connector does not perform implicit fallback between accounts. Context cancellation propagates to HTTP requests and runtime calls; `Close` is idempotent and releases resources even with a partially read response. Concurrent `Execute` calls must be safe; a single stream is read by a single consumer.
 
 ## Descriptor and Models
 
-The descriptor contains a stable ID, implementation version, contract version, connector type, accepted protocols, and authentication methods. The implementation version and IPC/SDK version are different values. `Models` returns the availability of models for a configured instance/account and their capabilities, not a universal description of the internal model architecture.
+The descriptor contains a stable ID, implementation version, contract version, connector type, accepted protocols, and authentication methods. The implementation version and IPC/SDK version are distinct values. `Models` returns available models for a configured instance/account along with their capabilities, not a universal description of internal model architecture.
 
-Capabilities have three values: `supported`, `unsupported`, `unknown`. A request requirement is satisfied only by the first. The final support is determined by a combination of protocol, execution mode, connector, model, and account; a broad connector declaration should not override a specific model limitation.
+Capabilities have three values: `supported`, `unsupported`, `unknown`. A request requirement is satisfied only by the first. Final support is determined by a combination of protocol, execution mode, connector, model, and account; a broad connector declaration should not override a specific model limitation.
 
 ```yaml
 id: openai-compatible
@@ -57,7 +57,7 @@ capabilities:
 auth: [api_key]
 ```
 
-This refines the early manifest from PLAN: there `true`, `false`, and `unknown` illustrate the same three-valued semantics. For the first implementation, we choose one canonical format and validate it strictly.
+This refines the early manifest from PLAN: where `true`, `false`, and `unknown` illustrate the same three-valued semantics. For the first implementation, we choose one canonical format and validate it strictly.
 
 ## Execution Stream
 
@@ -69,34 +69,34 @@ This refines the early manifest from PLAN: there `true`, `false`, and `unknown` 
 | `Body` | Non-empty set of bytes | Original or already translated connector response |
 | `Complete` | Outcome and final UsageReport | Once; closes successful transport lifecycle |
 
-The valid sequence is `Head → Body* → Complete → EOF`. `Complete` can describe an upstream HTTP error, not just a successful generation. Before `Head`, the connector may return a typed error; after `Head`, an unexpected `Next` error indicates an incomplete stream. EOF without `Complete` is also considered incomplete.
+The valid sequence is `Head → Body* → Complete → EOF`. `Complete` can describe an upstream HTTP error, not just successful generation. Before `Head`, the connector may return a typed error; after `Head`, an unexpected `Next` error indicates an incomplete stream. EOF without `Complete` is also considered incomplete.
 
-Body chunks do not need to align with SSE event boundaries. Core must not reinterpret their contents. Non-streaming JSON is transmitted through the same mechanism. With native passthrough, the connector may parse a limited copy of events in parallel for usage, but the transmitted bytes remain unchanged.
+Body chunks do not need to align with SSE event boundaries. Core must not reinterpret their contents. Non-streaming JSON is transmitted through the same mechanism. With native passthrough, the connector may parse a limited copy of events in parallel for usage tracking, but the transmitted bytes remain unchanged.
 
 ## Usage
 
-`UsageEstimate` contains a known estimate of input/output budget, an unknown value indicator, and an estimation method. `UsageReport` contains nullable counters `input_tokens`, `output_tokens`, `reasoning_tokens`, `cached_tokens`, a source (`provider`, `estimate`, `unknown`), and a completeness indicator. An unknown value is not equal to zero.
+`UsageEstimate` contains a known estimate of input/output budget, an unknown value indicator, and an estimation method. `UsageReport` contains nullable counters `input_tokens`, `output_tokens`, `reasoning_tokens`, `cached_tokens`, a source (`provider`, `estimate`, `unknown`), and a completeness indicator. An unknown value is distinct from zero.
 
-Input/output counters are considered top-level quantities. Cached and reasoning tokens are details that may already be included in totals; they cannot be unconditionally added again. The connector normalizes only accounting semantics and preserves backend-specific details in namespaced diagnostics when necessary.
+Input/output counters are considered top-level quantities. Cached and reasoning tokens are details that may already be included in the totals; they cannot be unconditionally added again. The connector normalizes only accounting semantics and preserves backend-specific details in namespaced diagnostics when necessary.
 
 If the client disconnects before receiving usage, Core saves the partial/unknown outcome and applied estimate separately. The absence of usage does not turn an executed request into a free one and does not allow deletion of the reservation without a trace.
 
 ## Errors
 
-A typed error describes an infrastructure category: `invalid_request`, `unsupported_feature`, `unauthenticated`, `permission_denied`, `rate_limited`, `unavailable`, `timeout`, `cancelled`, or `internal`. Additionally, retry disposition, optional retry delay, and a safe message for the client are transmitted.
+A typed error describes an infrastructure category: `invalid_request`, `unsupported_feature`, `unauthenticated`, `permission_denied`, `rate_limited`, `unavailable`, `timeout`, `cancelled`, or `internal`. Additionally, retry disposition, optional retry delay, and a client-safe message are transmitted.
 
 A native connector can return the original upstream error as `Head` and `Body`, preserving the external protocol. If Core considers fallback, the decision and retry metadata must be available before forwarding `Head` to the client. A translation connector converts the upstream error to northbound-compatible bytes; the gateway's own errors are encoded by the northbound adapter.
 
 ## Runtime Services and Auth
 
-Runtime provides selected instance/account context, scoped credential access, HTTP transport, logger, and common auth runtime. It does not pass the entire database or credentials of other accounts to the connector. The connector can use the secret during invocation but does not store it independently.
+Runtime provides selected instance/account context, scoped credential access, HTTP transport, logger, and common auth runtime. It does not pass the entire database or credentials of other accounts to the connector. The connector can use secrets during invocation but does not store them independently.
 
-`Authenticate` works as a state machine: start a flow, continue after callback/device polling, or perform a refresh. `AuthResult` describes the next action, completion with updated credential, or an error. Specific endpoints, scopes, and token exchanges remain inside the connector. Core is responsible for state validation, PKCE storage, auth session lifetime, and atomic result persistence.
+`Authenticate` works as a state machine: start a flow, continue after callback/device polling, or perform a refresh. `AuthResult` describes the next action, completion with updated credentials, or an error. Specific endpoints, scopes, and token exchanges remain inside the connector. Core is responsible for state validation, PKCE storage, auth session lifetime, and atomic result persistence.
 
-Refresh is serialized for a single account. When rotating a refresh token, the new value is saved atomically with expiry; a parallel request must not overwrite it with the old one. A storage error after token exchange is recorded as a separate auth failure.
+Refresh is serialized for a single account. When rotating a refresh token, the new value is saved atomically with its expiry; a parallel request must not overwrite it with the old value. A storage error after token exchange is recorded as a separate auth failure.
 
 ## Transition to IPC
 
-Opaque request bytes, metadata, descriptor, and the same stream frames are transferred to IPC. For Runtime calls from an external connector, a separate scoped host-service channel is required; a single server-streaming `Execute` RPC is insufficient for this. In M6, the lifecycle of both directions, authentication of the local channel, and access revocation upon attempt completion need to be verified.
+Opaque request bytes, metadata, descriptor, and the same stream frames are transferred via IPC. For Runtime calls from an external connector, a separate scoped host-service channel is required; a single server-streaming `Execute` RPC is insufficient. In M6, the lifecycle of both directions, authentication of the local channel, and access revocation upon attempt completion need to be verified.
 
 The handshake verifies major contract version compatibility before executing requests. An unknown control frame cannot be skipped the same way as an unknown JSON field: the transport contract must remain unambiguous. Payload compatibility is ensured by its opacity; IPC compatibility is ensured by separate versioning rules.

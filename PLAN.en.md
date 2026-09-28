@@ -6,15 +6,15 @@
 
 We're building a lightweight self-hosted AI protocol gateway that provides an OpenAI-compatible API and connects to any AI backends through an extensible connector system. This isn't just an LLM API gateway: it must work with regular API providers, existing AI subscriptions, local models, and official AI client protocols, including those recovered through reverse engineering.
 
-The gateway centralizes routing between backends, credential management, accounts, limits, and usage tracking. The core remains minimal: it manages infrastructure while all backend-specific logic resides inside connectors.
+The gateway centralizes routing between backends, credential management, accounts, limits, and usage tracking. The core remains minimal: it manages infrastructure while all backend-specific logic resides in connectors.
 
 The primary architectural constraint is to avoid creating an internal "universal LLM language." The external contract already exists: OpenAI Responses API. Each connector independently decides how to deliver such a request to its backend and return a compatible response.
 
 ## 1. Boundary Between Core and Connectors
 
-Core handles the API server, client authentication, virtual keys, routing, limits, usage, connector lifecycle, and plugin runtime. Core knows nothing about specific providers: it should contain no OpenAI, Anthropic, or Gemini code, no provider OAuth flows, no request/response formats, no tokenization rules, and no backend-specific streaming formats.
+Core handles API serving, client authentication, virtual keys, routing, limits, usage, connector lifecycle, and plugin runtime. Core knows nothing about specific providers: it should contain no OpenAI, Anthropic, or Gemini code, no provider OAuth flows, no request/response formats, no tokenization rules, and no backend-specific streaming formats.
 
-The OpenAI-compatible API is the gateway's external contract, not a reason to introduce provider logic into the infrastructure core. External API processing must remain separated from knowledge of how any particular upstream is structured.
+The OpenAI-compatible API is the gateway's external contract, not justification for introducing provider logic into the infrastructure core. External API processing must remain separated from knowledge of how any particular upstream is structured.
 
 ```text
                          Clients
@@ -41,15 +41,15 @@ The OpenAI-compatible API is the gateway's external contract, not a reason to in
 
 ## 2. External API
 
-The primary endpoint is `POST /v1/responses`. It must be compatible with OpenAI Responses API, Codex clients, OpenCode, and other agent frameworks. Responses was chosen as the main contract because it supports reasoning, tool calls, parallel tools, streaming events, and multi-step agent workflows.
+The primary endpoint is `POST /v1/responses`. It must be compatible with OpenAI Responses API, Codex clients, OpenCode, and other agent frameworks. Responses was chosen as the primary contract because it supports reasoning, tool calls, parallel tools, streaming events, and multi-step agent workflows.
 
 Additionally, `POST /v1/chat/completions` can be supported. This compatibility endpoint should transform the request into the external Responses contract, rather than creating a second independent internal LLM model.
 
 ## 3. What is a Connector
 
-A connector is an isolated implementation of interaction with one backend or a family of compatible backends. It receives a request in a declared protocol and independently determines the delivery method: direct API call, OpenAI-compatible proxy, official client protocol, or local runtime access.
+A connector is an isolated implementation for interacting with one backend or a family of compatible backends. It receives a request in a declared protocol and independently determines the delivery method: direct API call, OpenAI-compatible proxy, official client protocol, or local runtime access.
 
-Expected implementation structure:
+Proposed implementation structure:
 
 ```text
 connectors/
@@ -85,17 +85,17 @@ models:
 
 An agent protocol connector reproduces how an official AI client communicates with its backend. Instead of running the client itself, the gateway transforms an OpenAI Responses request into the protocol of Claude Code, Codex, Gemini CLI, or another supported client and directly accesses the backend.
 
-Knowledge of these protocols is obtained partly through reverse engineering. The connector reproduces the official client's behavior, including OAuth flow, access through existing subscriptions, required hidden parameters, and provider interaction specifics. All these details remain inside the connector.
+Knowledge of these protocols is obtained partly through reverse engineering. The connector reproduces the official client's behavior, including OAuth flow, access through existing subscriptions, required hidden parameters, and provider-specific interaction details. All these implementation details remain inside the connector.
 
 A typical request path: `OpenAI Responses API → Claude Code Connector → Provider backend`.
 
 ### Local Runtime Connectors
 
-Local runtime connectors enable working with Ollama, vLLM, and llama.cpp. If a runtime already provides a suitable OpenAI-compatible API, it can be connected through the generic compatible connector; a separate implementation is needed only for specific protocols or behaviors.
+Local runtime connectors enable working with Ollama, vLLM, and llama.cpp. If a runtime already provides a suitable OpenAI-compatible API, it can be connected through the generic compatible connector; a separate implementation is only needed for specific protocols or behaviors.
 
 ## 4. Connector API
 
-The connector interface should be small and infrastructural. Methods like `ChatCompletion()`, `Responses()`, `AnthropicMessages()`, or `GeminiGenerate()` must not be added: such forms leak provider models into Core.
+The connector interface should be small and infrastructural. Methods like `ChatCompletion()`, `Responses()`, `AnthropicMessages()`, or `GeminiGenerate()` must not be added: such forms leak provider-specific models into Core.
 
 Preliminary Go contract:
 
@@ -110,11 +110,11 @@ type Connector interface {
 }
 ```
 
-`Describe` reports connector capabilities, `Authenticate` performs its authentication part, `EstimateUsage` estimates usage before execution, and `Execute` returns a result stream. `Models` provides available models, `Health` reports connector status. Specific types and error mechanics are clarified during implementation without extending the interface with provider-specific methods.
+`Describe` reports connector capabilities, `Authenticate` performs the connector's authentication portion, `EstimateUsage` estimates usage before execution, and `Execute` returns a result stream. `Models` provides available models, `Health` reports connector status. Specific types and error handling mechanics are clarified during implementation without extending the interface with provider-specific methods.
 
 ## 5. Request Model and Native Passthrough
 
-A request is passed as an opaque payload with protocol indication and a small set of infrastructure metadata. There's no need for universal `Messages[]`, `Tools[]`, `Reasoning{}`, or `Images{}`: providers evolve independently, and such abstraction would quickly limit available capabilities.
+A request is passed as an opaque payload with protocol indication and a minimal set of infrastructure metadata. There's no need for universal `Messages[]`, `Tools[]`, `Reasoning{}`, or `Images{}`: providers evolve independently, and such abstraction would quickly become limiting.
 
 ```go
 type Request struct {
@@ -132,13 +132,13 @@ type Request struct {
 
 For example, `Protocol` contains `openai.responses/v1`, and `Body` contains the original JSON. Metadata is used for routing and execution management but doesn't replace the payload with an internal LLM model.
 
-Native passthrough is a mandatory requirement. If a connector natively supports the incoming protocol, the request body flows `Client → Core → Connector → Provider` unchanged. Core must not parse, reassemble, normalize the payload, or remove unknown fields. Extracting necessary routing metadata at the external API boundary should not turn into request body reconstruction inside Core.
+Native passthrough is a mandatory requirement. If a connector natively supports the incoming protocol, the request body flows through `Client → Core → Connector → Provider` unchanged. Core must not parse, reassemble, normalize the payload, or remove unknown fields. Extracting necessary routing metadata at the external API boundary must not turn into request body reconstruction inside Core.
 
 This preserves tool calls, parallel tool calls, reasoning, and provider extensions, including fields the gateway doesn't yet know about.
 
 ## 6. Translation
 
-If a backend doesn't support the incoming protocol, transformation is performed exclusively inside the connector. For example, the Anthropic connector translates OpenAI Responses into Anthropic Messages and returns a result compatible with the external API.
+If a backend doesn't support the incoming protocol, transformation is performed exclusively within the connector. For example, the Anthropic connector translates OpenAI Responses into Anthropic Messages and returns a result compatible with the external API.
 
 Only the connector knows field mapping rules, tool transformations, streaming events, errors, and usage. Core doesn't participate in semantic translation between APIs and doesn't maintain an intermediate universal response or request model.
 
@@ -157,41 +157,41 @@ capabilities:
   exact_usage: true
 ```
 
-Routing considers request requirements: if `tools`, `parallel_tools`, and `reasoning` are needed, only connectors supporting all required capabilities can be selected. In MVP, these requirements may be explicitly set in metadata and route configuration; automatic capability matching develops later.
+Routing considers request requirements: if `tools`, `parallel_tools`, and `reasoning` are needed, only connectors supporting all required capabilities can be selected. In MVP, these requirements may be explicitly set in metadata and route configuration; automatic capability matching is developed later.
 
 ## 8. Authentication and Credentials
 
 Core owns secret storage, encryption, credential references, and account management. It also provides common OAuth infrastructure: callback server, PKCE, and refresh scheduling. However, provider OAuth endpoints, scopes, token exchange, and refresh implementation belong to the connector.
 
-The authentication flow looks like `User → Core Auth Runtime → Connector Authenticate() → Provider → Credential Store`. The connector executes the protocol-specific part through the runtime but doesn't store secrets itself. This separation allows centralized credential management without adding provider knowledge to Core.
+The authentication flow looks like `User → Core Auth Runtime → Connector Authenticate() → Provider → Credential Store`. The connector executes the protocol-specific portion through the runtime but doesn't store secrets itself. This separation enables centralized credential management without adding provider-specific knowledge to Core.
 
 ## 9. Usage and Token Counting
 
-Tokenization belongs to the connector, since the same request might consume, for example, 12 thousand tokens with OpenAI and 13 thousand with Anthropic. Core should not select a tokenizer or interpret provider counting rules.
+Tokenization belongs to the connector, since the same request might consume, for example, 12 thousand tokens with OpenAI and 13 thousand with Anthropic. Core should not select a tokenizer or interpret provider-specific counting rules.
 
-Before execution, Core calls `connector.EstimateUsage()` and uses the estimate to check limits. After execution, the connector extracts actual usage from the backend response and passes it to Core Usage Storage. The report includes `input_tokens`, `output_tokens`, `reasoning_tokens`, and `cached_tokens`; the `exact_usage` capability describes whether precise tracking is available.
+Before execution, Core calls `connector.EstimateUsage()` and uses the estimate to check limits. After execution, the connector extracts actual usage from the backend response and passes it to Core Usage Storage. The report includes `input_tokens`, `output_tokens`, `reasoning_tokens`, and `cached_tokens`; the `exact_usage` capability indicates whether precise tracking is available.
 
 ## 10. Virtual Keys
 
-The gateway provides its own virtual API keys. They can be created, revoked, enabled, and disabled; each key supports restrictions by models and connectors, RPM and TPM limits, and usage tracking. Clients receive only virtual keys and never receive provider credentials.
+The gateway provides its own virtual API keys. They can be created, revoked, enabled, and disabled; each key supports restrictions by models and connectors, RPM and TPM limits, and usage tracking. Clients receive only virtual keys and never access provider credentials.
 
 ## 11. Routing
 
-In MVP, routing is built on explicit model mapping, connector and account selection, fallback, and limit checking. For each request, the gateway must determine a suitable route and verify the connector's required capabilities.
+In MVP, routing is built on explicit model mapping, connector and account selection, fallback, and limit checking. For each request, the gateway must determine a suitable route and verify the connector has the required capabilities.
 
-Later, selection by latency and cost can be added, along with automatic capability matching. These mechanisms shouldn't change the responsibility boundary: Core selects the executor, connector understands the backend.
+Later, selection by latency and cost can be added, along with automatic capability matching. These mechanisms shouldn't change the responsibility boundary: Core selects the executor, the connector understands the backend.
 
 ## 12. Streaming
 
 Streaming is mandatory from the first working version. The stream flows through the chain `Provider Stream → Connector → Core → Client` without buffering the complete response. The gateway must support SSE, cancellation propagation from client to upstream, tool streaming, reasoning streaming, and usage events.
 
-Provider streaming format is parsed by the connector. Core passes the result to the client and manages request lifecycle without interpreting the backend's internal protocol.
+Provider streaming format is parsed by the connector. Core passes the result to the client and manages the request lifecycle without interpreting the backend's internal protocol.
 
 ## 13. Plugin Runtime
 
-A third-party connector should not be able to crash Core with its failure. Therefore, Go native plugins are not used; the target model is a separate connector process linked to Core through a versioned IPC protocol.
+A third-party connector should not be able to crash Core with its failure. Therefore, Go native plugins are not used; the target model is a separate connector process communicating with Core through a versioned IPC protocol.
 
-Possible transports include stdio, Unix socket, or gRPC/Connect. The final choice must provide streaming, cancellation, health checks, versioning, and process isolation. External plugin runtime is a separate stage, but the connector boundary is designed with this execution model from the start.
+Possible transports include stdio, Unix socket, or gRPC/Connect. The final choice must provide streaming, cancellation, health checks, versioning, and process isolation. External plugin runtime is a separate phase, but the connector boundary is designed with this execution model in mind from the start.
 
 ## 14. Connector Manifest
 
@@ -218,19 +218,19 @@ The manifest allows Core to discover and use connectors without knowing their in
 
 Connectors need a common conformance suite. It verifies basic requests, streaming, tool calls, parallel tool calls, multiple sequential tool rounds, reasoning, tool choice, usage, errors, cancellation, and preservation of unknown fields. Capability checks align with the manifest; unsupported capabilities should not appear as successfully supported.
 
-A key regression test compares direct `OpenCode → Provider` connection with `OpenCode → Gateway → Provider` connection. Behavior must remain equivalent, especially for parallel tool calls, tool identifiers, and event ordering. Native passthrough is separately verified to ensure request body preservation without changes.
+A key regression test compares direct `OpenCode → Provider` connection with `OpenCode → Gateway → Provider` connection. Behavior must remain equivalent, especially for parallel tool calls, tool identifiers, and event ordering. Native passthrough is separately verified to ensure request body preservation without modifications.
 
 ## 16. First Connectors
 
-The first needed is a generic OpenAI-compatible connector: it covers most compatible services. OpenAI API and Codex provide reference implementations for direct API and client protocol respectively. Anthropic API is needed to verify translation architecture, Claude Code for subscription-backed usage, and Ollama/vLLM for local models.
+The first needed is a generic OpenAI-compatible connector: it covers most compatible services. OpenAI API and Codex provide reference implementations for direct API and client protocol respectively. Anthropic API is needed to verify the translation architecture, Claude Code for subscription-backed usage, and Ollama/vLLM for local models.
 
-These implementations should use the same infrastructure contract without requiring provider exceptions in Core.
+These implementations should use the same infrastructure contract without requiring provider-specific exceptions in Core.
 
 ## 17. Migration from 9Router
 
-From 9Router, provider adapters, OAuth flows, stream parsers, usage extraction, model handling, and accumulated protocol knowledge should be reused. This code is transferred inside corresponding connectors.
+From 9Router, provider adapters, OAuth flows, stream parsers, usage extraction, model handling, and accumulated protocol knowledge should be reused. This code is transferred into corresponding connectors.
 
-Old routing, old core, and previous abstractions are not transferred. Each migrated connector must pass the conformance suite: working code in 9Router alone doesn't confirm compatibility with the new gateway.
+Old routing, the old core, and previous abstractions are not transferred. Each migrated connector must pass the conformance suite: working code in 9Router alone doesn't confirm compatibility with the new gateway.
 
 ## 18. MVP Implementation Order
 
@@ -240,7 +240,7 @@ Build a minimal working path `OpenCode → Gateway → OpenAI Responses`. The ma
 
 ### Phase 2 — Connector API
 
-Formalize a minimal Connector API and move OpenAI implementation into a connector. Verify that the infrastructure core no longer depends on upstream structure and maintains native passthrough.
+Formalize a minimal Connector API and move the OpenAI implementation into a connector. Verify that the infrastructure core no longer depends on upstream structure and maintains native passthrough.
 
 ### Phase 3 — Access and Usage Management
 
@@ -248,7 +248,7 @@ Add credentials, accounts, virtual keys, usage, and limits. Connect pre-executio
 
 ### Phase 4 — Anthropic Connector
 
-Add Anthropic API connector and implement translation from OpenAI Responses. This phase verifies that all request, response, and streaming transformations remain inside the connector.
+Add the Anthropic API connector and implement translation from OpenAI Responses. This phase verifies that all request, response, and streaming transformations remain within the connector.
 
 ### Phase 5 — Agent Connectors
 
@@ -256,11 +256,11 @@ Add connectors for Claude Code, Codex, and ACP. Implement required client protoc
 
 ### Phase 6 — External Plugin Runtime
 
-Move connector execution into separate processes. Implement IPC, versioning, health checks, streaming, cancellation, and isolation while preserving already verified API behavior.
+Move connector execution into separate processes. Implement IPC, versioning, health checks, streaming, cancellation, and isolation while preserving the already verified API behavior.
 
 ## 19. What is Not in Project Scope
 
-Don't start with UI, building a marketplace, billing, Kubernetes infrastructure, or distributed clusters. The gateway should also not become an agent framework, prompt management system, or universal LLM abstraction. The priority is a small runtime with a reliable external contract and extensible connectors.
+Don't start with UI, building a marketplace, billing, Kubernetes infrastructure, or distributed clusters. The gateway should also not become an agent framework, prompt management system, or universal LLM abstraction. The priority is a lightweight runtime with a reliable external contract and extensible connectors.
 
 ## Final Architectural Rule
 
