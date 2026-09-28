@@ -16,7 +16,7 @@ Backend Provider
 
 The Core Runtime is the execution runtime: it manages infrastructure and execution without interpreting provider payloads. A Protocol Adapter owns the client-facing API format. A Connector owns Backend Provider communication and provider-specific translation. Raw payloads remain opaque to the Core Runtime, and native passthrough preserves body bytes.
 
-This document extends the [architecture](ARCHITECTURE.md) with extension points intended to avoid future breaking changes. It defines architectural constraints, not concrete interfaces, wire formats, or implementation milestones. The existing [connector contract](../implementation/CONTRACT.md) remains the transport-oriented baseline; optional extensions do not change the connector model or introduce a universal LLM abstraction.
+This document extends the [architecture](ARCHITECTURE.md) with extension points intended to avoid future breaking changes. It defines architectural constraints, not concrete interfaces, wire formats, or implementation milestones. The normative [internal execution contract](../implementation/CONTRACT.md) owns the v1 Adapter–Core Runtime–Connector boundary; optional extensions do not change the connector model or introduce a universal LLM abstraction.
 
 ## 1. Component Lifecycle
 
@@ -59,7 +59,7 @@ Routing and validation rely on declared capabilities and request requirements, n
 
 The existing three-valued semantics remain: `supported`, `unsupported`, and `unknown`. Only confirmed support satisfies a requirement. End-to-end support depends on the applicable Protocol Adapter, Connector, protocol, model, and account; a provider-wide claim is insufficient. Component-level capabilities such as authentication are evaluated in their relevant scope rather than required of every layer.
 
-The names above illustrate an extensible vocabulary, not a rename of existing manifest fields. New capability identifiers may be added without teaching the Core Runtime their LLM semantics. An unrecognized capability must not be treated as supported. Changes in availability affect eligibility; they do not authorize unsafe retries of active work.
+The [contract capability model](../implementation/CONTRACT.md#capability-model) fixes the namespaced vocabulary and three-valued support semantics; earlier short draft keys are superseded under DEC-004. New identifiers require documented scope and meaning without teaching Core their LLM semantics. An unrecognized capability must not be treated as supported. Changes in availability affect eligibility; they do not authorize unsafe retries of active work.
 
 ## 3. Execution Envelope
 

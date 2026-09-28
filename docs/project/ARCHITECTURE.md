@@ -2,6 +2,8 @@
 
 The [Extensibility Model](EXTENSIBILITY.md) defines component lifecycle, capabilities, transport boundaries, and versioning constraints for evolving Protocol Adapters and Connectors within this architecture.
 
+The [Internal Execution Contract](../implementation/CONTRACT.md) is the normative v1 specification of the Protocol Adapter–Core Runtime–Connector boundary. Semantic changes require an ADR in [DECISIONS.md](DECISIONS.md#contract-adrs).
+
 ## Three Explicit Boundaries
 
 The system has Client Protocol Adapters, Core infrastructure, and backend connectors. Each adapter understands its client-facing protocol, extracts minimal metadata, and formats gateway-level errors. OpenAI Responses is the primary northbound protocol; additional adapters extend the client-facing formats. Core only knows about the execution envelope, access policies, and execution state. Connectors understand the upstream and translate its protocol when necessary.

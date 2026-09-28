@@ -37,7 +37,7 @@ routes:
     match:
       protocol: openai.responses/v1
       model: model-a
-    requirements: [streaming, tools]
+    requirements: [llm.streaming, llm.tools]
     targets:
       - connector: primary
         account: primary-account

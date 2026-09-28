@@ -52,6 +52,8 @@ The complete document index and glossary are in [docs/README.md](docs/README.md)
 | One task's scope, acceptance and verification evidence | `docs/implementation/tasks/<ID>.md` |
 | Technical specification | Relevant implementation document |
 
+`docs/implementation/CONTRACT.md` is the normative v1 internal boundary for Protocol Adapters, Core Runtime, and Connectors. Every semantic contract change requires an ADR in DECISIONS, compatibility impact, and synchronized specification updates. Concrete language/IPC bindings must preserve it; provider additions must not grow provider-specific public APIs.
+
 Accepted constraints bind implementation. Proposed interfaces and libraries are drafts to validate, not claims of working code. Task cards narrow scope; they cannot silently override architecture. Resolve a relevant conflict in DECISIONS and the owning specification before encoding a new contract. Do not duplicate full contracts or roadmap text into task cards.
 
 ## Planning and Execution
