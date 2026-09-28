@@ -2,6 +2,8 @@
 
 > The practical development plan, stack, contracts, and readiness criteria are collected in [docs/README.md](docs/README.md).
 
+> The [Extensibility Model](docs/EXTENSIBILITY.md) defines how Protocol Adapters and Connectors evolve through lifecycle management, capabilities, opaque execution envelopes, and explicit API compatibility. Core Runtime remains provider-agnostic; extensions must preserve native passthrough and must not introduce a universal LLM abstraction.
+
 ## Project Vision
 
 We are building a lightweight self-hosted AI protocol gateway that provides an OpenAI-compatible API and connects to any AI backends through an extensible connector system. This is not just an LLM API gateway: it must work with regular API providers, existing AI subscriptions, local models, and official AI client protocols, including those recovered through reverse engineering.
@@ -19,7 +21,11 @@ The OpenAI-compatible API is the gateway's external contract, not justification 
 ```text
                          Clients
                             |
-                  OpenAI-compatible API
+                  Client API Protocol
+                            |
+                  Client Protocol Adapter
+                            |
+                  Internal Execution Envelope
                             |
                  +----------v-----------+
                  |         CORE         |
@@ -40,7 +46,9 @@ The OpenAI-compatible API is the gateway's external contract, not justification 
 
 The primary endpoint is `POST /v1/responses`. It must be compatible with OpenAI Responses API, Codex clients, OpenCode, and other agent frameworks. Responses was chosen as the primary contract because it supports reasoning, tool calls, parallel tools, streaming events, and multi-step agent workflows.
 
-Additionally, `POST /v1/chat/completions` can be supported. This compatibility endpoint should transform the request into the external Responses contract, rather than creating a parallel internal abstraction.
+Additionally, `POST /v1/chat/completions` can be supported through its own Client Protocol Adapter. Chat Completions is a compatibility protocol and Responses is the primary agent-oriented protocol, but both are first-class northbound interfaces. Anthropic Messages and potentially Gemini-compatible APIs and other protocols can be added through the same architectural layer.
+
+Client Protocol Adapters parse and validate client-protocol requests, produce the minimal internal execution envelope, and convert connector output streams into the client protocol format. Core remains unaware of OpenAI and Anthropic request structures, Responses/Chat Completions conversion, tool call formats, and reasoning formats. The envelope carries a protocol identifier, raw payload, and routing metadata; responses carry stream frames, raw bytes where possible, and lifecycle events, not a universal LLM model. Backend communication, provider authentication, provider-specific translation, streaming, and usage remain connector responsibilities. See [Client Protocol Adapters](docs/architecture.md#client-protocol-adapters) for boundaries and example paths.
 
 ## 3. What is a Connector
 
@@ -140,7 +148,7 @@ type Request struct {
 
 For example, `Protocol` contains `openai.responses/v1`, and `Body` contains the original JSON. Metadata is used for routing and execution management but does not replace the payload with an internal LLM model.
 
-Native passthrough is a mandatory requirement. If a connector natively supports the incoming protocol, the request body flows through `Client → Core → Connector → Provider` unchanged. Core must not parse, reassemble, normalize the payload, or remove unknown fields. Extracting necessary routing metadata at the external API boundary must not turn into request body reconstruction inside Core.
+Native passthrough is a mandatory requirement. If a connector natively supports the incoming protocol, the request body flows through `Client → Protocol Adapter → Core → Connector → Provider` unchanged. Core must not parse, reassemble, normalize the payload, or remove unknown fields. Extracting necessary routing metadata at the external API boundary must not turn into request body reconstruction inside Core.
 
 This preserves tool calls, parallel tool calls, reasoning, and provider extensions, including fields the gateway does not yet recognize.
 
