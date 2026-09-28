@@ -60,13 +60,13 @@ The generic `openai-compatible` connector cannot assume that Chat Completions su
 
 ## Streaming and Backpressure
 
-After the first response header, status and headers are considered committed. Core does not buffer the complete response or reorder chunks. Queues are bounded; a slow client slows upstream reads instead of allowing unbounded memory growth. The completion control message contains outcome and usage separately from user-facing bytes.
+After sending response headers, status and headers are considered committed. Core does not buffer the complete response or reorder chunks. Queues are bounded; a slow client slows upstream reads instead of allowing unbounded memory growth. The completion control message contains outcome and usage separately from user-facing bytes.
 
-An error before commit can be converted to an HTTP error response. After commit, you cannot replace the response with new JSON and a different status code. The connector may emit a protocol-appropriate terminal error event; on a corrupted stream or process crash, the transport closes and the attempt is recorded as incomplete. Core does not synthesize provider-specific SSE events.
+An error before commit can be converted to an HTTP error response. After commit, the response cannot be replaced with new JSON and a different status code. The connector may emit a protocol-appropriate terminal error event; on a corrupted stream or process crash, the transport closes and the attempt is recorded as incomplete. Core does not synthesize provider-specific SSE events.
 
 ## Fallback and Retries
 
-Fallback is only permitted before commit and with confirmed safe retry capability. Connection errors before sending the request, local connector unavailability, and explicitly classified upstream rejections are different cases. Connection loss after sending the body has unknown outcome and by default is not automatically retried, even if the client has not yet received any bytes.
+Fallback is only permitted before commit and with confirmed safe retry capability. Connection errors before sending the request, local connector unavailability, and explicitly classified upstream rejections are different cases. Connection loss after sending the body has an unknown outcome and by default is not automatically retried, even if the client has not yet received any bytes.
 
 The connector reports error category and retry disposition: `safe`, `unsafe`, or `unknown`. Core applies policy with attempt count limits and an overall deadline. Provider error codes and `Retry-After` headers are interpreted by the connector. After commit, fallback is forbidden: stitching together responses from different attempts violates tool IDs, event ordering, and usage tracking.
 
@@ -74,7 +74,7 @@ The connector reports error category and retry disposition: `safe`, `unsafe`, or
 
 `previous_response_id`, session resume, stored responses, and background execution do not automatically become portable across backends. In the first native implementation, they may pass through to the same upstream as opaque fields, but this is not a guarantee of full Responses resource API implementation.
 
-Session-bound requests require affinity to the original connector instance, account, and backend. Until affinity is implemented, the configuration uses a single target for such scenarios and cross-account fallback is disabled. The translation connector explicitly rejects unsupported stateful features. Retrieval, deletion, cancellation by response ID, and background execution will receive separate scope after basic POST and streaming are complete.
+Session-bound requests require affinity to the original connector instance, account, and backend. Until affinity is implemented, the configuration uses a single target for such scenarios and cross-account fallback is disabled. The translation connector explicitly rejects unsupported stateful features. Retrieval, deletion, cancellation by response ID, and background execution will be scoped separately after basic POST and streaming are complete.
 
 ## Isolation
 

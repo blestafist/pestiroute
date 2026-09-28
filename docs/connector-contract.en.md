@@ -57,27 +57,27 @@ capabilities:
 auth: [api_key]
 ```
 
-This refines the early manifest from PLAN: where `true`, `false`, and `unknown` illustrate the same three-valued semantics. For the first implementation, we choose one canonical format and validate it strictly.
+This refines the early manifest from PLAN, where `true`, `false`, and `unknown` illustrate the same three-valued semantics. For the first implementation, we choose one canonical format and validate it strictly.
 
 ## Execution Stream
 
-`Frame` is a tagged union of transport and control messages, not LLM events. It has exactly one variant:
+`Frame` is a tagged union of transport and control messages, not LLM events. It has exactly one of these variants:
 
 | Variant | Data | Semantics |
 | --- | --- | --- |
 | `Head` | HTTP status and response headers | Once, before any body chunk |
 | `Body` | Non-empty set of bytes | Original or already translated connector response |
-| `Complete` | Outcome and final UsageReport | Once; closes successful transport lifecycle |
+| `Complete` | Outcome and final UsageReport | Once; closes transport lifecycle |
 
 The valid sequence is `Head → Body* → Complete → EOF`. `Complete` can describe an upstream HTTP error, not just successful generation. Before `Head`, the connector may return a typed error; after `Head`, an unexpected `Next` error indicates an incomplete stream. EOF without `Complete` is also considered incomplete.
 
-Body chunks do not need to align with SSE event boundaries. Core must not reinterpret their contents. Non-streaming JSON is transmitted through the same mechanism. With native passthrough, the connector may parse a limited copy of events in parallel for usage tracking, but the transmitted bytes remain unchanged.
+Body chunks do not need to align with SSE event boundaries. Core must not reinterpret their contents. Non-streaming JSON is transmitted through the same mechanism. With native passthrough, the connector may parse events in parallel for usage tracking, but the transmitted bytes remain unchanged.
 
 ## Usage
 
 `UsageEstimate` contains a known estimate of input/output budget, an unknown value indicator, and an estimation method. `UsageReport` contains nullable counters `input_tokens`, `output_tokens`, `reasoning_tokens`, `cached_tokens`, a source (`provider`, `estimate`, `unknown`), and a completeness indicator. An unknown value is distinct from zero.
 
-Input/output counters are considered top-level quantities. Cached and reasoning tokens are details that may already be included in the totals; they cannot be unconditionally added again. The connector normalizes only accounting semantics and preserves backend-specific details in namespaced diagnostics when necessary.
+Input/output counters are considered top-level quantities. Cached and reasoning tokens are details that may already be included in the totals and cannot be unconditionally added again. The connector normalizes only accounting semantics and preserves backend-specific details in namespaced diagnostics when necessary.
 
 If the client disconnects before receiving usage, Core saves the partial/unknown outcome and applied estimate separately. The absence of usage does not turn an executed request into a free one and does not allow deletion of the reservation without a trace.
 

@@ -6,7 +6,7 @@ Tests primarily verify the observable behavior of the gateway. For native mode, 
 
 ## Testing Levels
 
-Unit tests are useful for routing eligibility, retry decisions, auth state transitions, and limits reconciliation. Integration tests use a fake HTTP upstream and real server/client connections: cancellation and streaming cannot be convincingly verified by merely calling a handler with a recorder.
+Unit tests are useful for routing eligibility, retry decisions, auth state transitions, and limit reconciliation. Integration tests use a fake HTTP upstream and real server/client connections: cancellation and streaming cannot be convincingly verified by merely calling a handler with a recorder.
 
 The conformance harness runs the same scenarios against different connectors and transports. Real upstream smoke tests verify the actual backend and specific client versions separately from regular CI. They do not replace deterministic fixtures.
 
@@ -20,7 +20,7 @@ The conformance harness runs the same scenarios against different connectors and
 | Multi-round | Multiple tool rounds | Context and identifiers remain consistent |
 | Tool choice | Auto, forced tool, and tools disabled | Declared modes are honored or explicitly rejected |
 | Reasoning | Reasoning events and associated counters | Declared semantics are not lost |
-| Usage | Exact, estimated, missing, and partial | Unknown values are not converted to zero, no double counting |
+| Usage | Exact, estimated, missing, and partial | Unknown values are not converted to zero; no double counting |
 | Early errors | Auth failure, 429, unavailable | Correct status and retry disposition |
 | Late errors | Disconnect after Head/first chunk | No fallback and no new HTTP response |
 | Cancellation | Client stops reading | Upstream and internal resources are released |

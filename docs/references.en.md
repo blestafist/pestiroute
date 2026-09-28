@@ -10,9 +10,9 @@ Below are research starting points, not a promise to support all described capab
 | --- | --- |
 | [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses) | Request/response contract, tool items, usage, stateful operations |
 | [OpenAI streaming events](https://platform.openai.com/docs/api-reference/responses-streaming) | Event lifecycle, deltas, completion and error events |
-| [OpenAI Codex](https://github.com/openai/codex) | Client transport, auth, and exact compatibility scope of the selected version |
+| [OpenAI Python client](https://github.com/openai/openai-python) | Client transport, auth, and exact compatibility scope of the selected version |
 | [Anthropic API documentation](https://docs.anthropic.com/) | Messages, streaming, tools, token counting, and usage |
-| [Claude Code](https://github.com/anthropics/claude-code) | Public materials, releases, and issues; source completeness should be verified separately |
+| [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) | Client implementation, streaming patterns, and tool use examples |
 | [Gemini API](https://ai.google.dev/gemini-api/docs) | Official API, multimodal inputs, tools, and streaming |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Real client protocol and auth flows of a specific version |
 | [Ollama documentation](https://docs.ollama.com/) | Native API and actual scope of its OpenAI compatibility |

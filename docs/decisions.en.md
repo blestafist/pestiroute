@@ -8,18 +8,18 @@
 
 | ID | Status | Decision | Rationale |
 | --- | --- | --- | --- |
-| D01 | Accepted | OpenAI Responses is the primary external contract | Agent workflows without requiring custom LLM language |
-| D02 | Accepted | Core contains no backend-specific code | Extension through connectors |
-| D03 | Accepted | Payload is opaque; native body is preserved byte-for-byte | Compatibility with unknown fields and extensions |
-| D04 | Accepted | Northbound adapter is separated from Core | API parsing is kept separate from routing and limits |
-| D05 | Accepted | Translation and tokenizer belong to the connector | API differences are not normalized inside the core |
-| D06 | Accepted | Third-party connectors execute out-of-process | Their failure does not bring down the gateway |
-| D07 | Proposed | Go, `net/http`, single module | Minimal infrastructure for M0–M3 |
-| D08 | Proposed | SQLite for single-node state | Self-hosted deployment without separate database |
-| D09 | Proposed | `Head / Body / Complete` as stream contract | Transport semantics without LLM event model |
-| D10 | Proposed | gRPC over Unix socket for IPC | Validate overhead and host-service lifecycle in M6 |
-| D11 | Accepted | Model rewrite is not a native passthrough | Body modification must be explicit |
-| D12 | Proposed | CLI for initial admin operations | Account/key management without UI milestone |
+| D01 | Accepted | OpenAI Responses is the primary external contract | Enables agent workflows without requiring custom LLM-specific language |
+| D02 | Accepted | Core contains no backend-specific code | Enables extension through connectors |
+| D03 | Accepted | Payload is opaque; native body is preserved byte-for-byte | Ensures compatibility with unknown fields and extensions |
+| D04 | Accepted | Northbound adapter is separated from Core | Keeps API parsing separate from routing and limits |
+| D05 | Accepted | Translation and tokenizer belong to the connector | Prevents API differences from being normalized inside the core |
+| D06 | Accepted | Third-party connectors execute out-of-process | Ensures their failure does not bring down the gateway |
+| D07 | Proposed | Go, `net/http`, single module | Provides minimal infrastructure for M0–M3 |
+| D08 | Proposed | SQLite for single-node state | Enables self-hosted deployment without separate database |
+| D09 | Proposed | `Head / Body / Complete` as stream contract | Provides transport semantics without LLM event model |
+| D10 | Proposed | gRPC over Unix socket for IPC | Will validate overhead and host-service lifecycle in M6 |
+| D11 | Accepted | Model rewrite is not a native passthrough | Requires body modification to be explicit |
+| D12 | Proposed | CLI for initial admin operations | Enables account/key management without UI milestone |
 
 ## Questions Before Implementation
 

@@ -74,7 +74,7 @@ The model is designed for a single gateway process. All timestamps are stored in
 
 A virtual key identifies the policy used to verify models and connector targets before execution. Model alias restrictions apply to the client-provided name; connector restrictions are checked for both the initial target and fallback. Unknown or revoked keys are rejected before contacting upstream.
 
-The admin interface is separated from public inference endpoints. In the initial phase, a CLI with access to the local data directory is sufficient; key creation and revocation operations are logged without exposing secrets to the general log.
+The administrative interface is separated from public inference endpoints. In the initial phase, a CLI with access to the local data directory is sufficient; key creation and revocation operations are logged without exposing secrets to the general log.
 
 ## Limits and Reconciliation
 

@@ -4,7 +4,7 @@
 
 ## Project Vision
 
-We're building a lightweight self-hosted AI protocol gateway that provides an OpenAI-compatible API and connects to any AI backends through an extensible connector system. This isn't just an LLM API gateway: it must work with regular API providers, existing AI subscriptions, local models, and official AI client protocols, including those recovered through reverse engineering.
+We are building a lightweight self-hosted AI protocol gateway that provides an OpenAI-compatible API and connects to any AI backends through an extensible connector system. This is not just an LLM API gateway: it must work with regular API providers, existing AI subscriptions, local models, and official AI client protocols, including those recovered through reverse engineering.
 
 The gateway centralizes routing between backends, credential management, accounts, limits, and usage tracking. The core remains minimal: it manages infrastructure while all backend-specific logic resides in connectors.
 
@@ -14,7 +14,7 @@ The primary architectural constraint is to avoid creating an internal "universal
 
 Core handles API serving, client authentication, virtual keys, routing, limits, usage, connector lifecycle, and plugin runtime. Core knows nothing about specific providers: it should contain no OpenAI, Anthropic, or Gemini code, no provider OAuth flows, no request/response formats, no tokenization rules, and no backend-specific streaming formats.
 
-The OpenAI-compatible API is the gateway's external contract, not justification for introducing provider logic into the infrastructure core. External API processing must remain separated from knowledge of how any particular upstream is structured.
+The OpenAI-compatible API is the gateway's external contract, not justification for introducing provider logic into the infrastructure core. External API processing must remain independent of any particular upstream's structure.
 
 ```text
                          Clients
@@ -43,7 +43,7 @@ The OpenAI-compatible API is the gateway's external contract, not justification 
 
 The primary endpoint is `POST /v1/responses`. It must be compatible with OpenAI Responses API, Codex clients, OpenCode, and other agent frameworks. Responses was chosen as the primary contract because it supports reasoning, tool calls, parallel tools, streaming events, and multi-step agent workflows.
 
-Additionally, `POST /v1/chat/completions` can be supported. This compatibility endpoint should transform the request into the external Responses contract, rather than creating a second independent internal LLM model.
+Additionally, `POST /v1/chat/completions` can be supported. This compatibility endpoint should transform the request into the external Responses contract, rather than creating a parallel internal abstraction.
 
 ## 3. What is a Connector
 
@@ -114,7 +114,7 @@ type Connector interface {
 
 ## 5. Request Model and Native Passthrough
 
-A request is passed as an opaque payload with protocol indication and a minimal set of infrastructure metadata. There's no need for universal `Messages[]`, `Tools[]`, `Reasoning{}`, or `Images{}`: providers evolve independently, and such abstraction would quickly become limiting.
+A request is passed as an opaque payload with protocol indication and a minimal set of infrastructure metadata. There is no need for universal `Messages[]`, `Tools[]`, `Reasoning{}`, or `Images{}`: providers evolve independently, and such abstraction would quickly become limiting.
 
 ```go
 type Request struct {
@@ -130,17 +130,17 @@ type Request struct {
 }
 ```
 
-For example, `Protocol` contains `openai.responses/v1`, and `Body` contains the original JSON. Metadata is used for routing and execution management but doesn't replace the payload with an internal LLM model.
+For example, `Protocol` contains `openai.responses/v1`, and `Body` contains the original JSON. Metadata is used for routing and execution management but does not replace the payload with an internal LLM model.
 
 Native passthrough is a mandatory requirement. If a connector natively supports the incoming protocol, the request body flows through `Client → Core → Connector → Provider` unchanged. Core must not parse, reassemble, normalize the payload, or remove unknown fields. Extracting necessary routing metadata at the external API boundary must not turn into request body reconstruction inside Core.
 
-This preserves tool calls, parallel tool calls, reasoning, and provider extensions, including fields the gateway doesn't yet know about.
+This preserves tool calls, parallel tool calls, reasoning, and provider extensions, including fields the gateway does not yet recognize.
 
 ## 6. Translation
 
-If a backend doesn't support the incoming protocol, transformation is performed exclusively within the connector. For example, the Anthropic connector translates OpenAI Responses into Anthropic Messages and returns a result compatible with the external API.
+If a backend does not support the incoming protocol, transformation is performed exclusively within the connector. For example, the Anthropic connector translates OpenAI Responses into Anthropic Messages and returns a result compatible with the external API.
 
-Only the connector knows field mapping rules, tool transformations, streaming events, errors, and usage. Core doesn't participate in semantic translation between APIs and doesn't maintain an intermediate universal response or request model.
+Only the connector knows field mapping rules, tool transformations, streaming events, errors, and usage. Core does not participate in semantic translation between APIs and does not maintain an intermediate universal response or request model.
 
 ## 7. Capabilities
 
@@ -163,7 +163,7 @@ Routing considers request requirements: if `tools`, `parallel_tools`, and `reaso
 
 Core owns secret storage, encryption, credential references, and account management. It also provides common OAuth infrastructure: callback server, PKCE, and refresh scheduling. However, provider OAuth endpoints, scopes, token exchange, and refresh implementation belong to the connector.
 
-The authentication flow looks like `User → Core Auth Runtime → Connector Authenticate() → Provider → Credential Store`. The connector executes the protocol-specific portion through the runtime but doesn't store secrets itself. This separation enables centralized credential management without adding provider-specific knowledge to Core.
+The authentication flow looks like `User → Core Auth Runtime → Connector Authenticate() → Provider → Credential Store`. The connector executes the protocol-specific portion through the runtime but does not store secrets itself. This separation enables centralized credential management without adding provider-specific knowledge to Core.
 
 ## 9. Usage and Token Counting
 
@@ -179,7 +179,7 @@ The gateway provides its own virtual API keys. They can be created, revoked, ena
 
 In MVP, routing is built on explicit model mapping, connector and account selection, fallback, and limit checking. For each request, the gateway must determine a suitable route and verify the connector has the required capabilities.
 
-Later, selection by latency and cost can be added, along with automatic capability matching. These mechanisms shouldn't change the responsibility boundary: Core selects the executor, the connector understands the backend.
+Later, selection by latency and cost can be added, along with automatic capability matching. These mechanisms should not change the responsibility boundary: Core selects the executor, the connector understands the backend.
 
 ## 12. Streaming
 
@@ -222,7 +222,7 @@ A key regression test compares direct `OpenCode → Provider` connection with `O
 
 ## 16. First Connectors
 
-The first needed is a generic OpenAI-compatible connector: it covers most compatible services. OpenAI API and Codex provide reference implementations for direct API and client protocol respectively. Anthropic API is needed to verify the translation architecture, Claude Code for subscription-backed usage, and Ollama/vLLM for local models.
+The first connector needed is a generic OpenAI-compatible one: it covers most compatible services. OpenAI API and Codex provide reference implementations for direct API and client protocol respectively. Anthropic API is needed to verify the translation architecture, Claude Code for subscription-backed usage, and Ollama/vLLM for local models.
 
 These implementations should use the same infrastructure contract without requiring provider-specific exceptions in Core.
 
@@ -230,7 +230,7 @@ These implementations should use the same infrastructure contract without requir
 
 From 9Router, provider adapters, OAuth flows, stream parsers, usage extraction, model handling, and accumulated protocol knowledge should be reused. This code is transferred into corresponding connectors.
 
-Old routing, the old core, and previous abstractions are not transferred. Each migrated connector must pass the conformance suite: working code in 9Router alone doesn't confirm compatibility with the new gateway.
+Old routing, the old core, and previous abstractions are not transferred. Each migrated connector must pass the conformance suite: working code in 9Router alone does not confirm compatibility with the new gateway.
 
 ## 18. MVP Implementation Order
 
@@ -260,7 +260,7 @@ Move connector execution into separate processes. Implement IPC, versioning, hea
 
 ## 19. What is Not in Project Scope
 
-Don't start with UI, building a marketplace, billing, Kubernetes infrastructure, or distributed clusters. The gateway should also not become an agent framework, prompt management system, or universal LLM abstraction. The priority is a lightweight runtime with a reliable external contract and extensible connectors.
+Do not start with UI, building a marketplace, billing, Kubernetes infrastructure, or distributed clusters. The gateway should also not become an agent framework, prompt management system, or universal LLM abstraction. The priority is a lightweight runtime with a reliable external contract and extensible connectors.
 
 ## Final Architectural Rule
 

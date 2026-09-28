@@ -42,6 +42,6 @@ Metrics track request count, active streams, errors, execution time, first-byte 
 
 ## Build and Workflow
 
-We start with a single Go module and one main binary `gateway`. Minimal CI runs `gofmt`, `go vet ./...`, `go test ./...`, `go test -race ./...`, and build checks. Protocol fixtures do not require network credentials. Real upstream smoke tests run separately and have explicitly limited request volumes.
+The project starts with a single Go module and one main binary `gateway`. Minimal CI runs `gofmt`, `go vet ./...`, `go test ./...`, `go test -race ./...`, and build checks. Protocol fixtures do not require network credentials. Real upstream smoke tests run separately and have explicitly limited request volumes.
 
 The container runs as an unprivileged user, receives configuration and persistent data directory via mounts, and includes CA certificates for upstream TLS. SQLite backups are performed using consistent snapshot/backup methods; simple file copying of an active WAL database is not a proper procedure.

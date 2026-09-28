@@ -26,7 +26,7 @@ Create Go module, entrypoint, configuration loader, and minimal health/readiness
 
 Implement `POST /v1/responses` with one explicitly configured target, bounded request body, native forwarding, and cancellation. Place backend-specific code in a separate package from day one, even before the final Connector API. Use existing upstream model ID without alias rewrite for smoke tests.
 
-**Done when:** request body bytes, including unknown fields, match at fake upstream input; response bytes are preserved; first chunk reaches client before upstream response completes; tool IDs and event order are unchanged. Client disconnect closes upstream request; late upstream failure does not trigger second response. One documented smoke test is executed with a real client using tools and parallel tool calls.
+**Done when:** request body bytes, including unknown fields, reach the fake upstream unchanged; response bytes are preserved; first chunk reaches client before upstream response completes; tool IDs and event order are unchanged. Client disconnect closes upstream request; late upstream failure does not trigger second response. One documented smoke test is executed with a real client using tools and parallel tool calls.
 
 ## M2 · Connector API and Conformance Baseline
 
@@ -54,7 +54,7 @@ Ollama/vLLM are first verified through a common compatible connector. If a backe
 
 ACP is considered separately: it is a protocol for communicating with an agent process, not equivalent to a subscription backend API. The spike must identify a concrete agent, transport, and owner of the agent/tool loop before including ACP in the implementation scope.
 
-**Done for each connector when:** fresh authorization, expiry, and concurrent refresh are verified; no own secret persistence; versioned fixtures and a capability matrix are added; the direct-versus-gateway smoke test is reproducible. Unknown stateful capabilities are explicitly marked. Each connector can be released independently of others.
+**Done for each connector when:** fresh authorization, expiry, and concurrent refresh are verified; connector does not persist its own secrets; versioned fixtures and a capability matrix are added; the direct-versus-gateway smoke test is reproducible. Unknown stateful capabilities are explicitly marked. Each connector can be released independently of others.
 
 ## M6 · External Plugin Runtime
 
