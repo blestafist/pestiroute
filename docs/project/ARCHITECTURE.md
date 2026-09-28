@@ -48,7 +48,7 @@ The envelope is transport-oriented, not a universal LLM abstraction:
 | Request | Protocol identifier, raw payload, and metadata required for routing and execution |
 | Response | Stream frames, raw bytes wherever possible, and lifecycle events |
 
-There is no universal `Message[]`, `Tool[]`, or `Reasoning{}` model. Tool calls, reasoning, and other protocol-specific content remain in opaque payloads across Core. This extends the northbound boundary using the existing [connector execution envelope](connector-contract.md), without changing the connector model.
+There is no universal `Message[]`, `Tool[]`, or `Reasoning{}` model. Tool calls, reasoning, and other protocol-specific content remain in opaque payloads across Core. This extends the northbound boundary using the existing [connector execution envelope](../implementation/CONTRACT.md), without changing the connector model.
 
 Chat Completions is a **compatibility protocol**, while Responses API is the **primary agent-oriented protocol**. Both are first-class northbound interfaces; Chat Completions does not require a universal intermediate LLM representation or conversion inside Core.
 
@@ -149,6 +149,8 @@ Directories appear as features are implemented. Core and routing do not import `
 
 A connector may internally use direct API calls, protocol emulation, or local process communication. Core does not care which approach is used; payloads stay opaque across its boundary.
 
+Reverse-engineered connectors are first-class citizens: subscription access, existing authentication flows, and recovered client/backend protocols belong within the same Connector boundary. They do not introduce provider-specific exceptions in Core Runtime.
+
 ## Request Lifecycle
 
 The northbound adapter validates the virtual key, limits body size, and extracts `model`, `stream`, and other explicitly recognized requirements. Original bytes are preserved. Unknown fields remain in the payload; the adapter does not attempt to fully describe the Responses API with its own schema.
@@ -186,5 +188,7 @@ Session-bound requests require affinity to the original connector instance, acco
 ## Isolation
 
 Until M6, built-in first-party connectors execute in-process with the gateway under the same contract. This simplifies architecture validation but does not provide process isolation. External third-party connectors will be integrated after the process runtime becomes available.
+
+Go native plugins are not used. External Connectors communicate with Core Runtime through a versioned IPC contract so a plugin failure cannot crash the gateway process.
 
 Process isolation protects Core from connector crashes. CPU, memory, filesystem, and network access restrictions are separate sandbox capabilities; IPC transport alone does not provide such guarantees. The runtime should at minimum limit message sizes, queues, and process termination timeouts.

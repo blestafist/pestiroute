@@ -57,7 +57,7 @@ capabilities:
 auth: [api_key]
 ```
 
-This refines the early manifest from PLAN, where `true`, `false`, and `unknown` illustrate the same three-valued semantics. For the first implementation, we choose one canonical format and validate it strictly.
+This is the canonical draft manifest vocabulary: `supported`, `unsupported`, and `unknown`. Namespaced capability examples in the [Extensibility Model](../project/EXTENSIBILITY.md#2-capability-system) are extension concepts, not a second manifest schema. Validate one chosen format strictly in the first implementation.
 
 ## Execution Stream
 

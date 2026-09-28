@@ -1,8 +1,8 @@
-# Milestones
+# Implementation Roadmap
 
 ## Overview
 
-Work progresses from transparent request path to managed runtime. M1–M6 correspond to the PLAN phases; M0 adds a short preparation. Estimates below are guidelines for a single developer familiar with Go, not calendar commitments. Uncertainty is especially high for subscription protocols and translation.
+Work progresses from transparent request path to managed runtime under the [project scope](../project/README.md). This document owns milestone outcomes and acceptance gates; [TASKS.md](TASKS.md) owns executable work and status. Estimates below are guidelines for a single developer familiar with Go, not calendar commitments. Uncertainty is especially high for subscription protocols and translation.
 
 | Stage | Outcome | Estimate |
 | --- | --- | --- |
@@ -67,6 +67,6 @@ Compare stdio framing and gRPC over Unix socket on one scenario with a long stre
 
 **Done when:** a crashed connector does not terminate the gateway; a slow consumer does not cause unbounded memory growth; an incompatible contract version is rejected before execution; cancellation stops work and releases process resources. Conformance results for in-process and external implementations match. Already-started generation cannot be automatically restarted after a crash.
 
-## First Task After Documentation
+## First Vertical Slice
 
-Start with M0 and one M1 integration test: a fake upstream accepts JSON with an unknown field and returns two SSE chunks with a controlled pause. The test simultaneously verifies payload preservation, immediate delivery of the first chunk, and cancellation. This creates a useful baseline before full auth, storage, and plugin SDK appear.
+M0 prepares the scaffold and fake upstream; M1 connects them in one integration scenario: the fake upstream accepts JSON with an unknown field and returns two SSE chunks with a controlled pause. Verify payload preservation, immediate delivery of the first chunk, and cancellation. This creates a useful baseline before full auth, storage, and plugin SDK appear. Use the task registry for the next bounded deliverable rather than treating a milestone as a single task.
