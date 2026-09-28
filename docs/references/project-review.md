@@ -33,3 +33,20 @@ These gates belong to their existing milestones and task preparation. No new imp
 - Local Python checks passed: 19 Markdown files (including this report), 75 relative links/anchors, fenced-block closure, and the four registered task dependency references/cycle absence.
 - `git diff --check` passed for patch whitespace.
 - No build, Go tests, race tests, provider smoke tests or external source tests were run: this repository has no implementation to exercise. Added test scenarios are requirements, not passing results.
+
+## Follow-up: Critical Review of the M0 Candidates
+
+Reviewed each candidate after recording the high-level M0 backlog. All six remain planning inputs; no task card or executable acceptance claim was introduced.
+
+| Candidate | Challenge | Review result |
+| --- | --- | --- |
+| FND-001 | Does a scaffold force a speculative framework or unsettled toolchain? | Keep only module identity, pinned Go, entrypoint and reproducible build. Planner resolves choices before READY; no Connector SDK or directory framework is needed here. |
+| FND-002 | Does startup drag M3 configuration/storage into M0 or falsely claim inference readiness? | Keep a minimal startup configuration subset. Clarified that readiness concerns the implemented service, not provider health or inference eligibility. |
+| FND-003 | Can the fixture actually support the first byte-preservation/streaming regression? | Added request capture; clarified deterministic synchronization and observable cleanup. Fixture behavior is verified in M0; the gateway integration remains M1. |
+| FND-004 | Must CI wait for every feature, and is scaffold-only green CI enough? | Its only prerequisite is the scaffold, allowing checks early. Explicitly require rerunning those checks on the assembled M0 in FND-006. |
+| FND-005 | Does baseline research imply proven compatibility or block local work on credentials? | Clarified concrete intended backend/model/client selection, evidence and prerequisites. Live execution belongs to M1; missing access is recorded without blocking independent local tasks. |
+| FND-006 | Is this a second implementation task or merely an unchecked milestone label? | Keep one outcome: evidence-backed M0 closure and M1 planning handoff. Strengthened its check to cover assembled clean-checkout startup, invalid configuration and local/CI verification without provider credentials. Defects return to their owning tasks. |
+
+The dependency graph has no cycle: scaffold precedes local implementation/check setup; baseline research is independent; the final handoff joins completed prerequisites. No accepted contract, milestone deliverable, or existing task identity changed. Planner retains concrete design and task-card preparation.
+
+Follow-up verification passed: 19 Markdown files, 78 local links/anchors, fenced blocks, six unique DRAFT task rows with valid acyclic dependencies, and no prematurely created task cards. `git diff --check` passed. Implementation checks remain unavailable.

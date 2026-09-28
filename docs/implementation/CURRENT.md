@@ -11,7 +11,7 @@
 
 Prepare the first M0 task for execution. The initial candidates are in [TASKS.md](TASKS.md#m0--foundation); the planner should create `tasks/FND-001.md` from [TEMPLATE.md](tasks/TEMPLATE.md), resolve the module path and supported Go version, and establish concrete checks before making it READY.
 
-After the scaffold, build the startup/configuration path and controllable fake upstream toward the [first vertical slice](ROADMAP.md#first-vertical-slice). Task statuses and dependencies live only in TASKS.
+After the scaffold, build the startup/configuration path, controllable fake upstream and shared local/CI checks toward the [first vertical slice](ROADMAP.md#first-vertical-slice). The M0 candidates also cover baseline selection and an assembled-foundation verification handoff; real-provider smoke execution remains an M1 gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 
