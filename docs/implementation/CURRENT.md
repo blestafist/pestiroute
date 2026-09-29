@@ -9,9 +9,9 @@
 
 ## Immediate Focus
 
-[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), [M1-001](tasks/M1-001.md), and [M1-004](tasks/M1-004.md) through [M1-012](tasks/M1-012.md) are DONE.
+[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), [M1-001](tasks/M1-001.md), and [M1-004](tasks/M1-004.md) through [M1-013](tasks/M1-013.md) are DONE.
 
-Next candidate: [M1-013](tasks/M1-013.md) (Flush native body frames to HTTP client before upstream completion, dependencies M1-001 and M1-012 DONE). M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
+Next candidate: [M1-002](tasks/M1-002.md) (Verify SSE split boundaries, event ordering and interleaved tool IDs end to end, dependency M1-013 DONE), with [M1-014](tasks/M1-014.md) (client disconnect/cancellation) and [M1-015](tasks/M1-015.md) (pre-commit rejection/error behavior) also unblocked. M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 

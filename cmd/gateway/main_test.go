@@ -122,6 +122,65 @@ func TestFixedResponsesComposition(t *testing.T) {
 	}
 }
 
+func TestResponsesIncrementalFlush(t *testing.T) {
+	const first = "event: response.created\ndata: {\"type\":\"response.created\"}\n\n"
+	const second = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+	gate := make(chan struct{})
+	sent := make(chan struct{})
+	upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}, "X-Upstream": {"one"}}, Steps: []fakeupstream.Step{{Data: []byte(first), Sent: sent}, {Gate: gate, Data: []byte(second)}}})
+	defer upstream.Close()
+	var ready atomic.Bool
+	h, closeTransport := handler(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic", MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s"}, &ready)
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	defer func() {
+		if gate != nil {
+			close(gate) // Release the fake upstream before server cleanup on failure.
+		}
+	}()
+	client := server.Client()
+	client.Timeout = 3 * time.Second
+	requestBody := []byte(`{ "model": "gpt-4.1-mini-2025-04-14", "stream": true, "extra": {"opaque": 1} }`)
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", bytes.NewReader(requestBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/event-stream" || len(resp.Header.Values("X-Upstream")) != 1 || resp.Header.Get("X-Upstream") != "one" {
+		t.Fatalf("stream headers: %d %v", resp.StatusCode, resp.Header)
+	}
+	select {
+	case <-sent:
+	case <-time.After(time.Second):
+		t.Fatal("upstream first event not sent")
+	}
+	gotFirst := make([]byte, len(first))
+	if _, err := io.ReadFull(resp.Body, gotFirst); err != nil || string(gotFirst) != first {
+		t.Fatalf("first event before second gate: %q, %v", gotFirst, err)
+	}
+	select {
+	case captured := <-upstream.Requests:
+		if !bytes.Equal(captured.Body, requestBody) || captured.Header.Get("Authorization") != "Bearer synthetic" {
+			t.Fatalf("upstream request: exact bytes %t, selected credential %t", bytes.Equal(captured.Body, requestBody), captured.Header.Get("Authorization") == "Bearer synthetic")
+		}
+	default:
+		t.Fatal("upstream request not captured")
+	}
+	closeGate := gate
+	gate = nil
+	close(closeGate)
+	rest, err := io.ReadAll(resp.Body)
+	if err != nil || string(rest) != second {
+		t.Fatalf("second event and EOF: %q, %v", rest, err)
+	}
+}
+
 func TestConfig(t *testing.T) {
 	path := t.TempDir() + "/gateway.json"
 	if err := os.WriteFile(path, []byte(`{"listen":"127.0.0.1:0","shutdown_timeout":"250ms"}`), 0600); err != nil {

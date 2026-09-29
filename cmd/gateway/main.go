@@ -180,6 +180,9 @@ func probes(ready *atomic.Bool) *http.ServeMux {
 type fixedTarget struct{ *connector.Transport }
 
 func (t fixedTarget) Execute(ctx context.Context, req core.ExecutionRequest, _ core.AttemptScope) (core.ExecutionResponse, *core.GatewayError) {
+	if req.Metadata.Streaming != nil && *req.Metadata.Streaming {
+		return t.ExecuteSSE(ctx, req)
+	}
 	return t.ExecuteFixedJSON(ctx, req)
 }
 
@@ -196,6 +199,12 @@ func handler(c config, ready *atomic.Bool) (http.Handler, func()) {
 		TLSHandshakeTimeout: tlsHandshake, ResponseHeaderTimeout: responseHeader,
 	})
 	dispatch := &core.Dispatcher{Target: fixedTarget{transport}, AccountID: c.UpstreamCredentialEnv}
+	endpoint, _ := url.Parse(c.UpstreamEndpoint)
+	if endpoint.Scheme == "http" && isLoopbackHost(endpoint.Hostname()) {
+		// Fixture-only support; public-account streaming needs live verification.
+		dispatch.Adapter = map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}
+		dispatch.Connector = map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}
+	}
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
 		req, gatewayErr := adapter.Decode(r, c.MaxRequestBodyBytes, c.MaxRequestHeaderBytes)
 		if gatewayErr != nil {

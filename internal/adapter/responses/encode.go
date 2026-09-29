@@ -58,6 +58,9 @@ func Encode(w http.ResponseWriter, r *http.Request, resp core.ExecutionResponse,
 			if n != len(frame.Body.Data) {
 				return io.ErrShortWrite
 			}
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
 		case core.FrameComplete:
 			if !committed || frame.Complete == nil {
 				return core.ErrStreamContract
