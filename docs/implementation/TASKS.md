@@ -58,8 +58,8 @@ Existing IDs retain their purpose: M1-001 is now fixed-response composition afte
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M1-004](tasks/M1-004.md) | READY | — | FND-006 | Specify the minimal M1 binding and local startup choices against v1, resolving component handoff questions | — | Card's reproducible contract/scope review and `git diff --check` |
-| [M1-005](tasks/M1-005.md) | DRAFT | — | M1-004 | Minimal Go execution envelope, frames, errors and cancellable stream boundary | — | Focused binding tests and `./scripts/check.sh` |
+| [M1-004](tasks/M1-004.md) | DONE | GPT-6 Sol (ses_f113f5c46ffeR9yYsJZYuHRbVi) | FND-006 | Specify the minimal M1 binding and local startup choices against v1, resolving component handoff questions | Native binding/startup note linked from STACK; contract mapping, paper walkthrough, reviewer corrections and checks verified | Manual contract/scenario/link review, `./scripts/check.sh`, `git diff --check` |
+| [M1-005](tasks/M1-005.md) | ACTIVE | GPT-6 Sol (ses_f112e23b0ffeF8EhX6FodWIS6H) | M1-004 | Minimal Go execution envelope, frames, errors and cancellable stream boundary | — | `go test -race ./internal/core/...` and `./scripts/check.sh` |
 | [M1-006](tasks/M1-006.md) | DRAFT | — | M1-004 | Single-target startup configuration, limits and runtime-owned environment credential | — | Configuration validation tests and `./scripts/check.sh` |
 | [M1-007](tasks/M1-007.md) | DRAFT | — | M1-005 | Bounded Responses Decode with byte-preserving envelope extraction | — | Decoder byte/invalid/limit tests and `./scripts/check.sh` |
 | [M1-008](tasks/M1-008.md) | DRAFT | — | M1-005, M1-006 | Scoped native HTTP transport: selected credentials, no redirects or hidden replay | — | Loopback transport capture/replay tests and `./scripts/check.sh` |

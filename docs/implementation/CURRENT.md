@@ -4,14 +4,14 @@
 
 - FND-001 Go module scaffold, FND-002 probe-only server, FND-003 controllable local fake upstream fixture, and FND-004 shared local/CI workflow are verified locally. Hosted CI has not run. No inference endpoint or provider integration exists yet.
 - FND-005 M1 compatibility baseline is selected on source evidence in [References](REFERENCES.md#m1-compatibility-baseline) (OpenAI public Responses / `gpt-4.1-mini-2025-04-14` with OpenCode V2 2.0.6); real inference execution remains an M1 smoke gate.
-- [CONTRACT.md](CONTRACT.md) is the accepted v1 semantic boundary for Protocol Adapters, Core Runtime, and Connectors, with ADR change control. Language/IPC bindings are not implemented; the M3 configuration schema and later stack choices remain drafts.
+- [CONTRACT.md](CONTRACT.md) is the accepted v1 semantic boundary for Protocol Adapters, Core Runtime, and Connectors, with ADR change control. [M1-BINDING.md](M1-BINDING.md) specifies the minimal Go execution signatures, startup JSON subset, capability checks, and bounded streaming observer. Language/IPC bindings are not implemented; M3 configuration schema remains draft.
 - Documentation is organized by project intent and implementation; the root [AGENTS.md](../../AGENTS.md) defines the agent entry path.
 
 ## Immediate Focus
 
-[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md) are DONE. M0 foundation is verified complete.
+[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md) and [M1-004](tasks/M1-004.md) are DONE.
 
-Next: execute [M1-004](tasks/M1-004.md), the minimal M1 binding/scope decision note. M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); promote dependent cards only after checking predecessor evidence. Give each worker one card, not the milestone. Real-provider smoke execution remains a separate M1 gate. Task statuses and dependencies live only in TASKS.
+Next: execute [M1-005](tasks/M1-005.md) (minimal Go execution boundary, now READY). [M1-006](tasks/M1-006.md) is an independent candidate (also depends on M1-004). M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke execution remains a separate M1 gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 
