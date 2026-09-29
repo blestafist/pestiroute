@@ -1,0 +1,130 @@
+// Package fakeupstream provides a controllable loopback HTTP upstream for tests.
+package fakeupstream
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+)
+
+// Request is a snapshot of the incoming request. Cancelled closes when the
+// client disconnects while the handler is still running.
+type Request struct {
+	Method, Path, RawQuery string
+	Header                 http.Header
+	Body                   []byte
+	Cancelled              <-chan struct{}
+}
+
+// Step is one stream write. Closing Gate permits the write; Sent closes after
+// the write has been flushed. Drop closes the connection after this step.
+type Step struct {
+	Gate <-chan struct{}
+	Sent chan<- struct{}
+	Data []byte
+	Drop bool
+}
+
+// Response describes a fixed response or a sequence of independently gated
+// stream writes. Drop closes the connection before response headers are sent.
+type Response struct {
+	Status int
+	Header http.Header
+	Body   []byte
+	Steps  []Step
+	Drop   bool
+}
+
+// Server is a loopback-only test server. Read Requests as each call arrives;
+// its one-slot queue intentionally bounds unconsumed captures.
+type Server struct {
+	*httptest.Server
+	Requests <-chan Request
+}
+
+func New(response Response) *Server {
+	requests := make(chan Request, 1)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return
+		}
+		cancelled := make(chan struct{})
+		done := make(chan struct{})
+		var once sync.Once
+		signal := func() { once.Do(func() { close(cancelled) }) }
+		go func() {
+			select {
+			case <-r.Context().Done():
+				select {
+				case <-done:
+				default:
+					signal()
+				}
+			case <-done:
+			}
+		}()
+		defer close(done)
+
+		capture := Request{Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery,
+			Header: r.Header.Clone(), Body: body, Cancelled: cancelled}
+		select {
+		case requests <- capture:
+		case <-r.Context().Done():
+			return
+		}
+		if response.Drop {
+			drop(w)
+			return
+		}
+		for key, values := range response.Header {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
+		if len(response.Steps) == 0 {
+			if response.Status != 0 {
+				w.WriteHeader(response.Status)
+			}
+			_, _ = w.Write(response.Body)
+			return
+		}
+		if response.Header.Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "text/event-stream")
+		}
+		if response.Status != 0 {
+			w.WriteHeader(response.Status)
+		}
+		w.(http.Flusher).Flush()
+		for _, step := range response.Steps {
+			if step.Gate != nil {
+				select {
+				case <-step.Gate:
+				case <-r.Context().Done():
+					signal()
+					return
+				}
+			}
+			if _, err := w.Write(step.Data); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			if step.Sent != nil {
+				close(step.Sent)
+			}
+			if step.Drop {
+				drop(w)
+				return
+			}
+		}
+	}))
+	return &Server{Server: s, Requests: requests}
+}
+
+func drop(w http.ResponseWriter) {
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err == nil {
+		_ = conn.Close()
+	}
+}
