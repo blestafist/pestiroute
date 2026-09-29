@@ -17,6 +17,10 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
+	connector "github.com/blestafist/pestiroute/internal/connector/responses"
+	"github.com/blestafist/pestiroute/internal/core"
 )
 
 type config struct {
@@ -156,7 +160,7 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func probes(ready *atomic.Bool) http.Handler {
+func probes(ready *atomic.Bool) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -173,6 +177,37 @@ func probes(ready *atomic.Bool) http.Handler {
 	return mux
 }
 
+type fixedTarget struct{ *connector.Transport }
+
+func (t fixedTarget) Execute(ctx context.Context, req core.ExecutionRequest, _ core.AttemptScope) (core.ExecutionResponse, *core.GatewayError) {
+	return t.ExecuteFixedJSON(ctx, req)
+}
+
+func handler(c config, ready *atomic.Bool) (http.Handler, func()) {
+	mux := probes(ready)
+	if c.UpstreamEndpoint == "" {
+		return mux, func() {}
+	}
+	connect, _ := time.ParseDuration(c.ConnectTimeout)
+	tlsHandshake, _ := time.ParseDuration(c.TLSHandshakeTimeout)
+	responseHeader, _ := time.ParseDuration(c.ResponseHeaderTimeout)
+	transport := connector.NewTransport(connector.Config{
+		Endpoint: c.UpstreamEndpoint, Credential: string(c.credential), ConnectTimeout: connect,
+		TLSHandshakeTimeout: tlsHandshake, ResponseHeaderTimeout: responseHeader,
+	})
+	dispatch := &core.Dispatcher{Target: fixedTarget{transport}, AccountID: c.UpstreamCredentialEnv}
+	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
+		req, gatewayErr := adapter.Decode(r, c.MaxRequestBodyBytes, c.MaxRequestHeaderBytes)
+		if gatewayErr != nil {
+			_ = adapter.Encode(w, r, core.ExecutionResponse{}, gatewayErr)
+			return
+		}
+		resp, gatewayErr := dispatch.Execute(r.Context(), req)
+		_ = adapter.Encode(w, r, resp, gatewayErr)
+	})
+	return mux, transport.Close
+}
+
 func run(ctx context.Context, args []string) error {
 	c, timeout, err := loadConfig(args)
 	if err != nil {
@@ -183,7 +218,9 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("listen %q: %w", c.Listen, err)
 	}
 	var ready atomic.Bool
-	server := &http.Server{Handler: probes(&ready), ReadHeaderTimeout: 5 * time.Second}
+	h, closeTransport := handler(c, &ready)
+	defer closeTransport()
+	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
 	done := make(chan error, 1)
 	go func() {
 		ready.Store(true)

@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -15,7 +17,110 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/blestafist/pestiroute/internal/testutil/fakeupstream"
 )
+
+func TestFixedResponsesComposition(t *testing.T) {
+	const credential = "synthetic-selected-credential"
+	const clientCredential = "synthetic-client-credential"
+	t.Setenv("PESTIROUTE_TEST_UPSTREAM", credential)
+	responseBody := []byte(" {\n \"status\" : \"completed\", \"unknown\": {\"nested\": [1, 2]} } \n")
+	upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: responseBody})
+	defer upstream.Close()
+	configPath := t.TempDir() + "/gateway.json"
+	settings := map[string]any{
+		"listen": "127.0.0.1:0", "upstream_endpoint": upstream.URL + "/v1/responses",
+		"upstream_credential_env": "PESTIROUTE_TEST_UPSTREAM", "max_request_body_bytes": 1024,
+		"max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s",
+		"response_header_timeout": "1s", "stream_idle_timeout": "1s",
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := loadConfig([]string{"-config", configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready atomic.Bool
+	h, closeTransport := handler(c, &ready)
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	ready.Store(true)
+	client := server.Client()
+	requestBody := []byte(" { \"model\" : \"gpt-4.1-mini-2025-04-14\", \"unknown\": {\"nested\": [ 1, {\"extra\": true} ]} } \n")
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", bytes.NewReader(requestBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+clientCredential)
+	req.Header.Set("X-Client-Token", clientCredential)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != 200 || !bytes.Equal(got, responseBody) {
+		t.Fatalf("fixed response: status %d, exact bytes %t, read %v", resp.StatusCode, bytes.Equal(got, responseBody), err)
+	}
+	select {
+	case captured := <-upstream.Requests:
+		if captured.Method != http.MethodPost || captured.Path != "/v1/responses" || !bytes.Equal(captured.Body, requestBody) || captured.Header.Get("Authorization") != "Bearer "+credential || captured.Header.Get("X-Client-Token") != "" || bytes.Contains(captured.Body, []byte(clientCredential)) {
+			t.Fatalf("upstream request mismatch: method %s path %s exact bytes %t selected credential %t client token absent %t", captured.Method, captured.Path, bytes.Equal(captured.Body, requestBody), captured.Header.Get("Authorization") == "Bearer "+credential, captured.Header.Get("X-Client-Token") == "")
+		}
+	default:
+		t.Fatal("missing upstream request")
+	}
+	for _, tc := range []struct {
+		name, method, path, body string
+		want                     int
+	}{
+		{"malformed", "POST", "/v1/responses", `{"model":`, 400},
+		{"oversized", "POST", "/v1/responses", strings.Repeat("x", 1025), 400},
+		{"wrong method", "GET", "/v1/responses", "", 405},
+		{"wrong path", "POST", "/v1/other", "{}", 404},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(tc.method, server.URL+tc.path, strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				t.Errorf("status %d, want %d", resp.StatusCode, tc.want)
+			}
+			select {
+			case <-upstream.Requests:
+				t.Fatal("rejected request reached upstream")
+			default:
+			}
+		})
+	}
+	for _, path := range []string{"/healthz", "/readyz"} {
+		resp, err := client.Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Errorf("%s: status %d", path, resp.StatusCode)
+		}
+	}
+}
 
 func TestConfig(t *testing.T) {
 	path := t.TempDir() + "/gateway.json"

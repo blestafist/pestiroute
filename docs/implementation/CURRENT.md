@@ -2,16 +2,16 @@
 
 ## Verified Baseline
 
-- FND-001 Go module scaffold, FND-002 probe-only server, FND-003 controllable local fake upstream fixture, and FND-004 shared local/CI workflow are verified locally. Hosted CI has not run. No inference endpoint or provider integration exists yet.
+- FND-001 Go module scaffold, FND-002 probe-only server, FND-003 controllable local fake upstream fixture, and FND-004 shared local/CI workflow are verified locally. M1-001 end-to-end loopback POST /v1/responses fixed JSON passthrough is verified. Hosted CI has not run.
 - FND-005 M1 compatibility baseline is selected on source evidence in [References](REFERENCES.md#m1-compatibility-baseline) (OpenAI public Responses / `gpt-4.1-mini-2025-04-14` with OpenCode V2 2.0.6); real inference execution remains an M1 smoke gate.
 - [CONTRACT.md](CONTRACT.md) is the accepted v1 semantic boundary for Protocol Adapters, Core Runtime, and Connectors, with ADR change control. [M1-BINDING.md](M1-BINDING.md) specifies the minimal Go execution signatures, startup JSON subset, capability checks, and bounded streaming observer. Language/IPC bindings are not implemented; M3 configuration schema remains draft.
 - Documentation is organized by project intent and implementation; the root [AGENTS.md](../../AGENTS.md) defines the agent entry path.
 
 ## Immediate Focus
 
-[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), and [M1-004](tasks/M1-004.md) through [M1-011](tasks/M1-011.md) are DONE.
+[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), [M1-001](tasks/M1-001.md), and [M1-004](tasks/M1-004.md) through [M1-011](tasks/M1-011.md) are DONE.
 
-Next candidate: [M1-001](tasks/M1-001.md) (Compose POST /v1/responses and prove fixed-response end-to-end passthrough, all dependencies DONE). M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke execution remains a separate M1 gate. Task statuses and dependencies live only in TASKS.
+Next candidate: [M1-012](tasks/M1-012.md) (Incremental native SSE Connector output and bounded terminal-outcome observation, dependency M1-009 DONE). M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. SSE and real-provider smoke remain separate gates. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 
