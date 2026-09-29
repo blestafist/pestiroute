@@ -9,9 +9,9 @@
 
 ## Immediate Focus
 
-[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md) and [M1-004](tasks/M1-004.md) are DONE.
+[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), [M1-004](tasks/M1-004.md), and [M1-005](tasks/M1-005.md) are DONE.
 
-Next: execute [M1-005](tasks/M1-005.md) (minimal Go execution boundary, now READY). [M1-006](tasks/M1-006.md) is an independent candidate (also depends on M1-004). M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke execution remains a separate M1 gate. Task statuses and dependencies live only in TASKS.
+Next: plan and promote eligible candidates [M1-006](tasks/M1-006.md) (single-target startup configuration, depends on M1-004) and [M1-007](tasks/M1-007.md) (bounded Responses Decode, depends on M1-005). M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke execution remains a separate M1 gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 
