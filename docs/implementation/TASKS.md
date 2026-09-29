@@ -29,7 +29,7 @@ Candidates covering [M0](ROADMAP.md#m0--project-foundation) and its handoff to M
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [FND-001](tasks/FND-001.md) | READY | — | — | Reproducible Go scaffold: module identity, pinned toolchain, minimal `gateway` entrypoint and clean-checkout build instructions | — | `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build ./...` with Go 1.27.1 from a clean checkout |
+| [FND-001](tasks/FND-001.md) | DONE | GPT-6 Sol (ses_f127f196fffe6OhKnJp1Tx7tO8) | — | Reproducible Go scaffold: module identity, pinned toolchain, minimal `gateway` entrypoint and clean-checkout build instructions | Go scaffold established with module identity, artifact-free offline build and explicit non-serving entrypoint | `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build -o /dev/null ./...` with Go 1.27.1 from a clean checkout |
 | FND-002 | DRAFT | — | FND-001 | Runnable startup slice: minimal configuration, health/readiness, clear startup failures and bounded graceful shutdown | — | Local lifecycle scenarios cover valid/invalid configuration, readiness and shutdown |
 | FND-003 | DRAFT | — | FND-001 | Controllable local fake upstream for M1: JSON and incremental SSE, request capture, gated delivery, connection failures and cancellation observation | — | Deterministic HTTP scenarios prove byte capture, controlled delivery, failures and cleanup without provider credentials |
 | FND-004 | DRAFT | — | FND-001 | Shared local/CI verification baseline: formatting, vet, tests, race detection and build on the pinned toolchain | — | The same documented checks run locally and in CI |

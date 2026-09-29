@@ -2,14 +2,13 @@
 
 ## Verified Baseline
 
-- Repository contains architecture and implementation documentation only.
-- No Go module, application source, executable, test suite, CI workflow, or verified run command exists yet.
+- FND-001 Go scaffold is verified: module `github.com/blestafist/pestiroute`, `cmd/gateway` entrypoint with explicit non-serving exit, and root README with artifact-free offline build instructions. No server, test suite, CI workflow, or provider integration yet.
 - [CONTRACT.md](CONTRACT.md) is the accepted v1 semantic boundary for Protocol Adapters, Core Runtime, and Connectors, with ADR change control. Language/IPC bindings are not implemented; configuration and stack choices remain drafts.
 - Documentation is organized by project intent and implementation; the root [AGENTS.md](../../AGENTS.md) defines the agent entry path.
 
 ## Immediate Focus
 
-The independent [FND-001](tasks/FND-001.md) scaffold and [FND-005](tasks/FND-005.md) M1 baseline selection are READY for separate workers. Claim each in [TASKS.md](TASKS.md#m0--foundation) before execution. FND-001 uses module `github.com/blestafist/pestiroute` and Go 1.27.1; FND-005 selects and documents the backend/client combination without claiming live compatibility.
+[FND-001](tasks/FND-001.md) is DONE. [FND-005](tasks/FND-005.md) (M1 baseline selection) is READY for execution. Prerequisite FND-001 is satisfied, unblocking preparation of dependent M0 tasks [FND-002](TASKS.md#m0--foundation) (startup slice), FND-003 (fake upstream), and FND-004 (verification baseline).
 
 After the scaffold, build the startup/configuration path, controllable fake upstream and shared local/CI checks toward the [first vertical slice](ROADMAP.md#first-vertical-slice). The M0 candidates also cover baseline selection and an assembled-foundation verification handoff; real-provider smoke execution remains an M1 gate. Task statuses and dependencies live only in TASKS.
 
@@ -24,7 +23,7 @@ Other architectural questions remain in [DECISIONS.md](../project/DECISIONS.md#q
 
 `git diff --check` is available for patch whitespace. Documentation verification also checks local link targets/anchors, fenced blocks, and task registry consistency; no persistent checker command has been added.
 
-Build, test, start, and CI commands will be recorded here when FND tasks establish and verify them. Commands in [STACK.md](STACK.md#build-and-workflow) describe the intended baseline.
+With local Go 1.27.1, `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build -o /dev/null ./...` is verified and leaves no binary. `GOTOOLCHAIN=local go run ./cmd/gateway` exits 1 with an explicit non-serving notice. `gofmt -l cmd/gateway/main.go`, `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test ./...`, and `GOTOOLCHAIN=local go test -race ./...` pass (no tests yet). No CI exists.
 
 ## Update Rule
 
