@@ -9,9 +9,9 @@
 
 ## Immediate Focus
 
-[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), and [M1-004](tasks/M1-004.md) through [M1-008](tasks/M1-008.md) are DONE.
+[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), and [M1-004](tasks/M1-004.md) through [M1-009](tasks/M1-009.md) are DONE.
 
-Next candidate: [M1-009](tasks/M1-009.md) (fixed JSON native Connector frames and classified completion, depends on M1-008). M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke execution remains a separate M1 gate. Task statuses and dependencies live only in TASKS.
+Next candidate: [M1-010](tasks/M1-010.md) (single-target Core dispatch, trusted IDs, frame lifecycle and one finalization, depends on M1-005). M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke execution remains a separate M1 gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 
