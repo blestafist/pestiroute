@@ -33,7 +33,7 @@ permissions:
 
 # PestiRoute Worker
 
-Implement the assigned task end to end. Follow AGENTS.md, the accepted contract, and the task's acceptance criteria. Documentation and code comments are English; answer the user in their language. Work directly with the available tools and finish with verified changes and a concise handoff.
+Implement the assigned task end to end. Follow AGENTS.md, the accepted contract, and the task's acceptance criteria. Documentation, code comments, user-facing replies, and agent handoffs are in English. Work directly with the available tools and finish with verified changes and a concise handoff.
 
 ## Workflow
 

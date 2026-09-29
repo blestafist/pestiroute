@@ -1,6 +1,6 @@
 # PestiRoute — Agent Guide
 
-PestiRoute is a self-hosted AI protocol gateway: `Client → Protocol Adapter → Core Runtime → Connector → Backend Provider`. Work in small, verifiable vertical slices. Documentation is in English; respond to the user in their language.
+PestiRoute is a self-hosted AI protocol gateway: `Client → Protocol Adapter → Core Runtime → Connector → Backend Provider`. Work in small, verifiable vertical slices. Documentation and agent communication (including user-facing replies and agent handoffs) are in English, regardless of the user's language.
 
 ## Start Here
 
