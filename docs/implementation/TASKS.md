@@ -25,16 +25,16 @@ Normal path: `DRAFT → READY → ACTIVE → DONE`. BLOCKED returns to READY whe
 
 ## M0 — Foundation
 
-Candidates covering [M0](ROADMAP.md#m0--project-foundation) and its handoff to M1. FND-001 and FND-005 have executable cards; the dependent candidates remain DRAFT until their inputs and checks are concrete. No implementation work is claimed complete.
+Candidates covering [M0](ROADMAP.md#m0--project-foundation) and its handoff to M1. FND-001 through FND-006 are DONE.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [FND-001](tasks/FND-001.md) | READY | — | — | Reproducible Go scaffold: module identity, pinned toolchain, minimal `gateway` entrypoint and clean-checkout build instructions | — | `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build ./...` with Go 1.27.1 from a clean checkout |
-| FND-002 | DRAFT | — | FND-001 | Runnable startup slice: minimal configuration, health/readiness, clear startup failures and bounded graceful shutdown | — | Local lifecycle scenarios cover valid/invalid configuration, readiness and shutdown |
-| FND-003 | DRAFT | — | FND-001 | Controllable local fake upstream for M1: JSON and incremental SSE, request capture, gated delivery, connection failures and cancellation observation | — | Deterministic HTTP scenarios prove byte capture, controlled delivery, failures and cleanup without provider credentials |
-| FND-004 | DRAFT | — | FND-001 | Shared local/CI verification baseline: formatting, vet, tests, race detection and build on the pinned toolchain | — | The same documented checks run locally and in CI |
-| [FND-005](tasks/FND-005.md) | READY | — | — | Select the M1 compatibility baseline: Responses-native backend, client/version and reproducible tool/parallel-tool scenario | — | Review source-linked baseline note and reproducible smoke procedure against the card's acceptance checklist |
-| FND-006 | DRAFT | — | FND-002, FND-003, FND-004, FND-005 | Verify M0 acceptance and prepare the M1 handoff from actual scaffold, fixture and check results | — | Assembled M0 passes documented clean-checkout startup, invalid-config and local/CI checks without provider credentials; evidence supports bounded M1 candidates |
+| [FND-001](tasks/FND-001.md) | DONE | GPT-6 Sol (ses_f127f196fffe6OhKnJp1Tx7tO8) | — | Reproducible Go scaffold: module identity, pinned toolchain, minimal `gateway` entrypoint and clean-checkout build instructions | Go scaffold established with module identity, artifact-free offline build and explicit non-serving entrypoint | `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build -o /dev/null ./...` with Go 1.27.1 from a clean checkout |
+| [FND-002](tasks/FND-002.md) | DONE | GPT-6 Sol (ses_f121d2a4bffeR1da0gHcR5hHED) | FND-001 | Runnable startup slice: minimal configuration, health/readiness, clear startup failures and bounded graceful shutdown | Probe-only HTTP server with JSON/flag startup, /healthz and /readyz endpoints, invalid input failure reporting, and signal-driven bounded shutdown | `GOTOOLCHAIN=local go test -race ./...` and CLI probe/signal/invalid-config runs pass |
+| [FND-003](tasks/FND-003.md) | DONE | GPT-6 Sol (ses_f120de8a5ffe5h4hBv3AO2aUP2) | FND-001 | Controllable local fake upstream for M1: JSON and incremental SSE, request capture, gated delivery, connection failures and cancellation observation | Controllable loopback HTTP fixture with request byte/header capture, gated incremental SSE streaming, mid-stream drop, and client cancellation observation | `GOTOOLCHAIN=local go test -race ./internal/testutil/fakeupstream/...` |
+| [FND-004](tasks/FND-004.md) | DONE | GPT-6 Sol (ses_f1205c26dffezzHtzMCYSiwL0T) | FND-001 | Shared local/CI verification baseline: formatting, vet, tests, race detection and build on the pinned toolchain | Executable shared offline check script and pinned Go CI workflow; local suite and failure detection verified, hosted CI unrun | `./scripts/check.sh` with Go 1.27.1 |
+| [FND-005](tasks/FND-005.md) | DONE | GPT-6 Sol (ses_f12616adbffeeLzbhovjYlZ5v0) | — | Select the M1 compatibility baseline: Responses-native backend, client/version and reproducible tool/parallel-tool scenario | OpenAI public Responses / gpt-4.1-mini-2025-04-14 with OpenCode V2 2.0.6 selected on source evidence; live gate remains M1 | Review source-linked baseline note and reproducible smoke procedure against the card's acceptance checklist |
+| [FND-006](tasks/FND-006.md) | DONE | GPT-6 Sol (ses_f11faaaf0ffeBsSBNpzuIgJknJ) | FND-002, FND-003, FND-004, FND-005 | Verify M0 acceptance and prepare the M1 handoff from actual scaffold, fixture and check results | Local assembled M0 checks, isolated clean-build lifecycle, and M1 candidate registration verified | `./scripts/check.sh` passes, gateway probe/failure/shutdown verified, and M1 candidate breakdown prepared |
 
 ### Planner Handoff
 
@@ -49,3 +49,13 @@ FND-005 records a specific intended backend/model and client/version, selection 
 ## Next Planning Boundary
 
 FND-006 verifies every [M0 acceptance criterion](ROADMAP.md#m0--project-foundation) and uses the selected baseline to outline bounded M1 candidates. The Planner prepares executable M1 cards when their prerequisites and checks are concrete. The first end-to-end regression must cover unknown-field preservation, early chunk delivery, and cancellation. Later milestones are not implicitly ready because they appear in ROADMAP.
+
+## M1 — Transparent Responses Proxy (planning candidates)
+
+These DRAFT rows are not executable assignments. The Planner prepares cards, concrete commands, and acceptance before promotion; the live smoke requires separate API access. All paths use the selected OpenAI public Responses baseline and the accepted v1 execution contract, not a temporary proxy contract.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| M1-001 | DRAFT | — | FND-006 | Wire a single explicit Responses target through adapter, Core and native connector: bounded ingress, scoped upstream credential, opaque request/response bytes and contract-aligned stream lifecycle even for fixed JSON | — | Fake-upstream fixed-response integration: unknown fields/whitespace and response bytes preserved; oversize/invalid requests fail before upstream; credentials isolated |
+| M1-002 | DRAFT | — | M1-001 | Exercise incremental native SSE path and cleanup: ordered flushed chunks, bounded backpressure, cancellation, pre-/post-commit failure without hidden replay or replacement response | — | Fake-upstream gated two-chunk integration: first event before completion, byte/event order and IDs preserved, disconnect cancels upstream, late drop does not retry |
+| M1-003 | DRAFT | — | M1-002 | Run versioned direct-versus-gateway OpenCode 2.0.6 smoke with public Responses `gpt-4.1-mini-2025-04-14`: tools, parallel attempt, continuation and cancellation; sanitize evidence | — | Review versioned direct/gateway traces against REFERENCES smoke procedure and M1 roadmap gate; requires authorized API access/credit |

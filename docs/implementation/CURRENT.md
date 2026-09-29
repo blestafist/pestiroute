@@ -2,20 +2,20 @@
 
 ## Verified Baseline
 
-- Repository contains architecture and implementation documentation only.
-- No Go module, application source, executable, test suite, CI workflow, or verified run command exists yet.
-- [CONTRACT.md](CONTRACT.md) is the accepted v1 semantic boundary for Protocol Adapters, Core Runtime, and Connectors, with ADR change control. Language/IPC bindings are not implemented; configuration and stack choices remain drafts.
+- FND-001 Go module scaffold, FND-002 probe-only server, FND-003 controllable local fake upstream fixture, and FND-004 shared local/CI workflow are verified locally. Hosted CI has not run. No inference endpoint or provider integration exists yet.
+- FND-005 M1 compatibility baseline is selected on source evidence in [References](REFERENCES.md#m1-compatibility-baseline) (OpenAI public Responses / `gpt-4.1-mini-2025-04-14` with OpenCode V2 2.0.6); real inference execution remains an M1 smoke gate.
+- [CONTRACT.md](CONTRACT.md) is the accepted v1 semantic boundary for Protocol Adapters, Core Runtime, and Connectors, with ADR change control. Language/IPC bindings are not implemented; the M3 configuration schema and later stack choices remain drafts.
 - Documentation is organized by project intent and implementation; the root [AGENTS.md](../../AGENTS.md) defines the agent entry path.
 
 ## Immediate Focus
 
-The independent [FND-001](tasks/FND-001.md) scaffold and [FND-005](tasks/FND-005.md) M1 baseline selection are READY for separate workers. Claim each in [TASKS.md](TASKS.md#m0--foundation) before execution. FND-001 uses module `github.com/blestafist/pestiroute` and Go 1.27.1; FND-005 selects and documents the backend/client combination without claiming live compatibility.
+[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md) are DONE. M0 foundation is verified complete.
 
-After the scaffold, build the startup/configuration path, controllable fake upstream and shared local/CI checks toward the [first vertical slice](ROADMAP.md#first-vertical-slice). The M0 candidates also cover baseline selection and an assembled-foundation verification handoff; real-provider smoke execution remains an M1 gate. Task statuses and dependencies live only in TASKS.
+Next: prepare executable cards from M1 [DRAFT candidates](TASKS.md#m1--transparent-responses-proxy-planning-candidates) starting with M1-001. Real-provider smoke execution remains an M1 gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 
-- First real Responses-native backend and client/version for the smoke baseline: resolve during M0, before the M1 compatibility claim. Local scaffold work does not need provider credentials.
+- The selected OpenAI public Responses / OpenCode V2 baseline requires M1 access and live verification; account access/credit and actual parallel/cancellation behavior are unknown. Local scaffold work does not need provider credentials.
 - Local 9Router/9Gateway revisions and source maps are recorded in [References](REFERENCES.md#migration-from-9router). Reproducible repository provenance and code-reuse licenses remain unresolved before code migration; live compatibility is unverified. These do not block M0.
 
 Other architectural questions remain in [DECISIONS.md](../project/DECISIONS.md#questions-before-implementation). The `/next n` OpenCode command describes a bounded agent workflow; it does not provide a persistent scheduler or change task readiness rules. [Tooling adoption](TOOLING.md) records conditional future additions.
@@ -24,7 +24,7 @@ Other architectural questions remain in [DECISIONS.md](../project/DECISIONS.md#q
 
 `git diff --check` is available for patch whitespace. Documentation verification also checks local link targets/anchors, fenced blocks, and task registry consistency; no persistent checker command has been added.
 
-Build, test, start, and CI commands will be recorded here when FND tasks establish and verify them. Commands in [STACK.md](STACK.md#build-and-workflow) describe the intended baseline.
+With local Go 1.27.1, `./scripts/check.sh` passes: whitespace, `gofmt -l cmd internal`, vet, tests, race tests, and offline artifact-free build. In an isolated HEAD export, offline build and direct binary startup passed: `/healthz` and `/readyz` returned 200; SIGTERM exited 0 in <3s; malformed addresses and timeouts returned non-zero with stderr. `GOTOOLCHAIN=local go run ./cmd/gateway -listen invalid:address` also failed clearly. `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -race ./internal/testutil/fakeupstream/...` passes byte capture, gated SSE, drops and cancellation. CI workflow invokes the same script on pinned Go 1.27.1; hosted execution and actionlint remain unrun. `gofmt -l .` reports an unrelated pre-existing file under `.refs/9Router/`.
 
 ## Update Rule
 
