@@ -9,13 +9,12 @@
 
 ## Immediate Focus
 
-Prepare the first M0 task for execution. The initial candidates are in [TASKS.md](TASKS.md#m0--foundation); the planner should create `tasks/FND-001.md` from [TEMPLATE.md](tasks/TEMPLATE.md), resolve the module path and supported Go version, and establish concrete checks before making it READY.
+The independent [FND-001](tasks/FND-001.md) scaffold and [FND-005](tasks/FND-005.md) M1 baseline selection are READY for separate workers. Claim each in [TASKS.md](TASKS.md#m0--foundation) before execution. FND-001 uses module `github.com/blestafist/pestiroute` and Go 1.27.1; FND-005 selects and documents the backend/client combination without claiming live compatibility.
 
 After the scaffold, build the startup/configuration path, controllable fake upstream and shared local/CI checks toward the [first vertical slice](ROADMAP.md#first-vertical-slice). The M0 candidates also cover baseline selection and an assembled-foundation verification handoff; real-provider smoke execution remains an M1 gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 
-- Go module path and pinned toolchain version: resolve in FND-001.
 - First real Responses-native backend and client/version for the smoke baseline: resolve during M0, before the M1 compatibility claim. Local scaffold work does not need provider credentials.
 - Local 9Router/9Gateway revisions and source maps are recorded in [References](REFERENCES.md#migration-from-9router). Reproducible repository provenance and code-reuse licenses remain unresolved before code migration; live compatibility is unverified. These do not block M0.
 
