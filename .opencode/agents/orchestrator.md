@@ -1,6 +1,7 @@
 ---
 description: Coordinates long-running delivery through planner, worker, and reviewer; resolves disagreements, preserves concise handoffs, and never implements changes itself.
 mode: primary
+model: openai/gpt-6-sol#medium
 permissions:
   - action: "*"
     resource: "*"

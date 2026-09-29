@@ -1,6 +1,7 @@
 ---
 description: Independently challenges a worker's changes, actively hunts defects and unnecessary code, and reports actionable findings without modifying files.
 mode: all
+model: 9router/review#medium
 permissions:
   - action: "*"
     resource: "*"
