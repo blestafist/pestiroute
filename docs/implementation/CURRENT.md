@@ -11,7 +11,7 @@
 
 [FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md) are DONE. M0 foundation is verified complete.
 
-Next: prepare executable cards from M1 [DRAFT candidates](TASKS.md#m1--transparent-responses-proxy-planning-candidates) starting with M1-001. Real-provider smoke execution remains an M1 gate. Task statuses and dependencies live only in TASKS.
+Next: execute [M1-004](tasks/M1-004.md), the minimal M1 binding/scope decision note. M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); promote dependent cards only after checking predecessor evidence. Give each worker one card, not the milestone. Real-provider smoke execution remains a separate M1 gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 

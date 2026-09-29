@@ -52,10 +52,36 @@ FND-006 verifies every [M0 acceptance criterion](ROADMAP.md#m0--project-foundati
 
 ## M1 — Transparent Responses Proxy (planning candidates)
 
-These DRAFT rows are not executable assignments. The Planner prepares cards, concrete commands, and acceptance before promotion; the live smoke requires separate API access. All paths use the selected OpenAI public Responses baseline and the accepted v1 execution contract, not a temporary proxy contract.
+M1 is decomposed into 27 bounded cards. **Assign one READY card per worker session, never this milestone or a dependency chain.** Read only that card's linked sections and affected code; stop at its acceptance boundary. Dependencies are not extra scope. The Planner refreshes each dependent DRAFT against actual predecessor results before promotion, recording concrete package/test names where needed. Only M1-004 is initially READY. All local work is independent of real API credentials.
+
+Existing IDs retain their purpose: M1-001 is now fixed-response composition after component work, M1-002 is the native SSE integration gate, and M1-003 compares separately captured live evidence. They no longer authorize implementing their prerequisites. The order below is dependency-oriented, not numeric. M2 registry/conformance, M3 storage/auth/accounting, translation, and automatic fallback remain outside M1.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| M1-001 | DRAFT | — | FND-006 | Wire a single explicit Responses target through adapter, Core and native connector: bounded ingress, scoped upstream credential, opaque request/response bytes and contract-aligned stream lifecycle even for fixed JSON | — | Fake-upstream fixed-response integration: unknown fields/whitespace and response bytes preserved; oversize/invalid requests fail before upstream; credentials isolated |
-| M1-002 | DRAFT | — | M1-001 | Exercise incremental native SSE path and cleanup: ordered flushed chunks, bounded backpressure, cancellation, pre-/post-commit failure without hidden replay or replacement response | — | Fake-upstream gated two-chunk integration: first event before completion, byte/event order and IDs preserved, disconnect cancels upstream, late drop does not retry |
-| M1-003 | DRAFT | — | M1-002 | Run versioned direct-versus-gateway OpenCode 2.0.6 smoke with public Responses `gpt-4.1-mini-2025-04-14`: tools, parallel attempt, continuation and cancellation; sanitize evidence | — | Review versioned direct/gateway traces against REFERENCES smoke procedure and M1 roadmap gate; requires authorized API access/credit |
+| [M1-004](tasks/M1-004.md) | READY | — | FND-006 | Specify the minimal M1 binding and local startup choices against v1, resolving component handoff questions | — | Card's reproducible contract/scope review and `git diff --check` |
+| [M1-005](tasks/M1-005.md) | DRAFT | — | M1-004 | Minimal Go execution envelope, frames, errors and cancellable stream boundary | — | Focused binding tests and `./scripts/check.sh` |
+| [M1-006](tasks/M1-006.md) | DRAFT | — | M1-004 | Single-target startup configuration, limits and runtime-owned environment credential | — | Configuration validation tests and `./scripts/check.sh` |
+| [M1-007](tasks/M1-007.md) | DRAFT | — | M1-005 | Bounded Responses Decode with byte-preserving envelope extraction | — | Decoder byte/invalid/limit tests and `./scripts/check.sh` |
+| [M1-008](tasks/M1-008.md) | DRAFT | — | M1-005, M1-006 | Scoped native HTTP transport: selected credentials, no redirects or hidden replay | — | Loopback transport capture/replay tests and `./scripts/check.sh` |
+| [M1-009](tasks/M1-009.md) | DRAFT | — | M1-008 | Fixed JSON native Connector frames and classified completion | — | Connector fixed-response lifecycle tests and `./scripts/check.sh` |
+| [M1-010](tasks/M1-010.md) | DRAFT | — | M1-005 | Single-target Core dispatch, trusted IDs, frame lifecycle and one finalization | — | Scripted-connector Core tests and `./scripts/check.sh` |
+| [M1-011](tasks/M1-011.md) | DRAFT | — | M1-005 | HTTP Encode for native frames and pre-head gateway errors | — | Encoder commit/byte/error tests and `./scripts/check.sh` |
+| [M1-001](tasks/M1-001.md) | DRAFT | — | M1-006, M1-007, M1-009, M1-010, M1-011 | Compose POST /v1/responses and prove fixed-response end-to-end passthrough | — | Real loopback fixed-response gateway regression and `./scripts/check.sh` |
+| [M1-012](tasks/M1-012.md) | DRAFT | — | M1-009 | Incremental native SSE Connector output and bounded terminal-outcome observation | — | Gated Connector SSE/outcome tests and `./scripts/check.sh` |
+| [M1-013](tasks/M1-013.md) | DRAFT | — | M1-001, M1-012 | Flush native body frames to HTTP client before upstream completion | — | Real-socket first-event gate and `./scripts/check.sh` |
+| [M1-002](tasks/M1-002.md) | DRAFT | — | M1-013 | Verify SSE split boundaries, event ordering and interleaved tool IDs end to end | — | Byte-exact split-event integration and `./scripts/check.sh` |
+| [M1-014](tasks/M1-014.md) | DRAFT | — | M1-013 | Client disconnect/write failure cancels upstream and releases stream | — | Explicit client-cancel cleanup tests and `./scripts/check.sh` |
+| [M1-015](tasks/M1-015.md) | DRAFT | — | M1-001 | Pre-commit rejection and transport-error behavior without replay | — | Rejection/drop request-count tests and `./scripts/check.sh` |
+| [M1-016](tasks/M1-016.md) | DRAFT | — | M1-013, M1-015 | Post-commit failure closes response without replacement or retry | — | Late-drop/EOF integration and `./scripts/check.sh` |
+| [M1-017](tasks/M1-017.md) | DRAFT | — | M1-014 | Bounded backpressure under a stalled downstream reader | — | Controlled slow-consumer/buffer-bound tests and `./scripts/check.sh` |
+| [M1-018](tasks/M1-018.md) | DRAFT | — | M1-014, M1-016 | Phase-specific timeouts and deadline cancellation for active requests | — | Header/idle/deadline tests and `./scripts/check.sh` |
+| [M1-019](tasks/M1-019.md) | DRAFT | — | M1-018 | Drain and bounded shutdown of active inference and Connector resources | — | Shutdown with gated active work and `./scripts/check.sh` |
+| [M1-020](tasks/M1-020.md) | DRAFT | — | M1-016, M1-019 | Verify concurrent request isolation and exactly-once in-memory finalization | — | Race-tested competing termination scenarios and `./scripts/check.sh` |
+| [M1-021](tasks/M1-021.md) | DRAFT | — | M1-001 | End-to-end credential/header isolation and encoded native response preservation | — | Header/compression capture matrix and `./scripts/check.sh` |
+| [M1-022](tasks/M1-022.md) | DRAFT | — | M1-002, M1-017, M1-020, M1-021 | Assemble local M1 gate, runnable startup docs and measured native baseline | — | Clean local run, existing regressions, baseline procedure and `./scripts/check.sh` |
+| [M1-023](tasks/M1-023.md) | DRAFT | — | M1-022 | Prepare exact-version disposable live-smoke setup and evidence capture procedure | — | Local fake-target dry run of documented procedure |
+| [M1-024](tasks/M1-024.md) | DRAFT | — | M1-023 | Capture direct real-client single/parallel tool and continuation evidence | — | Versioned direct trace review; requires API access/credit |
+| [M1-025](tasks/M1-025.md) | DRAFT | — | M1-024 | Capture gateway real-client single/parallel tool and continuation evidence | — | Versioned gateway trace review; requires API access/credit |
+| [M1-026](tasks/M1-026.md) | DRAFT | — | M1-025 | Observe live direct/gateway streaming interruption and cancellation | — | Explicit interrupted-client traces and cleanup evidence; requires API access/credit |
+| [M1-003](tasks/M1-003.md) | DRAFT | — | M1-024, M1-025, M1-026 | Compare versioned direct/gateway evidence and report supported/unknown observations | — | REFERENCES smoke checklist against sanitized traces |
+| [M1-027](tasks/M1-027.md) | DRAFT | — | M1-022, M1-003 | Verify every M1 roadmap gate and hand off actual scope to M2 | — | Acceptance-to-evidence audit and `./scripts/check.sh` |
