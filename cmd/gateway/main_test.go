@@ -181,6 +181,163 @@ func TestResponsesIncrementalFlush(t *testing.T) {
 	}
 }
 
+func TestResponsesSplitToolEvents(t *testing.T) {
+	// Synthetic Responses-native trace: distinct call IDs and output indices are
+	// deliberately interleaved; chunk cuts are transport artifacts, not events.
+	const first = "event: response.created\r\ndata: {\"type\":\"response.created\",\"unknown\":\"café\"}\r\n\r\n"
+	events := []string{
+		`event: response.output_item.added` + "\n" + `data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_A","id":"item_A","name":"lookup"}}` + "\n\n",
+		`event: response.output_item.added` + "\n" + `data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_B","id":"item_B","name":"lookup"}}` + "\n\n",
+		`event: response.function_call_arguments.delta` + "\n" + `data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item_A","delta":"{\"key\":\""}` + "\n\n",
+		`event: response.function_call_arguments.delta` + "\n" + `data: {"type":"response.function_call_arguments.delta","output_index":1,"item_id":"item_B","delta":"{\"key\":\"B\"}"}` + "\n\n",
+		`event: response.function_call_arguments.delta` + "\n" + `data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item_A","delta":"A\"}"}` + "\n\n",
+		`event: vendor.unknown` + "\n" + `data: {"type":"vendor.unknown","opaque":{"x":1}}` + "\n\n",
+		`event: response.output_item.done` + "\n" + `data: {"type":"response.output_item.done","output_index":1,"item":{"id":"item_B","call_id":"call_B","arguments":"{\"key\":\"B\"}"}}` + "\n\n",
+		`event: response.output_item.done` + "\n" + `data: {"type":"response.output_item.done","output_index":0,"item":{"id":"item_A","call_id":"call_A","arguments":"{\"key\":\"A\"}"}}` + "\n\n",
+		`event: response.completed` + "\n" + `data: {"type":"response.completed","response":{"status":"completed"}}` + "\n\n",
+	}
+	want := []byte(first + strings.Join(events, ""))
+	// Cut inside UTF-8, JSON strings, CRLF and SSE blank-line separators.
+	cut := bytes.Index([]byte(first), []byte("é"))
+	if cut < 0 {
+		t.Fatal("missing UTF-8 fixture")
+	}
+	gate := make(chan struct{})
+	defer func() {
+		if gate != nil {
+			close(gate)
+		}
+	}()
+	// Hold the second half of A's argument delta, not just response.created:
+	// the client must receive the first half before this tool event completes.
+	deltaCut := bytes.Index([]byte(events[2]), []byte(`\"key`))
+	if deltaCut < 0 {
+		t.Fatal("missing argument JSON split point")
+	}
+	deltaCut += 2
+	early := []byte(first + events[0] + events[1] + events[2][:deltaCut])
+	steps := []fakeupstream.Step{
+		{Data: []byte(first)[:cut+1]}, {Data: []byte(first)[cut+1 : len(first)-3]},
+		{Data: []byte(first)[len(first)-3:]},
+	}
+	for _, event := range events[:2] {
+		mid := bytes.Index([]byte(event), []byte(`"output_index"`))
+		steps = append(steps, fakeupstream.Step{Data: []byte(event[:mid])}, fakeupstream.Step{Data: []byte(event[mid:])})
+	}
+	steps = append(steps, fakeupstream.Step{Data: []byte(events[2][:deltaCut])}, fakeupstream.Step{Gate: gate, Data: []byte(events[2][deltaCut:])})
+	for _, event := range events[3:] {
+		mid := bytes.Index([]byte(event), []byte(`"output_index"`))
+		if mid < 0 {
+			mid = len(event) / 2
+		}
+		steps = append(steps, fakeupstream.Step{Data: []byte(event[:mid])}, fakeupstream.Step{Data: []byte(event[mid:])})
+	}
+	upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: steps})
+	defer upstream.Close()
+	var ready atomic.Bool
+	h, closeTransport := handler(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic", MaxRequestBodyBytes: 4096, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s"}, &ready)
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = 3 * time.Second
+	send := func(body []byte) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/event-stream" {
+			t.Fatalf("stream response: %d %v", resp.StatusCode, resp.Header)
+		}
+		return resp
+	}
+	initial := []byte(`{"model":"gpt-4.1-mini-2025-04-14","stream":true,"unknown":{"keep":1}}`)
+	resp := send(initial)
+	gotEarly := make([]byte, len(early))
+	if _, err := io.ReadFull(resp.Body, gotEarly); err != nil || !bytes.Equal(gotEarly, early) {
+		t.Fatalf("early partial tool delta: exact bytes %t, read %v", bytes.Equal(gotEarly, early), err)
+	}
+	close(gate)
+	gate = nil
+	rest, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || !bytes.Equal(append(gotEarly, rest...), want) {
+		t.Fatalf("ordered native SSE: exact bytes %t, read %v", bytes.Equal(append(gotEarly, rest...), want), err)
+	}
+	var order []string
+	callIDs := map[string]string{}
+	arguments := map[string]string{}
+	for _, event := range events {
+		var data struct {
+			Type        string `json:"type"`
+			OutputIndex int    `json:"output_index"`
+			ItemID      string `json:"item_id"`
+			Delta       string `json:"delta"`
+			Item        struct {
+				ID        string `json:"id"`
+				CallID    string `json:"call_id"`
+				Arguments string `json:"arguments"`
+			} `json:"item"`
+		}
+		line := strings.SplitN(event, "\n", 3)
+		if len(line) != 3 || json.Unmarshal([]byte(strings.TrimPrefix(line[1], "data: ")), &data) != nil {
+			t.Fatalf("invalid synthetic event: %q", event)
+		}
+		order = append(order, fmt.Sprintf("%s:%d", data.Type, data.OutputIndex))
+		switch data.Type {
+		case "response.output_item.added":
+			callIDs[data.Item.ID] = data.Item.CallID
+		case "response.function_call_arguments.delta":
+			arguments[data.ItemID] += data.Delta
+		case "response.output_item.done":
+			if callIDs[data.Item.ID] != data.Item.CallID || arguments[data.Item.ID] != data.Item.Arguments {
+				t.Fatalf("tool item relationship lost: %+v", data.Item)
+			}
+		}
+	}
+	wantOrder := []string{"response.output_item.added:0", "response.output_item.added:1", "response.function_call_arguments.delta:0", "response.function_call_arguments.delta:1", "response.function_call_arguments.delta:0", "vendor.unknown:0", "response.output_item.done:1", "response.output_item.done:0", "response.completed:0"}
+	if strings.Join(order, ",") != strings.Join(wantOrder, ",") || callIDs["item_A"] != "call_A" || callIDs["item_B"] != "call_B" || arguments["item_A"] != `{"key":"A"}` || arguments["item_B"] != `{"key":"B"}` {
+		t.Fatalf("event order or call relationships: %v, %v, %v", order, callIDs, arguments)
+	}
+	followup := []byte(` {"model":"gpt-4.1-mini-2025-04-14","stream":true,"previous_response_id":"response_1","input":[{"type":"function_call_output","call_id":"call_B","output":"B result","unknown":{"keep":2}},{"type":"function_call_output","call_id":"call_A","output":"A result"}],"unknown":{"keep":3}} `)
+	var round struct {
+		Input []struct {
+			CallID string `json:"call_id"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(followup, &round); err != nil || len(round.Input) != 2 || round.Input[0].CallID != callIDs["item_B"] || round.Input[1].CallID != callIDs["item_A"] {
+		t.Fatalf("follow-up call ID relationship: %+v, %v", round, err)
+	}
+	select {
+	case captured := <-upstream.Requests:
+		if !bytes.Equal(captured.Body, initial) || captured.Header.Get("Authorization") != "Bearer synthetic" {
+			t.Fatal("initial request bytes or credential changed")
+		}
+	default:
+		t.Fatal("missing initial upstream request")
+	}
+	second := send(followup)
+	_, err = io.Copy(io.Discard, second.Body)
+	second.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case captured := <-upstream.Requests:
+		if !bytes.Equal(captured.Body, followup) || captured.Header.Get("Authorization") != "Bearer synthetic" {
+			t.Fatalf("follow-up request: exact bytes %t, credential %t", bytes.Equal(captured.Body, followup), captured.Header.Get("Authorization") == "Bearer synthetic")
+		}
+	default:
+		t.Fatal("missing follow-up upstream request")
+	}
+}
+
 func TestConfig(t *testing.T) {
 	path := t.TempDir() + "/gateway.json"
 	if err := os.WriteFile(path, []byte(`{"listen":"127.0.0.1:0","shutdown_timeout":"250ms"}`), 0600); err != nil {
