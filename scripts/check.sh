@@ -10,7 +10,11 @@ case "$version" in
 esac
 
 echo 'check: patch whitespace' >&2
-git diff --check >&2
+if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
+  git diff --check HEAD^ HEAD >&2
+else
+  git diff --check >&2
+fi
 
 echo 'check: formatting (cmd, internal)' >&2
 unformatted=$(gofmt -l cmd internal)
