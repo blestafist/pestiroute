@@ -9,9 +9,9 @@
 
 ## Immediate Focus
 
-[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), and [M1-004](tasks/M1-004.md) through [M1-010](tasks/M1-010.md) are DONE.
+[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), and [M1-004](tasks/M1-004.md) through [M1-011](tasks/M1-011.md) are DONE.
 
-Next candidate: [M1-011](tasks/M1-011.md) (HTTP Encode for native frames and pre-head gateway errors, depends on M1-005). M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke execution remains a separate M1 gate. Task statuses and dependencies live only in TASKS.
+Next candidate: [M1-001](tasks/M1-001.md) (Compose POST /v1/responses and prove fixed-response end-to-end passthrough, all dependencies DONE). M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke execution remains a separate M1 gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 
