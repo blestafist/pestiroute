@@ -12,6 +12,10 @@ GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build -o /dev/null ./...
 
 The server has no application dependencies. Plain `go build ./...` writes a `gateway` binary to the current directory; `-o /dev/null` avoids that artifact.
 
+## Verify
+
+With Go 1.27.1, run `./scripts/check.sh` from the repository root. CI runs the same script for formatting, vet, tests, race detection, and an offline artifact-free build; checks need no provider credentials.
+
 ## Run
 
 ```sh

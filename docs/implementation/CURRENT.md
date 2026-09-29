@@ -9,7 +9,7 @@
 
 ## Immediate Focus
 
-[FND-001](tasks/FND-001.md), [FND-002](tasks/FND-002.md), [FND-003](tasks/FND-003.md), and [FND-005](tasks/FND-005.md) are DONE. Independent candidate FND-004 (verification baseline) remains DRAFT.
+[FND-001](tasks/FND-001.md), [FND-002](tasks/FND-002.md), [FND-003](tasks/FND-003.md), [FND-004](tasks/FND-004.md), and [FND-005](tasks/FND-005.md) are DONE. FND-006 remains DRAFT pending planning.
 
 After the scaffold, build the startup/configuration path, controllable fake upstream and shared local/CI checks toward the [first vertical slice](ROADMAP.md#first-vertical-slice). The M0 candidates also cover baseline selection and an assembled-foundation verification handoff; real-provider smoke execution remains an M1 gate. Task statuses and dependencies live only in TASKS.
 
@@ -24,7 +24,7 @@ Other architectural questions remain in [DECISIONS.md](../project/DECISIONS.md#q
 
 `git diff --check` is available for patch whitespace. Documentation verification also checks local link targets/anchors, fenced blocks, and task registry consistency; no persistent checker command has been added.
 
-With local Go 1.27.1, `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build -o /dev/null ./...` leaves no binary. `gofmt -l cmd/gateway internal/testutil/fakeupstream`, `GOTOOLCHAIN=local go vet ./...`, `GOTOOLCHAIN=local go test ./...`, and `GOTOOLCHAIN=local go test -race ./...` pass. `GOTOOLCHAIN=local go run ./cmd/gateway -listen 127.0.0.1:0` serves `/healthz` and `/readyz` (200) and exits cleanly on SIGTERM; invalid config exits non-zero with stderr. `gofmt -l .` reports an unrelated pre-existing file under `.refs/9Router/`. No CI exists.
+With local Go 1.27.1, `./scripts/check.sh` passes: whitespace, `gofmt -l cmd internal`, vet, tests, race tests, and offline artifact-free build. A deliberate formatting error fails with the file named on stderr. CI workflow invokes the same script on pinned Go 1.27.1; syntactic YAML parse was confirmed via cached parser (`yamlcheck`), while actionlint schema validation and hosted execution remain unrun. `GOTOOLCHAIN=local go run ./cmd/gateway -listen 127.0.0.1:0` serves `/healthz` and `/readyz` (200) and exits cleanly on SIGTERM; invalid config exits non-zero with stderr. `gofmt -l .` reports an unrelated pre-existing file under `.refs/9Router/`.
 
 ## Update Rule
 
