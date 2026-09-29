@@ -19,7 +19,7 @@ After the scaffold, build the startup/configuration path, controllable fake upst
 - First real Responses-native backend and client/version for the smoke baseline: resolve during M0, before the M1 compatibility claim. Local scaffold work does not need provider credentials.
 - Local 9Router/9Gateway revisions and source maps are recorded in [References](REFERENCES.md#migration-from-9router). Reproducible repository provenance and code-reuse licenses remain unresolved before code migration; live compatibility is unverified. These do not block M0.
 
-Other architectural questions remain in [DECISIONS.md](../project/DECISIONS.md#questions-before-implementation). Future harness/planner automation is not specified yet.
+Other architectural questions remain in [DECISIONS.md](../project/DECISIONS.md#questions-before-implementation). The `/next n` OpenCode command describes a bounded agent workflow; it does not provide a persistent scheduler or change task readiness rules. [Tooling adoption](TOOLING.md) records conditional future additions.
 
 ## Available Checks
 
