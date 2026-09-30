@@ -47,6 +47,9 @@ func Encode(w http.ResponseWriter, r *http.Request, resp core.ExecutionResponse,
 			}
 			w.WriteHeader(*frame.Head.HTTPStatus)
 			committed = true
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
 		case core.FrameBody:
 			if !committed || frame.Body == nil {
 				return core.ErrStreamContract

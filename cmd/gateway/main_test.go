@@ -420,6 +420,72 @@ func TestResponsesWriteFailureCancelsUpstream(t *testing.T) {
 	assertCounts(t, upstream, &finalized, 2)
 }
 
+func TestResponsesPostCommitLateFailures(t *testing.T) {
+	const created = "event: response.created\ndata: {\"type\":\"response.created\"}\n\n"
+	const failed = "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\"}}\n\n"
+	for _, tc := range []struct {
+		name     string
+		response fakeupstream.Response
+		prefix   string
+		want     core.Outcome
+	}{
+		{name: "Head then drop", response: fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Drop: true}}}, want: core.OutcomeIncomplete},
+		{name: "Body then drop", response: fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: []byte(created)}, {Data: []byte("partial"), Drop: true}}}, prefix: created + "partial", want: core.OutcomeIncomplete},
+		{name: "EOF without terminal", response: fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: []byte(created)}}}, prefix: created, want: core.OutcomeIncomplete},
+		{name: "native failed terminal", response: fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: []byte(failed)}}}, prefix: failed, want: core.OutcomeFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gate chan struct{}
+			if tc.name == "Head then drop" {
+				gate = make(chan struct{})
+				tc.response.Steps[0].Gate = gate
+				defer func() {
+					if gate == nil {
+						return
+					}
+					select {
+					case <-gate:
+					default:
+						close(gate)
+					}
+				}()
+			}
+			upstream := fakeupstream.New(tc.response)
+			defer upstream.Close()
+			finals := make(chan core.AttemptResult, 2)
+			var finalized atomic.Int32
+			server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
+			defer closeTransport()
+			defer server.Close()
+
+			conn := rawGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`)
+			defer conn.Close()
+			resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPost})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" {
+				t.Fatalf("committed response replaced: status=%d headers=%v", resp.StatusCode, resp.Header)
+			}
+			receiveRequest(t, upstream)
+			if upstream.RequestCount() != 1 {
+				t.Fatalf("upstream invocation count=%d, want 1", upstream.RequestCount())
+			}
+			if gate != nil {
+				close(gate)
+				gate = nil
+			}
+			got, readErr := io.ReadAll(resp.Body)
+			if string(got) != tc.prefix || readErr != nil {
+				t.Fatalf("response bytes=%q read error=%v, want bytes=%q and clean termination", got, readErr, tc.prefix)
+			}
+			assertFinalization(t, finals, tc.want, true)
+			assertCounts(t, upstream, &finalized, 1)
+		})
+	}
+}
+
 type gatewayFailWriter struct {
 	header http.Header
 	status int
