@@ -1238,7 +1238,7 @@ func TestProbes(t *testing.T) {
 	check("/readyz", 200)
 }
 
-func TestGatewayLifecycle(t *testing.T) {
+func TestLifecycleGateway(t *testing.T) {
 	binary := t.TempDir() + "/gateway"
 	build := exec.Command("go", "build", "-o", binary, ".")
 	build.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off")
@@ -1297,5 +1297,253 @@ func TestGatewayLifecycle(t *testing.T) {
 		if err == nil || !strings.Contains(string(out), "gateway:") || !strings.Contains(string(out), args[1]) {
 			t.Errorf("invalid %v: output %q, error %v", args, out, err)
 		}
+	}
+}
+
+func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
+	binary := t.TempDir() + "/gateway"
+	build := exec.Command("go", "build", "-o", binary, ".")
+	build.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build gateway: %v: %s", err, out)
+	}
+	for _, expire := range []bool{false, true} {
+		name := "drains active work"
+		if expire {
+			name = "deadline cancels active work"
+		}
+		t.Run(name, func(t *testing.T) {
+			gate := make(chan struct{})
+			upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`), HeaderGate: gate})
+			defer upstream.Close()
+			configPath := t.TempDir() + "/gateway.json"
+			settings := map[string]any{
+				"listen": "127.0.0.1:0", "shutdown_timeout": "250ms", "upstream_endpoint": upstream.URL + "/v1/responses",
+				"upstream_credential_env": "PESTIROUTE_SHUTDOWN_CREDENTIAL", "max_request_body_bytes": 1024,
+				"max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s",
+				"response_header_timeout": "2s", "stream_idle_timeout": "2s",
+			}
+			data, err := json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(configPath, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(binary, "-config", configPath)
+			cmd.Env = append(os.Environ(), "PESTIROUTE_SHUTDOWN_CREDENTIAL=synthetic")
+			stderr, err := cmd.StderrPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			finished := false
+			defer func() {
+				if !finished {
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+				}
+			}()
+			reader := bufio.NewReader(stderr)
+			line, err := reader.ReadString('\n')
+			if err != nil || !strings.HasPrefix(line, "gateway: listening on ") {
+				t.Fatalf("startup: %q: %v", line, err)
+			}
+			base := "http://" + strings.TrimSpace(strings.TrimPrefix(line, "gateway: listening on "))
+			response := make(chan struct {
+				status int
+				body   string
+				err    error
+			}, 1)
+			go func() {
+				resp, err := http.Post(base+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+				if err != nil {
+					response <- struct {
+						status int
+						body   string
+						err    error
+					}{err: err}
+					return
+				}
+				body, readErr := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				response <- struct {
+					status int
+					body   string
+					err    error
+				}{status: resp.StatusCode, body: string(body), err: readErr}
+			}()
+			captured := receiveRequest(t, upstream)
+			shutdownStarted := time.Now()
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(time.Second)
+			for {
+				resp, err := http.Get(base + "/readyz")
+				if err != nil {
+					break // Shutdown may close the listener before the next probe reaches /readyz.
+				}
+				status := resp.StatusCode
+				resp.Body.Close()
+				if status == http.StatusServiceUnavailable {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("readiness did not fall after SIGTERM")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			cutoff, cutoffErr := http.Post(base+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+			if cutoffErr == nil {
+				io.Copy(io.Discard, cutoff.Body)
+				cutoff.Body.Close()
+			}
+			if cutoffErr == nil && cutoff.StatusCode != http.StatusServiceUnavailable || upstream.RequestCount() != 1 {
+				status := 0
+				if cutoff != nil {
+					status = cutoff.StatusCode
+				}
+				t.Fatalf("shutdown admission: status=%d error=%v upstream requests=%d", status, cutoffErr, upstream.RequestCount())
+			}
+			if expire {
+				select {
+				case <-captured.Cancelled:
+				case <-time.After(time.Second):
+					t.Fatal("upstream work was not cancelled at drain deadline")
+				}
+			} else {
+				close(gate)
+				got := <-response
+				if got.err != nil || got.status != http.StatusOK || got.body != `{"status":"completed"}` {
+					t.Fatalf("drained response: status=%d body=%q err=%v", got.status, got.body, got.err)
+				}
+			}
+			waited := make(chan error, 1)
+			go func() { waited <- cmd.Wait() }()
+			var waitErr error
+			select {
+			case waitErr = <-waited:
+			case <-time.After(2 * time.Second):
+				_ = cmd.Process.Kill()
+				<-waited
+				finished = true
+				t.Fatal("gateway exceeded bounded shutdown margin")
+			}
+			finished = true
+			if elapsed := time.Since(shutdownStarted); elapsed > 1500*time.Millisecond {
+				t.Fatalf("shutdown took %s, exceeding 1.5s margin", elapsed)
+			}
+			if expire && waitErr == nil || !expire && waitErr != nil {
+				t.Fatalf("gateway exit: %v (expire=%t)", waitErr, expire)
+			}
+			_, _ = io.ReadAll(reader)
+		})
+	}
+}
+
+func TestLifecycleAdmissionGuards(t *testing.T) {
+	upstream := fakeupstream.New(fakeupstream.Response{Status: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`)})
+	defer upstream.Close()
+	c := config{
+		UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic",
+		MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s",
+		ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s",
+	}
+
+	t.Run("unready probe", func(t *testing.T) {
+		var ready, draining atomic.Bool
+		h, closeTransport := handlerWithLifecycle(c, &ready, &draining, nil)
+		defer closeTransport()
+		server := httptest.NewServer(h)
+		defer server.Close()
+		resp, err := server.Client().Get(server.URL + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("unready /readyz status=%d, want 503", resp.StatusCode)
+		}
+	})
+
+	t.Run("draining rejects inference before dispatch", func(t *testing.T) {
+		var ready, draining atomic.Bool
+		ready.Store(true)
+		draining.Store(true)
+		h, closeTransport := handlerWithLifecycle(c, &ready, &draining, nil)
+		defer closeTransport()
+		server := httptest.NewServer(h)
+		defer server.Close()
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusServiceUnavailable || string(body) != "gateway is shutting down\n" {
+			t.Fatalf("draining response: status=%d body=%q read=%v", resp.StatusCode, body, readErr)
+		}
+		if got := upstream.RequestCount(); got != 0 {
+			t.Fatalf("draining request dispatched upstream %d times", got)
+		}
+	})
+}
+
+func TestLifecycleCloseTransportReleasesIdleConnection(t *testing.T) {
+	closed := make(chan struct{}, 1)
+	idle := make(chan struct{}, 1)
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"completed"}`))
+	}))
+	upstream.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateIdle:
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		case http.StateClosed:
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}
+	upstream.Start()
+	defer upstream.Close()
+
+	var ready, draining atomic.Bool
+	ready.Store(true)
+	h, closeTransport := handlerWithLifecycle(config{
+		UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic",
+		MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s",
+		ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s",
+	}, &ready, &draining, nil)
+	server := httptest.NewServer(h)
+	defer server.Close()
+	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("inference status=%d", resp.StatusCode)
+	}
+	select {
+	case <-idle:
+	case <-time.After(time.Second):
+		t.Fatal("upstream connection did not become idle")
+	}
+	closeTransport()
+	closeTransport()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not release the pooled upstream connection")
 	}
 }

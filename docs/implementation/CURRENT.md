@@ -9,7 +9,7 @@
 
 ## Immediate Focus
 
-Batch completed (M1-014 through M1-018 DONE); user authorized outgoing 7-commit batch (`f944dbf`, `35c53f6`, M1-014..018). Pending final doc amend to HEAD `d30a0a5` before push. No new task started.
+M1-019 implementation is verified and accepted DONE. Next task start is stopped: git-worker commit delegation is blocked by external prompt substitution (git-worker sessions received stale M1-018 amend instructions instead of new commit instructions; root cause external). Working tree holds 5 uncommitted M1-019 files; HEAD `093c014` remains ahead 7 of origin/dev-m1. Awaiting user resolution of git-worker dispatch/model before proceeding.
 
 M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
 

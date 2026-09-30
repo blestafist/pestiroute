@@ -191,6 +191,11 @@ func handler(c config, ready *atomic.Bool) (http.Handler, func()) {
 }
 
 func handlerWithFinalize(c config, ready *atomic.Bool, finalize func(core.AttemptResult)) (http.Handler, func()) {
+	var draining atomic.Bool
+	return handlerWithLifecycle(c, ready, &draining, finalize)
+}
+
+func handlerWithLifecycle(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult)) (http.Handler, func()) {
 	mux := probes(ready)
 	if c.UpstreamEndpoint == "" {
 		return mux, func() {}
@@ -211,6 +216,10 @@ func handlerWithFinalize(c config, ready *atomic.Bool, finalize func(core.Attemp
 		dispatch.Connector = map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}
 	}
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
+		if draining.Load() {
+			http.Error(w, "gateway is shutting down", http.StatusServiceUnavailable)
+			return
+		}
 		req, gatewayErr := adapter.Decode(r, c.MaxRequestBodyBytes, c.MaxRequestHeaderBytes)
 		if gatewayErr != nil {
 			_ = adapter.Encode(w, r, core.ExecutionResponse{}, gatewayErr)
@@ -232,7 +241,8 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("listen %q: %w", c.Listen, err)
 	}
 	var ready atomic.Bool
-	h, closeTransport := handler(c, &ready)
+	var draining atomic.Bool
+	h, closeTransport := handlerWithLifecycle(c, &ready, &draining, nil)
 	defer closeTransport()
 	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
 	done := make(chan error, 1)
@@ -243,9 +253,14 @@ func run(ctx context.Context, args []string) error {
 	fmt.Fprintf(os.Stderr, "gateway: listening on %s\n", listener.Addr())
 	select {
 	case err := <-done:
+		draining.Store(true)
 		ready.Store(false)
+		if err != nil {
+			server.Close()
+		}
 		return fmt.Errorf("serve: %w", err)
 	case <-ctx.Done():
+		draining.Store(true)
 		ready.Store(false)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
