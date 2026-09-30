@@ -60,7 +60,7 @@ done
 [ -n "${gateway_addr:-}" ] && curl -fsS "http://$gateway_addr/readyz" >/dev/null || { cat "$dir/gateway.log"; cat "$dir/fake.log"; exit 1; }
 curl -fsS "http://$gateway_addr/healthz"
 curl -fsS "http://$gateway_addr/readyz"
-curl -fsS "http://$gateway_addr/v1/responses" -H 'Content-Type: application/json' -H 'Authorization: Bearer synthetic-client-only' --data-binary '{"model":"gpt-4.1-mini-2025-04-14","unknown":{"preserve":true}}'
+curl -fsS "http://$gateway_addr/v1/responses" -H 'Content-Type: application/json' -H 'Authorization: Bearer synthetic-client-only' --data-binary '{"model":"gpt-5.4-mini","unknown":{"preserve":true}}'
 if grep -Eq 'synthetic-(only|client-only)' "$dir/gateway.log"; then echo 'synthetic credential leaked to gateway stderr' >&2; cat "$dir/gateway.log" >&2; exit 1; fi
 ```
 

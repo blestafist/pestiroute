@@ -53,15 +53,15 @@ snapshot, and HTTP transport in the disposable `opencode.jsonc`:
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openai/gpt-4.1-mini-2025-04-14",
+  "model": "openai/gpt-5.4-mini",
   "providers": {
     "openai": {
       "package": "@opencode/ai/providers/openai/responses",
       "name": "OpenAI Responses",
       "models": {
-        "gpt-4.1-mini-2025-04-14": {
-          "name": "GPT-4.1 mini snapshot",
-          "modelID": "gpt-4.1-mini-2025-04-14"
+        "gpt-5.4-mini": {
+          "name": "GPT-5.4 mini",
+          "modelID": "gpt-5.4-mini"
         }
       },
       "settings": {
@@ -76,7 +76,7 @@ Use the direct OpenAI default endpoint for the first leg. For the gateway leg,
 change only the provider's `settings.baseURL` to
 `http://127.0.0.1:8080/v1`; retain model ID and `transport: "http"`. Confirm the
 actual request URL is `/v1/responses`, the body uses model
-`gpt-4.1-mini-2025-04-14`, and streaming is enabled before calling either leg's
+`gpt-5.4-mini`, and streaming is enabled before calling either leg's
 evidence real. In the local CLI probe, the observed request was an HTTP
 `POST /v1/responses` with `stream:true` and an SSE response; the probe does not
 establish through an A/B test that the transport setting alone caused that
@@ -117,7 +117,7 @@ gateway offline, sends a fixed JSON request through it to check selected
 upstream credential handling, then invokes exact OpenCode 2.0.6 in standalone
 mode with clean account directories and a synthetic client key against the
 loopback fake. The CLI invocation observes an HTTP `POST /v1/responses`,
-snapshot model, `stream:true`, SSE response, and synthetic client bearer. This
+`gpt-5.4-mini`, `stream:true`, SSE response, and synthetic client bearer. This
 verifies the configured combination; it does not isolate transport-setting
 causality with an A/B test. The fake returns valid 200 JSON/SSE completions (not
 5xx); this does not exercise retry behavior. Temporary capture contains only request metadata,
@@ -141,7 +141,7 @@ settings identical between direct and gateway legs.
 
 Only after an authorized live run, write sanitized `direct.json`,
 `gateway.json`, and `README.md` beneath
-`evidence/m1/openai-responses/gpt-4.1-mini-2025-04-14/opencode-2.0.6/`.
+`evidence/m1/openai-responses/gpt-5.4-mini/opencode-2.0.6/`.
 The README records scenario, sources, versions, scope and invariants. Exclude
 credentials, Authorization/cookies, account identifiers, private prompts/file
 contents, and raw provider payloads. Do not create placeholder or purported

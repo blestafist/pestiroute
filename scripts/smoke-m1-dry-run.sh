@@ -123,12 +123,12 @@ done
 curl -fsS http://127.0.0.1:8080/readyz >/dev/null || { cat "$dir/gateway.log" >&2; exit 1; }
 curl -fsS http://127.0.0.1:8080/v1/responses \
   -H 'Content-Type: application/json' -H 'Authorization: Bearer synthetic-client-only' \
-  --data-binary '{"model":"gpt-4.1-mini-2025-04-14","stream":false,"input":"local fake gateway probe"}' >/dev/null
+  --data-binary '{"model":"gpt-5.4-mini","stream":false,"input":"local fake gateway probe"}' >/dev/null
 
 mkdir -p "$dir/home" "$dir/xdg-config" "$dir/xdg-data" "$dir/project"
 cat >"$dir/project/opencode.jsonc" <<JSON
 {
-  "model": "openai/gpt-4.1-mini-2025-04-14",
+  "model": "openai/gpt-5.4-mini",
   "agents": {
     "smoke": {
       "description": "No-tool local transport probe",
@@ -141,9 +141,9 @@ cat >"$dir/project/opencode.jsonc" <<JSON
       "package": "@opencode/ai/providers/openai/responses",
       "name": "OpenAI Responses",
       "models": {
-        "gpt-4.1-mini-2025-04-14": {
-          "name": "GPT-4.1 mini snapshot",
-          "modelID": "gpt-4.1-mini-2025-04-14"
+        "gpt-5.4-mini": {
+          "name": "GPT-5.4 mini",
+          "modelID": "gpt-5.4-mini"
         }
       },
       "settings": {
@@ -161,7 +161,7 @@ printf 'BETA-LOCAL-ONLY\n' >"$dir/project/beta.txt"
   XDG_DATA_HOME="$dir/xdg-data" TMPDIR="$dir" TERM=dumb \
   OPENCODE_CONFIG="$dir/project/opencode.jsonc" \
   OPENCODE_DISABLE_AUTOUPDATE=1 OPENAI_API_KEY=synthetic-client-only \
-  "$OPENCODE_BIN" run --standalone --agent smoke --title local-smoke --model openai/gpt-4.1-mini-2025-04-14 \
+  "$OPENCODE_BIN" run --standalone --agent smoke --title local-smoke --model openai/gpt-5.4-mini \
   'Reply with a short acknowledgement.' >"$dir/client.out" 2>"$dir/client.err") || {
     echo 'Pinned CLI local probe failed; sanitized diagnostics follow:' >&2
     sed -E 's/(Bearer )[A-Za-z0-9._-]+/\1[REDACTED]/g' "$dir/client.err" >&2
@@ -186,7 +186,7 @@ for capture in captures:
     assert capture["valid"] is True, capture
 assert {c["credential_scope"] for c in captures} == {"gateway-upstream", "cli-client"}, captures
 cli = [c for c in captures if c["credential_scope"] == "cli-client"]
-assert any(c["model"] == "gpt-4.1-mini-2025-04-14" and c["stream"] is True
+assert any(c["model"] == "gpt-5.4-mini" and c["stream"] is True
            and c["response_content_type"] == "text/event-stream" for c in cli), cli
 assert all(c["stream"] is True for c in cli), cli
 gateway = next(c for c in captures if c["credential_scope"] == "gateway-upstream")

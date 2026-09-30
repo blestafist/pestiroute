@@ -3,15 +3,15 @@
 ## Verified Baseline
 
 - FND-001 Go module scaffold, FND-002 probe-only server, FND-003 controllable local fake upstream fixture, and FND-004 shared local/CI workflow are verified locally. M1-001 end-to-end loopback POST /v1/responses fixed JSON passthrough is verified. Hosted CI has not run.
-- FND-005 M1 compatibility baseline is selected on source evidence in [References](REFERENCES.md#m1-compatibility-baseline) (OpenAI public Responses / `gpt-4.1-mini-2025-04-14` with OpenCode V2 2.0.6); real inference execution remains an M1 smoke gate.
+- FND-005 records the historical M1 compatibility baseline selection in [References](REFERENCES.md#m1-compatibility-baseline); the current smoke model is `gpt-5.4-mini` (synchronized locally under M1-028; real inference remains an M1 smoke gate).
 - [CONTRACT.md](CONTRACT.md) is the accepted v1 semantic boundary for Protocol Adapters, Core Runtime, and Connectors, with ADR change control. [M1-BINDING.md](M1-BINDING.md) specifies the minimal Go execution signatures, startup JSON subset, capability checks, and bounded streaming observer. Language/IPC bindings are not implemented; M3 configuration schema remains draft.
 - Documentation is organized by project intent and implementation; the root [AGENTS.md](../../AGENTS.md) defines the agent entry path.
 
 ## Immediate Focus
 
-M1-023 is verified and marked DONE (exact OpenCode 2.0.6 plural-provider loopback probe and procedure verified under isolated user/network namespace; no external provider calls or live compatibility claimed). All 10 tasks in the bounded quota (M1-014..M1-023) are now DONE (10/10 complete). No next task is assigned or planned in this quota. Subsequent tasks (M1-024..M1-026) remain DRAFT gated on real OpenAI Platform API access, billing authority, and credit. Unrelated `.opencode/agents/git-worker.md` edit preserved unstaged.
+M1-028 model migration to `gpt-5.4-mini` is DONE (exact model validation, Core dispatch capability check, full race tests, loopback dry-run in isolated user/network namespace, and binding/smoke docs verified; no semantic contract changes). Downstream live smoke candidate M1-024 is BLOCKED: environment lacks authorized OpenAI API credentials (`OPENAI_API_KEY` is unset). Live smoke execution is strictly constrained to user-authorized free quota (2.5M daily tokens, zero paid spend). Subsequent candidates (M1-025..M1-027) strictly depend on live smoke traces and remain DRAFT. Stopping boundary reached pending live credentials. Unrelated `.opencode/agents/git-worker.md` edit preserved unstaged.
 
-M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
+M1 has [28 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 

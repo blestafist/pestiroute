@@ -64,7 +64,6 @@ func TestDispatchEligibilityAndIdentity(t *testing.T) {
 		return ExecutionResponse{Stream: &scriptedStream{frames: []StreamFrame{head(), complete()}}}, nil
 	})
 	for _, mutate := range []func(*ExecutionRequest){
-		func(r *ExecutionRequest) { r.Model = "other" },
 		func(r *ExecutionRequest) { r.Payload.Protocol = "other" },
 		func(r *ExecutionRequest) { r.Capabilities = map[Capability]struct{}{"llm.reasoning": {}} },
 		func(r *ExecutionRequest) { r.Capabilities = map[Capability]struct{}{"llm.tools.parallel": {}} },
@@ -73,6 +72,13 @@ func TestDispatchEligibilityAndIdentity(t *testing.T) {
 		mutate(&r)
 		if _, err := d.Execute(context.Background(), r); err == nil || err.Category != CategoryUnsupportedFeature {
 			t.Fatalf("expected pre-execution rejection: %v", err)
+		}
+	}
+	for _, model := range []string{"", "other", "gpt-4.1-mini-2025-04-14"} {
+		r := request()
+		r.Model = model
+		if _, err := d.Execute(context.Background(), r); err == nil || err.Category != CategoryInvalidRequest {
+			t.Fatalf("model %q: expected invalid-request rejection: %v", model, err)
 		}
 	}
 	d.Mode = "translation"

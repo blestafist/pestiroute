@@ -28,7 +28,7 @@ import (
 // samples direct/proxy active-stream memory; figures are observations, not budgets.
 func TestNativeBaseline(t *testing.T) {
 	const credential = "synthetic-baseline-credential"
-	requestBody := []byte(`{"model":"gpt-4.1-mini-2025-04-14","unknown":{"keep":true}}`)
+	requestBody := []byte(`{"model":"gpt-5.4-mini","unknown":{"keep":true}}`)
 	jsonUpstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`)})
 	defer jsonUpstream.Close()
 	settings := config{Listen: "127.0.0.1:0", UpstreamEndpoint: jsonUpstream.URL + "/v1/responses", UpstreamCredentialEnv: "BASELINE",
@@ -118,7 +118,7 @@ func TestNativeBaseline(t *testing.T) {
 		}
 		return count
 	}
-	streamBody := []byte(`{"model":"gpt-4.1-mini-2025-04-14","stream":true}`)
+	streamBody := []byte(`{"model":"gpt-5.4-mini","stream":true}`)
 	first := []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\n")
 	for _, streams := range []int{4, 8} {
 		for _, proxiedPath := range []bool{false, true} {
@@ -262,7 +262,7 @@ func TestFixedResponsesComposition(t *testing.T) {
 	defer server.Close()
 	ready.Store(true)
 	client := server.Client()
-	requestBody := []byte(" { \"model\" : \"gpt-4.1-mini-2025-04-14\", \"unknown\": {\"nested\": [ 1, {\"extra\": true} ]} } \n")
+	requestBody := []byte(" { \"model\" : \"gpt-5.4-mini\", \"unknown\": {\"nested\": [ 1, {\"extra\": true} ]} } \n")
 	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", bytes.NewReader(requestBody))
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +355,7 @@ func TestResponsesRejectPreCommit(t *testing.T) {
 			server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
 			defer closeTransport()
 			defer server.Close()
-			resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+			resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -392,7 +392,7 @@ func TestResponsesTransportErrorPreCommit(t *testing.T) {
 	server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
 	defer closeTransport()
 	defer server.Close()
-	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +434,7 @@ func TestResponsesConnectionFailurePreCommit(t *testing.T) {
 	defer closeTransport()
 	server := httptest.NewServer(h)
 	defer server.Close()
-	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestResponsesIncrementalFlush(t *testing.T) {
 	}()
 	client := server.Client()
 	client.Timeout = 3 * time.Second
-	requestBody := []byte(`{ "model": "gpt-4.1-mini-2025-04-14", "stream": true, "extra": {"opaque": 1} }`)
+	requestBody := []byte(`{ "model": "gpt-5.4-mini", "stream": true, "extra": {"opaque": 1} }`)
 	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", bytes.NewReader(requestBody))
 	if err != nil {
 		t.Fatal(err)
@@ -530,7 +530,7 @@ func TestResponsesCancelBeforeHead(t *testing.T) {
 	server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
 	defer closeTransport()
 	defer server.Close()
-	conn := rawGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14"}`)
+	conn := rawGatewayRequest(t, server, `{"model":"gpt-5.4-mini"}`)
 	captured := receiveRequest(t, upstream)
 	conn.Close()
 	waitCancelled(t, captured)
@@ -540,7 +540,7 @@ func TestResponsesCancelBeforeHead(t *testing.T) {
 	}
 	close(gate)
 	released = true
-	response := sendGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14"}`)
+	response := sendGatewayRequest(t, server, `{"model":"gpt-5.4-mini"}`)
 	if response != `{"status":"completed"}` {
 		t.Fatalf("follow-up response: %q", response)
 	}
@@ -565,7 +565,7 @@ func TestResponsesCancelAfterHead(t *testing.T) {
 	server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
 	defer closeTransport()
 	defer server.Close()
-	conn := rawGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`)
+	conn := rawGatewayRequest(t, server, `{"model":"gpt-5.4-mini","stream":true}`)
 	reader := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(reader, &http.Request{Method: http.MethodPost})
 	if err != nil {
@@ -583,7 +583,7 @@ func TestResponsesCancelAfterHead(t *testing.T) {
 		t.Fatalf("upstream invocation count before follow-up = %d, want 1", upstream.RequestCount())
 	}
 	close(gate)
-	follow := sendGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`)
+	follow := sendGatewayRequest(t, server, `{"model":"gpt-5.4-mini","stream":true}`)
 	if follow != `event: response.created`+"\ndata: {\"type\":\"response.created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n" {
 		t.Fatalf("follow-up response: %q", follow)
 	}
@@ -686,7 +686,7 @@ func TestResponsesTimeoutHeaderIdleHealthyAndDeadline(t *testing.T) {
 		server, closeTransport := timeoutServer(t, upstream, 60*time.Millisecond, 2*time.Second, finals, &finalized)
 		defer closeTransport()
 		defer server.Close()
-		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -709,7 +709,7 @@ func TestResponsesTimeoutHeaderIdleHealthyAndDeadline(t *testing.T) {
 		server, closeTransport := timeoutServer(t, upstream, time.Second, 70*time.Millisecond, finals, &finalized)
 		defer closeTransport()
 		defer server.Close()
-		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14","stream":true}`))
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini","stream":true}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -748,7 +748,7 @@ func TestResponsesTimeoutHeaderIdleHealthyAndDeadline(t *testing.T) {
 		server, closeTransport := timeoutServer(t, upstream, 80*time.Millisecond, 200*time.Millisecond, finals, &finalized)
 		defer closeTransport()
 		defer server.Close()
-		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14","stream":true}`))
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini","stream":true}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -782,7 +782,7 @@ func TestResponsesClientDeadlineCancelsUpstreamBeforeAndAfterHead(t *testing.T) 
 			defer server.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
 			defer cancel()
-			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14","stream":true}`))
+			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-5.4-mini","stream":true}`))
 			req.Header.Set("Content-Type", "application/json")
 			resp, err := server.Client().Do(req)
 			if afterHead {
@@ -929,7 +929,7 @@ func slowGatewayRequest(t *testing.T, server *httptest.Server) net.Conn {
 		conn.Close()
 		t.Fatal(err)
 	}
-	body := `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`
+	body := `{"model":"gpt-5.4-mini","stream":true}`
 	if _, err := fmt.Fprintf(conn, "POST /v1/responses HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", server.Listener.Addr(), len(body), body); err != nil {
 		conn.Close()
 		t.Fatal(err)
@@ -953,7 +953,7 @@ func TestResponsesWriteFailureCancelsUpstream(t *testing.T) {
 	server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
 	defer server.Close()
 	defer closeTransport()
-	body := `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`
+	body := `{"model":"gpt-5.4-mini","stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := &gatewayFailWriter{header: make(http.Header)}
@@ -966,7 +966,7 @@ func TestResponsesWriteFailureCancelsUpstream(t *testing.T) {
 	}
 	close(gate)
 	released = true
-	follow := sendGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`)
+	follow := sendGatewayRequest(t, server, `{"model":"gpt-5.4-mini","stream":true}`)
 	if follow == "" || upstream.RequestCount() != 2 {
 		t.Fatalf("follow-up failed: body %q, invocation count %d", follow, upstream.RequestCount())
 	}
@@ -1012,7 +1012,7 @@ func TestResponsesPostCommitLateFailures(t *testing.T) {
 			defer closeTransport()
 			defer server.Close()
 
-			conn := rawGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`)
+			conn := rawGatewayRequest(t, server, `{"model":"gpt-5.4-mini","stream":true}`)
 			defer conn.Close()
 			resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPost})
 			if err != nil {
@@ -1212,7 +1212,7 @@ func TestResponsesSplitToolEvents(t *testing.T) {
 		}
 		return resp
 	}
-	initial := []byte(`{"model":"gpt-4.1-mini-2025-04-14","stream":true,"unknown":{"keep":1}}`)
+	initial := []byte(`{"model":"gpt-5.4-mini","stream":true,"unknown":{"keep":1}}`)
 	resp := send(initial)
 	gotEarly := make([]byte, len(early))
 	if _, err := io.ReadFull(resp.Body, gotEarly); err != nil || !bytes.Equal(gotEarly, early) {
@@ -1260,7 +1260,7 @@ func TestResponsesSplitToolEvents(t *testing.T) {
 	if strings.Join(order, ",") != strings.Join(wantOrder, ",") || callIDs["item_A"] != "call_A" || callIDs["item_B"] != "call_B" || arguments["item_A"] != `{"key":"A"}` || arguments["item_B"] != `{"key":"B"}` {
 		t.Fatalf("event order or call relationships: %v, %v, %v", order, callIDs, arguments)
 	}
-	followup := []byte(` {"model":"gpt-4.1-mini-2025-04-14","stream":true,"previous_response_id":"response_1","input":[{"type":"function_call_output","call_id":"call_B","output":"B result","unknown":{"keep":2}},{"type":"function_call_output","call_id":"call_A","output":"A result"}],"unknown":{"keep":3}} `)
+	followup := []byte(` {"model":"gpt-5.4-mini","stream":true,"previous_response_id":"response_1","input":[{"type":"function_call_output","call_id":"call_B","output":"B result","unknown":{"keep":2}},{"type":"function_call_output","call_id":"call_A","output":"A result"}],"unknown":{"keep":3}} `)
 	var round struct {
 		Input []struct {
 			CallID string `json:"call_id"`
@@ -1566,7 +1566,7 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 				err    error
 			}, 1)
 			go func() {
-				resp, err := http.Post(base+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+				resp, err := http.Post(base+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 				if err != nil {
 					response <- struct {
 						status int
@@ -1604,7 +1604,7 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 				}
 				time.Sleep(time.Millisecond)
 			}
-			cutoff, cutoffErr := http.Post(base+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+			cutoff, cutoffErr := http.Post(base+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 			if cutoffErr == nil {
 				io.Copy(io.Discard, cutoff.Body)
 				cutoff.Body.Close()
@@ -1685,7 +1685,7 @@ func TestLifecycleAdmissionGuards(t *testing.T) {
 		defer closeTransport()
 		server := httptest.NewServer(h)
 		defer server.Close()
-		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1724,7 +1724,7 @@ func TestResponsesHeaderIsolationAndIdentityEncoding(t *testing.T) {
 				defer closeTransport()
 				server := httptest.NewServer(h)
 				defer server.Close()
-				req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+				req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1785,7 +1785,7 @@ func TestResponsesRequestEncodingRejectedBeforeExecute(t *testing.T) {
 	defer closeTransport()
 	server := httptest.NewServer(h)
 	defer server.Close()
-	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	resp, err := server.Client().Do(req)
@@ -1818,7 +1818,7 @@ func TestResponsesUpstreamEncodingRejectedPreHead(t *testing.T) {
 				server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
 				defer closeTransport()
 				defer server.Close()
-				resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+				resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1877,7 +1877,7 @@ func TestLifecycleCloseTransportReleasesIdleConnection(t *testing.T) {
 	}, &ready, &draining, nil)
 	server := httptest.NewServer(h)
 	defer server.Close()
-	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1954,7 +1954,7 @@ func TestGatewayConcurrentRequestIsolation(t *testing.T) {
 		ch := make(chan response, 1)
 		responses[i] = ch
 		go func(marker string) {
-			body := fmt.Sprintf(`{"model":"gpt-4.1-mini-2025-04-14","marker":%q}`, marker)
+			body := fmt.Sprintf(`{"model":"gpt-5.4-mini","marker":%q}`, marker)
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/responses", strings.NewReader(body))
 			if err != nil {
 				ch <- response{err: err}
@@ -1984,7 +1984,7 @@ func TestGatewayConcurrentRequestIsolation(t *testing.T) {
 		}
 	}
 	draining.Store(true)
-	rejected, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14","marker":"during-drain"}`))
+	rejected, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini","marker":"during-drain"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2022,7 +2022,7 @@ func TestGatewayConcurrentRequestIsolation(t *testing.T) {
 		t.Fatal("unrelated request did not complete")
 	}
 	draining.Store(false)
-	followup, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14","marker":"after"}`))
+	followup, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini","marker":"after"}`))
 	if err != nil {
 		t.Fatal(err)
 	}

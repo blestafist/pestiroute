@@ -1,6 +1,6 @@
 # M1 native Responses binding (implementation note)
 
-This fixes the local M1 handoff against [v1](CONTRACT.md), not a new contract or a claim of live compatibility. The only admitted protocol is `openai.responses.v1` (exact match at Decode, Connector and Head); execution is native only. The sole configured target is the OpenAI public `POST /v1/responses` endpoint, model `gpt-4.1-mini-2025-04-14`, and one explicitly selected account/credential. Decode rejects missing or different model; neither Core nor Connector rewrites the admitted body. A loopback fake target may replace the endpoint in tests, never through client routing metadata. No provider-derived account fallback or M2 target registry.
+This fixes the local M1 handoff against [v1](CONTRACT.md), not a new contract or a claim of live compatibility. The only admitted protocol is `openai.responses.v1` (exact match at Decode, Connector and Head); execution is native only. The sole configured target is the OpenAI public `POST /v1/responses` endpoint, model `gpt-5.4-mini`, and one explicitly selected account/credential. Decode rejects missing or different model; neither Core nor Connector rewrites the admitted body. A loopback fake target may replace the endpoint in tests, never through client routing metadata. No provider-derived account fallback or M2 target registry.
 
 ## Go handoff
 

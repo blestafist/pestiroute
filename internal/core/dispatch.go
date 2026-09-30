@@ -10,7 +10,7 @@ import (
 )
 
 const m1Protocol = "openai.responses.v1"
-const m1Model = "gpt-4.1-mini-2025-04-14"
+const m1Model = "gpt-5.4-mini"
 
 // AttemptScope is runtime-owned; client metadata is never used for selection.
 type AttemptScope struct {
@@ -63,7 +63,10 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	if err := ctx.Err(); err != nil {
 		return ExecutionResponse{}, executionError(err)
 	}
-	if in.Payload.Protocol != m1Protocol || in.Model != m1Model || (d.Mode != "" && d.Mode != "native") || d.Target == nil || d.AccountID == "" {
+	if in.Model != m1Model {
+		return ExecutionResponse{}, &GatewayError{Code: "invalid_request", Category: CategoryInvalidRequest, Message: "Invalid request"}
+	}
+	if in.Payload.Protocol != m1Protocol || (d.Mode != "" && d.Mode != "native") || d.Target == nil || d.AccountID == "" {
 		return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 	}
 	for capability := range in.Capabilities {

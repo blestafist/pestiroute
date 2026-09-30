@@ -9,7 +9,7 @@ import (
 	"github.com/blestafist/pestiroute/internal/core"
 )
 
-const base = `{"model":"gpt-4.1-mini-2025-04-14"}`
+const base = `{"model":"gpt-5.4-mini"}`
 
 func request(body string) *http.Request {
 	r, _ := http.NewRequest(http.MethodPost, "http://localhost/v1/responses", strings.NewReader(body))
@@ -18,7 +18,7 @@ func request(body string) *http.Request {
 }
 
 func TestDecodeOpaqueAndCapabilities(t *testing.T) {
-	body := " { \n\"model\" : \"gpt-4.1-mini-2025-04-14\", \"unknown\": {\"nested\": [1, 2]}, " +
+	body := " { \n\"model\" : \"gpt-5.4-mini\", \"unknown\": {\"nested\": [1, 2]}, " +
 		`"stream":true,"tools":[{"type":"function","name":"f"}],"parallel_tool_calls":true,` +
 		`"reasoning":{"effort":"low"},"text":{"format":{"type":"json_schema"}},` +
 		`"input":[{"role":"user","content":[{"type":"input_image","image_url":"x"},{"type":"input_audio","input_audio":{}},{"type":"input_text","text":"hello"}]}]}`
@@ -74,7 +74,9 @@ func TestDecodeInvalid(t *testing.T) {
 		{"duplicate tool type", base[:len(base)-1] + `,"tools":[{"type":"function","ty\u0070e":"future"}]}`, "", "", core.CategoryInvalidRequest},
 		{"duplicate opaque nested", base[:len(base)-1] + `,"future":{"a":[{"field":1,"field":2}]}}`, "", "", core.CategoryInvalidRequest},
 		{"missing model", `{}`, "", "", core.CategoryInvalidRequest},
+		{"empty model", `{"model":""}`, "", "", core.CategoryInvalidRequest},
 		{"wrong model", `{"model":"other"}`, "", "", core.CategoryInvalidRequest},
+		{"historical model", `{"model":"gpt-4.1-mini-2025-04-14"}`, "", "", core.CategoryInvalidRequest},
 		{"stream null", base[:len(base)-1] + `,"stream":null}`, "", "", core.CategoryInvalidRequest},
 		{"reasoning null", base[:len(base)-1] + `,"reasoning":null}`, "", "", core.CategoryInvalidRequest},
 		{"tools object", base[:len(base)-1] + `,"tools":{}}`, "", "", core.CategoryInvalidRequest},
