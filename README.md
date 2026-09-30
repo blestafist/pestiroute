@@ -1,6 +1,6 @@
 # PestiRoute
 
-PestiRoute is a planned self-hosted AI protocol gateway. The current server exposes only health and readiness probes; it does not proxy inference requests.
+PestiRoute is a self-hosted AI protocol gateway. The current server exposes health/readiness probes and a native `POST /v1/responses` proxy when inference is configured.
 
 ## Build
 
@@ -25,3 +25,5 @@ curl -f http://127.0.0.1:8080/readyz
 ```
 
 Both probes return `200 OK` while serving. Press Ctrl-C (SIGINT) or send SIGTERM to stop; shutdown waits up to the configured timeout for active requests and closes the listener. The default listener is `127.0.0.1:8080` and default shutdown timeout is `5s`. Alternatively pass `-config path/to/config.json` containing a JSON object such as `{"listen":"127.0.0.1:8080","shutdown_timeout":"5s"}`; explicit flags override file values. Invalid file paths, syntax, addresses and timeouts fail before serving with a diagnostic on stderr and a non-zero exit. The M3 YAML topology schema is not yet supported.
+
+To run the configured native proxy against a local fake target with synthetic credentials, follow [the local M1 procedure](docs/implementation/LOCAL-M1.md). This is local verification, not live-provider or real-client compatibility evidence.

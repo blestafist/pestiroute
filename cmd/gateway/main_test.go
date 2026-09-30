@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"runtime"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -21,6 +23,212 @@ import (
 	"github.com/blestafist/pestiroute/internal/core"
 	"github.com/blestafist/pestiroute/internal/testutil/fakeupstream"
 )
+
+// TestNativeBaseline compares equivalent warmed serial requests and separately
+// samples direct/proxy active-stream memory; figures are observations, not budgets.
+func TestNativeBaseline(t *testing.T) {
+	const credential = "synthetic-baseline-credential"
+	requestBody := []byte(`{"model":"gpt-4.1-mini-2025-04-14","unknown":{"keep":true}}`)
+	jsonUpstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`)})
+	defer jsonUpstream.Close()
+	settings := config{Listen: "127.0.0.1:0", UpstreamEndpoint: jsonUpstream.URL + "/v1/responses", UpstreamCredentialEnv: "BASELINE",
+		MaxRequestBodyBytes: 4096, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s",
+		ResponseHeaderTimeout: "2s", StreamIdleTimeout: "5s", credential: secret(credential)}
+	var ready atomic.Bool
+	h, closeTransport := handler(settings, &ready)
+	gateway := httptest.NewServer(h)
+	defer func() { gateway.Close(); closeTransport() }()
+	transport := &http.Transport{}
+	client := &http.Client{Transport: transport}
+	defer transport.CloseIdleConnections()
+	type sample struct{ ttfb, total time.Duration }
+	measure := func(target string, proxy bool) sample {
+		req, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(requestBody))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if !proxy {
+			req.Header.Set("Authorization", "Bearer "+credential)
+		}
+		started := time.Now()
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var one [1]byte
+		if _, err := io.ReadFull(resp.Body, one[:]); err != nil {
+			t.Fatal(err)
+		}
+		ttfb := time.Since(started)
+		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return sample{ttfb, time.Since(started)}
+	}
+	directURL, gatewayURL := jsonUpstream.URL+"/v1/responses", gateway.URL+"/v1/responses"
+	for i := 0; i < 5; i++ {
+		measure(directURL, false)
+		<-jsonUpstream.Requests
+		measure(gatewayURL, true)
+		<-jsonUpstream.Requests
+	}
+	const repetitions = 25
+	direct, proxied := make([]sample, 0, repetitions), make([]sample, 0, repetitions)
+	for i := 0; i < repetitions; i++ {
+		for _, path := range []bool{false, true} {
+			if path {
+				proxied = append(proxied, measure(gatewayURL, true))
+			} else {
+				direct = append(direct, measure(directURL, false))
+			}
+			<-jsonUpstream.Requests
+		}
+	}
+	logStats := func(name string, values []sample, selectValue func(sample) time.Duration) {
+		series := make([]time.Duration, len(values))
+		for i, value := range values {
+			series[i] = selectValue(value)
+		}
+		sort.Slice(series, func(i, j int) bool { return series[i] < series[j] })
+		p95 := series[(len(series)*95+99)/100-1]
+		t.Logf("%s n=%d min=%s median=%s p95=%s max=%s", name, len(series), series[0], series[len(series)/2], p95, series[len(series)-1])
+	}
+	logStats("direct TTFB", direct, func(s sample) time.Duration { return s.ttfb })
+	logStats("gateway TTFB", proxied, func(s sample) time.Duration { return s.ttfb })
+	logStats("direct complete", direct, func(s sample) time.Duration { return s.total })
+	logStats("gateway complete", proxied, func(s sample) time.Duration { return s.total })
+
+	stableBaseline := func() int {
+		client.CloseIdleConnections()
+		runtime.GC()
+		count, same, deadline := runtime.NumGoroutine(), 0, time.Now().Add(2*time.Second)
+		for same < 10 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+			next := runtime.NumGoroutine()
+			if next == count {
+				same++
+			} else {
+				count, same = next, 0
+			}
+		}
+		if same < 10 {
+			t.Fatalf("idle goroutines did not stabilize: last=%d", count)
+		}
+		return count
+	}
+	streamBody := []byte(`{"model":"gpt-4.1-mini-2025-04-14","stream":true}`)
+	first := []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\n")
+	for _, streams := range []int{4, 8} {
+		for _, proxiedPath := range []bool{false, true} {
+			stableGoroutines := stableBaseline()
+			gate := make(chan struct{})
+			upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: first}, {Gate: gate, Data: []byte("event: response.completed\ndata: {}\n\n")}}})
+			var streamGateway *httptest.Server
+			streamClose := func() {}
+			streamTarget := upstream.URL + "/v1/responses"
+			if proxiedPath {
+				streamSettings := settings
+				streamSettings.UpstreamEndpoint = streamTarget
+				var streamReady atomic.Bool
+				streamHandler, closeStreamTransport := handler(streamSettings, &streamReady)
+				streamClose = closeStreamTransport
+				streamGateway = httptest.NewServer(streamHandler)
+				streamTarget = streamGateway.URL + "/v1/responses"
+			}
+			runtime.GC()
+			var before runtime.MemStats
+			runtime.ReadMemStats(&before)
+			idleGoroutines := runtime.NumGoroutine()
+			cancels := make([]context.CancelFunc, streams)
+			done := make(chan struct{}, streams)
+			activeReady := make(chan struct{}, streams)
+			streamErrors := make(chan error, streams)
+			for i := range cancels {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancels[i] = cancel
+				req, _ := http.NewRequestWithContext(ctx, http.MethodPost, streamTarget, bytes.NewReader(streamBody))
+				req.Header.Set("Content-Type", "application/json")
+				if !proxiedPath {
+					req.Header.Set("Authorization", "Bearer "+credential)
+				}
+				go func() {
+					resp, err := client.Do(req)
+					if err == nil {
+						var b [1]byte
+						_, err = io.ReadFull(resp.Body, b[:])
+						if err == nil {
+							activeReady <- struct{}{}
+							_, _ = io.Copy(io.Discard, resp.Body)
+						} else {
+							streamErrors <- err
+						}
+						_ = resp.Body.Close()
+					} else {
+						streamErrors <- err
+					}
+					done <- struct{}{}
+				}()
+			}
+			captures := make([]fakeupstream.Request, streams)
+			for i := range captures {
+				select {
+				case captures[i] = <-upstream.Requests:
+				case <-time.After(5 * time.Second):
+					t.Fatal("timed out waiting for active stream capture")
+				}
+			}
+			for i := 0; i < streams; i++ {
+				select {
+				case <-activeReady:
+				case err := <-streamErrors:
+					t.Fatalf("active stream failed before snapshot: %v", err)
+				case <-time.After(5 * time.Second):
+					t.Fatal("timed out waiting for active client streams")
+				}
+			}
+			var active runtime.MemStats
+			runtime.ReadMemStats(&active)
+			t.Logf("active %s streams n=%d whole_process_heap_delta=%dB per_stream_estimate=%dB goroutines=%d idle=%d", map[bool]string{false: "direct", true: "gateway"}[proxiedPath], streams, int64(active.HeapAlloc)-int64(before.HeapAlloc), (int64(active.HeapAlloc)-int64(before.HeapAlloc))/int64(streams), runtime.NumGoroutine(), idleGoroutines)
+			for _, cancel := range cancels {
+				cancel()
+			}
+			for _, capture := range captures {
+				select {
+				case <-capture.Cancelled:
+				case <-time.After(5 * time.Second):
+					t.Fatal("upstream did not observe active stream cancellation")
+				}
+			}
+			for range cancels {
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("stream client goroutine did not exit")
+				}
+			}
+			if streamGateway != nil {
+				streamGateway.Close()
+			}
+			streamClose()
+			client.CloseIdleConnections()
+			upstream.Close()
+			deadline := time.Now().Add(2 * time.Second)
+			for runtime.NumGoroutine() > stableGoroutines && time.Now().Before(deadline) {
+				runtime.GC()
+				time.Sleep(time.Millisecond)
+			}
+			if got := runtime.NumGoroutine(); got > stableGoroutines {
+				t.Fatalf("%s stream cleanup leaked goroutines: got %d, stable pre-fixture baseline %d", map[bool]string{false: "direct", true: "gateway"}[proxiedPath], got, stableGoroutines)
+			}
+			runtime.GC()
+			var after runtime.MemStats
+			runtime.ReadMemStats(&after)
+			t.Logf("after %s cancellation/fixture teardown n=%d whole_process_heap_delta=%dB client_goroutines=0 upstream_cancel_observations=%d process_goroutines=%d stable_pre_fixture=%d", map[bool]string{false: "direct", true: "gateway"}[proxiedPath], streams, int64(after.HeapAlloc)-int64(before.HeapAlloc), len(captures), runtime.NumGoroutine(), stableGoroutines)
+		}
+	}
+}
 
 func TestFixedResponsesComposition(t *testing.T) {
 	const credential = "synthetic-selected-credential"

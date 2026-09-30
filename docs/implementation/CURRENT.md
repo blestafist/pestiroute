@@ -9,7 +9,7 @@
 
 ## Immediate Focus
 
-M1-021 header isolation, Accept-Encoding override, and response encoding gate is verified and accepted DONE. Working tree holds 4 scoped task files ready for commit (`cmd/gateway/main_test.go`, `docs/implementation/tasks/M1-021.md`, `docs/implementation/TASKS.md`, `docs/implementation/CURRENT.md`); unrelated `.opencode/agents/git-worker.md` edit preserved unstaged. Awaiting commit before next task selection.
+M1-022 is verified and marked DONE (local fake startup documented, local baseline measured, clean export startup and all 7 local regression categories verified). 9 of 10 tasks in the bounded quota are now DONE (M1-014..M1-022); M1-023 is the remaining eligible DRAFT. Unrelated `.opencode/agents/git-worker.md` edit preserved unstaged.
 
 M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
 
@@ -24,7 +24,7 @@ Other architectural questions remain in [DECISIONS.md](../project/DECISIONS.md#q
 
 `git diff --check` is available for patch whitespace. Documentation verification also checks local link targets/anchors, fenced blocks, and task registry consistency; no persistent checker command has been added.
 
-With local Go 1.27.1, `./scripts/check.sh` passes: whitespace, `gofmt -l cmd internal`, vet, tests, race tests, and offline artifact-free build. In an isolated HEAD export, offline build and direct binary startup passed: `/healthz` and `/readyz` returned 200; SIGTERM exited 0 in <3s; malformed addresses and timeouts returned non-zero with stderr. `GOTOOLCHAIN=local go run ./cmd/gateway -listen invalid:address` also failed clearly. `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -race ./internal/testutil/fakeupstream/...` passes byte capture, gated SSE, drops and cancellation. CI workflow invokes the same script on pinned Go 1.27.1; hosted execution and actionlint remain unrun. `gofmt -l .` reports an unrelated pre-existing file under `.refs/9Router/`.
+With local Go 1.27.1, `./scripts/check.sh` passes: whitespace, `gofmt -l cmd internal`, vet, tests, race tests, and offline artifact-free build. In an isolated HEAD export, offline build and direct binary startup passed: `/healthz` and `/readyz` returned 200; SIGTERM exited 0 in <3s; malformed addresses and timeouts returned non-zero with stderr. M1-022 additionally verifies isolated-source build and fake-target POST using synthetic credentials; `go test -count=1 -v -run 'Test.*Baseline' ./cmd/gateway/...` records local TTFB/heap/goroutine observations (see task evidence; no budgets). `GOTOOLCHAIN=local go run ./cmd/gateway -listen invalid:address` also failed clearly. `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -race ./internal/testutil/fakeupstream/...` passes byte capture, gated SSE, drops and cancellation. CI workflow invokes the same script on pinned Go 1.27.1; hosted execution and actionlint remain unrun. `gofmt -l .` reports an unrelated pre-existing file under `.refs/9Router/`.
 
 ## Update Rule
 
