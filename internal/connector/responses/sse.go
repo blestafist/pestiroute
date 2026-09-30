@@ -48,7 +48,7 @@ func (t *Transport) ExecuteSSE(ctx context.Context, in core.ExecutionRequest) (c
 	status := resp.StatusCode
 	head := &core.HeadFrame{Protocol: protocol, ContentType: resp.Header.Get("Content-Type"), HTTPStatus: &status, Headers: headers}
 	if status < 200 || status >= 300 {
-		head.Error = rejectionError(status)
+		head.Error = rejectionError(status, resp.Header.Get("Retry-After"))
 	}
 	return core.ExecutionResponse{Stream: &sseStream{body: resp.Body, cancel: cancel, requestCtx: requestCtx, head: head}}, nil
 }

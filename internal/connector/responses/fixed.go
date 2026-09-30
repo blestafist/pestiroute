@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -58,7 +60,7 @@ func (t *Transport) ExecuteFixedJSON(ctx context.Context, in core.ExecutionReque
 	status := resp.StatusCode
 	head := &core.HeadFrame{Protocol: protocol, ContentType: resp.Header.Get("Content-Type"), HTTPStatus: &status, Headers: headers}
 	if status < 200 || status >= 300 {
-		head.Error = rejectionError(status)
+		head.Error = rejectionError(status, resp.Header.Get("Retry-After"))
 	}
 	return core.ExecutionResponse{Stream: &fixedStream{body: resp.Body, cancel: cancel, requestCtx: requestCtx, head: head}}, nil
 }
@@ -255,7 +257,7 @@ func transportError(err error) *core.GatewayError {
 	return gatewayError("upstream_unavailable", core.CategoryUnavailable, "Upstream request failed")
 }
 
-func rejectionError(status int) *core.GatewayError {
+func rejectionError(status int, retryAfter string) *core.GatewayError {
 	category := core.CategoryUnavailable
 	switch status {
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
@@ -267,5 +269,22 @@ func rejectionError(status int) *core.GatewayError {
 	case http.StatusTooManyRequests:
 		category = core.CategoryRateLimited
 	}
-	return gatewayError("upstream_rejection", category, fmt.Sprintf("Upstream rejected request (HTTP %d)", status))
+	err := gatewayError("upstream_rejection", category, fmt.Sprintf("Upstream rejected request (HTTP %d)", status))
+	if status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable {
+		err.Retryable = true
+		err.RetryAfter = parseRetryAfter(retryAfter, time.Now())
+	}
+	return err
+}
+
+func parseRetryAfter(value string, now time.Time) *time.Duration {
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 && seconds <= int64((time.Duration(1<<63-1))/time.Second) {
+		delay := time.Duration(seconds) * time.Second
+		return &delay
+	}
+	if at, err := http.ParseTime(value); err == nil && at.After(now) {
+		delay := at.Sub(now)
+		return &delay
+	}
+	return nil
 }

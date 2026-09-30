@@ -9,9 +9,9 @@
 
 ## Immediate Focus
 
-[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), [M1-001](tasks/M1-001.md), [M1-002](tasks/M1-002.md), and [M1-004](tasks/M1-004.md) through [M1-014](tasks/M1-014.md) are DONE.
+[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), [M1-001](tasks/M1-001.md), [M1-002](tasks/M1-002.md), and [M1-004](tasks/M1-004.md) through [M1-015](tasks/M1-015.md) are DONE.
 
-Next candidate: [M1-015](tasks/M1-015.md) (pre-commit rejection/error behavior) is an unblocked backlog candidate. M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
+M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 

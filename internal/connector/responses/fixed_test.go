@@ -155,11 +155,32 @@ func TestExecuteFixedJSON_Usage(t *testing.T) {
 }
 
 func TestExecuteFixedJSON_Rejection(t *testing.T) {
-	for _, status := range []int{400, 429, 500} {
+	for _, status := range []int{400, 401, 403, 429, 500, 503} {
 		data := []byte(` {"error":"raw private"} `)
-		head, body, done, _ := fixedFrames(t, fakeupstream.Response{Status: status, Body: data, Header: http.Header{"X-Request-Id": {"safe"}, "Connection": {"X-Secret"}, "X-Secret": {"hidden"}}})
+		head, body, done, _ := fixedFrames(t, fakeupstream.Response{Status: status, Body: data, Header: http.Header{"X-Request-Id": {"safe"}, "Connection": {"X-Secret"}, "X-Secret": {"hidden"}, "Retry-After": {"17"}}})
 		if *head.HTTPStatus != status || head.Error == nil || done.Error == nil || done.Outcome != core.OutcomeFailed || !bytes.Equal(body, data) || http.Header(head.Headers).Get("X-Request-Id") != "safe" || http.Header(head.Headers).Get("X-Secret") != "" {
 			t.Fatalf("%d: head=%+v done=%+v body=%q", status, head, done, body)
+		}
+		wantCategory := core.CategoryUnavailable
+		switch status {
+		case 400:
+			wantCategory = core.CategoryInvalidRequest
+		case 401:
+			wantCategory = core.CategoryUnauthenticated
+		case 403:
+			wantCategory = core.CategoryPermissionDenied
+		case 429:
+			wantCategory = core.CategoryRateLimited
+		}
+		if head.Error.Category != wantCategory || (status == 429 || status == 503) != head.Error.Retryable {
+			t.Fatalf("%d classified at Head as %+v", status, head.Error)
+		}
+		if status == 429 || status == 503 {
+			if head.Error.RetryAfter == nil || *head.Error.RetryAfter != 17*time.Second || head.Error.RetryDisposition != core.RetryUnknown {
+				t.Fatalf("%d retry metadata: %+v", status, head.Error)
+			}
+		} else if head.Error.RetryAfter != nil {
+			t.Fatalf("unexpected Retry-After for %d: %+v", status, head.Error)
 		}
 	}
 }

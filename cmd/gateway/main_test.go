@@ -123,6 +123,131 @@ func TestFixedResponsesComposition(t *testing.T) {
 	}
 }
 
+func TestResponsesRejectPreCommit(t *testing.T) {
+	for _, tc := range []struct {
+		status   int
+		category core.ErrorCategory
+		retry    bool
+	}{
+		{http.StatusUnauthorized, core.CategoryUnauthenticated, false},
+		{http.StatusForbidden, core.CategoryPermissionDenied, false},
+		{http.StatusTooManyRequests, core.CategoryRateLimited, true},
+		{http.StatusServiceUnavailable, core.CategoryUnavailable, true},
+	} {
+		t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
+			const upstreamBody = ` {"error":{"message":"private provider detail"}} `
+			headers := http.Header{"Content-Type": {"application/json"}}
+			if tc.retry {
+				headers.Set("Retry-After", "23")
+			}
+			upstream := fakeupstream.New(fakeupstream.Response{Status: tc.status, Header: headers, Body: []byte(upstreamBody)})
+			defer upstream.Close()
+			finals := make(chan core.AttemptResult, 2)
+			var finalized atomic.Int32
+			server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
+			defer closeTransport()
+			defer server.Close()
+			resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil || resp.StatusCode != tc.status || !bytes.Equal(body, []byte(upstreamBody)) || (resp.Header.Get("Retry-After") == "23") != tc.retry {
+				t.Fatalf("native rejection: status=%d retry-after=%q body=%q read=%v", resp.StatusCode, resp.Header.Get("Retry-After"), body, readErr)
+			}
+			receiveRequest(t, upstream)
+			if upstream.RequestCount() != 1 {
+				t.Fatalf("upstream request count=%d, want exactly one", upstream.RequestCount())
+			}
+			select {
+			case result := <-finals:
+				if !result.Committed || result.Outcome != core.OutcomeFailed || result.Error == nil || result.Error.Category != tc.category || result.Error.Retryable != tc.retry || len(finals) != 0 {
+					t.Fatalf("finalized rejection: %+v", result)
+				}
+				if tc.retry && (result.Error.RetryAfter == nil || *result.Error.RetryAfter != 23*time.Second || result.Error.RetryDisposition != core.RetryUnknown) {
+					t.Fatalf("retry metadata missing before Head handoff: %+v", result.Error)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("rejected attempt was not finalized")
+			}
+			assertCounts(t, upstream, &finalized, 1)
+		})
+	}
+}
+
+func TestResponsesTransportErrorPreCommit(t *testing.T) {
+	upstream := fakeupstream.New(fakeupstream.Response{Drop: true})
+	defer upstream.Close()
+	finals := make(chan core.AttemptResult, 2)
+	var finalized atomic.Int32
+	server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
+	defer closeTransport()
+	defer server.Close()
+	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var gatewayBody struct {
+		Error struct {
+			Code string `json:"code"`
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	decodeErr := json.Unmarshal(body, &gatewayBody)
+	if readErr != nil || decodeErr != nil || resp.StatusCode != http.StatusServiceUnavailable || gatewayBody.Error.Code != "upstream_unavailable" || gatewayBody.Error.Type != string(core.CategoryUnavailable) || bytes.Contains(body, []byte("private")) {
+		t.Fatalf("transport error response: status=%d body=%q read=%v", resp.StatusCode, body, readErr)
+	}
+	receiveRequest(t, upstream)
+	select {
+	case result := <-finals:
+		if result.Committed || result.Outcome != core.OutcomeFailed || result.Error == nil || result.Error.Category != core.CategoryUnavailable || result.Error.Retryable || result.Error.RetryDisposition != core.RetryUnknown || len(finals) != 0 {
+			t.Fatalf("pre-Head transport failure metadata: %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("transport-failed attempt was not finalized")
+	}
+	assertCounts(t, upstream, &finalized, 1)
+}
+
+func TestResponsesConnectionFailurePreCommit(t *testing.T) {
+	upstream := fakeupstream.New(fakeupstream.Response{})
+	endpoint := upstream.URL + "/v1/responses"
+	upstream.Close()
+	finals := make(chan core.AttemptResult, 2)
+	var finalized atomic.Int32
+	var ready atomic.Bool
+	h, closeTransport := handlerWithFinalize(config{UpstreamEndpoint: endpoint, UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic", MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s"}, &ready, func(result core.AttemptResult) {
+		finalized.Add(1)
+		finals <- result
+	})
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil || resp.StatusCode != http.StatusServiceUnavailable || !json.Valid(body) {
+		t.Fatalf("connection failure response: status=%d body=%q read=%v", resp.StatusCode, body, readErr)
+	}
+	select {
+	case result := <-finals:
+		if result.Committed || result.Outcome != core.OutcomeFailed || result.Error == nil || result.Error.Category != core.CategoryUnavailable || result.Error.Retryable || result.Error.RetryDisposition != core.RetryUnknown || len(finals) != 0 {
+			t.Fatalf("connection failure metadata: %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connection-failed attempt was not finalized")
+	}
+	if finalized.Load() != 1 {
+		t.Fatalf("connection failure attempt finalization count=%d, want exactly one", finalized.Load())
+	}
+}
+
 func TestResponsesIncrementalFlush(t *testing.T) {
 	const first = "event: response.created\ndata: {\"type\":\"response.created\"}\n\n"
 	const second = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
