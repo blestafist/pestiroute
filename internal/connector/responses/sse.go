@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -52,18 +54,20 @@ func (t *Transport) ExecuteSSE(ctx context.Context, in core.ExecutionRequest) (c
 	if status < 200 || status >= 300 {
 		head.Error = rejectionError(status, resp.Header.Get("Retry-After"))
 	}
-	return core.ExecutionResponse{Stream: &sseStream{body: resp.Body, cancel: cancel, requestCtx: requestCtx, head: head}}, nil
+	return core.ExecutionResponse{Stream: &sseStream{body: resp.Body, cancel: cancel, requestCtx: requestCtx, head: head, idleTimeout: t.streamIdleTimeout}}, nil
 }
 
 type sseStream struct {
-	mu         sync.Mutex
-	body       io.ReadCloser
-	cancel     context.CancelFunc
-	requestCtx context.Context
-	head       *core.HeadFrame
-	phase      int
-	pending    error
-	observer   sseObserver
+	mu          sync.Mutex
+	body        io.ReadCloser
+	cancel      context.CancelFunc
+	requestCtx  context.Context
+	head        *core.HeadFrame
+	phase       int
+	pending     error
+	observer    sseObserver
+	idleTimeout time.Duration
+	idleExpired atomic.Bool
 }
 
 func (s *sseStream) Close() error {
@@ -105,14 +109,35 @@ func (s *sseStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if pending != nil {
 		err = pending
 	} else {
+		var timer *time.Timer
+		var timerDone chan struct{}
+		if s.idleTimeout > 0 {
+			timerDone = make(chan struct{})
+			timer = time.AfterFunc(s.idleTimeout, func() {
+				defer close(timerDone)
+				s.idleExpired.Store(true)
+				_ = s.body.Close()
+				s.cancel()
+			})
+		}
 		for n == 0 && err == nil && ctx.Err() == nil {
 			n, err = s.body.Read(buf)
+		}
+		if timer != nil && !timer.Stop() {
+			<-timerDone
 		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ctx.Err() != nil {
 		return core.StreamFrame{}, ctx.Err()
+	}
+	if s.idleExpired.Load() {
+		s.phase = 2
+		s.body.Close()
+		done := &core.CompleteFrame{Outcome: core.OutcomeIncomplete, Error: gatewayError("upstream_timeout", core.CategoryTimeout, "Upstream stream idle timeout"), Usage: unknownUsage()}
+		s.cancel()
+		return core.StreamFrame{Type: core.FrameComplete, Complete: done}, nil
 	}
 	if s.phase == 3 {
 		return core.StreamFrame{}, context.Canceled

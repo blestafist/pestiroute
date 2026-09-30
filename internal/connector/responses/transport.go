@@ -22,13 +22,15 @@ type Config struct {
 	ConnectTimeout        time.Duration
 	TLSHandshakeTimeout   time.Duration
 	ResponseHeaderTimeout time.Duration
+	StreamIdleTimeout     time.Duration
 }
 
 type Transport struct {
-	endpoint   string
-	credential string
-	client     *http.Client
-	transport  *http.Transport
+	endpoint          string
+	credential        string
+	streamIdleTimeout time.Duration
+	client            *http.Client
+	transport         *http.Transport
 }
 
 // NewTransport creates a reusable one-target transport from validated startup
@@ -44,7 +46,7 @@ func NewTransport(c Config) *Transport {
 	// connection fails; avoid the HTTP/2 no-cached-connection retry path.
 	tr.ForceAttemptHTTP2 = false
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
-	return &Transport{endpoint: c.Endpoint, credential: c.Credential, transport: tr,
+	return &Transport{endpoint: c.Endpoint, credential: c.Credential, streamIdleTimeout: c.StreamIdleTimeout, transport: tr,
 		client: &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -252,6 +253,10 @@ func transportError(err error) *core.GatewayError {
 		return gatewayError("upstream_cancelled", core.CategoryCancelled, "Upstream request cancelled")
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
+		return gatewayError("upstream_timeout", core.CategoryTimeout, "Upstream request timed out")
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return gatewayError("upstream_timeout", core.CategoryTimeout, "Upstream request timed out")
 	}
 	return gatewayError("upstream_unavailable", core.CategoryUnavailable, "Upstream request failed")

@@ -198,9 +198,10 @@ func handlerWithFinalize(c config, ready *atomic.Bool, finalize func(core.Attemp
 	connect, _ := time.ParseDuration(c.ConnectTimeout)
 	tlsHandshake, _ := time.ParseDuration(c.TLSHandshakeTimeout)
 	responseHeader, _ := time.ParseDuration(c.ResponseHeaderTimeout)
+	streamIdle, _ := time.ParseDuration(c.StreamIdleTimeout)
 	transport := connector.NewTransport(connector.Config{
 		Endpoint: c.UpstreamEndpoint, Credential: string(c.credential), ConnectTimeout: connect,
-		TLSHandshakeTimeout: tlsHandshake, ResponseHeaderTimeout: responseHeader,
+		TLSHandshakeTimeout: tlsHandshake, ResponseHeaderTimeout: responseHeader, StreamIdleTimeout: streamIdle,
 	})
 	dispatch := &core.Dispatcher{Target: fixedTarget{transport}, AccountID: c.UpstreamCredentialEnv, Finalize: finalize}
 	endpoint, _ := url.Parse(c.UpstreamEndpoint)

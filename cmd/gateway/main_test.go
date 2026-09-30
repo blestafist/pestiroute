@@ -388,7 +388,7 @@ func TestResponsesSlowConsumerBackpressure(t *testing.T) {
 	upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: steps})
 	defer upstream.Close()
 	var ready atomic.Bool
-	h, closeTransport := handler(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic", MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s"}, &ready)
+	h, closeTransport := handler(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic", MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "100ms"}, &ready)
 	defer closeTransport()
 	server := httptest.NewServer(h)
 	defer server.Close()
@@ -467,6 +467,173 @@ func TestResponsesBackpressureCancellation(t *testing.T) {
 	waitCancelled(t, captured)
 	assertFinalization(t, finals, core.OutcomeCancelled, true)
 	assertCounts(t, upstream, &finalized, 1)
+}
+
+func TestResponsesTimeoutHeaderIdleHealthyAndDeadline(t *testing.T) {
+	t.Run("response header timeout is 504", func(t *testing.T) {
+		upstream := fakeupstream.New(fakeupstream.Response{HeaderGate: make(chan struct{})})
+		defer upstream.Close()
+		finals := make(chan core.AttemptResult, 2)
+		var finalized atomic.Int32
+		server, closeTransport := timeoutServer(t, upstream, 60*time.Millisecond, 2*time.Second, finals, &finalized)
+		defer closeTransport()
+		defer server.Close()
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusGatewayTimeout {
+			t.Fatalf("status %d", resp.StatusCode)
+		}
+		receiveRequest(t, upstream)
+		assertTimeoutFinal(t, finals, &finalized, false)
+		if upstream.RequestCount() != 1 {
+			t.Fatalf("upstream attempts=%d", upstream.RequestCount())
+		}
+	})
+	t.Run("idle timeout closes committed stream once", func(t *testing.T) {
+		upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: []byte("event: response.created\ndata: {}\n\n")}, {Gate: make(chan struct{})}}})
+		defer upstream.Close()
+		finals := make(chan core.AttemptResult, 2)
+		var finalized atomic.Int32
+		server, closeTransport := timeoutServer(t, upstream, time.Second, 70*time.Millisecond, finals, &finalized)
+		defer closeTransport()
+		defer server.Close()
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14","stream":true}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("response.created")) {
+			t.Fatalf("stream status=%d body=%q read=%v", resp.StatusCode, body, readErr)
+		}
+		req := receiveRequest(t, upstream)
+		select {
+		case <-req.Cancelled:
+		case <-time.After(time.Second):
+			t.Fatal("idle timeout did not cancel upstream")
+		}
+		assertTimeoutFinal(t, finals, &finalized, true)
+	})
+	t.Run("long stream with timely events survives", func(t *testing.T) {
+		firstSent, secondSent := make(chan struct{}), make(chan struct{})
+		secondGate, thirdGate := make(chan struct{}), make(chan struct{})
+		go func() {
+			<-firstSent
+			time.Sleep(120 * time.Millisecond)
+			close(secondGate)
+			<-secondSent
+			time.Sleep(120 * time.Millisecond)
+			close(thirdGate)
+		}()
+		upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{
+			{Data: []byte("event: response.created\ndata: {}\n\n"), Sent: firstSent},
+			{Gate: secondGate, Data: []byte("event: response.in_progress\ndata: {}\n\n"), Sent: secondSent},
+			{Gate: thirdGate, Data: []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")},
+		}})
+		defer upstream.Close()
+		finals := make(chan core.AttemptResult, 1)
+		var finalized atomic.Int32
+		server, closeTransport := timeoutServer(t, upstream, 80*time.Millisecond, 200*time.Millisecond, finals, &finalized)
+		defer closeTransport()
+		defer server.Close()
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14","stream":true}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("response.completed")) {
+			t.Fatalf("healthy stream status=%d read=%v body=%q", resp.StatusCode, readErr, body)
+		}
+		assertFinalization(t, finals, core.OutcomeSucceeded, true)
+		assertCounts(t, upstream, &finalized, 1)
+	})
+}
+
+func TestResponsesClientDeadlineCancelsUpstreamBeforeAndAfterHead(t *testing.T) {
+	for _, afterHead := range []bool{false, true} {
+		name := "before Head"
+		if afterHead {
+			name = "after Head"
+		}
+		t.Run(name, func(t *testing.T) {
+			response := fakeupstream.Response{HeaderGate: make(chan struct{})}
+			if afterHead {
+				response = fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Gate: make(chan struct{}), Data: []byte("event: response.created\ndata: {}\n\n")}}}
+			}
+			upstream := fakeupstream.New(response)
+			defer upstream.Close()
+			finals := make(chan core.AttemptResult, 1)
+			var finalized atomic.Int32
+			server, closeTransport := timeoutServer(t, upstream, time.Second, time.Second, finals, &finalized)
+			defer closeTransport()
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+			defer cancel()
+			req, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14","stream":true}`))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := server.Client().Do(req)
+			if afterHead {
+				if err != nil {
+					t.Fatal(err)
+				}
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			} else if err == nil {
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				t.Fatalf("deadline returned a response before Head: status=%d", resp.StatusCode)
+			}
+			u := receiveRequest(t, upstream)
+			select {
+			case <-u.Cancelled:
+			case <-time.After(time.Second):
+				t.Fatal("client deadline did not cancel upstream")
+			}
+			select {
+			case r := <-finals:
+				if r.Error == nil || r.Error.Category != core.CategoryCancelled {
+					t.Fatalf("deadline finalization: %+v", r)
+				}
+				if r.Committed != afterHead {
+					t.Fatalf("committed=%t", r.Committed)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("deadline did not finalize")
+			}
+			if finalized.Load() != 1 {
+				t.Fatalf("finalized %d times", finalized.Load())
+			}
+		})
+	}
+}
+
+func timeoutServer(t *testing.T, upstream *fakeupstream.Server, header, idle time.Duration, finals chan core.AttemptResult, finalized *atomic.Int32) (*httptest.Server, func()) {
+	t.Helper()
+	var ready atomic.Bool
+	h, closeTransport := handlerWithFinalize(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic", MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: header.String(), StreamIdleTimeout: idle.String()}, &ready, func(r core.AttemptResult) { finalized.Add(1); finals <- r })
+	s := httptest.NewServer(h)
+	ready.Store(true)
+	return s, closeTransport
+}
+
+func assertTimeoutFinal(t *testing.T, finals <-chan core.AttemptResult, finalized *atomic.Int32, committed bool) {
+	t.Helper()
+	select {
+	case r := <-finals:
+		if r.Committed != committed || r.Error == nil || r.Error.Category != core.CategoryTimeout || committed && r.Outcome != core.OutcomeIncomplete {
+			t.Fatalf("timeout finalization: committed=%t outcome=%s error=%+v", r.Committed, r.Outcome, r.Error)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout did not finalize")
+	}
+	if finalized.Load() != 1 {
+		t.Fatalf("finalized %d times", finalized.Load())
+	}
 }
 
 func slowConsumerFixture() ([]byte, []fakeupstream.Step, []<-chan struct{}) {
