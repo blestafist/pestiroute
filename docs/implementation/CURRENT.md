@@ -9,7 +9,7 @@
 
 ## Immediate Focus
 
-M1-019 implementation is verified and accepted DONE. Next task start is stopped: git-worker commit delegation is blocked by external prompt substitution (git-worker sessions received stale M1-018 amend instructions instead of new commit instructions; root cause external). Working tree holds 5 uncommitted M1-019 files; HEAD `093c014` remains ahead 7 of origin/dev-m1. Awaiting user resolution of git-worker dispatch/model before proceeding.
+M1-020 concurrent isolation and finalization races is verified and accepted DONE. Working tree holds 5 scoped task files ready for commit (`internal/core/dispatch_test.go`, `cmd/gateway/main_test.go`, `docs/implementation/tasks/M1-020.md`, `docs/implementation/TASKS.md`, `docs/implementation/CURRENT.md`); unrelated `.opencode/agents/git-worker.md` edit preserved and excluded from task commit. Awaiting commit before next task selection.
 
 M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
 

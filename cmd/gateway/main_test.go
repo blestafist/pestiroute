@@ -1547,3 +1547,176 @@ func TestLifecycleCloseTransportReleasesIdleConnection(t *testing.T) {
 		t.Fatal("Close did not release the pooled upstream connection")
 	}
 }
+
+func TestGatewayConcurrentRequestIsolation(t *testing.T) {
+	type captured struct {
+		marker    string
+		body      []byte
+		cancelled <-chan struct{}
+	}
+	requests := make(chan captured, 2)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return
+		}
+		c := captured{marker: r.Header.Get("X-Request-Marker"), body: body, cancelled: r.Context().Done()}
+		requests <- c
+		if c.marker == "cancel-me" {
+			<-r.Context().Done()
+			return
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"completed","marker":"keep-me"}`))
+	}))
+	defer upstream.Close()
+	finals := make(chan core.AttemptResult, 3)
+	var finalized atomic.Int32
+	var ready atomic.Bool
+	var draining atomic.Bool
+	ready.Store(true)
+	h, closeTransport := handlerWithLifecycle(config{
+		UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic",
+		MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s",
+		ResponseHeaderTimeout: "1s", StreamIdleTimeout: "2s",
+	}, &ready, &draining, func(r core.AttemptResult) { finalized.Add(1); finals <- r })
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	type response struct {
+		status int
+		body   []byte
+		err    error
+	}
+	contexts := make([]context.CancelFunc, 2)
+	responses := make([]<-chan response, 2)
+	for i, marker := range []string{"cancel-me", "keep-me"} {
+		ctx, cancel := context.WithCancel(context.Background())
+		contexts[i] = cancel
+		ch := make(chan response, 1)
+		responses[i] = ch
+		go func(marker string) {
+			body := fmt.Sprintf(`{"model":"gpt-4.1-mini-2025-04-14","marker":%q}`, marker)
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/responses", strings.NewReader(body))
+			if err != nil {
+				ch <- response{err: err}
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Request-Marker", marker)
+			resp, err := server.Client().Do(req)
+			if err != nil {
+				ch <- response{err: err}
+				return
+			}
+			got, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			ch <- response{status: resp.StatusCode, body: got, err: err}
+		}(marker)
+	}
+	defer func() { contexts[0](); contexts[1]() }()
+	seen := map[string]captured{}
+	for range 2 {
+		select {
+		case req := <-requests:
+			seen[req.marker] = req
+		case <-time.After(time.Second):
+			a, b := <-responses[0], <-responses[1]
+			t.Fatalf("both requests did not reach upstream (received %v; client results status=%d body=%s err=%v, status=%d body=%s err=%v)", len(seen), a.status, a.body, a.err, b.status, b.body, b.err)
+		}
+	}
+	draining.Store(true)
+	rejected, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14","marker":"during-drain"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectedBody, readErr := io.ReadAll(rejected.Body)
+	rejected.Body.Close()
+	if readErr != nil || rejected.StatusCode != http.StatusServiceUnavailable || string(rejectedBody) != "gateway is shutting down\n" {
+		t.Fatalf("concurrent drain admission: status=%d body=%q err=%v", rejected.StatusCode, rejectedBody, readErr)
+	}
+	for marker, want := range map[string]string{"cancel-me": `"marker":"cancel-me"`, "keep-me": `"marker":"keep-me"`} {
+		if got := seen[marker]; !bytes.Contains(got.body, []byte(want)) || got.marker != marker {
+			t.Fatalf("request crossed markers: header=%q body=%s", got.marker, got.body)
+		}
+	}
+	contexts[0]()
+	select {
+	case <-seen["cancel-me"].cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled request did not cancel upstream")
+	}
+	select {
+	case got := <-responses[0]:
+		if got.err == nil {
+			t.Fatalf("cancelled client unexpectedly received a response: %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled client did not return")
+	}
+	close(release)
+	select {
+	case got := <-responses[1]:
+		if got.err != nil || got.status != http.StatusOK || string(got.body) != `{"status":"completed","marker":"keep-me"}` {
+			t.Fatalf("concurrent successful response: %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unrelated request did not complete")
+	}
+	draining.Store(false)
+	followup, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14","marker":"after"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	followupBody, readErr := io.ReadAll(followup.Body)
+	followup.Body.Close()
+	if readErr != nil || followup.StatusCode != http.StatusOK || string(followupBody) != `{"status":"completed","marker":"keep-me"}` {
+		t.Fatalf("post-cancellation follow-up: status=%d body=%q err=%v", followup.StatusCode, followupBody, readErr)
+	}
+	select {
+	case req := <-requests:
+		if req.marker != "" || !bytes.Contains(req.body, []byte(`"marker":"after"`)) {
+			t.Fatalf("follow-up request state leaked: header=%q body=%s", req.marker, req.body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("follow-up request did not reach upstream")
+	}
+	results := make(map[string]core.AttemptResult)
+	for range 3 {
+		select {
+		case result := <-finals:
+			results[result.RequestID] = result
+		case <-time.After(time.Second):
+			t.Fatal("attempt was not finalized")
+		}
+	}
+	if len(results) != 3 || finalized.Load() != 3 {
+		t.Fatalf("finalized attempts: count=%d results=%+v", finalized.Load(), results)
+	}
+	var cancelled, succeeded int
+	for _, result := range results {
+		if result.Scope.ID == "" || result.RequestID == "" || result.Usage.Source != core.UsageUnknown {
+			t.Fatalf("attempt identity/usage: %+v", result)
+		}
+		switch result.Outcome {
+		case core.OutcomeCancelled, core.OutcomeIncomplete:
+			if result.Outcome != core.OutcomeCancelled {
+				t.Fatalf("client cancellation was not classified as cancelled: %+v", result)
+			}
+			cancelled++
+		case core.OutcomeSucceeded:
+			succeeded++
+		default:
+			t.Fatalf("unexpected terminal result: %+v", result)
+		}
+	}
+	if cancelled != 1 || succeeded != 2 {
+		t.Fatalf("cancellation corrupted concurrent completion: %+v", results)
+	}
+}

@@ -28,6 +28,9 @@ type gatedFrame struct {
 func (s *gatedFrame) Next(context.Context) (StreamFrame, error) {
 	close(s.entered)
 	<-s.release
+	if s.frame.Type == "" {
+		return StreamFrame{}, io.EOF
+	}
 	return s.frame, nil
 }
 
@@ -310,5 +313,171 @@ func TestDispatchPostHeadCancel(t *testing.T) {
 	defer mu.Unlock()
 	if len(results) != 1 || results[0].Outcome != OutcomeCancelled || !results[0].Committed || p.closed.Load() != 1 {
 		t.Fatalf("post-head cancellation: %+v, closes %d", results, p.closed.Load())
+	}
+}
+
+func TestDispatchConcurrentIsolationAndCancellation(t *testing.T) {
+	type attempt struct {
+		request ExecutionRequest
+		scope   AttemptScope
+		stream  *scriptedStream
+	}
+	var mu sync.Mutex
+	var attempts []attempt
+	var results []AttemptResult
+	finalized := make(chan AttemptResult, 2)
+	d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) {
+		mu.Lock()
+		results = append(results, r)
+		mu.Unlock()
+		finalized <- r
+	}}
+	d.Target = targetFunc(func(_ context.Context, r ExecutionRequest, scope AttemptScope) (ExecutionResponse, *GatewayError) {
+		p := &scriptedStream{frames: []StreamFrame{head(), {Type: FrameBody, Body: &BodyFrame{Data: append([]byte(nil), r.Payload.Body...)}}, complete()}}
+		if string(r.Payload.Body) == "cancelled opaque bytes" {
+			p = &scriptedStream{block: true, entered: make(chan struct{}), release: make(chan struct{})}
+		}
+		mu.Lock()
+		attempts = append(attempts, attempt{r, scope, p})
+		mu.Unlock()
+		return ExecutionResponse{Stream: p}, nil
+	})
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inputs := []struct {
+		ctx  context.Context
+		body string
+	}{{cancelCtx, "cancelled opaque bytes"}, {context.Background(), "successful opaque bytes"}}
+	responses := make([]ExecutionResponse, len(inputs))
+	for i, input := range inputs {
+		r := request()
+		r.Payload.Body = []byte(input.body)
+		resp, err := d.Execute(input.ctx, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		responses[i] = resp
+	}
+	cancelledNext := make(chan struct{})
+	go func() {
+		_, _ = responses[0].Stream.Next(context.Background())
+		close(cancelledNext)
+	}()
+	<-attempts[0].stream.entered
+	cancel()
+	select {
+	case <-cancelledNext:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled stream did not stop")
+	}
+	select {
+	case <-finalized:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled attempt was not finalized before success")
+	}
+	var successBody string
+	for range 3 {
+		frame, err := responses[1].Stream.Next(context.Background())
+		if err != nil {
+			t.Fatalf("unrelated successful stream: %v", err)
+		}
+		if frame.Type == FrameBody {
+			successBody = string(frame.Body.Data)
+		}
+	}
+	if successBody != "successful opaque bytes" {
+		t.Fatalf("successful payload crossed requests: %q", successBody)
+	}
+	select {
+	case <-finalized:
+	case <-time.After(time.Second):
+		t.Fatal("successful attempt was not finalized")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(attempts) != 2 || attempts[0].request.ID == attempts[1].request.ID || attempts[0].scope.ID == attempts[1].scope.ID {
+		t.Fatalf("request/attempt IDs not isolated: %+v", attempts)
+	}
+	if len(results) != 2 {
+		t.Fatalf("finalizations=%d: %+v", len(results), results)
+	}
+	byID := map[string]AttemptResult{}
+	for _, result := range results {
+		byID[result.RequestID] = result
+	}
+	for _, a := range attempts {
+		result, ok := byID[a.request.ID]
+		if !ok || result.Scope.ID != a.scope.ID {
+			t.Fatalf("finalization crossed attempts: %+v", results)
+		}
+		if string(a.request.Payload.Body) == "cancelled opaque bytes" {
+			if result.Outcome != OutcomeCancelled || result.Usage.Source != UsageUnknown {
+				t.Fatalf("cancelled request result: %+v", result)
+			}
+		} else if result.Outcome != OutcomeSucceeded {
+			t.Fatalf("successful request corrupted: %+v", result)
+		}
+	}
+}
+
+func TestDispatchConcurrentTerminalSignals(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		frame StreamFrame
+	}{
+		{"complete", complete()},
+		{"EOF", StreamFrame{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &gatedFrame{frame: tc.frame, entered: make(chan struct{}), release: make(chan struct{})}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+			defer cancel()
+			var mu sync.Mutex
+			var results []AttemptResult
+			finalized := make(chan struct{}, 1)
+			d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) {
+				mu.Lock()
+				results = append(results, r)
+				mu.Unlock()
+				finalized <- struct{}{}
+			}, Target: targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+				return ExecutionResponse{Stream: p}, nil
+			})}
+			resp, err := d.Execute(ctx, request())
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { _, err := resp.Stream.Next(context.Background()); done <- err }()
+			<-p.entered
+			<-ctx.Done()
+			start := make(chan struct{})
+			var signals sync.WaitGroup
+			signals.Add(2)
+			go func() { defer signals.Done(); <-start; _ = resp.Stream.Close() }()
+			go func() { defer signals.Done(); <-start; close(p.release) }()
+			close(start)
+			signals.Wait()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("competing terminal signals did not settle")
+			}
+			_ = resp.Stream.Close()
+			select {
+			case <-finalized:
+			case <-time.After(time.Second):
+				t.Fatal("attempt was not finalized")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(results) != 1 || p.closed.Load() != 1 || results[0].Usage.Source != UsageUnknown {
+				t.Fatalf("terminal signals finalized %d times, closed %d: %+v", len(results), p.closed.Load(), results)
+			}
+			if tc.name == "EOF" && results[0].Outcome == OutcomeSucceeded {
+				t.Fatalf("EOF incorrectly finalized success: %+v", results[0])
+			}
+		})
 	}
 }
