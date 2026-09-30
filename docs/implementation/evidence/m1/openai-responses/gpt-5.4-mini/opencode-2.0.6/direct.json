@@ -1,0 +1,486 @@
+{
+  "date": "2026-09-30",
+  "client": {
+    "name": "OpenCode V2 CLI",
+    "version": "2.0.6"
+  },
+  "provider": "OpenAI public Responses API",
+  "observation": "Instrumented direct leg; client baseURL pointed at temporary loopback streaming observer which forwarded to api.openai.com over HTTPS. No PestiRoute gateway involved. Observer persisted only the whitelisted structural metadata below; request/response text, reasoning deltas, headers and credentials are excluded.",
+  "scenario": "Single read call followed by tool result and model continuation; disposable alpha.txt/beta.txt only.",
+  "manual_client_runs": 2,
+  "manual_run_limit_per_scenario": 2,
+  "instrumented_http_posts": 4,
+  "instrumented_usage_total_tokens": 7132,
+  "accounting_note": "Single-tool scenario used two manual runs. The instrumented run reported 7,132 tokens; an earlier client-only run reported 1,168 at its tool step but omitted continuation usage. Prior cumulative single-tool usage is therefore unknown and at least 8,300 tokens; the additional 5,000-token reserve in M1-024 planning is an internal estimate, not a measured total or verified upper bound. Parallel attempt usage and enforced limits are in parallel.json.",
+  "tool_result_association": {
+    "observed": true,
+    "call_id": "call_MWBHNUmEvZXJny46yTxOAGuh",
+    "function_call_item_id": "fc_0f0b547ccd2cd5fb016abd75da095087d28434398e90c4e324",
+    "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}",
+    "result_in_following_request": true,
+    "continuation_response_id": "resp_0f0b547ccd2cd5fb016abd75da7b0c87d296cad51aa4071bc8"
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "client_path": "/v1/responses",
+      "upstream": "https://api.openai.com/v1/responses",
+      "model": "gpt-5.4-mini",
+      "stream": true,
+      "status": 200,
+      "first_byte_ms": 2578.5,
+      "input_items": [
+        {
+          "type": "message",
+          "id": null,
+          "call_id": null,
+          "name": null
+        },
+        {
+          "type": "message",
+          "id": null,
+          "call_id": null,
+          "name": null
+        }
+      ],
+      "events": [
+        {
+          "t_ms": 2579.1,
+          "type": "response.created",
+          "response_id": "resp_0e31fe88e4f9d1d9016abd75d2f55c87d2b30c37d736448c7a",
+          "status": "in_progress"
+        },
+        {
+          "t_ms": 2579.6,
+          "type": "response.in_progress",
+          "response_id": "resp_0e31fe88e4f9d1d9016abd75d2f55c87d2b30c37d736448c7a",
+          "status": "in_progress"
+        },
+        {
+          "t_ms": 2882.1,
+          "type": "response.output_item.added",
+          "output_index": 0,
+          "item": {
+            "id": "rs_0e31fe88e4f9d1d9016abd75d588ec87d28b140b1f061e6c05",
+            "type": "reasoning"
+          }
+        },
+        {
+          "t_ms": 4262.6,
+          "type": "response.output_item.done",
+          "output_index": 0,
+          "item": {
+            "id": "rs_0e31fe88e4f9d1d9016abd75d588ec87d28b140b1f061e6c05",
+            "type": "reasoning"
+          }
+        },
+        {
+          "t_ms": 4268.8,
+          "type": "response.output_item.added",
+          "output_index": 1,
+          "item": {
+            "id": "msg_0e31fe88e4f9d1d9016abd75d6e93087d2b0617ff1349b4174",
+            "type": "message"
+          }
+        },
+        {
+          "t_ms": 5433.6,
+          "type": "response.output_item.done",
+          "output_index": 1,
+          "item": {
+            "id": "msg_0e31fe88e4f9d1d9016abd75d6e93087d2b0617ff1349b4174",
+            "type": "message"
+          }
+        },
+        {
+          "t_ms": 5442.0,
+          "type": "response.completed",
+          "response_id": "resp_0e31fe88e4f9d1d9016abd75d2f55c87d2b30c37d736448c7a",
+          "status": "completed",
+          "usage": {
+            "input_tokens": 1496,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 442,
+            "output_tokens_details": {
+              "reasoning_tokens": 196
+            },
+            "total_tokens": 1938
+          },
+          "output_items": [
+            {
+              "id": "rs_0e31fe88e4f9d1d9016abd75d588ec87d28b140b1f061e6c05",
+              "type": "reasoning"
+            },
+            {
+              "id": "msg_0e31fe88e4f9d1d9016abd75d6e93087d2b0617ff1349b4174",
+              "type": "message"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "client_path": "/v1/responses",
+      "upstream": "https://api.openai.com/v1/responses",
+      "model": "gpt-5.4-mini",
+      "stream": true,
+      "status": 200,
+      "first_byte_ms": 493.4,
+      "input_items": [
+        {
+          "type": "message",
+          "id": null,
+          "call_id": null,
+          "name": null
+        }
+      ],
+      "events": [
+        {
+          "t_ms": 494.0,
+          "type": "response.created",
+          "response_id": "resp_0f0b547ccd2cd5fb016abd75d8612487d298fbb0912384513e",
+          "status": "in_progress"
+        },
+        {
+          "t_ms": 494.4,
+          "type": "response.in_progress",
+          "response_id": "resp_0f0b547ccd2cd5fb016abd75d8612487d298fbb0912384513e",
+          "status": "in_progress"
+        },
+        {
+          "t_ms": 814.9,
+          "type": "response.output_item.added",
+          "output_index": 0,
+          "item": {
+            "id": "rs_0f0b547ccd2cd5fb016abd75d8efc887d2bc69e36f01039f27",
+            "type": "reasoning"
+          }
+        },
+        {
+          "t_ms": 1915.2,
+          "type": "response.output_item.done",
+          "output_index": 0,
+          "item": {
+            "id": "rs_0f0b547ccd2cd5fb016abd75d8efc887d2bc69e36f01039f27",
+            "type": "reasoning"
+          }
+        },
+        {
+          "t_ms": 1917.3,
+          "type": "response.output_item.added",
+          "output_index": 1,
+          "item": {
+            "id": "fc_0f0b547ccd2cd5fb016abd75da095087d28434398e90c4e324",
+            "type": "function_call",
+            "call_id": "call_MWBHNUmEvZXJny46yTxOAGuh",
+            "name": "read",
+            "arguments": ""
+          }
+        },
+        {
+          "t_ms": 2029.1,
+          "type": "response.function_call_arguments.done",
+          "item_id": "fc_0f0b547ccd2cd5fb016abd75da095087d28434398e90c4e324",
+          "output_index": 1,
+          "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}"
+        },
+        {
+          "t_ms": 2029.2,
+          "type": "response.output_item.done",
+          "output_index": 1,
+          "item": {
+            "id": "fc_0f0b547ccd2cd5fb016abd75da095087d28434398e90c4e324",
+            "type": "function_call",
+            "call_id": "call_MWBHNUmEvZXJny46yTxOAGuh",
+            "name": "read",
+            "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}"
+          }
+        },
+        {
+          "t_ms": 2029.9,
+          "type": "response.completed",
+          "response_id": "resp_0f0b547ccd2cd5fb016abd75d8612487d298fbb0912384513e",
+          "status": "completed",
+          "usage": {
+            "input_tokens": 1197,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 189,
+            "output_tokens_details": {
+              "reasoning_tokens": 161
+            },
+            "total_tokens": 1386
+          },
+          "output_items": [
+            {
+              "id": "rs_0f0b547ccd2cd5fb016abd75d8efc887d2bc69e36f01039f27",
+              "type": "reasoning"
+            },
+            {
+              "id": "fc_0f0b547ccd2cd5fb016abd75da095087d28434398e90c4e324",
+              "type": "function_call",
+              "call_id": "call_MWBHNUmEvZXJny46yTxOAGuh",
+              "name": "read",
+              "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "client_path": "/v1/responses",
+      "upstream": "https://api.openai.com/v1/responses",
+      "model": "gpt-5.4-mini",
+      "stream": true,
+      "status": 200,
+      "first_byte_ms": 1035.4,
+      "input_items": [
+        {
+          "type": "message",
+          "id": null,
+          "call_id": null,
+          "name": null
+        },
+        {
+          "type": "reasoning",
+          "id": "rs_0f0b547ccd2cd5fb016abd75d8efc887d2bc69e36f01039f27",
+          "call_id": null,
+          "name": null
+        },
+        {
+          "type": "function_call",
+          "id": "fc_0f0b547ccd2cd5fb016abd75da095087d28434398e90c4e324",
+          "call_id": "call_MWBHNUmEvZXJny46yTxOAGuh",
+          "name": "read"
+        },
+        {
+          "type": "function_call_output",
+          "id": null,
+          "call_id": "call_MWBHNUmEvZXJny46yTxOAGuh",
+          "name": null
+        },
+        {
+          "type": "message",
+          "id": null,
+          "call_id": null,
+          "name": null
+        }
+      ],
+      "events": [
+        {
+          "t_ms": 1035.9,
+          "type": "response.created",
+          "response_id": "resp_0f0b547ccd2cd5fb016abd75da7b0c87d296cad51aa4071bc8",
+          "status": "in_progress"
+        },
+        {
+          "t_ms": 1036.2,
+          "type": "response.in_progress",
+          "response_id": "resp_0f0b547ccd2cd5fb016abd75da7b0c87d296cad51aa4071bc8",
+          "status": "in_progress"
+        },
+        {
+          "t_ms": 1656.7,
+          "type": "response.output_item.added",
+          "output_index": 0,
+          "item": {
+            "id": "rs_0f0b547ccd2cd5fb016abd75dbdf2c87d29abe7f9c91c65044",
+            "type": "reasoning"
+          }
+        },
+        {
+          "t_ms": 4077.4,
+          "type": "response.output_item.done",
+          "output_index": 0,
+          "item": {
+            "id": "rs_0f0b547ccd2cd5fb016abd75dbdf2c87d29abe7f9c91c65044",
+            "type": "reasoning"
+          }
+        },
+        {
+          "t_ms": 4085.1,
+          "type": "response.output_item.added",
+          "output_index": 1,
+          "item": {
+            "id": "msg_0f0b547ccd2cd5fb016abd75de48cc87d28bfe5e05160d813f",
+            "type": "message"
+          }
+        },
+        {
+          "t_ms": 4720.0,
+          "type": "response.output_item.done",
+          "output_index": 1,
+          "item": {
+            "id": "msg_0f0b547ccd2cd5fb016abd75de48cc87d28bfe5e05160d813f",
+            "type": "message"
+          }
+        },
+        {
+          "t_ms": 4728.6,
+          "type": "response.completed",
+          "response_id": "resp_0f0b547ccd2cd5fb016abd75da7b0c87d296cad51aa4071bc8",
+          "status": "completed",
+          "usage": {
+            "input_tokens": 1941,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 1024
+            },
+            "output_tokens": 483,
+            "output_tokens_details": {
+              "reasoning_tokens": 308
+            },
+            "total_tokens": 2424
+          },
+          "output_items": [
+            {
+              "id": "rs_0f0b547ccd2cd5fb016abd75dbdf2c87d29abe7f9c91c65044",
+              "type": "reasoning"
+            },
+            {
+              "id": "msg_0f0b547ccd2cd5fb016abd75de48cc87d28bfe5e05160d813f",
+              "type": "message"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "client_path": "/v1/responses",
+      "upstream": "https://api.openai.com/v1/responses",
+      "model": "gpt-5.4-mini",
+      "stream": true,
+      "status": 200,
+      "first_byte_ms": 465.5,
+      "input_items": [
+        {
+          "type": "message",
+          "id": null,
+          "call_id": null,
+          "name": null
+        }
+      ],
+      "events": [
+        {
+          "t_ms": 466.0,
+          "type": "response.created",
+          "response_id": "resp_074d2b1e9008fde2016abd75df30c887d2b604406b02eaef15",
+          "status": "in_progress"
+        },
+        {
+          "t_ms": 466.4,
+          "type": "response.in_progress",
+          "response_id": "resp_074d2b1e9008fde2016abd75df30c887d2b604406b02eaef15",
+          "status": "in_progress"
+        },
+        {
+          "t_ms": 748.5,
+          "type": "response.output_item.added",
+          "output_index": 0,
+          "item": {
+            "id": "rs_074d2b1e9008fde2016abd75dfb7f887d2b6473355d64dcbee",
+            "type": "reasoning"
+          }
+        },
+        {
+          "t_ms": 2484.9,
+          "type": "response.output_item.done",
+          "output_index": 0,
+          "item": {
+            "id": "rs_074d2b1e9008fde2016abd75dfb7f887d2b6473355d64dcbee",
+            "type": "reasoning"
+          }
+        },
+        {
+          "t_ms": 2487.8,
+          "type": "response.output_item.added",
+          "output_index": 1,
+          "item": {
+            "id": "msg_074d2b1e9008fde2016abd75e1728c87d28aaa0aaf97e636c4",
+            "type": "message"
+          }
+        },
+        {
+          "t_ms": 2843.8,
+          "type": "response.output_item.done",
+          "output_index": 1,
+          "item": {
+            "id": "msg_074d2b1e9008fde2016abd75e1728c87d28aaa0aaf97e636c4",
+            "type": "message"
+          }
+        },
+        {
+          "t_ms": 2862.4,
+          "type": "response.completed",
+          "response_id": "resp_074d2b1e9008fde2016abd75df30c887d2b604406b02eaef15",
+          "status": "completed",
+          "usage": {
+            "input_tokens": 1126,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 258,
+            "output_tokens_details": {
+              "reasoning_tokens": 140
+            },
+            "total_tokens": 1384
+          },
+          "output_items": [
+            {
+              "id": "rs_074d2b1e9008fde2016abd75dfb7f887d2b6473355d64dcbee",
+              "type": "reasoning"
+            },
+            {
+              "id": "msg_074d2b1e9008fde2016abd75e1728c87d28aaa0aaf97e636c4",
+              "type": "message"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "parallel_scenario": {
+    "status": "attempted once; two calls and client-side result associations observed",
+    "evidence": "parallel.json",
+    "limitation": "Observer rejected oversized continuation before forwarding; no backend continuation/result acceptance was observed."
+  },
+  "settings": {
+    "provider_package": "@opencode/ai/providers/openai/responses",
+    "transport": "http",
+    "model": "openai/gpt-5.4-mini",
+    "model_id": "gpt-5.4-mini",
+    "project": "disposable directory; alpha.txt and beta.txt contained only harmless marker lines",
+    "client_account_state": "fresh isolated HOME/XDG directories; no saved provider credentials",
+    "tool_permissions": "read allowed; other tools denied",
+    "configured_output_limit": 300,
+    "limit_note": "Configured model limit was not asserted to be a hard aggregate token cap; observed usage governed stop decision.",
+    "endpoint_variants": [
+      "default public OpenAI base URL in first run",
+      "temporary loopback observer forwarding to api.openai.com over HTTPS in instrumented run"
+    ]
+  },
+  "batch_accounting": {
+    "known_or_reported_usage_minimum_tokens": 11451,
+    "components_tokens": {
+      "instrumented_single_tool": 7132,
+      "earlier_uninstrumented_tool_step_only": 1168,
+      "instrumented_parallel": 3151
+    },
+    "unmeasured_usage": "Earlier single-tool continuation is unknown; the additional 5,000-token planning reserve is not measured usage or a verified upper bound.",
+    "user_authorized_batch_cap_tokens": 100000,
+    "cap_compliance": "Unverified because cumulative usage is unknown; do not infer compliance from the account free quota.",
+    "account_guard": "User-confirmed account-level zero-paid enforcement and 2.5M daily free quota; this does not measure consumed aggregate."
+  },
+  "sanitization": {
+    "capture": "Structural event metadata, IDs, timing and usage plus the harmless alpha.txt function arguments. Generated prose/reasoning and tool result bodies are omitted; the call/result link is represented by call IDs and continuation request metadata."
+  }
+}

@@ -9,7 +9,7 @@
 
 ## Immediate Focus
 
-M1-028 model migration to `gpt-5.4-mini` is DONE (exact model validation, Core dispatch capability check, full race tests, loopback dry-run in isolated user/network namespace, and binding/smoke docs verified; no semantic contract changes). Downstream live smoke candidate M1-024 is BLOCKED: environment lacks authorized OpenAI API credentials (`OPENAI_API_KEY` is unset). Live smoke execution is strictly constrained to user-authorized free quota (2.5M daily tokens, zero paid spend). Subsequent candidates (M1-025..M1-027) strictly depend on live smoke traces and remain DRAFT. Stopping boundary reached pending live credentials. Unrelated `.opencode/agents/git-worker.md` edit preserved unstaged.
+M1-024 direct real-client tool baseline is DONE: single-tool continuation captured; two parallel calls and matching client results observed, but backend continuation rejected by observer before egress and recorded as not demonstrated (downstream parallel gate in M1-003/M1-027 not met). User confirmed account-level zero-paid enforcement and remaining free quota for `gpt-5.4-mini` (2.5M daily); known reported usage is >=11,451 tokens, with earlier continuation unmeasured so exact 100k batch-cap compliance is unverified. Next candidate M1-025 (gateway baseline) remains DRAFT pending planning and verified commit of M1-024. Subsequent candidates (M1-026..M1-027) remain DRAFT. Unrelated `.opencode/agents/git-worker.md` edit preserved unstaged.
 
 M1 has [28 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
 
