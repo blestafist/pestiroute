@@ -1492,6 +1492,150 @@ func TestLifecycleAdmissionGuards(t *testing.T) {
 	})
 }
 
+func TestResponsesHeaderIsolationAndIdentityEncoding(t *testing.T) {
+	for _, encoding := range []string{"", "gzip", "br", "*"} {
+		for _, responseEncoding := range []string{"", "identity"} {
+			t.Run("accept-encoding-"+encoding+"-response-"+responseEncoding, func(t *testing.T) {
+				const credential = "selected-only"
+				t.Setenv("TEST_UPSTREAM", credential)
+				body := []byte(" {\"status\":\"completed\",\"opaque\":true} \n")
+				responseHeaders := http.Header{
+					"Content-Type": {"application/json"}, "Content-Length": {fmt.Sprint(len(body))},
+					"Connection": {"X-Private"}, "X-Private": {"secret"},
+					"Keep-Alive": {"timeout=5"}, "Set-Cookie": {"upstream=secret"}, "Authorization": {"Bearer private"}, "X-Public": {"visible"},
+				}
+				if responseEncoding != "" {
+					responseHeaders.Set("Content-Encoding", responseEncoding)
+				}
+				upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: responseHeaders, Body: body})
+				defer upstream.Close()
+				var ready atomic.Bool
+				ready.Store(true)
+				h, closeTransport := handler(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: credential,
+					MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s"}, &ready)
+				defer closeTransport()
+				server := httptest.NewServer(h)
+				defer server.Close()
+				req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", "Bearer client-secret")
+				req.Header.Set("Cookie", "client=secret")
+				req.Header.Set("Proxy-Authorization", "Basic client-secret")
+				req.Header.Set("Connection", "X-Connection-Private, X-Proxy-Connection-Private")
+				req.Header.Set("X-Connection-Private", "client-secret")
+				req.Header.Set("Proxy-Connection", "keep-alive")
+				req.Header.Set("X-Proxy-Connection-Private", "client-secret")
+				req.Header.Set("X-Client-Safe", "safe")
+				if encoding != "" {
+					req.Header.Set("Accept-Encoding", encoding)
+				}
+				clientTransport := http.DefaultTransport.(*http.Transport).Clone()
+				clientTransport.DisableCompression = true
+				defer clientTransport.CloseIdleConnections()
+				resp, err := (&http.Client{Transport: clientTransport}).Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, readErr := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if readErr != nil || resp.StatusCode != 200 || !bytes.Equal(got, body) || resp.ContentLength != int64(len(body)) {
+					t.Fatalf("response status=%d bytes=%t length=%d err=%v", resp.StatusCode, bytes.Equal(got, body), resp.ContentLength, readErr)
+				}
+				for _, name := range []string{"Connection", "Keep-Alive", "X-Private", "Set-Cookie", "Authorization"} {
+					if resp.Header.Get(name) != "" {
+						t.Errorf("leaked response header %s: %q", name, resp.Header.Get(name))
+					}
+				}
+				if resp.Header.Get("X-Public") != "visible" {
+					t.Errorf("safe response header lost: %v", resp.Header)
+				}
+				captured := receiveRequest(t, upstream)
+				if captured.Header.Get("Authorization") != "Bearer "+credential || captured.Header.Get("Accept-Encoding") != "identity" || captured.Header.Get("X-Client-Safe") != "safe" {
+					t.Fatalf("selected/safe request headers missing: %v", captured.Header)
+				}
+				for _, name := range []string{"Cookie", "Proxy-Authorization", "Proxy-Connection", "Connection", "X-Connection-Private", "X-Proxy-Connection-Private"} {
+					if captured.Header.Get(name) != "" {
+						t.Errorf("leaked request header %s: %q", name, captured.Header.Get(name))
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestResponsesRequestEncodingRejectedBeforeExecute(t *testing.T) {
+	upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Body: []byte(`{"status":"completed"}`)})
+	defer upstream.Close()
+	var ready atomic.Bool
+	ready.Store(true)
+	var finalized atomic.Int32
+	h, closeTransport := handlerWithFinalize(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic",
+		MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s"}, &ready, func(core.AttemptResult) { finalized.Add(1) })
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var gatewayBody struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	decodeErr := json.Unmarshal(body, &gatewayBody)
+	if readErr != nil || decodeErr != nil || resp.StatusCode != http.StatusBadRequest || gatewayBody.Error.Type != string(core.CategoryUnsupportedFeature) || upstream.RequestCount() != 0 || finalized.Load() != 0 {
+		t.Fatalf("encoded request status=%d type=%q upstream=%d finalized=%d read=%v decode=%v", resp.StatusCode, gatewayBody.Error.Type, upstream.RequestCount(), finalized.Load(), readErr, decodeErr)
+	}
+}
+
+func TestResponsesUpstreamEncodingRejectedPreHead(t *testing.T) {
+	for _, encoding := range []string{"gzip", "identity, gzip", "deflate"} {
+		for _, status := range []int{http.StatusOK, http.StatusBadRequest} {
+			t.Run(fmt.Sprintf("%s-%d", strings.ReplaceAll(encoding, ", ", "-"), status), func(t *testing.T) {
+				gate := make(chan struct{})
+				upstream := fakeupstream.New(fakeupstream.Response{Status: status, Header: http.Header{"Content-Type": {"application/json"}, "Content-Encoding": {encoding}}, Steps: []fakeupstream.Step{{Data: []byte("encoded-private-body")}, {Gate: gate, Data: []byte("must-not-be-read")}}})
+				defer upstream.Close()
+				defer close(gate)
+				finals := make(chan core.AttemptResult, 2)
+				var finalized atomic.Int32
+				server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
+				defer closeTransport()
+				defer server.Close()
+				resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-4.1-mini-2025-04-14"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, readErr := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				wantBody := fmt.Sprintf(`{"error":{"message":"Unsupported upstream response encoding (HTTP %d)","type":"unavailable","code":"unsupported_response_encoding"}}`, status)
+				if readErr != nil || resp.StatusCode != http.StatusServiceUnavailable || string(body) != wantBody {
+					t.Fatalf("encoded upstream response status=%d body=%q read=%v", resp.StatusCode, body, readErr)
+				}
+				captured := receiveRequest(t, upstream)
+				waitCancelled(t, captured)
+				select {
+				case result := <-finals:
+					if result.Committed || result.Outcome != core.OutcomeFailed || result.Error == nil || result.Error.Category != core.CategoryUnavailable || result.Error.Retryable || result.Error.RetryDisposition != core.RetryUnknown || len(finals) != 0 {
+						t.Fatalf("encoded response finalization: %+v", result)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("encoded response attempt was not finalized")
+				}
+				assertCounts(t, upstream, &finalized, 1)
+			})
+		}
+	}
+}
+
 func TestLifecycleCloseTransportReleasesIdleConnection(t *testing.T) {
 	closed := make(chan struct{}, 1)
 	idle := make(chan struct{}, 1)

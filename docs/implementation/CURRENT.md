@@ -9,7 +9,7 @@
 
 ## Immediate Focus
 
-M1-020 concurrent isolation and finalization races is verified and accepted DONE. Working tree holds 5 scoped task files ready for commit (`internal/core/dispatch_test.go`, `cmd/gateway/main_test.go`, `docs/implementation/tasks/M1-020.md`, `docs/implementation/TASKS.md`, `docs/implementation/CURRENT.md`); unrelated `.opencode/agents/git-worker.md` edit preserved and excluded from task commit. Awaiting commit before next task selection.
+M1-021 header isolation, Accept-Encoding override, and response encoding gate is verified and accepted DONE. Working tree holds 4 scoped task files ready for commit (`cmd/gateway/main_test.go`, `docs/implementation/tasks/M1-021.md`, `docs/implementation/TASKS.md`, `docs/implementation/CURRENT.md`); unrelated `.opencode/agents/git-worker.md` edit preserved unstaged. Awaiting commit before next task selection.
 
 M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
 
