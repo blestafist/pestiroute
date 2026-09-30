@@ -43,7 +43,7 @@ func sseFrames(t *testing.T, response fakeupstream.Response) ([]byte, *core.Comp
 			}
 			count++
 		case core.FrameBody:
-			if count < 1 || done != nil || len(f.Body.Data) == 0 || len(f.Body.Data) > chunkSize {
+			if count < 1 || done != nil || len(f.Body.Data) == 0 || len(f.Body.Data) > sseChunkSize {
 				t.Fatal("body out of order")
 			}
 			raw = append(raw, f.Body.Data...)
@@ -111,6 +111,54 @@ func TestExecuteSSE_GatedIncrementalBodies(t *testing.T) {
 		t.Fatalf("raw match=%v completion=%+v", bytes.Equal(raw, append(first, last...)), done)
 	}
 }
+
+func TestSSEReadChunkHardBound(t *testing.T) {
+	const maxChunk = 4096
+	const terminal = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+	want := append(append([]byte(":"), bytes.Repeat([]byte{'x'}, 64<<10)...), []byte("\n\n"+terminal)...)
+	stream := &sseStream{body: io.NopCloser(bytes.NewReader(want)), cancel: func() {}, requestCtx: context.Background(), head: &core.HeadFrame{}}
+	defer stream.Close()
+	if frame, err := stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+		t.Fatalf("head frame: %v, %v", frame.Type, err)
+	}
+	var got []byte
+	for {
+		frame, err := stream.Next(context.Background())
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameBody {
+			if len(frame.Body.Data) == 0 || len(frame.Body.Data) > maxChunk {
+				t.Fatalf("body chunk = %d bytes, hard maximum %d", len(frame.Body.Data), maxChunk)
+			}
+			got = append(got, frame.Body.Data...)
+		}
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("large body exact bytes = %t", bytes.Equal(got, want))
+	}
+}
+
+func TestSSEObserverScalarScratchHardBound(t *testing.T) {
+	const maxScalar = 4096
+	var observer sseObserver
+	observer.feed([]byte("event:" + strings.Repeat("x", maxScalar+1) + "\n"))
+	if len(observer.event) > maxScalar || cap(observer.event) > maxScalar || !observer.invalid {
+		t.Fatalf("event scratch length/capacity = %d/%d, invalid = %t", len(observer.event), cap(observer.event), observer.invalid)
+	}
+
+	json := tokenObserver{mode: 's', keep: true}
+	for i := 0; i < maxScalar+1; i++ {
+		json.feed('x')
+	}
+	if len(json.token) > maxScalar || cap(json.token) > maxScalar || !json.overflow {
+		t.Fatalf("JSON scalar scratch length/capacity = %d/%d, overflow = %t", len(json.token), cap(json.token), json.overflow)
+	}
+}
+
 func TestExecuteSSE_TerminalClassification(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string

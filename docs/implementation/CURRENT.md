@@ -9,7 +9,7 @@
 
 ## Immediate Focus
 
-[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), [M1-001](tasks/M1-001.md), [M1-002](tasks/M1-002.md), and [M1-004](tasks/M1-004.md) through [M1-016](tasks/M1-016.md) are DONE.
+[FND-001](tasks/FND-001.md) through [FND-006](tasks/FND-006.md), [M1-001](tasks/M1-001.md), [M1-002](tasks/M1-002.md), and [M1-004](tasks/M1-004.md) through [M1-017](tasks/M1-017.md) are DONE.
 
 M1 has [27 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
 

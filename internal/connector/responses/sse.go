@@ -12,6 +12,8 @@ import (
 	"github.com/blestafist/pestiroute/internal/core"
 )
 
+const sseChunkSize = 4 << 10
+
 // ExecuteSSE performs a single native streaming attempt. Observation is inline
 // with the consumer's reads, so an upstream read never outruns downstream writes.
 func (t *Transport) ExecuteSSE(ctx context.Context, in core.ExecutionRequest) (core.ExecutionResponse, *core.GatewayError) {
@@ -97,7 +99,7 @@ func (s *sseStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	s.mu.Unlock()
 	stop := context.AfterFunc(ctx, func() { s.Close() })
 	defer stop()
-	buf := make([]byte, chunkSize)
+	buf := make([]byte, sseChunkSize)
 	var n int
 	var err error
 	if pending != nil {

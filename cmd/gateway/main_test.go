@@ -383,6 +383,185 @@ func TestResponsesCancelAfterHead(t *testing.T) {
 	assertCounts(t, upstream, &finalized, 2)
 }
 
+func TestResponsesSlowConsumerBackpressure(t *testing.T) {
+	want, steps, progress := slowConsumerFixture()
+	upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: steps})
+	defer upstream.Close()
+	var ready atomic.Bool
+	h, closeTransport := handler(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic", MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s"}, &ready)
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	conn := slowGatewayRequest(t, server)
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, &http.Request{Method: http.MethodPost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("stream response: %d %v", resp.StatusCode, resp.Header)
+	}
+	receiveRequest(t, upstream)
+	select {
+	case <-progress[0]:
+	case <-time.After(time.Second):
+		t.Fatal("upstream did not complete its initial write")
+	}
+	consumed := len(steps[0].Data)
+	prefix := make([]byte, consumed)
+	if _, err := io.ReadFull(resp.Body, prefix); err != nil || !bytes.Equal(prefix, want[:consumed]) {
+		t.Fatalf("initial downstream progress exact bytes %t, read error %v", bytes.Equal(prefix, want[:consumed]), err)
+	}
+	completed := waitForSlowConsumerStall(t, progress)
+
+	got, err := io.ReadAll(resp.Body)
+	if err != nil || !bytes.Equal(append(prefix, got...), want) {
+		t.Fatalf("resumed stream exact bytes %t, got %d want %d bytes: %v", bytes.Equal(append(prefix, got...), want), len(got)+len(prefix), len(want), err)
+	}
+	if !waitForAllSlowConsumerWrites(progress, 3*time.Second) {
+		t.Fatalf("upstream completed %d of %d writes after downstream resumed", completed, len(progress))
+	}
+}
+
+func TestResponsesBackpressureCancellation(t *testing.T) {
+	_, steps, progress := slowConsumerFixture()
+	upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: steps})
+	defer upstream.Close()
+	finals := make(chan core.AttemptResult, 1)
+	var finalized atomic.Int32
+	server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
+	defer closeTransport()
+	defer server.Close()
+
+	conn := slowGatewayRequest(t, server)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, &http.Request{Method: http.MethodPost})
+	if err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		conn.Close()
+		t.Fatalf("stream status = %d, want 200", resp.StatusCode)
+	}
+	captured := receiveRequest(t, upstream)
+	select {
+	case <-progress[0]:
+	case <-time.After(time.Second):
+		conn.Close()
+		t.Fatal("upstream did not complete its initial write")
+	}
+	prefix := make([]byte, len(steps[0].Data))
+	if _, err := io.ReadFull(resp.Body, prefix); err != nil || !bytes.Equal(prefix, steps[0].Data) {
+		conn.Close()
+		t.Fatalf("initial downstream progress exact bytes %t, read error %v", bytes.Equal(prefix, steps[0].Data), err)
+	}
+	waitForSlowConsumerStall(t, progress)
+	if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	waitCancelled(t, captured)
+	assertFinalization(t, finals, core.OutcomeCancelled, true)
+	assertCounts(t, upstream, &finalized, 1)
+}
+
+func slowConsumerFixture() ([]byte, []fakeupstream.Step, []<-chan struct{}) {
+	const firstChunk = 4 << 10
+	const chunkSize = 64 << 10
+	const terminal = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+	want := append(append([]byte(":"), bytes.Repeat([]byte{'x'}, 12<<20)...), []byte("\n\n"+terminal)...)
+	var steps []fakeupstream.Step
+	var progress []<-chan struct{}
+	for start := 0; start < len(want); {
+		end := start + chunkSize
+		if start == 0 {
+			end = firstChunk
+		} else if end > len(want) {
+			end = len(want)
+		}
+		sent := make(chan struct{})
+		steps = append(steps, fakeupstream.Step{Data: want[start:end], Sent: sent})
+		progress = append(progress, sent)
+		start = end
+	}
+	return want, steps, progress
+}
+
+func waitForSlowConsumerStall(t *testing.T, progress []<-chan struct{}) int {
+	t.Helper()
+	started := time.Now()
+	lastProgress := started
+	completed := completedSlowConsumerWrites(progress)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			current := completedSlowConsumerWrites(progress)
+			if current == len(progress) {
+				t.Fatal("upstream completed the entire long response while downstream was stalled")
+			}
+			if current != completed {
+				completed = current
+				lastProgress = time.Now()
+			} else if time.Since(lastProgress) >= 250*time.Millisecond {
+				if completed < 2 {
+					t.Fatalf("upstream completed only %d writes before stall; want initial and follow-up progress", completed)
+				}
+				return completed
+			}
+			if time.Since(started) > 5*time.Second {
+				t.Fatalf("upstream writes did not reach a bounded stall; completed %d/%d", completed, len(progress))
+			}
+		}
+	}
+}
+
+func completedSlowConsumerWrites(progress []<-chan struct{}) int {
+	completed := 0
+	for _, sent := range progress {
+		select {
+		case <-sent:
+			completed++
+		default:
+		}
+	}
+	return completed
+}
+
+func waitForAllSlowConsumerWrites(progress []<-chan struct{}, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for completedSlowConsumerWrites(progress) < len(progress) {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
+}
+
+func slowGatewayRequest(t *testing.T, server *httptest.Server) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.(*net.TCPConn).SetReadBuffer(64 << 10); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	body := `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`
+	if _, err := fmt.Fprintf(conn, "POST /v1/responses HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", server.Listener.Addr(), len(body), body); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	return conn
+}
+
 func TestResponsesWriteFailureCancelsUpstream(t *testing.T) {
 	const first = "event: response.created\ndata: {\"type\":\"response.created\"}\n\n"
 	gate := make(chan struct{})

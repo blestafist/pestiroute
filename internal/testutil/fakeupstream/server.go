@@ -123,6 +123,9 @@ func New(response Response) *Server {
 				}
 			}
 			if _, err := w.Write(step.Data); err != nil {
+				if r.Context().Err() != nil {
+					signal()
+				}
 				return
 			}
 			w.(http.Flusher).Flush()
