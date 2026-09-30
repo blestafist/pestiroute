@@ -1805,6 +1805,101 @@ func TestResponsesRequestEncodingRejectedBeforeExecute(t *testing.T) {
 	}
 }
 
+func TestResponsesToolCapabilityAdmissionAndUnknown(t *testing.T) {
+	upstream := fakeupstream.New(fakeupstream.Response{Status: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`)})
+	defer upstream.Close()
+	var ready atomic.Bool
+	ready.Store(true)
+	h, closeTransport := handler(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic",
+		MaxRequestBodyBytes: 4096, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s"}, &ready)
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	post := func(body string) (*http.Response, []byte) {
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp, data
+	}
+	resp, _ := post(`{"model":"gpt-5.4-mini","tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]}`)
+	if resp.StatusCode != http.StatusOK || upstream.RequestCount() != 1 {
+		t.Fatalf("tool request status=%d upstream=%d", resp.StatusCode, upstream.RequestCount())
+	}
+	captured := receiveRequest(t, upstream)
+	if string(captured.Body) != `{"model":"gpt-5.4-mini","tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]}` {
+		t.Fatalf("tool request bytes changed: %q", captured.Body)
+	}
+	continuation := `{"model":"gpt-5.4-mini","input":[{"type":"function_call","id":"fc_0f0b547ccd2cd5fb016abd75da095087d28434398e90c4e324","call_id":"call_MWBHNUmEvZXJny46yTxOAGuh","name":"read","arguments":"{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}"},{"type":"function_call_output","call_id":"call_MWBHNUmEvZXJny46yTxOAGuh","output":"fixture result"}]}`
+	resp, _ = post(continuation)
+	if resp.StatusCode != http.StatusOK || upstream.RequestCount() != 2 {
+		t.Fatalf("tool continuation status=%d upstream=%d", resp.StatusCode, upstream.RequestCount())
+	}
+	captured = receiveRequest(t, upstream)
+	if string(captured.Body) != continuation {
+		t.Fatalf("continuation bytes changed: %q", captured.Body)
+	}
+
+	for _, tc := range []struct {
+		name, request string
+	}{
+		{"parallel", `{"model":"gpt-5.4-mini","tools":[{"type":"function","name":"read"}],"parallel_tool_calls":true}`},
+		{"reasoning", `{"model":"gpt-5.4-mini","reasoning":{"effort":"low"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, body := post(tc.request)
+			var got struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusBadRequest || got.Error.Code != "unsupported_capability" || upstream.RequestCount() != 2 {
+				t.Fatalf("unknown capability status=%d code=%q upstream=%d", resp.StatusCode, got.Error.Code, upstream.RequestCount())
+			}
+		})
+	}
+}
+
+func TestResponsesToolCapabilitiesAreScopedToVerifiedTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint string
+		wantSupported  bool
+	}{
+		{"verified public endpoint", "https://api.openai.com/v1/responses", true},
+		{"loopback fixture", "http://127.0.0.1:12345/v1/responses", true},
+		{"other host", "https://unverified.invalid/v1/responses", false},
+		{"other path", "https://api.openai.com/other/v1/responses", false},
+		{"http public endpoint", "http://api.openai.com/v1/responses", false},
+		{"explicit port", "https://api.openai.com:443/v1/responses", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapterCaps, connectorCaps := dispatchCapabilities(tc.endpoint)
+			for label, capabilities := range map[string]map[core.Capability]core.CapabilityState{"adapter": adapterCaps, "connector": connectorCaps} {
+				if tc.wantSupported && (capabilities["llm.tools"] != core.Supported || capabilities["llm.streaming"] != core.Supported) {
+					t.Errorf("%s capabilities=%v, want supported tool/stream", label, capabilities)
+				}
+				if !tc.wantSupported && len(capabilities) != 0 {
+					t.Errorf("%s capabilities=%v, want no declared support", label, capabilities)
+				}
+				for _, unproven := range []core.Capability{"llm.tools.parallel", "llm.reasoning"} {
+					if _, declared := capabilities[unproven]; declared {
+						t.Errorf("%s advertised unproven %s=%s", label, unproven, capabilities[unproven])
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestResponsesUpstreamEncodingRejectedPreHead(t *testing.T) {
 	for _, encoding := range []string{"gzip", "identity, gzip", "deflate"} {
 		for _, status := range []int{http.StatusOK, http.StatusBadRequest} {

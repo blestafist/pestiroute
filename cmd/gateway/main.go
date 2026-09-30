@@ -186,6 +186,20 @@ func (t fixedTarget) Execute(ctx context.Context, req core.ExecutionRequest, _ c
 	return t.ExecuteFixedJSON(ctx, req)
 }
 
+func dispatchCapabilities(endpoint string) (map[core.Capability]core.CapabilityState, map[core.Capability]core.CapabilityState) {
+	target, err := url.Parse(endpoint)
+	if err != nil || target == nil {
+		return nil, nil
+	}
+	verifiedTarget := target.Scheme == "https" && target.Host == "api.openai.com" && target.EscapedPath() == "/v1/responses"
+	fixtureTarget := target.Scheme == "http" && isLoopbackHost(target.Hostname())
+	if !verifiedTarget && !fixtureTarget {
+		return nil, nil
+	}
+	capabilities := map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported, "llm.tools": core.Supported}
+	return capabilities, capabilities
+}
+
 func handler(c config, ready *atomic.Bool) (http.Handler, func()) {
 	return handlerWithFinalize(c, ready, nil)
 }
@@ -209,12 +223,9 @@ func handlerWithLifecycle(c config, ready, draining *atomic.Bool, finalize func(
 		TLSHandshakeTimeout: tlsHandshake, ResponseHeaderTimeout: responseHeader, StreamIdleTimeout: streamIdle,
 	})
 	dispatch := &core.Dispatcher{Target: fixedTarget{transport}, AccountID: c.UpstreamCredentialEnv, Finalize: finalize}
-	endpoint, _ := url.Parse(c.UpstreamEndpoint)
-	if endpoint.Scheme == "http" && isLoopbackHost(endpoint.Hostname()) {
-		// Fixture-only support; public-account streaming needs live verification.
-		dispatch.Adapter = map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}
-		dispatch.Connector = map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}
-	}
+	// M1-024 verified streaming and single-tool continuation for the sole
+	// configured account/model. Parallel tools and reasoning remain unknown.
+	dispatch.Adapter, dispatch.Connector = dispatchCapabilities(c.UpstreamEndpoint)
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
 		if draining.Load() {
 			http.Error(w, "gateway is shutting down", http.StatusServiceUnavailable)
