@@ -1,6 +1,7 @@
 ---
 description: Implements one assigned task with the smallest correct change, runs its checks, and records evidence for planner closure. Includes the full Ponytail ruleset.
 mode: all
+model: openai/gpt-6-luna#high
 permissions:
   - action: read
     resource: "*"
