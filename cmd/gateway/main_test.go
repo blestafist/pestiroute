@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blestafist/pestiroute/internal/core"
 	"github.com/blestafist/pestiroute/internal/testutil/fakeupstream"
 )
 
@@ -179,6 +180,215 @@ func TestResponsesIncrementalFlush(t *testing.T) {
 	if err != nil || string(rest) != second {
 		t.Fatalf("second event and EOF: %q, %v", rest, err)
 	}
+}
+
+func TestResponsesCancelBeforeHead(t *testing.T) {
+	gate := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(gate)
+		}
+	}()
+	upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`), HeaderGate: gate})
+	defer upstream.Close()
+	finals := make(chan core.AttemptResult, 4)
+	var finalized atomic.Int32
+	server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
+	defer closeTransport()
+	defer server.Close()
+	conn := rawGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14"}`)
+	captured := receiveRequest(t, upstream)
+	conn.Close()
+	waitCancelled(t, captured)
+	assertFinalization(t, finals, core.OutcomeCancelled, false)
+	if upstream.RequestCount() != 1 {
+		t.Fatalf("upstream invocation count before follow-up = %d, want 1", upstream.RequestCount())
+	}
+	close(gate)
+	released = true
+	response := sendGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14"}`)
+	if response != `{"status":"completed"}` {
+		t.Fatalf("follow-up response: %q", response)
+	}
+	assertFinalization(t, finals, core.OutcomeSucceeded, true)
+	assertCounts(t, upstream, &finalized, 2)
+}
+
+func TestResponsesCancelAfterHead(t *testing.T) {
+	const first = "event: response.created\ndata: {\"type\":\"response.created\"}\n\n"
+	gate := make(chan struct{})
+	defer func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	}()
+	upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: []byte(first)}, {Gate: gate, Data: []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")}}})
+	defer upstream.Close()
+	finals := make(chan core.AttemptResult, 4)
+	var finalized atomic.Int32
+	server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
+	defer closeTransport()
+	defer server.Close()
+	conn := rawGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, &http.Request{Method: http.MethodPost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(first))
+	if _, err := io.ReadFull(resp.Body, got); err != nil || string(got) != first {
+		t.Fatalf("first event: %q, %v", got, err)
+	}
+	captured := receiveRequest(t, upstream)
+	conn.Close()
+	waitCancelled(t, captured)
+	assertFinalization(t, finals, core.OutcomeCancelled, true)
+	if upstream.RequestCount() != 1 {
+		t.Fatalf("upstream invocation count before follow-up = %d, want 1", upstream.RequestCount())
+	}
+	close(gate)
+	follow := sendGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`)
+	if follow != `event: response.created`+"\ndata: {\"type\":\"response.created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n" {
+		t.Fatalf("follow-up response: %q", follow)
+	}
+	assertFinalization(t, finals, core.OutcomeSucceeded, true)
+	assertCounts(t, upstream, &finalized, 2)
+}
+
+func TestResponsesWriteFailureCancelsUpstream(t *testing.T) {
+	const first = "event: response.created\ndata: {\"type\":\"response.created\"}\n\n"
+	gate := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(gate)
+		}
+	}()
+	upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: []byte(first)}, {Gate: gate, Data: []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")}}})
+	defer upstream.Close()
+	finals := make(chan core.AttemptResult, 2)
+	var finalized atomic.Int32
+	server, closeTransport := cancellationServer(t, upstream, finals, &finalized)
+	defer server.Close()
+	defer closeTransport()
+	body := `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := &gatewayFailWriter{header: make(http.Header)}
+	server.Config.Handler.ServeHTTP(w, req)
+	captured := receiveRequest(t, upstream)
+	waitCancelled(t, captured)
+	assertFinalization(t, finals, core.OutcomeCancelled, true)
+	if upstream.RequestCount() != 1 {
+		t.Fatalf("write-failed invocation count = %d, want 1", upstream.RequestCount())
+	}
+	close(gate)
+	released = true
+	follow := sendGatewayRequest(t, server, `{"model":"gpt-4.1-mini-2025-04-14","stream":true}`)
+	if follow == "" || upstream.RequestCount() != 2 {
+		t.Fatalf("follow-up failed: body %q, invocation count %d", follow, upstream.RequestCount())
+	}
+	assertFinalization(t, finals, core.OutcomeSucceeded, true)
+	assertCounts(t, upstream, &finalized, 2)
+}
+
+type gatewayFailWriter struct {
+	header http.Header
+	status int
+	writes int
+}
+
+func (w *gatewayFailWriter) Header() http.Header    { return w.header }
+func (w *gatewayFailWriter) WriteHeader(status int) { w.status = status }
+func (w *gatewayFailWriter) Write([]byte) (int, error) {
+	w.writes++
+	return 0, io.ErrClosedPipe
+}
+
+func cancellationServer(t *testing.T, upstream *fakeupstream.Server, finalize chan<- core.AttemptResult, count *atomic.Int32) (*httptest.Server, func()) {
+	t.Helper()
+	var ready atomic.Bool
+	h, closeTransport := handlerWithFinalize(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic", MaxRequestBodyBytes: 1024, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s"}, &ready, func(result core.AttemptResult) {
+		count.Add(1)
+		finalize <- result
+	})
+	return httptest.NewServer(h), closeTransport
+}
+
+func rawGatewayRequest(t *testing.T, server *httptest.Server, body string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(conn, "POST /v1/responses HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", server.Listener.Addr(), len(body), body); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	return conn
+}
+
+func assertFinalization(t *testing.T, finals <-chan core.AttemptResult, outcome core.Outcome, committed bool) {
+	t.Helper()
+	select {
+	case result := <-finals:
+		if result.Outcome != outcome || result.Committed != committed || (outcome != core.OutcomeSucceeded && result.Error == nil) || len(finals) != 0 {
+			category := core.ErrorCategory("")
+			if result.Error != nil {
+				category = result.Error.Category
+			}
+			t.Fatalf("attempt finalization: outcome=%s committed=%t error=%s queued=%d", result.Outcome, result.Committed, category, len(finals))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("attempt was not finalized")
+	}
+}
+
+func assertCounts(t *testing.T, upstream *fakeupstream.Server, finalized *atomic.Int32, want int32) {
+	t.Helper()
+	if got := upstream.RequestCount(); got != int64(want) {
+		t.Fatalf("upstream invocation count = %d, want %d", got, want)
+	}
+	if got := finalized.Load(); got != want {
+		t.Fatalf("attempt finalization count = %d, want %d", got, want)
+	}
+}
+
+func receiveRequest(t *testing.T, upstream *fakeupstream.Server) fakeupstream.Request {
+	t.Helper()
+	select {
+	case request := <-upstream.Requests:
+		return request
+	case <-time.After(time.Second):
+		t.Fatal("upstream request not observed")
+		return fakeupstream.Request{}
+	}
+}
+
+func waitCancelled(t *testing.T, request fakeupstream.Request) {
+	t.Helper()
+	select {
+	case <-request.Cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("upstream did not observe cancellation")
+	}
+}
+
+func sendGatewayRequest(t *testing.T, server *httptest.Server, body string) string {
+	t.Helper()
+	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("follow-up status %d: %v", resp.StatusCode, err)
+	}
+	return string(data)
 }
 
 func TestResponsesSplitToolEvents(t *testing.T) {

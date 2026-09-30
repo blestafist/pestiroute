@@ -19,6 +19,7 @@ type encodeStream struct {
 	frames []core.StreamFrame
 	err    error
 	closed bool
+	closes int
 	next   func(context.Context) (core.StreamFrame, error)
 }
 
@@ -36,7 +37,7 @@ func (s *encodeStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	s.frames = s.frames[1:]
 	return f, nil
 }
-func (s *encodeStream) Close() error { s.closed = true; return nil }
+func (s *encodeStream) Close() error { s.closed = true; s.closes++; return nil }
 
 func TestEncodeOpaqueCommitAndFailure(t *testing.T) {
 	status := http.StatusTooManyRequests
@@ -106,10 +107,13 @@ func (w *failWriter) Write(p []byte) (int, error) {
 func TestEncodeWriterFailureClosesStream(t *testing.T) {
 	for _, short := range []bool{false, true} {
 		status := 200
-		s := &encodeStream{frames: []core.StreamFrame{{Type: core.FrameHead, Head: &core.HeadFrame{HTTPStatus: &status}}, {Type: core.FrameBody, Body: &core.BodyFrame{Data: []byte("raw")}}}}
+		s := &encodeStream{frames: []core.StreamFrame{{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: "openai.responses.v1", HTTPStatus: &status}}, {Type: core.FrameBody, Body: &core.BodyFrame{Data: []byte("raw")}}}}
+		stream := core.NewCheckedStream(s, "openai.responses.v1")
 		w := &failWriter{header: make(http.Header), short: short}
-		err := Encode(w, httptest.NewRequest("POST", "/v1/responses", nil), core.ExecutionResponse{Stream: s}, nil)
-		if short && !errors.Is(err, io.ErrShortWrite) || !short && !errors.Is(err, io.ErrClosedPipe) || !s.closed || w.status != 200 || w.writes != 1 || len(s.frames) != 0 {
+		err := Encode(w, httptest.NewRequest("POST", "/v1/responses", nil), core.ExecutionResponse{Stream: stream}, nil)
+		stream.Close()
+		stream.Close()
+		if short && !errors.Is(err, io.ErrShortWrite) || !short && !errors.Is(err, io.ErrClosedPipe) || !s.closed || s.closes != 1 || w.status != 200 || w.writes != 1 || len(s.frames) != 0 {
 			t.Fatalf("failure cleanup: %v %#v %#v", err, s, w)
 		}
 	}

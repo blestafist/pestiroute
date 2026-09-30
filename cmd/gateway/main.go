@@ -187,6 +187,10 @@ func (t fixedTarget) Execute(ctx context.Context, req core.ExecutionRequest, _ c
 }
 
 func handler(c config, ready *atomic.Bool) (http.Handler, func()) {
+	return handlerWithFinalize(c, ready, nil)
+}
+
+func handlerWithFinalize(c config, ready *atomic.Bool, finalize func(core.AttemptResult)) (http.Handler, func()) {
 	mux := probes(ready)
 	if c.UpstreamEndpoint == "" {
 		return mux, func() {}
@@ -198,7 +202,7 @@ func handler(c config, ready *atomic.Bool) (http.Handler, func()) {
 		Endpoint: c.UpstreamEndpoint, Credential: string(c.credential), ConnectTimeout: connect,
 		TLSHandshakeTimeout: tlsHandshake, ResponseHeaderTimeout: responseHeader,
 	})
-	dispatch := &core.Dispatcher{Target: fixedTarget{transport}, AccountID: c.UpstreamCredentialEnv}
+	dispatch := &core.Dispatcher{Target: fixedTarget{transport}, AccountID: c.UpstreamCredentialEnv, Finalize: finalize}
 	endpoint, _ := url.Parse(c.UpstreamEndpoint)
 	if endpoint.Scheme == "http" && isLoopbackHost(endpoint.Hostname()) {
 		// Fixture-only support; public-account streaming needs live verification.

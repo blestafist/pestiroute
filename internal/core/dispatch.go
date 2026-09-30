@@ -93,6 +93,9 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 			response.Stream.Close()
 		}
 		result.Outcome = OutcomeFailed
+		if gatewayErr.Category == CategoryCancelled {
+			result.Outcome = OutcomeCancelled
+		}
 		result.Error = gatewayErr
 		finish(result)
 		return ExecutionResponse{}, gatewayErr

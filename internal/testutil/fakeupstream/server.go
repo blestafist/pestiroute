@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 )
 
 // Request is a snapshot of the incoming request. Cancelled closes when the
@@ -27,13 +28,15 @@ type Step struct {
 }
 
 // Response describes a fixed response or a sequence of independently gated
-// stream writes. Drop closes the connection before response headers are sent.
+// stream writes. HeaderGate delays headers; Drop closes the connection before
+// response headers are sent.
 type Response struct {
-	Status int
-	Header http.Header
-	Body   []byte
-	Steps  []Step
-	Drop   bool
+	Status     int
+	Header     http.Header
+	Body       []byte
+	Steps      []Step
+	Drop       bool
+	HeaderGate <-chan struct{}
 }
 
 // Server is a loopback-only test server. Read Requests as each call arrives;
@@ -41,11 +44,16 @@ type Response struct {
 type Server struct {
 	*httptest.Server
 	Requests <-chan Request
+	requests atomic.Int64
 }
 
+func (s *Server) RequestCount() int64 { return s.requests.Load() }
+
 func New(response Response) *Server {
+	server := &Server{}
 	requests := make(chan Request, 1)
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server.requests.Add(1)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			return
@@ -77,6 +85,14 @@ func New(response Response) *Server {
 		if response.Drop {
 			drop(w)
 			return
+		}
+		if response.HeaderGate != nil {
+			select {
+			case <-response.HeaderGate:
+			case <-r.Context().Done():
+				signal()
+				return
+			}
 		}
 		for key, values := range response.Header {
 			for _, value := range values {
@@ -119,7 +135,9 @@ func New(response Response) *Server {
 			}
 		}
 	}))
-	return &Server{Server: s, Requests: requests}
+	server.Server = s
+	server.Requests = requests
+	return server
 }
 
 func drop(w http.ResponseWriter) {

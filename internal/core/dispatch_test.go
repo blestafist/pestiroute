@@ -182,6 +182,19 @@ func TestDispatchCancelAndPreExecuteFailure(t *testing.T) {
 	}
 }
 
+func TestDispatchPreHeadCancellationFinalizesCancelled(t *testing.T) {
+	var results []AttemptResult
+	d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) { results = append(results, r) }, Target: targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+		return ExecutionResponse{}, &GatewayError{Code: "upstream_cancelled", Category: CategoryCancelled, Message: "cancelled"}
+	})}
+	if _, err := d.Execute(context.Background(), request()); err == nil || err.Category != CategoryCancelled {
+		t.Fatalf("pre-head cancellation: %v", err)
+	}
+	if len(results) != 1 || results[0].Outcome != OutcomeCancelled || results[0].Committed || results[0].Error.Category != CategoryCancelled {
+		t.Fatalf("pre-head cancellation finalization: %+v", results)
+	}
+}
+
 func TestDispatchNilStreamFailsBeforeHead(t *testing.T) {
 	var results []AttemptResult
 	d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) { results = append(results, r) }, Target: targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
