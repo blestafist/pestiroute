@@ -177,13 +177,32 @@ func probes(ready *atomic.Bool) *http.ServeMux {
 	return mux
 }
 
-type fixedTarget struct{ *connector.Transport }
+type connectorTarget struct {
+	connector  core.Connector
+	credential secret
+}
 
-func (t fixedTarget) Execute(ctx context.Context, req core.ExecutionRequest, _ core.AttemptScope) (core.ExecutionResponse, *core.GatewayError) {
-	if req.Metadata.Streaming != nil && *req.Metadata.Streaming {
-		return t.ExecuteSSE(ctx, req)
+func (t connectorTarget) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope) (core.ExecutionResponse, *core.GatewayError) {
+	services := core.InvocationServices{Credentials: attemptCredential{value: []byte(t.credential)}}
+	return t.connector.Execute(ctx, req, scope, services)
+}
+
+type attemptCredential struct{ value []byte }
+
+func (c attemptCredential) Get(ctx context.Context, name string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return t.ExecuteFixedJSON(ctx, req)
+	if name != "bearer" || len(c.value) == 0 {
+		return nil, core.ErrCredentialUnavailable
+	}
+	return append([]byte(nil), c.value...), nil
+}
+
+type responsesInit struct {
+	Transport connector.Config `json:"transport"`
+	Model     string           `json:"model"`
+	AccountID string           `json:"account_id"`
 }
 
 func dispatchCapabilities(endpoint string) (map[core.Capability]core.CapabilityState, map[core.Capability]core.CapabilityState) {
@@ -218,11 +237,15 @@ func handlerWithLifecycle(c config, ready, draining *atomic.Bool, finalize func(
 	tlsHandshake, _ := time.ParseDuration(c.TLSHandshakeTimeout)
 	responseHeader, _ := time.ParseDuration(c.ResponseHeaderTimeout)
 	streamIdle, _ := time.ParseDuration(c.StreamIdleTimeout)
-	transport := connector.NewTransport(connector.Config{
-		Endpoint: c.UpstreamEndpoint, Credential: string(c.credential), ConnectTimeout: connect,
+	implementation := connector.NewConnector()
+	configBytes, _ := json.Marshal(responsesInit{Transport: connector.Config{
+		Endpoint: c.UpstreamEndpoint, ConnectTimeout: connect,
 		TLSHandshakeTimeout: tlsHandshake, ResponseHeaderTimeout: responseHeader, StreamIdleTimeout: streamIdle,
-	})
-	dispatch := &core.Dispatcher{Target: fixedTarget{transport}, AccountID: c.UpstreamCredentialEnv, Finalize: finalize}
+	}, Model: "gpt-5.4-mini", AccountID: c.UpstreamCredentialEnv})
+	if err := implementation.Init(context.Background(), core.ComponentConfig{Data: configBytes}); err != nil {
+		return mux, func() { _ = implementation.Close(context.Background()) }
+	}
+	dispatch := &core.Dispatcher{Target: connectorTarget{connector: implementation, credential: c.credential}, AccountID: c.UpstreamCredentialEnv, Finalize: finalize}
 	// M1-024 verified streaming, reasoning items and single-tool continuation
 	// for the sole configured account/model. Parallel tools remain unknown.
 	dispatch.Adapter, dispatch.Connector = dispatchCapabilities(c.UpstreamEndpoint)
@@ -239,7 +262,7 @@ func handlerWithLifecycle(c config, ready, draining *atomic.Bool, finalize func(
 		resp, gatewayErr := dispatch.Execute(r.Context(), req)
 		_ = adapter.Encode(w, r, resp, gatewayErr)
 	})
-	return mux, transport.Close
+	return mux, func() { _ = implementation.Close(context.Background()) }
 }
 
 func run(ctx context.Context, args []string) error {

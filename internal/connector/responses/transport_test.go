@@ -17,7 +17,7 @@ import (
 )
 
 func testTransport(endpoint string) *Transport {
-	return NewTransport(Config{Endpoint: endpoint, Credential: "selected", ConnectTimeout: time.Second, TLSHandshakeTimeout: time.Second, ResponseHeaderTimeout: time.Second})
+	return NewTransport(Config{Endpoint: endpoint, ConnectTimeout: time.Second, TLSHandshakeTimeout: time.Second, ResponseHeaderTimeout: time.Second})
 }
 
 func testRequest() core.ExecutionRequest {
@@ -39,12 +39,12 @@ func TestTransportRequestConstruction(t *testing.T) {
 		"Upgrade": {"websocket"}, "Idempotency-Key": {"retain"},
 		"Content-Type": {"text/plain"}, "Accept-Encoding": {"gzip"}, "X-Allowed": {"yes"},
 	}
-	req, err := tr.Request(context.Background(), in)
+	req, err := tr.Request(context.Background(), in, "selected")
 	if err != nil || req.GetBody != nil || req.Body == nil || req.URL.String() != endpoint || req.Method != http.MethodPost {
 		t.Fatalf("request: %+v, %v", req, err)
 	}
 	req.Body.Close()
-	resp, err := tr.Do(context.Background(), in)
+	resp, err := tr.Do(context.Background(), in, "selected", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestTransportRequestConstruction(t *testing.T) {
 		}
 	}
 	in.Metadata.Headers["Connection"] = []string{"Idempotency-Key"}
-	req, err = tr.Request(context.Background(), in)
+	req, err = tr.Request(context.Background(), in, "selected")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestTransportNoRedirect(t *testing.T) {
 	defer up.Close()
 	tr := testTransport(up.URL + "/v1/responses")
 	defer tr.Close()
-	resp, err := tr.Do(context.Background(), testRequest())
+	resp, err := tr.Do(context.Background(), testRequest(), "selected", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestTransportNoHiddenReplay(t *testing.T) {
 	defer tr.Close()
 	in := testRequest()
 	in.Metadata.Headers = map[string][]string{"Idempotency-Key": {"key"}, "X-Idempotency-Key": {"key"}}
-	first, err := tr.Do(context.Background(), in)
+	first, err := tr.Do(context.Background(), in, "selected", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestTransportNoHiddenReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := tr.Do(context.Background(), in)
+	second, err := tr.Do(context.Background(), in, "selected", nil)
 	if second != nil {
 		second.Body.Close()
 	}
@@ -146,7 +146,7 @@ func TestTransportNoDecompression(t *testing.T) {
 	defer up.Close()
 	tr := testTransport(up.URL + "/v1/responses")
 	defer tr.Close()
-	resp, err := tr.Do(context.Background(), testRequest())
+	resp, err := tr.Do(context.Background(), testRequest(), "selected", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestTransportCancellation(t *testing.T) {
 	defer tr.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	resp, err := tr.Do(ctx, testRequest())
+	resp, err := tr.Do(ctx, testRequest(), "selected", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

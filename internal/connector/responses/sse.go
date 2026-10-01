@@ -18,12 +18,12 @@ const sseChunkSize = 4 << 10
 
 // ExecuteSSE performs a single native streaming attempt. Observation is inline
 // with the consumer's reads, so an upstream read never outruns downstream writes.
-func (t *Transport) ExecuteSSE(ctx context.Context, in core.ExecutionRequest) (core.ExecutionResponse, *core.GatewayError) {
+func (t *Transport) ExecuteSSE(ctx context.Context, in core.ExecutionRequest, credential string, doer core.HTTPDoer) (core.ExecutionResponse, *core.GatewayError) {
 	if in.Payload.Protocol != protocol {
 		return core.ExecutionResponse{}, gatewayError("unsupported_protocol", core.CategoryUnsupportedFeature, "Unsupported response protocol")
 	}
 	requestCtx, cancel := context.WithCancel(ctx)
-	resp, err := t.Do(requestCtx, in)
+	resp, err := t.Do(requestCtx, in, credential, doer)
 	if err != nil {
 		cancel()
 		return core.ExecutionResponse{}, transportError(err)

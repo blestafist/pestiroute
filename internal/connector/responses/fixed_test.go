@@ -26,7 +26,7 @@ func fixedFrames(t *testing.T, response fakeupstream.Response) (*core.HeadFrame,
 	defer up.Close()
 	tr := testTransport(up.URL + "/v1/responses")
 	defer tr.Close()
-	result, failure := tr.ExecuteFixedJSON(context.Background(), fixedRequest())
+	result, failure := tr.ExecuteFixedJSON(context.Background(), fixedRequest(), "selected", nil)
 	if failure != nil {
 		t.Fatal(failure)
 	}
@@ -199,7 +199,7 @@ func TestExecuteFixedJSON_BodyIdleTimeout(t *testing.T) {
 	tr := testTransport(up.URL + "/v1/responses")
 	tr.streamIdleTimeout = 30 * time.Millisecond
 	defer tr.Close()
-	result, failure := tr.ExecuteFixedJSON(context.Background(), fixedRequest())
+	result, failure := tr.ExecuteFixedJSON(context.Background(), fixedRequest(), "selected", nil)
 	if failure != nil {
 		t.Fatal(failure)
 	}
@@ -227,7 +227,7 @@ func TestExecuteFixedJSON_PartialReadClose(t *testing.T) {
 	defer up.Close()
 	tr := testTransport(up.URL + "/v1/responses")
 	defer tr.Close()
-	result, failure := tr.ExecuteFixedJSON(context.Background(), fixedRequest())
+	result, failure := tr.ExecuteFixedJSON(context.Background(), fixedRequest(), "selected", nil)
 	if failure != nil {
 		t.Fatal(failure)
 	}
@@ -268,7 +268,7 @@ func TestExecuteFixedJSON_ParentCancellation(t *testing.T) {
 	defer tr.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	result, failure := tr.ExecuteFixedJSON(ctx, fixedRequest())
+	result, failure := tr.ExecuteFixedJSON(ctx, fixedRequest(), "selected", nil)
 	if failure != nil {
 		t.Fatal(failure)
 	}
@@ -305,7 +305,7 @@ func TestExecuteFixedJSON_EncodedResponseRejected(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			up := fakeupstream.New(fakeupstream.Response{Status: tc.status, Header: http.Header{"Content-Encoding": tc.encodings}, Body: []byte("encoded")})
 			tr := testTransport(up.URL + "/v1/responses")
-			result, failure := tr.ExecuteFixedJSON(context.Background(), fixedRequest())
+			result, failure := tr.ExecuteFixedJSON(context.Background(), fixedRequest(), "selected", nil)
 			tr.Close()
 			up.Close()
 			if failure == nil || failure.Code != "unsupported_response_encoding" || result.Stream != nil {

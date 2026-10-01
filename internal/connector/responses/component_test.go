@@ -1,17 +1,24 @@
 package responses
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
+	"github.com/blestafist/pestiroute/internal/testutil/fakeupstream"
 )
 
 func componentConfigJSON(endpoint string) []byte {
 	b, _ := json.Marshal(componentConfig{Transport: Config{
-		Endpoint: endpoint, Credential: "synthetic", ConnectTimeout: time.Second,
+		Endpoint: endpoint, ConnectTimeout: time.Second,
 	}, Model: modelID, AccountID: "account-a"})
 	return b
 }
@@ -93,4 +100,168 @@ func TestConnectorInitRejectsInvalidConfigAndUnknownEndpointCapability(t *testin
 		t.Fatalf("unverified endpoint capability = %q", got)
 	}
 	_ = c.Close(context.Background())
+}
+
+type credentialFunc func(context.Context, string) ([]byte, error)
+
+func (f credentialFunc) Get(ctx context.Context, name string) ([]byte, error) { return f(ctx, name) }
+
+type doerFunc func(*http.Request) (*http.Response, error)
+
+func (f doerFunc) Do(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestConnectorExecuteUsesAttemptServicesAndChecksScopeBeforeNetwork(t *testing.T) {
+	body := []byte(`{"id":"resp","status":"completed"}`)
+	up := fakeupstream.New(fakeupstream.Response{Body: body})
+	defer up.Close()
+	c := NewConnector()
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: componentConfigJSON(up.URL + "/v1/responses")}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	var calls atomic.Int32
+	var captured *http.Request
+	services := core.InvocationServices{
+		Credentials: credentialFunc(func(_ context.Context, name string) ([]byte, error) {
+			if name != "bearer" {
+				t.Fatalf("credential name = %q", name)
+			}
+			return []byte("attempt-secret"), nil
+		}),
+		Transport: doerFunc(func(req *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			captured = req
+			return http.DefaultClient.Do(req)
+		}),
+	}
+	req := fixedRequest()
+	req.Model = modelID
+	resp, ge := c.Execute(context.Background(), req, core.AttemptScope{AccountID: "account-a", Mode: "native"}, services)
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	var got []byte
+	for {
+		frame, err := resp.Stream.Next(context.Background())
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameBody {
+			got = append(got, frame.Body.Data...)
+		}
+	}
+	resp.Stream.Close()
+	if calls.Load() != 1 || captured == nil || captured.Header.Get("Authorization") != "Bearer attempt-secret" || !bytes.Equal(got, body) {
+		t.Fatalf("custom transport calls=%d request=%v body=%q", calls.Load(), captured, got)
+	}
+	for _, bad := range []struct {
+		req   core.ExecutionRequest
+		scope core.AttemptScope
+	}{
+		{req, core.AttemptScope{AccountID: "other", Mode: "native"}},
+		{req, core.AttemptScope{AccountID: "account-a", Mode: "translation"}},
+		{func() core.ExecutionRequest { r := req; r.Model = "other"; return r }(), core.AttemptScope{AccountID: "account-a", Mode: "native"}},
+		{func() core.ExecutionRequest { r := req; r.Payload.Protocol = "other"; return r }(), core.AttemptScope{AccountID: "account-a", Mode: "native"}},
+	} {
+		_, err := c.Execute(context.Background(), bad.req, bad.scope, services)
+		if err == nil {
+			t.Fatal("mismatched protocol or scope accepted")
+		}
+	}
+	_, err := c.Execute(context.Background(), req, core.AttemptScope{AccountID: "account-a", Mode: "native"}, core.InvocationServices{
+		Credentials: credentialFunc(func(context.Context, string) ([]byte, error) { return nil, errors.New("private failure") }),
+	})
+	if err == nil || err.Code != "credential_unavailable" || strings.Contains(err.Code+err.Message+err.Provider+err.OriginalError, "private failure") || calls.Load() != 1 {
+		t.Fatalf("credential failure leaked or attempted request: %v, calls=%d", err, calls.Load())
+	}
+}
+
+func TestConnectorExecuteRejectsUnavailableAndMissingCredentialsBeforeHTTP(t *testing.T) {
+	var calls atomic.Int32
+	services := core.InvocationServices{
+		Transport: doerFunc(func(*http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return nil, errors.New("unexpected HTTP request")
+		}),
+	}
+	req := fixedRequest()
+	req.Model = modelID
+	scope := core.AttemptScope{AccountID: "account-a", Mode: "native"}
+
+	checkRejected := func(name string, c *Connector, services core.InvocationServices) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			_, ge := c.Execute(context.Background(), req, scope, services)
+			if ge == nil || calls.Load() != 0 {
+				t.Fatalf("Execute error = %v, HTTP calls = %d; want rejection before HTTP", ge, calls.Load())
+			}
+		})
+	}
+
+	uninitialized := NewConnector()
+	checkRejected("uninitialized", uninitialized, services)
+
+	up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{}`)})
+	defer up.Close()
+	closed := NewConnector()
+	if err := closed.Init(context.Background(), core.ComponentConfig{Data: componentConfigJSON(up.URL + "/v1/responses")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := closed.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	checkRejected("closed", closed, services)
+
+	ready := NewConnector()
+	if err := ready.Init(context.Background(), core.ComponentConfig{Data: componentConfigJSON(up.URL + "/v1/responses")}); err != nil {
+		t.Fatal(err)
+	}
+	defer ready.Close(context.Background())
+	checkRejected("nil_credentials", ready, services)
+	checkRejected("empty_credential_value", ready, core.InvocationServices{
+		Transport: services.Transport,
+		Credentials: credentialFunc(func(context.Context, string) ([]byte, error) {
+			return []byte{}, nil
+		}),
+	})
+}
+
+func TestConnectorExecuteSelectsIncrementalSSEFromRequestMetadata(t *testing.T) {
+	body := []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+	up := fakeupstream.New(fakeupstream.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body})
+	defer up.Close()
+	c := NewConnector()
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: componentConfigJSON(up.URL + "/v1/responses")}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	streaming := true
+	req := fixedRequest()
+	req.Model, req.Metadata.Streaming = modelID, &streaming
+	resp, ge := c.Execute(context.Background(), req, core.AttemptScope{AccountID: "account-a", Mode: "native"}, core.InvocationServices{
+		Credentials: credentialFunc(func(context.Context, string) ([]byte, error) { return []byte("selected"), nil }),
+	})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer resp.Stream.Close()
+	var got []byte
+	for {
+		frame, err := resp.Stream.Next(context.Background())
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameBody {
+			got = append(got, frame.Body.Data...)
+		}
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("stream body changed: %q", got)
+	}
 }

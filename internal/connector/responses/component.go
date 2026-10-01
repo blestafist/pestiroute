@@ -19,8 +19,7 @@ const (
 	modelID     = "gpt-5.4-mini"
 )
 
-// componentConfig is private configuration for this implementation. Credentials
-// remain runtime-owned; M2-009 moves their use to invocation services.
+// componentConfig is private non-secret connector configuration.
 type componentConfig struct {
 	Transport Config `json:"transport"`
 	Model     string `json:"model"`
@@ -70,8 +69,8 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 		return errors.New("Responses connector model and account_id are required")
 	}
 	u, err := url.Parse(cfg.Transport.Endpoint)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.EscapedPath() != "/v1/responses" || cfg.Transport.Credential == "" {
-		return errors.New("Responses connector requires a valid /v1/responses endpoint and bearer credential")
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return errors.New("Responses connector requires a valid HTTP(S) endpoint")
 	}
 	c.transport = NewTransport(cfg.Transport)
 	c.model, c.accountID = cfg.Model, cfg.AccountID
@@ -152,15 +151,31 @@ func (c *Connector) Authenticate(context.Context, core.AuthRequest, core.Invocat
 	return core.AuthResult{Supported: false}, nil
 }
 
-func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, _ core.AttemptScope, _ core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
+func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
 	c.mu.Lock()
 	t, ready := c.transport, c.state == core.HealthReady
 	c.mu.Unlock()
 	if !ready || t == nil {
 		return core.ExecutionResponse{}, gatewayError("connector_unavailable", core.CategoryUnavailable, "Responses connector is unavailable")
 	}
-	if req.Metadata.Streaming != nil && *req.Metadata.Streaming {
-		return t.ExecuteSSE(ctx, req)
+	if req.Payload.Protocol != protocol {
+		return core.ExecutionResponse{}, gatewayError("unsupported_protocol", core.CategoryUnsupportedFeature, "Unsupported response protocol")
 	}
-	return t.ExecuteFixedJSON(ctx, req)
+	if scope.Mode != "native" {
+		return core.ExecutionResponse{}, gatewayError("unsupported_mode", core.CategoryUnsupportedFeature, "Unsupported execution mode")
+	}
+	if scope.AccountID != c.accountID || req.Model != c.model {
+		return core.ExecutionResponse{}, gatewayError("scope_mismatch", core.CategoryPermissionDenied, "Execution scope does not match configured target")
+	}
+	if services.Credentials == nil {
+		return core.ExecutionResponse{}, gatewayError("credential_unavailable", core.CategoryUnauthenticated, "Selected credential is unavailable")
+	}
+	credential, err := services.Credentials.Get(ctx, "bearer")
+	if err != nil || len(credential) == 0 {
+		return core.ExecutionResponse{}, gatewayError("credential_unavailable", core.CategoryUnauthenticated, "Selected credential is unavailable")
+	}
+	if req.Metadata.Streaming != nil && *req.Metadata.Streaming {
+		return t.ExecuteSSE(ctx, req, string(credential), services.Transport)
+	}
+	return t.ExecuteFixedJSON(ctx, req, string(credential), services.Transport)
 }
