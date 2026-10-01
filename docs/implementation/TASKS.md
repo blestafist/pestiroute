@@ -116,7 +116,7 @@ Groups describe outcomes, not assignment bundles or status. The dependency colum
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
 | [M2-001](tasks/M2-001.md) | DONE | OpenCode subagent (ses_f07860e0dffemRf9MT2Fxik0tC) | M1-027 | Specify the M2 Go binding and migration seams | Binding note maps v1 APIs, lifecycle, services and routes; verification recorded in card | Manual v1/signature and scenario mapping; local links/anchors; `git diff --check` |
-| [M2-002](tasks/M2-002.md) | DRAFT | — | M2-001 | Add shared descriptor and capability-scope types | — | [Direct proof](tasks/M2-002.md#verification) and `./scripts/check.sh` |
+| [M2-002](tasks/M2-002.md) | DONE | GPT-6 Luna (M2-002 worker) | M2-001 | Add shared descriptor and capability-scope types | Shared descriptor, lifecycle, health and capability-scope values with validation, exact API matching and declaration snapshots implemented | `go test -race -count=1 ./internal/core/...`, `./scripts/check.sh`, `git diff --check` |
 | [M2-003](tasks/M2-003.md) | DRAFT | — | M2-002 | Bind model, estimate and authentication support operations | — | [Direct proof](tasks/M2-003.md#verification) and `./scripts/check.sh` |
 | [M2-004](tasks/M2-004.md) | DRAFT | — | M2-002 | Implement invocation-scoped runtime services | — | [Direct proof](tasks/M2-004.md#verification) and `./scripts/check.sh` |
 | [M2-005](tasks/M2-005.md) | DRAFT | — | M2-002 | Validate registry identities and API compatibility | — | [Direct proof](tasks/M2-005.md#verification) and `./scripts/check.sh` |
