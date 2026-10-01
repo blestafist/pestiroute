@@ -1,7 +1,7 @@
 ---
 description: Inspects Git status and diffs, commits explicitly assigned changes, and pushes only when instructed by the orchestrator or user.
 mode: subagent
-model: 9router/kr/claude-haiku-4.5
+model: 9router/kr/claude-sonnet-4.5
 permissions:
   - action: "*"
     resource: "*"
