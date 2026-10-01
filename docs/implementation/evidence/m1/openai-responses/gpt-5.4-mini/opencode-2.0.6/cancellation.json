@@ -1,0 +1,88 @@
+{
+  "date": "2026-10-01",
+  "client": {"name": "OpenCode V2 CLI", "version": "2.0.6"},
+  "provider": "OpenAI public Responses API",
+  "model": "gpt-5.4-mini",
+  "scenario": "Bounded long-response interruption (configured output limit 300); request shape varied by attempt as recorded below",
+  "provenance": {
+    "live_run_window": "2026-10-01 14:48:35–14:51:42 +0200",
+    "first_post_run_observer_revision_mtime": "2026-10-01 14:53:36 +0200",
+    "post_review_offline_only_revision_mtime": "2026-10-01 15:01:42 +0200",
+    "revision_note": "Live runs used an earlier observer revision. Error-classification/self-test changes were made after the live runs; the raw live trace values below remain transport_error/AttributeError and are not retroactively represented as client_disconnect. Later review edits were offline-only; no further live requests were made."
+  },
+  "client_control": "PTY ETX delivered SIGINT to the opencode run process; it exited 130. No OpenCode session-interrupt API or in-process HTTP-abort hook was used. Observer-side socket EOF occurred after process exit and does not establish an OpenCode HTTP-library abort.",
+  "observer": {
+    "role": "loopback HTTP relay; forwarded original request body bytes unchanged to the Responses endpoint",
+    "capture": "allowlisted request/event metadata only; no auth values, prompts, or payload text",
+    "upstream_cancellation_evidence": "observer detected downstream socket EOF and closed its OpenAI HTTPS connection; remote compute cancellation is not observable"
+  },
+  "direct": {
+    "path": "OpenCode -> loopback observer -> OpenAI",
+    "manual_attempt_count": 2,
+    "attempts": [
+      {
+        "post_count": 1,
+        "request_body_bytes": 29633,
+        "tool_count": 11,
+        "required_capabilities": ["llm.streaming", "llm.tools", "llm.reasoning"],
+        "first_event": "response.created",
+        "first_event_ms": 1404.0,
+        "interruption": "PTY Ctrl-C (ETX) sent on observer first-event signal",
+        "client_exit_status": 130,
+        "observer_outcome": "harness stopped observer before disconnect finalization; client transport/upstream cancellation unverified for this attempt"
+      },
+      {
+        "post_count": 1,
+        "request_body_bytes": 6825,
+        "tool_count": 0,
+        "required_capabilities": ["llm.streaming", "llm.reasoning"],
+        "first_event": "response.created",
+        "first_event_ms": 606.3,
+        "interruption": "PTY Ctrl-C (ETX) sent on observer first-event signal",
+        "client_exit_status": 130,
+        "partial_events": ["response.created", "response.in_progress"],
+        "observer_socket_eof_after_process_exit": true,
+        "in_client_http_abort": "unverified",
+        "upstream_socket_closed": true,
+        "raw_observer_stream_end": "transport_error",
+        "raw_observer_error": "AttributeError",
+        "observer_read_error": "AttributeError after concurrent upstream socket close; lower-level cause not independently diagnosed",
+        "terminal_event_or_usage": "not observed"
+      }
+    ],
+    "follow_up_requests_or_retries": 0,
+    "request_shapes_differed": true
+  },
+  "gateway": {
+    "path": "OpenCode -> PestiRoute -> loopback observer -> OpenAI",
+    "manual_attempt_count": 1,
+    "attempts": [
+      {
+        "post_count": 1,
+        "request_body_bytes": 6825,
+        "tool_count": 0,
+        "required_capabilities": ["llm.streaming", "llm.reasoning"],
+        "first_event": "response.created",
+        "first_event_ms": 1093.4,
+        "interruption": "PTY Ctrl-C (ETX) sent on observer first-event signal after a 50 ms downstream scheduling window",
+        "client_exit_status": 130,
+        "partial_events": ["response.created", "response.in_progress"],
+        "gateway_to_observer_socket_eof_after_client_process_exit": true,
+        "client_http_abort": "unverified; the PTY action terminated the CLI process",
+        "upstream_socket_closed": true,
+        "raw_observer_stream_end": "transport_error",
+        "raw_observer_error": "AttributeError",
+        "observer_read_error": "AttributeError after concurrent upstream socket close; lower-level cause not independently diagnosed",
+        "terminal_event_or_usage": "not observed"
+      }
+    ],
+    "gateway_internal_teardown": "unverified live; connection EOF is consistent with teardown but does not prove it. Deterministic lifecycle evidence: M1-014 TestStreaming_ClientDisconnect; M1-031 TestDispatchCancelAndPreExecuteFailure.",
+    "follow_up_requests_or_retries": 0
+  },
+  "limitations": [
+    "Direct leg used two attempts (the card maximum); its first attempt did not retain final transport evidence.",
+    "No terminal usage was reported for interrupted streams; token usage and remote compute/billing effects are unknown.",
+    "PTY SIGINT terminated the CLI process. Subsequent socket EOF and observer upstream close do not prove an in-client HTTP abort or remote provider compute cancellation.",
+    "Deterministic lifecycle references: M1-014 TestStreaming_ClientDisconnect; M1-031 TestDispatchCancelAndPreExecuteFailure and fixed-response cancellation regression."
+  ]
+}

@@ -2,9 +2,13 @@
 """Bounded, streaming M1 Responses observer. Never records raw payloads or headers."""
 
 import argparse
+import errno
 import http.client
 import json
 import os
+import select
+import socket
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +22,7 @@ DATA = []
 POSTS = 0
 STOP = False
 TRACE_PATH = "/tmp/m1-gateway-observer.json"
+FIRST_EVENT_SIGNAL = None
 
 
 def safe_item(value):
@@ -63,12 +68,13 @@ def safe_request(body):
 class SSERecorder:
     """Retain event structure and allowlisted tool args only; event scratch is bounded."""
 
-    def __init__(self):
+    def __init__(self, on_first_event=None):
         self.buffer = bytearray()
         self.events = []  # Initialize before feeding any event (regression for follow-up2 KeyError).
         self.calls = {}
         self.arguments = {}
         self.first_event_ms = None
+        self.on_first_event = on_first_event
 
     def feed(self, chunk, elapsed_ms):
         self.buffer.extend(chunk)
@@ -145,6 +151,8 @@ class SSERecorder:
                             self.calls.setdefault(output_id, {key: output_item.get(key) for key in ("id", "call_id", "name")})
                             self.arguments[output_id] = args
         self.events.append(item_event)
+        if item_event.get("first_event") and self.on_first_event:
+            self.on_first_event(kind, self.first_event_ms, self.events)
 
     def safe_tool_calls(self):
         result = []
@@ -185,15 +193,115 @@ def self_test():
     assert recorder.events[-1]["usage"]["total_tokens"] == 7
     assert recorder.safe_tool_calls() == [{"item_id": "fc-1", "call_id": "call-1", "name": "read", "arguments": '{"path":"alpha.txt"}'}]
     assert "PRIVATE_FIXTURE_TEXT" not in json.dumps(recorder.events)
+    notified = []
+    notify_recorder = SSERecorder(lambda kind, elapsed, events: notified.append((kind, elapsed, len(events))))
+    notify_recorder.feed(b'data: {"type":"response.created"}\n\n', 12.5)
+    assert notified == [("response.created", 12.5, 1)]
+    class Closable:
+        closed = False
+        def close(self):
+            self.closed = True
+    response, connection = Closable(), Closable()
+    partial_entry = {"post": 1, "events": [], "client_transport_closed": True, "cancellation_signal_propagated": True}
+    partial_recorder = SSERecorder()
+    partial_recorder.feed(b'data: {"type":"response.created"}\n\n', 1.0)
+    with tempfile.TemporaryDirectory() as directory:
+        global FIRST_EVENT_SIGNAL, TRACE_PATH
+        old_trace, old_data, old_signal = TRACE_PATH, list(DATA), FIRST_EVENT_SIGNAL
+        TRACE_PATH, DATA[:] = os.path.join(directory, "trace.json"), []
+        FIRST_EVENT_SIGNAL = os.path.join(directory, "first-event.json")
+        first_event(partial_entry, "response.created", 1.0, partial_recorder.events)
+        with open(FIRST_EVENT_SIGNAL) as signal_file:
+            assert json.load(signal_file) == {"post": 1, "event": "response.created", "t_ms": 1.0}
+        finish_error(partial_entry, AttributeError("closed upstream stream"), partial_recorder, response, connection)
+        with open(TRACE_PATH) as saved_file:
+            saved = json.load(saved_file)
+        assert saved[0]["client_transport_closed"] is True
+        assert saved[0]["upstream_socket_closed"] is True
+        assert saved[0]["events"][0]["type"] == "response.created"
+        assert saved[0]["stream_end"] == "client_disconnect"
+        assert saved[0]["observer_error"] == "downstream_disconnect"
+        assert response.closed and connection.closed
+        TRACE_PATH, DATA[:], FIRST_EVENT_SIGNAL = old_trace, old_data, old_signal
+    client, peer = socket.socketpair()
+    upstream = Closable()
+    disconnect = threading.Event()
+    entry = {"post": 1, "events": [{"type": "response.created"}]}
+    with tempfile.TemporaryDirectory() as directory:
+        old_trace = TRACE_PATH
+        TRACE_PATH = os.path.join(directory, "disconnect.json")
+        watcher = threading.Thread(target=watch_client_disconnect, args=(client, upstream, entry, disconnect), daemon=True)
+        watcher.start()
+        peer.close()
+        watcher.join(timeout=1)
+        assert not watcher.is_alive()
+        assert entry["client_transport_closed"] and entry["upstream_socket_closed"] and upstream.closed
+        TRACE_PATH = old_trace
+    client.close()
     print("observer self-test passed: split SSE, missing optional keys, safe arguments, usage")
 
 
 def persist(entry):
     with LOCK:
-        DATA.append(entry)
+        if not any(existing is entry for existing in DATA):
+            DATA.append(entry)
         fd = os.open(TRACE_PATH, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as output:
             json.dump(DATA, output, indent=2)
+
+
+def first_event(entry, kind, elapsed_ms, events):
+    entry["first_event_type"] = kind
+    entry["first_event_ms"] = elapsed_ms
+    entry["events"] = list(events)
+    persist(entry)
+    if FIRST_EVENT_SIGNAL:
+        directory = os.path.dirname(FIRST_EVENT_SIGNAL) or "."
+        fd, temporary = tempfile.mkstemp(prefix=".m1-first-event-", dir=directory)
+        try:
+            with os.fdopen(fd, "w") as output:
+                json.dump({"post": entry.get("post"), "event": kind, "t_ms": elapsed_ms}, output)
+            os.replace(temporary, FIRST_EVENT_SIGNAL)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+def finish_error(entry, error, recorder, response, connection):
+    global STOP
+    STOP = True
+    disconnected = entry.get("client_transport_closed") or isinstance(error, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)) or (isinstance(error, OSError) and error.errno in (errno.EPIPE, errno.ECONNRESET, errno.ECONNABORTED))
+    entry["stream_end"] = "client_disconnect" if disconnected else "transport_error"
+    entry["observer_error"] = "downstream_disconnect" if disconnected else str(error) if str(error) == "sse_event_limit" else type(error).__name__
+    entry.setdefault("client_transport_closed", disconnected)
+    if recorder:
+        entry["events"] = recorder.events
+        entry["first_event_ms"] = recorder.first_event_ms
+        entry["tool_calls"] = recorder.safe_tool_calls()
+    if response:
+        response.close()
+    if connection:
+        connection.close()
+        entry["upstream_socket_closed"] = True
+    persist(entry)
+
+
+def watch_client_disconnect(client, upstream, entry, stop):
+    while not stop.wait(0.05):
+        try:
+            readable, _, _ = select.select([client], [], [], 0)
+            if readable and not client.recv(1, socket.MSG_PEEK):
+                entry["client_transport_closed"] = True
+                entry["cancellation_signal_propagated"] = True
+                upstream.close()
+                entry["upstream_socket_closed"] = True
+                persist(entry)
+                return
+        except OSError:
+            entry["client_transport_closed"] = True
+            entry["cancellation_signal_propagated"] = True
+            upstream.close()
+            entry["upstream_socket_closed"] = True
+            persist(entry)
+            return
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -225,6 +333,11 @@ class Handler(BaseHTTPRequestHandler):
             persist(entry)
             self.send_error(413 if oversized else 429)
             return
+        connection = None
+        response = None
+        recorder = None
+        disconnect_stop = threading.Event()
+        disconnect_watcher = None
         try:
             request_body = self.rfile.read(length)
             if self.headers.get("Authorization") != "Bearer " + os.environ.get("PESTIROUTE_UPSTREAM_BEARER", ""):
@@ -253,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
             entry["status"] = response.status
             entry["response_content_type"] = response.getheader("Content-Type")
             is_sse = "text/event-stream" in (entry["response_content_type"] or "").lower()
-            recorder = SSERecorder()
+            recorder = SSERecorder(lambda kind, elapsed, events: first_event(entry, kind, elapsed, events))
             if response.status >= 400:
                 STOP = True
                 entry["stop_after_upstream_error"] = True
@@ -264,6 +377,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header(header, value)
             self.send_header("Connection", "close")
             self.end_headers()
+            disconnect_watcher = threading.Thread(target=watch_client_disconnect, args=(self.connection, connection, entry, disconnect_stop), daemon=True)
+            disconnect_watcher.start()
             first_byte = True
             while True:
                 chunk = response.read1(2048)
@@ -287,12 +402,16 @@ class Handler(BaseHTTPRequestHandler):
                 entry["first_event_ms"] = recorder.first_event_ms
                 entry["tool_calls"] = recorder.safe_tool_calls()
                 entry["usage_reported"] = any("usage" in event for event in recorder.events)
+            entry["stream_end"] = "eof"
+            disconnect_stop.set()
+            disconnect_watcher.join(timeout=1)
             connection.close()
             persist(entry)
         except Exception as error:
-            STOP = True
-            entry["observer_error"] = str(error) if str(error) == "sse_event_limit" else type(error).__name__
-            persist(entry)
+            disconnect_stop.set()
+            if disconnect_watcher:
+                disconnect_watcher.join(timeout=1)
+            finish_error(entry, error, recorder, response, connection)
             try:
                 self.connection.shutdown(1)
             except OSError:
@@ -300,10 +419,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global TRACE_PATH
+    global FIRST_EVENT_SIGNAL, TRACE_PATH
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--trace", default=TRACE_PATH)
+    parser.add_argument("--first-event-signal")
     args = parser.parse_args()
     if args.self_test:
         self_test()
@@ -311,6 +431,7 @@ def main():
     if not os.environ.get("OPENAI_API_KEY") or not os.environ.get("PESTIROUTE_UPSTREAM_BEARER"):
         parser.error("OPENAI_API_KEY and PESTIROUTE_UPSTREAM_BEARER must be set in the environment")
     TRACE_PATH = args.trace
+    FIRST_EVENT_SIGNAL = args.first_event_signal
     ThreadingHTTPServer(("127.0.0.1", 18082), Handler).serve_forever()
 
 
