@@ -172,8 +172,9 @@ func TestDispatchTerminalPaths(t *testing.T) {
 func TestDispatchCancelAndPreExecuteFailure(t *testing.T) {
 	var mu sync.Mutex
 	var results []AttemptResult
+	finalized := make(chan struct{}, 2)
 	p := &scriptedStream{block: true, entered: make(chan struct{}), release: make(chan struct{})}
-	d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) { mu.Lock(); results = append(results, r); mu.Unlock() }}
+	d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) { mu.Lock(); results = append(results, r); mu.Unlock(); finalized <- struct{}{} }}
 	d.Target = targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
 		return ExecutionResponse{Stream: p}, nil
 	})
@@ -190,6 +191,7 @@ func TestDispatchCancelAndPreExecuteFailure(t *testing.T) {
 		t.Fatalf("cancel returned %v", err)
 	}
 	resp.Stream.Close()
+	<-finalized // Next/Close may race the context.AfterFunc finalizer callback.
 	mu.Lock()
 	if len(results) != 1 || results[0].Outcome != OutcomeCancelled || results[0].Committed || p.closed.Load() != 1 {
 		t.Fatalf("cancel result %+v, closes %d", results, p.closed.Load())
@@ -201,6 +203,7 @@ func TestDispatchCancelAndPreExecuteFailure(t *testing.T) {
 	if _, ge := d.Execute(context.Background(), request()); ge == nil || ge.Code != "pre" {
 		t.Fatalf("pre-execution failure: %v", ge)
 	}
+	<-finalized
 	mu.Lock()
 	defer mu.Unlock()
 	if len(results) != 2 || results[1].Outcome != OutcomeFailed || results[1].Committed {

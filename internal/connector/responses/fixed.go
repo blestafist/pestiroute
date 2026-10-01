@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
@@ -63,19 +64,21 @@ func (t *Transport) ExecuteFixedJSON(ctx context.Context, in core.ExecutionReque
 	if status < 200 || status >= 300 {
 		head.Error = rejectionError(status, resp.Header.Get("Retry-After"))
 	}
-	return core.ExecutionResponse{Stream: &fixedStream{body: resp.Body, cancel: cancel, requestCtx: requestCtx, head: head}}, nil
+	return core.ExecutionResponse{Stream: &fixedStream{body: resp.Body, cancel: cancel, requestCtx: requestCtx, head: head, idleTimeout: t.streamIdleTimeout}}, nil
 }
 
 type fixedStream struct {
-	mu         sync.Mutex
-	body       io.ReadCloser
-	cancel     context.CancelFunc
-	requestCtx context.Context
-	head       *core.HeadFrame
-	phase      int // head, body, complete, closed
-	seen       []byte
-	over       bool
-	pending    error
+	mu          sync.Mutex
+	body        io.ReadCloser
+	cancel      context.CancelFunc
+	requestCtx  context.Context
+	head        *core.HeadFrame
+	phase       int // head, body, complete, closed
+	seen        []byte
+	over        bool
+	pending     error
+	idleTimeout time.Duration
+	idleExpired atomic.Bool
 }
 
 func (s *fixedStream) Close() error {
@@ -117,8 +120,22 @@ func (s *fixedStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if s.pending != nil {
 		err = s.pending
 	} else {
+		var timer *time.Timer
+		var timerDone chan struct{}
+		if s.idleTimeout > 0 {
+			timerDone = make(chan struct{})
+			timer = time.AfterFunc(s.idleTimeout, func() {
+				defer close(timerDone)
+				s.idleExpired.Store(true)
+				_ = s.body.Close()
+				s.cancel()
+			})
+		}
 		for n == 0 && err == nil && ctx.Err() == nil {
 			n, err = s.body.Read(buf)
+		}
+		if timer != nil && !timer.Stop() {
+			<-timerDone
 		}
 	}
 	s.mu.Lock()
@@ -128,6 +145,13 @@ func (s *fixedStream) Next(ctx context.Context) (core.StreamFrame, error) {
 			return core.StreamFrame{}, ctx.Err()
 		}
 		return core.StreamFrame{}, context.Canceled
+	}
+	if s.idleExpired.Load() {
+		s.phase = 2
+		s.body.Close()
+		complete := &core.CompleteFrame{Outcome: core.OutcomeIncomplete, Error: gatewayError("upstream_timeout", core.CategoryTimeout, "Upstream response body idle timeout"), Usage: unknownUsage()}
+		s.cancel()
+		return core.StreamFrame{Type: core.FrameComplete, Complete: complete}, nil
 	}
 	if n > 0 {
 		s.pending = err

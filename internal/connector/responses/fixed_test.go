@@ -192,6 +192,35 @@ func TestExecuteFixedJSON_TruncatedBody(t *testing.T) {
 	}
 }
 
+func TestExecuteFixedJSON_BodyIdleTimeout(t *testing.T) {
+	gate := make(chan struct{})
+	up := fakeupstream.New(fakeupstream.Response{Header: http.Header{"Content-Type": {"application/json"}}, Steps: []fakeupstream.Step{{Data: []byte("{")}, {Gate: gate, Data: []byte(`"status":"completed"}`)}}})
+	defer up.Close()
+	tr := testTransport(up.URL + "/v1/responses")
+	tr.streamIdleTimeout = 30 * time.Millisecond
+	defer tr.Close()
+	result, failure := tr.ExecuteFixedJSON(context.Background(), fixedRequest())
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	defer result.Stream.Close()
+	capture := <-up.Requests
+	for range 2 { // Head and the initial body byte.
+		if _, err := result.Stream.Next(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	frame, err := result.Stream.Next(context.Background())
+	if err != nil || frame.Type != core.FrameComplete || frame.Complete.Outcome != core.OutcomeIncomplete || frame.Complete.Error == nil || frame.Complete.Error.Code != "upstream_timeout" || frame.Complete.Error.Category != core.CategoryTimeout {
+		t.Fatalf("idle completion: %+v, %v", frame, err)
+	}
+	select {
+	case <-capture.Cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle timeout did not cancel upstream")
+	}
+}
+
 func TestExecuteFixedJSON_PartialReadClose(t *testing.T) {
 	gate := make(chan struct{})
 	up := fakeupstream.New(fakeupstream.Response{Header: http.Header{"Content-Type": {"application/json"}}, Steps: []fakeupstream.Step{{Data: []byte("{")}, {Gate: gate, Data: []byte(`"status":"completed"}`)}}})
