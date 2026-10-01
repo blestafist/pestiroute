@@ -52,6 +52,144 @@ func request() ExecutionRequest {
 	return ExecutionRequest{ID: "client-id", Model: m1Model, Payload: RawPayload{Protocol: m1Protocol, Body: []byte("\x00opaque\xff")}, Metadata: RequestMetadata{Extensions: map[string]any{"account": "intruder", "attempt_id": "client-id"}}}
 }
 
+type testAdapter struct {
+	registryComponent
+	caps map[CapabilityScope]CapabilityResult
+}
+
+func (a *testAdapter) Capabilities(_ context.Context, scope CapabilityScope) CapabilityResult {
+	return a.caps[scope].Clone()
+}
+
+type testServices struct{ scopes []AttemptScope }
+
+type attemptCredential struct{ account string }
+
+func (a attemptCredential) Get(context.Context, string) ([]byte, error) {
+	return []byte(a.account + "-secret"), nil
+}
+
+func (s *testServices) ForAttempt(scope AttemptScope) InvocationServices {
+	s.scopes = append(s.scopes, scope)
+	return InvocationServices{Credentials: attemptCredential{account: scope.AccountID}}
+}
+
+type dispatchConnector struct {
+	registryComponent
+	caps  map[CapabilityScope]CapabilityResult
+	calls []ExecutionRequest
+	creds []string
+}
+
+func (c *dispatchConnector) Capabilities(_ context.Context, scope CapabilityScope) CapabilityResult {
+	return c.caps[scope].Clone()
+}
+
+func (c *dispatchConnector) Execute(ctx context.Context, in ExecutionRequest, _ AttemptScope, services InvocationServices) (ExecutionResponse, *GatewayError) {
+	c.calls = append(c.calls, in)
+	credential, err := services.Credentials.Get(ctx, "token")
+	if err != nil {
+		return ExecutionResponse{}, &GatewayError{Code: "credential_missing", Category: CategoryInternal, Message: "Credential missing"}
+	}
+	c.creds = append(c.creds, string(credential))
+	return ExecutionResponse{Stream: &scriptedStream{frames: []StreamFrame{head(), complete()}}}, nil
+}
+
+func (*dispatchConnector) Models(context.Context, ModelQuery, InvocationServices) (ModelsResult, *GatewayError) {
+	return ModelsResult{}, nil
+}
+func (*dispatchConnector) EstimateUsage(context.Context, UsageQuery, InvocationServices) (EstimateResult, *GatewayError) {
+	return EstimateResult{}, nil
+}
+func (*dispatchConnector) Authenticate(context.Context, AuthRequest, InvocationServices) (AuthResult, *GatewayError) {
+	return AuthResult{}, nil
+}
+
+func TestDispatchRouteRegistryEligibilityAndScopedServices(t *testing.T) {
+	ctx := context.Background()
+	protocol := "openai.responses.v1"
+	capability := Capability("vendor.required")
+	registry, err := NewRegistry(map[ComponentKind]APIVersion{ComponentAdapter: {Major: 1}, ComponentConnector: {Major: 1}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopeA := CapabilityScope{Protocol: protocol, Mode: ModeNative, Model: "model-a", AccountID: "account-a"}
+	scopeB := CapabilityScope{Protocol: protocol, Mode: ModeNative, Model: "model-b", AccountID: "account-a"}
+	caps := func(scope CapabilityScope, supported bool) map[CapabilityScope]CapabilityResult {
+		state := Unsupported
+		if supported {
+			state = Supported
+		}
+		return map[CapabilityScope]CapabilityResult{scope: {Values: map[Capability]CapabilityState{capability: state}}}
+	}
+	adapter := &testAdapter{registryComponent: registryComponent{descriptor: validDescriptor(ComponentAdapter)}, caps: caps(scopeA, true)}
+	adapter.caps[scopeB] = caps(scopeB, true)[scopeB]
+	var connectors [2]*dispatchConnector
+	for i, scope := range []CapabilityScope{scopeA, scopeB} {
+		descriptor := validDescriptor(ComponentConnector)
+		descriptor.ID = "scripted-" + scope.Model
+		connectors[i] = &dispatchConnector{registryComponent: registryComponent{descriptor: descriptor}, caps: caps(scope, true)}
+	}
+	if err := registry.Register("adapter", adapter, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	for i, connector := range connectors {
+		if err := registry.Register(InstanceID("connector-"+string(rune('a'+i))), connector, ComponentConnector); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []InstanceID{"adapter", "connector-a", "connector-b"} {
+		if err := registry.Init(ctx, id, ComponentConfig{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	routes, err := NewRouteTable([]Route{
+		{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: protocol, Mode: ModeNative, Model: "model-a"}, AccountID: "account-a"}, Adapter: "adapter", Connector: "connector-a"},
+		{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: protocol, Mode: ModeNative, Model: "model-b"}, AccountID: "account-a"}, Adapter: "adapter", Connector: "connector-b"},
+	}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	services := &testServices{}
+	d := &Dispatcher{Routes: routes, AccountID: "account-a", Services: services}
+	for i, model := range []string{"model-a", "model-b"} {
+		r := request()
+		r.Model = model
+		r.Capabilities = map[Capability]struct{}{capability: {}}
+		r.Metadata.Extensions["account"] = "attacker-account"
+		response, gatewayErr := d.Execute(ctx, r)
+		if gatewayErr != nil {
+			t.Fatalf("%s: %v", model, gatewayErr)
+		}
+		for range 2 {
+			if _, err := response.Stream.Next(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(connectors[i].calls) != 1 || connectors[i].calls[0].ID == "client-id" {
+			t.Fatalf("request identity was not runtime-owned: %+v", connectors[i].calls)
+		}
+		if len(connectors[i].creds) != 1 || connectors[i].creds[0] != "account-a-secret" {
+			t.Fatalf("untrusted metadata selected credentials: %v", connectors[i].creds)
+		}
+	}
+	if len(connectors[0].calls) != 1 || len(connectors[1].calls) != 1 || len(services.scopes) != 2 || services.scopes[0].ID == "" || services.scopes[0].AccountID != "account-a" || services.scopes[0].Mode != ModeNative {
+		t.Fatal("both routed implementations must execute once with scoped services")
+	}
+	r := request()
+	r.Model = "model-b"
+	r.Capabilities = map[Capability]struct{}{capability: {}, "vendor.unknown": {}}
+	if _, err := d.Execute(ctx, r); err == nil {
+		t.Fatal("ineligible capability executed")
+	}
+	if len(connectors[1].calls) != 1 || len(services.scopes) != 2 {
+		t.Fatal("ineligible attempt reached Execute or services")
+	}
+	if err := registry.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDispatchEligibilityAndIdentity(t *testing.T) {
 	var calls, finals int
 	d := &Dispatcher{AccountID: "selected", Adapter: map[Capability]CapabilityState{"llm.tools": Supported, "llm.reasoning": Supported}, Connector: map[Capability]CapabilityState{"llm.tools": Supported, "llm.reasoning": Supported}}

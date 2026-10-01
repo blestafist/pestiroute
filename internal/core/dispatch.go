@@ -40,10 +40,14 @@ type AttemptResult struct {
 	Error     *GatewayError
 }
 
-// Dispatcher is configured for one target/account and exact, scoped M1 support
-// declarations. The callback records one terminal observation per admitted attempt.
+// Dispatcher uses the route registry when configured and retains the fixed
+// target/account fields for the legacy M1 path. Finalize records each attempt.
 type Dispatcher struct {
-	Target    Target
+	Target   Target
+	Routes   *RouteTable
+	Services interface {
+		ForAttempt(AttemptScope) InvocationServices
+	}
 	AccountID string
 	Mode      string // Empty uses the M1 native mode.
 	Adapter   map[Capability]CapabilityState
@@ -63,14 +67,45 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	if err := ctx.Err(); err != nil {
 		return ExecutionResponse{}, executionError(err)
 	}
-	if in.Model != m1Model {
-		return ExecutionResponse{}, &GatewayError{Code: "invalid_request", Category: CategoryInvalidRequest, Message: "Invalid request"}
-	}
-	if in.Payload.Protocol != m1Protocol || (d.Mode != "" && d.Mode != "native") || d.Target == nil || d.AccountID == "" {
-		return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
-	}
-	for capability := range in.Capabilities {
-		if (capability != "llm.streaming" && capability != "llm.tools" && capability != "llm.reasoning" && capability != "llm.structured_output") || d.Adapter[capability] != Supported || d.Connector[capability] != Supported {
+	var connector Connector
+	legacy := d.Routes == nil
+	if legacy {
+		if in.Model != m1Model {
+			return ExecutionResponse{}, &GatewayError{Code: "invalid_request", Category: CategoryInvalidRequest, Message: "Invalid request"}
+		}
+		if in.Payload.Protocol != m1Protocol || (d.Mode != "" && d.Mode != ModeNative) || d.Target == nil || d.AccountID == "" {
+			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
+		}
+		for capability := range in.Capabilities {
+			if (capability != "llm.streaming" && capability != "llm.tools" && capability != "llm.reasoning" && capability != "llm.structured_output") || d.Adapter[capability] != Supported || d.Connector[capability] != Supported {
+				return ExecutionResponse{}, &GatewayError{Code: "unsupported_capability", Category: CategoryUnsupportedFeature, Message: "Unsupported required capability"}
+			}
+		}
+	} else {
+		mode := d.Mode
+		if mode == "" {
+			mode = ModeNative
+		}
+		selection, err := d.Routes.Select(ctx, in, SelectionContext{Mode: mode, AccountID: d.AccountID})
+		if err != nil {
+			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
+		}
+		var ok bool
+		connector, ok = selection.Connector.(Connector)
+		if !ok || d.Services == nil {
+			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
+		}
+		scope := CapabilityScope{Protocol: in.Payload.Protocol, Mode: mode, Model: in.Model, AccountID: d.AccountID}
+		candidate := EligibilityCandidate{
+			Scope: scope, Adapter: selection.Adapter.Descriptor(), Connector: selection.Connector.Descriptor(),
+			InitializedAndReady: true, AdapterCapabilityScope: scope, ConnectorCapabilityScope: scope,
+			AdapterCapabilities: selection.Adapter.Capabilities(ctx, scope), ConnectorCapabilities: selection.Connector.Capabilities(ctx, scope),
+		}
+		requirements := EligibilityRequirements{Request: make(map[Capability]struct{}, len(in.Capabilities))}
+		for capability := range in.Capabilities {
+			requirements.Request[capability] = struct{}{}
+		}
+		if candidate.Eligible(scope, requirements) != nil {
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_capability", Category: CategoryUnsupportedFeature, Message: "Unsupported required capability"}
 		}
 	}
@@ -90,7 +125,13 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 			d.Finalize(r)
 		}
 	}
-	response, gatewayErr := d.Target.Execute(ctx, in, scope)
+	var response ExecutionResponse
+	var gatewayErr *GatewayError
+	if legacy {
+		response, gatewayErr = d.Target.Execute(ctx, in, scope)
+	} else {
+		response, gatewayErr = connector.Execute(ctx, in, scope, d.Services.ForAttempt(scope))
+	}
 	if gatewayErr != nil {
 		if response.Stream != nil {
 			response.Stream.Close()
