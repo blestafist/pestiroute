@@ -115,7 +115,7 @@ func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.Execution
 		return empty, invalid("Invalid JSON request")
 	}
 	var selected string
-	if json.Unmarshal(fields["model"], &selected) != nil || selected != model {
+	if json.Unmarshal(fields["model"], &selected) != nil || strings.TrimSpace(selected) == "" {
 		return empty, invalid("Invalid model")
 	}
 	req := core.ExecutionRequest{Model: selected, Capabilities: make(map[core.Capability]struct{}), Metadata: core.RequestMetadata{Headers: headers}, Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: body}}

@@ -26,10 +26,14 @@ func routeRegistry(t *testing.T) (*Registry, *registryComponent, *registryCompon
 
 type routeHealthComponent struct {
 	registryComponent
-	health HealthState
+	health      HealthState
+	healthCalls int
 }
 
-func (c *routeHealthComponent) Health(context.Context) Health { return Health{State: c.health} }
+func (c *routeHealthComponent) Health(context.Context) Health {
+	c.healthCalls++
+	return Health{State: c.health}
+}
 
 func routeRegistryWithPairs(t *testing.T) (*Registry, *routeHealthComponent, *routeHealthComponent, *routeHealthComponent, *routeHealthComponent) {
 	t.Helper()
@@ -179,6 +183,24 @@ func TestRouteSelectionRequiresInitializedComponents(t *testing.T) {
 	initRouteComponents(t, r)
 	if _, err := table.Select(context.Background(), ExecutionRequest{Model: "m", Payload: RawPayload{Protocol: "openai.responses.v1"}}, SelectionContext{Mode: ModeNative, AccountID: "a"}); err != nil {
 		t.Fatalf("initialized components not selected: %v", err)
+	}
+}
+
+func TestRouteSelectionRejectsUnconfiguredValidModel(t *testing.T) {
+	r, adapter, connector, _, _ := routeRegistryWithPairs(t)
+	route := Route{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: "openai.responses.v1", Mode: ModeNative, Model: "gpt-5.4-mini"}, AccountID: "a"}, Adapter: "adapter-a", Connector: "connector-a"}
+	table, err := NewRouteTable([]Route{route}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initRouteComponents(t, r)
+	adapter.healthCalls, connector.healthCalls = 0, 0
+	request := ExecutionRequest{Model: "vendor/model:preview-2", Payload: RawPayload{Protocol: "openai.responses.v1"}}
+	if _, err := table.Select(context.Background(), request, SelectionContext{Mode: ModeNative, AccountID: "a"}); err == nil || err.Error() != `no route for protocol "openai.responses.v1", mode "native", model "vendor/model:preview-2", account "a"` {
+		t.Fatalf("unconfigured valid model error = %v", err)
+	}
+	if adapter.healthCalls != 0 || connector.healthCalls != 0 {
+		t.Fatalf("unconfigured model reached target admission: adapter health calls=%d, connector health calls=%d", adapter.healthCalls, connector.healthCalls)
 	}
 }
 

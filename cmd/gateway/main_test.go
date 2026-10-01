@@ -292,6 +292,7 @@ func TestFixedResponsesComposition(t *testing.T) {
 		want                     int
 	}{
 		{"malformed", "POST", "/v1/responses", `{"model":`, 400},
+		{"unconfigured model", "POST", "/v1/responses", `{"model":"vendor/model:preview-2"}`, 400},
 		{"oversized", "POST", "/v1/responses", strings.Repeat("x", 1025), 400},
 		{"wrong method", "GET", "/v1/responses", "", 405},
 		{"wrong path", "POST", "/v1/other", "{}", 404},

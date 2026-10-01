@@ -37,7 +37,7 @@ func TestDecodeOpaqueAndCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got.Payload.Body) != body || got.Payload.Protocol != protocol || got.Payload.ContentType != "application/json" || got.Model != model || got.ID != "" {
+	if string(got.Payload.Body) != body || got.Payload.Protocol != protocol || got.Payload.ContentType != "application/json" || got.Model != "gpt-5.4-mini" || got.ID != "" {
 		t.Fatalf("invalid envelope: %+v", got)
 	}
 	for _, key := range []string{"llm.streaming", "llm.tools", "llm.tools.parallel", "llm.reasoning", "llm.structured_output", "llm.vision", "llm.audio"} {
@@ -58,6 +58,18 @@ func TestDecodeOpaqueAndCapabilities(t *testing.T) {
 	}
 }
 
+func TestDecodeAcceptsOpaqueModelIdentifiers(t *testing.T) {
+	for _, name := range []string{"gpt-5.4-mini", "vendor/model:preview-2"} {
+		t.Run(name, func(t *testing.T) {
+			body := ` {"model":"` + name + `","future":true} `
+			got, err := Decode(request(body), int64(len(body)), 4096)
+			if err != nil || got.Model != name || string(got.Payload.Body) != body {
+				t.Fatalf("decoded model/body = %q / %q, error %v", got.Model, got.Payload.Body, err)
+			}
+		})
+	}
+}
+
 func TestDecodeInvalid(t *testing.T) {
 	cases := []struct {
 		name, body, header, value string
@@ -75,8 +87,9 @@ func TestDecodeInvalid(t *testing.T) {
 		{"duplicate opaque nested", base[:len(base)-1] + `,"future":{"a":[{"field":1,"field":2}]}}`, "", "", core.CategoryInvalidRequest},
 		{"missing model", `{}`, "", "", core.CategoryInvalidRequest},
 		{"empty model", `{"model":""}`, "", "", core.CategoryInvalidRequest},
-		{"wrong model", `{"model":"other"}`, "", "", core.CategoryInvalidRequest},
-		{"historical model", `{"model":"gpt-4.1-mini-2025-04-14"}`, "", "", core.CategoryInvalidRequest},
+		{"whitespace model", `{"model":" \t\n "}`, "", "", core.CategoryInvalidRequest},
+		{"null model", `{"model":null}`, "", "", core.CategoryInvalidRequest},
+		{"wrong-type model", `{"model":42}`, "", "", core.CategoryInvalidRequest},
 		{"stream null", base[:len(base)-1] + `,"stream":null}`, "", "", core.CategoryInvalidRequest},
 		{"reasoning null", base[:len(base)-1] + `,"reasoning":null}`, "", "", core.CategoryInvalidRequest},
 		{"tools object", base[:len(base)-1] + `,"tools":{}}`, "", "", core.CategoryInvalidRequest},
