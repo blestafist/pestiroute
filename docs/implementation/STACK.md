@@ -22,7 +22,7 @@ These are initial preferences. The SQLite driver will be validated with a small 
 
 ## HTTP and Streaming
 
-The [M1 native binding and startup note](M1-BINDING.md) fixes the initial single-target JSON subset and component handoffs; the broader stack choices below are not an M1 implementation checklist.
+The [M1 native binding and startup note](M1-BINDING.md) fixes the initial single-target JSON subset. [M2-BINDING.md](M2-BINDING.md) defines the contract-preserving component, scoped-service, route, and stream-validation binding; the broader stack choices below are not an implementation checklist.
 
 Each connector instance has a reusable HTTP client with connection pooling. Timeouts are separated into connection establishment, TLS handshake, response header reception, and idle time for active streams. A single short global `Client.Timeout` is unsuitable for long agent responses.
 
