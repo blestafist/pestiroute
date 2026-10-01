@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -193,6 +194,7 @@ func TestRegistryConcurrentRegisterAndLookup(t *testing.T) {
 type lifecycleComponent struct {
 	descriptor Descriptor
 	initErr    error
+	closeErr   error
 	initCalls  atomic.Int32
 	closeCalls atomic.Int32
 	health     atomic.Value
@@ -215,7 +217,7 @@ func (c *lifecycleComponent) Health(context.Context) Health { return c.health.Lo
 func (*lifecycleComponent) Capabilities(context.Context, CapabilityScope) CapabilityResult {
 	return CapabilityResult{}
 }
-func (c *lifecycleComponent) Close(context.Context) error { c.closeCalls.Add(1); return nil }
+func (c *lifecycleComponent) Close(context.Context) error { c.closeCalls.Add(1); return c.closeErr }
 
 type blockingLifecycleComponent struct {
 	*lifecycleComponent
@@ -223,6 +225,33 @@ type blockingLifecycleComponent struct {
 	initGate      chan struct{}
 	healthStarted chan struct{}
 	healthGate    chan struct{}
+}
+
+type gatedCloseComponent struct {
+	*lifecycleComponent
+	closeStarted chan struct{}
+	closeGate    chan struct{}
+}
+
+func (c *gatedCloseComponent) Close(ctx context.Context) error {
+	close(c.closeStarted)
+	select {
+	case <-c.closeGate:
+		return c.lifecycleComponent.Close(ctx)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type observedCancelContext struct {
+	context.Context
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (c *observedCancelContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.observed) })
+	return c.Context.Done()
 }
 
 func (c *blockingLifecycleComponent) Init(context.Context, ComponentConfig) error {
@@ -409,5 +438,144 @@ func TestRegistryConcurrentAlwaysReadyAdmissionNeverRejects(t *testing.T) {
 	wg.Wait()
 	if count := denied.Load(); count != 0 {
 		t.Fatalf("Admit denied %d of 16000 always-ready observations", count)
+	}
+}
+
+func TestRegistryCloseIsIdempotentAggregatesErrorsAndRejectsWork(t *testing.T) {
+	r := registryForTest(t)
+	first, second := newLifecycleComponent(), newLifecycleComponent()
+	wantErr := fmt.Errorf("synthetic close failure")
+	first.closeErr = wantErr
+	for id, c := range map[InstanceID]*lifecycleComponent{"first": first, "second": second} {
+		if err := r.Register(id, c, ComponentAdapter); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Init(context.Background(), id, ComponentConfig{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	errCh := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() { errCh <- r.Close(context.Background()) })
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("Close error %v does not include component failure", err)
+		}
+	}
+	if first.closeCalls.Load() != 1 || second.closeCalls.Load() != 1 {
+		t.Fatalf("component Close counts = (%d, %d), want (1, 1)", first.closeCalls.Load(), second.closeCalls.Load())
+	}
+	if err := r.Register("late", newLifecycleComponent(), ComponentAdapter); err == nil {
+		t.Fatal("Register succeeded after Close")
+	}
+	if err := r.Init(context.Background(), "first", ComponentConfig{}); err == nil {
+		t.Fatal("Init succeeded after Close")
+	}
+	if _, _, ok := r.Admit(context.Background(), "second"); ok {
+		t.Fatal("Admit succeeded after Close")
+	}
+	if health := r.Health(context.Background(), "second"); health.State != HealthUnavailable {
+		t.Fatalf("Health after Close = %q, want unavailable", health.State)
+	}
+}
+
+func TestRegistryCloseDoesNotRepeatFailedInitCleanup(t *testing.T) {
+	r := registryForTest(t)
+	c := newLifecycleComponent()
+	c.initErr = fmt.Errorf("synthetic init failure")
+	if err := r.Register("failed", c, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Init(context.Background(), "failed", ComponentConfig{}); err == nil {
+		t.Fatal("failed Init returned nil")
+	}
+	if err := r.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c.closeCalls.Load() != 1 {
+		t.Fatalf("Close calls after failed Init = %d, want 1", c.closeCalls.Load())
+	}
+}
+
+func TestRegistryCloseSerializesWithInitAndRejectsConcurrentAdmission(t *testing.T) {
+	base := newLifecycleComponent()
+	c := &blockingLifecycleComponent{
+		lifecycleComponent: base,
+		initStarted:        make(chan struct{}), initGate: make(chan struct{}),
+		healthStarted: make(chan struct{}, 2), healthGate: make(chan struct{}),
+	}
+	r := registryForTest(t)
+	if err := r.Register("closing", c, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	initDone := make(chan error, 1)
+	go func() { initDone <- r.Init(context.Background(), "closing", ComponentConfig{}) }()
+	<-c.initStarted
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- r.Close(context.Background()) }()
+	deadline := time.After(time.Second)
+	for !r.isClosed() {
+		select {
+		case <-deadline:
+			t.Fatal("Close did not stop admission")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if _, _, ok := r.Admit(context.Background(), "closing"); ok {
+		t.Fatal("Admit succeeded while registry was closing")
+	}
+	if component, descriptor, ok := r.Lookup("closing"); !ok || component != nil || descriptor.ID == "" {
+		t.Fatal("Lookup during Close returned an available component or lost its descriptor")
+	}
+	close(c.initGate)
+	if err := <-initDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+	if c.closeCalls.Load() != 1 {
+		t.Fatalf("Close calls = %d, want 1", c.closeCalls.Load())
+	}
+}
+
+func TestRegistryCloseWaiterCancellationAndCompletedResult(t *testing.T) {
+	r := registryForTest(t)
+	base := newLifecycleComponent()
+	wantErr := fmt.Errorf("synthetic close failure")
+	base.closeErr = wantErr
+	c := &gatedCloseComponent{lifecycleComponent: base, closeStarted: make(chan struct{}), closeGate: make(chan struct{})}
+	if err := r.Register("gated", c, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Init(context.Background(), "gated", ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- r.Close(context.Background()) }()
+	<-c.closeStarted
+
+	waitCtx, cancelWait := context.WithCancel(context.Background())
+	observed := &observedCancelContext{Context: waitCtx, observed: make(chan struct{})}
+	waiterDone := make(chan error, 1)
+	go func() { waiterDone <- r.Close(observed) }()
+	<-observed.observed // Confirms the waiter entered the incomplete-close select.
+	cancelWait()
+	if err := <-waiterDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled waiter Close = %v, want context.Canceled", err)
+	}
+
+	close(c.closeGate)
+	if err := <-firstDone; !errors.Is(err, wantErr) {
+		t.Fatalf("first Close = %v, want joined component error", err)
+	}
+	completedCtx, cancelCompleted := context.WithCancel(context.Background())
+	cancelCompleted()
+	if err := r.Close(completedCtx); !errors.Is(err, wantErr) {
+		t.Fatalf("completed Close with canceled context = %v, want original close error", err)
 	}
 }

@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"unicode/utf8"
 )
@@ -36,6 +38,9 @@ type Registry struct {
 	apiVersions        map[ComponentKind]APIVersion
 	requiredOperations map[ComponentKind]map[string]struct{}
 	components         map[InstanceID]*registryEntry
+	closed             bool
+	closeDone          chan struct{}
+	closeErr           error
 }
 
 // NewRegistry copies its compatibility policy so callers cannot change it
@@ -67,7 +72,7 @@ func NewRegistry(apiVersions map[ComponentKind]APIVersion, requiredOperations ma
 	}
 	return &Registry{
 		apiVersions: versions, requiredOperations: operations,
-		components: make(map[InstanceID]*registryEntry),
+		components: make(map[InstanceID]*registryEntry), closeDone: make(chan struct{}),
 	}, nil
 }
 
@@ -102,6 +107,9 @@ func (r *Registry) Register(id InstanceID, component Component, expectedKind Com
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return fmt.Errorf("registry is closed")
+	}
 	if _, exists := r.components[id]; exists {
 		return fmt.Errorf("duplicate component instance ID %q", id)
 	}
@@ -117,7 +125,7 @@ func (r *Registry) Lookup(id InstanceID) (Component, Descriptor, bool) {
 	}
 	entry.stateMu.RLock()
 	defer entry.stateMu.RUnlock()
-	if entry.state != LifecycleReady {
+	if r.isClosed() || entry.state != LifecycleReady {
 		return nil, entry.descriptor.Clone(), true
 	}
 	return entry.component, entry.descriptor.Clone(), true
@@ -132,6 +140,9 @@ func (r *Registry) Init(ctx context.Context, id InstanceID, config ComponentConf
 	}
 	entry.lifecycle.Lock()
 	defer entry.lifecycle.Unlock()
+	if r.isClosed() {
+		return fmt.Errorf("registry is closed")
+	}
 	entry.stateMu.RLock()
 	if entry.state != LifecycleUninitialized {
 		state := entry.state
@@ -158,6 +169,9 @@ func (r *Registry) Init(ctx context.Context, id InstanceID, config ComponentConf
 
 // Health reports the latest observational state without background polling.
 func (r *Registry) Health(ctx context.Context, id InstanceID) Health {
+	if r.isClosed() {
+		return Health{State: HealthUnavailable, Diagnostic: "registry is closed"}
+	}
 	entry, ok := r.entry(id)
 	if !ok {
 		return Health{State: HealthUnknown, Diagnostic: "unknown component instance"}
@@ -168,6 +182,9 @@ func (r *Registry) Health(ctx context.Context, id InstanceID) Health {
 
 // Admit returns the component only while it is initialized and currently ready.
 func (r *Registry) Admit(ctx context.Context, id InstanceID) (Component, Descriptor, bool) {
+	if r.isClosed() {
+		return nil, Descriptor{}, false
+	}
 	entry, ok := r.entry(id)
 	if !ok {
 		return nil, Descriptor{}, false
@@ -175,10 +192,80 @@ func (r *Registry) Admit(ctx context.Context, id InstanceID) (Component, Descrip
 	health, _ := r.observeHealth(ctx, entry)
 	entry.stateMu.RLock()
 	defer entry.stateMu.RUnlock()
-	if health.State != HealthReady || entry.state != LifecycleReady {
+	if r.isClosed() || health.State != HealthReady || entry.state != LifecycleReady {
 		return nil, entry.descriptor.Clone(), false
 	}
 	return entry.component, entry.descriptor.Clone(), true
+}
+
+// Close stops admission and closes every registered component exactly once.
+// Concurrent callers wait for the first close attempt and receive its result.
+// It waits for in-progress lifecycle calls; components must honor their contexts
+// because the registry cannot bound a component call that ignores cancellation.
+func (r *Registry) Close(ctx context.Context) error {
+	r.mu.Lock()
+	if r.closed {
+		done := r.closeDone
+		r.mu.Unlock()
+		select {
+		case <-done:
+			r.mu.RLock()
+			err := r.closeErr
+			r.mu.RUnlock()
+			return err
+		default:
+		}
+		select {
+		case <-done:
+			r.mu.RLock()
+			err := r.closeErr
+			r.mu.RUnlock()
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	r.closed = true
+	entries := make([]struct {
+		id    InstanceID
+		entry *registryEntry
+	}, 0, len(r.components))
+	for id, entry := range r.components {
+		entries = append(entries, struct {
+			id    InstanceID
+			entry *registryEntry
+		}{id, entry})
+	}
+	r.mu.Unlock()
+	sort.Slice(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
+
+	var closeErrors []error
+	for _, item := range entries {
+		item.entry.lifecycle.Lock()
+		item.entry.stateMu.Lock()
+		alreadyCleaned := item.entry.state == LifecycleFailed
+		item.entry.state = LifecycleUnavailable
+		item.entry.healthSeq++
+		item.entry.stateMu.Unlock()
+		if !alreadyCleaned {
+			if err := item.entry.component.Close(ctx); err != nil {
+				closeErrors = append(closeErrors, fmt.Errorf("close component %q: %w", item.id, err))
+			}
+		}
+		item.entry.lifecycle.Unlock()
+	}
+	r.mu.Lock()
+	r.closeErr = errors.Join(closeErrors...)
+	close(r.closeDone)
+	err := r.closeErr
+	r.mu.Unlock()
+	return err
+}
+
+func (r *Registry) isClosed() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.closed
 }
 
 func (r *Registry) observeHealth(ctx context.Context, entry *registryEntry) (Health, uint64) {
