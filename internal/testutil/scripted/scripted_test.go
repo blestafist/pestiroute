@@ -257,6 +257,143 @@ func TestWaitingNotificationSendCanBeCancelledOrClosed(t *testing.T) {
 	}
 }
 
+func TestFailureAndMalformedScriptsRemainRaw(t *testing.T) {
+	preHead := &core.GatewayError{Code: "rejected", Category: core.CategoryUnavailable, Retryable: true, RetryDisposition: core.RetrySafe, Message: "synthetic rejection"}
+	disconnect := &core.GatewayError{Code: "disconnect", Category: core.CategoryUnavailable, Retryable: true, RetryDisposition: core.RetryUnsafe, Message: "synthetic disconnect"}
+	connector := newConnector(
+		Script{ID: "pre", ExecuteError: preHead},
+		Script{ID: "unknown-retry", ExecuteError: &core.GatewayError{Code: "uncertain", Category: core.CategoryUnavailable, Message: "synthetic uncertainty"}},
+		Script{ID: "reject", Steps: []Step{{Frame: core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: "proto", Error: preHead}}}, {Frame: core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: core.OutcomeFailed, Error: preHead}}}}},
+		Script{ID: "ambiguous", Steps: []Step{{Frame: core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: "proto"}}}, {Err: disconnect}}},
+		Script{ID: "unsafe-rejection", Steps: []Step{{Frame: core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: "proto", Error: disconnect}}}, {Frame: core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: core.OutcomeFailed, Error: disconnect}}}}},
+		Script{ID: "invalid", Steps: []Step{{Frame: core.StreamFrame{Type: "unknown"}}, {Frame: core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: "wrong"}}}, {Frame: core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: core.OutcomeSucceeded}}}, {Frame: core.StreamFrame{Type: core.FrameBody, Body: &core.BodyFrame{Data: []byte("trailing")}}}}},
+	)
+	if err := connector.Init(context.Background(), core.ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	response, got := connector.Execute(context.Background(), core.ExecutionRequest{ID: "pre"}, core.AttemptScope{}, core.InvocationServices{})
+	if response.Stream != nil || got == nil || got.RetryDisposition != core.RetrySafe {
+		t.Fatalf("pre-Head error normalized: response=%#v error=%#v", response, got)
+	}
+	response, got = connector.Execute(context.Background(), core.ExecutionRequest{ID: "unknown-retry"}, core.AttemptScope{}, core.InvocationServices{})
+	if response.Stream != nil || got == nil || got.RetryDisposition != "" || got.Retryable {
+		t.Fatalf("unknown retry disposition changed: response=%#v error=%#v", response, got)
+	}
+	response = executeScript(t, connector, "reject")
+	for _, want := range []core.FrameType{core.FrameHead, core.FrameComplete} {
+		frame, err := response.Stream.Next(context.Background())
+		if err != nil || frame.Type != want {
+			t.Fatalf("rejection frame = %#v, %v; want %s", frame, err, want)
+		}
+	}
+	response.Stream.Close()
+	response = executeScript(t, connector, "unsafe-rejection")
+	if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Head == nil || frame.Head.Error.RetryDisposition != core.RetryUnsafe {
+		t.Fatalf("unsafe rejection Head = %#v, %v", frame, err)
+	}
+	response.Stream.Close()
+	response = executeScript(t, connector, "ambiguous")
+	if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+		t.Fatalf("ambiguous Head = %#v, %v", frame, err)
+	}
+	if _, err := response.Stream.Next(context.Background()); err != disconnect {
+		t.Fatalf("post-Head disconnect = %v, want exact error", err)
+	}
+	response.Stream.Close()
+	response = executeScript(t, connector, "invalid")
+	for _, want := range []core.FrameType{"unknown", core.FrameHead, core.FrameComplete, core.FrameBody} {
+		frame, err := response.Stream.Next(context.Background())
+		if err != nil || frame.Type != want {
+			t.Fatalf("raw frame = %#v, %v; want %s", frame, err, want)
+		}
+	}
+	if _, err := response.Stream.Next(context.Background()); err != io.EOF {
+		t.Fatalf("after raw trailing frame = %v", err)
+	}
+	response.Stream.Close()
+}
+
+func TestMalformedSequencesAreReturnedExactly(t *testing.T) {
+	rejected := &core.GatewayError{Code: "rejected", Category: core.CategoryInvalidRequest, Message: "synthetic rejection"}
+	frame := func(typ core.FrameType, head *core.HeadFrame, body *core.BodyFrame, complete *core.CompleteFrame) core.StreamFrame {
+		return core.StreamFrame{Type: typ, Head: head, Body: body, Complete: complete}
+	}
+	head := frame(core.FrameHead, &core.HeadFrame{Protocol: "proto"}, nil, nil)
+	body := frame(core.FrameBody, nil, &core.BodyFrame{Data: []byte{0, 0xff}}, nil)
+	complete := func(outcome core.Outcome, err *core.GatewayError) core.StreamFrame {
+		return frame(core.FrameComplete, nil, nil, &core.CompleteFrame{Outcome: outcome, Error: err})
+	}
+	cases := []struct {
+		name  string
+		steps []Step
+		want  []core.StreamFrame
+	}{
+		{name: "duplicate Head", steps: []Step{{Frame: head}, {Frame: head}}, want: []core.StreamFrame{head, head}},
+		{name: "duplicate Complete", steps: []Step{{Frame: head}, {Frame: complete(core.OutcomeSucceeded, nil)}, {Frame: complete(core.OutcomeSucceeded, nil)}}, want: []core.StreamFrame{head, complete(core.OutcomeSucceeded, nil), complete(core.OutcomeSucceeded, nil)}},
+		{name: "Body first", steps: []Step{{Frame: body}}, want: []core.StreamFrame{body}},
+		{name: "Head without Complete", steps: []Step{{Frame: head}}, want: []core.StreamFrame{head}},
+		{name: "Succeeded with Error", steps: []Step{{Frame: head}, {Frame: complete(core.OutcomeSucceeded, rejected)}}, want: []core.StreamFrame{head, complete(core.OutcomeSucceeded, rejected)}},
+		{name: "Failed without Error", steps: []Step{{Frame: head}, {Frame: complete(core.OutcomeFailed, nil)}}, want: []core.StreamFrame{head, complete(core.OutcomeFailed, nil)}},
+		{name: "rejected body", steps: []Step{{Frame: frame(core.FrameHead, &core.HeadFrame{Protocol: "proto", Error: rejected}, nil, nil)}, {Frame: body}, {Frame: complete(core.OutcomeFailed, rejected)}}, want: []core.StreamFrame{frame(core.FrameHead, &core.HeadFrame{Protocol: "proto", Error: rejected}, nil, nil), body, complete(core.OutcomeFailed, rejected)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			connector := newConnector(Script{ID: "raw", Steps: tc.steps})
+			if err := connector.Init(context.Background(), core.ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			response := executeScript(t, connector, "raw")
+			for i, want := range tc.want {
+				got, err := response.Stream.Next(context.Background())
+				if err != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("frame %d = %#v, %v; want exact %#v", i, got, err, want)
+				}
+			}
+			if got, err := response.Stream.Next(context.Background()); got != (core.StreamFrame{}) || err != io.EOF {
+				t.Fatalf("after raw sequence = %#v, %v; want zero frame, EOF", got, err)
+			}
+			response.Stream.Close()
+		})
+	}
+}
+
+func TestCloseTerminatesGatedStepError(t *testing.T) {
+	gate, waiting := make(chan struct{}), make(chan struct{}, 1)
+	injected := &core.GatewayError{Code: "disconnect", Category: core.CategoryUnavailable, Message: "synthetic disconnect"}
+	connector := newConnector(Script{ID: "trailing", Steps: []Step{
+		{Frame: core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: "proto"}}},
+		{Frame: core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: core.OutcomeSucceeded}}},
+		{Err: injected, Gate: gate, Waiting: waiting},
+	}})
+	if err := connector.Init(context.Background(), core.ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	response := executeScript(t, connector, "trailing")
+	for range 2 {
+		if _, err := response.Stream.Next(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan error, 1)
+	go func() { _, err := response.Stream.Next(context.Background()); done <- err }()
+	awaitWaiting(t, waiting)
+	if err := response.Stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("gated error Next after Close = %v", err)
+	}
+}
+
+func executeScript(t *testing.T, connector *Connector, id string) core.ExecutionResponse {
+	t.Helper()
+	response, err := connector.Execute(context.Background(), core.ExecutionRequest{ID: id}, core.AttemptScope{}, core.InvocationServices{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
 type pullResult struct {
 	frame core.StreamFrame
 	err   error

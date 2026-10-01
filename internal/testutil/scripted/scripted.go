@@ -12,14 +12,16 @@ import (
 // Step releases one frame when Gate is closed. A nil gate releases immediately.
 type Step struct {
 	Frame   core.StreamFrame
+	Err     error // Returned instead of Frame, including after Head.
 	Gate    <-chan struct{}
 	Waiting chan<- struct{} // Notified once Next reaches this gate.
 }
 
 // Script is selected by ExecutionRequest.ID; each ID can execute only once.
 type Script struct {
-	ID    string
-	Steps []Step
+	ID           string
+	ExecuteError *core.GatewayError // Returned before a stream is created.
+	Steps        []Step
 }
 
 // Call is an immutable snapshot of one Execute input.
@@ -29,30 +31,35 @@ type Call struct {
 }
 
 type Connector struct {
-	mu           sync.Mutex
-	descriptor   core.Descriptor
-	capabilities map[core.CapabilityScope]core.CapabilityResult
-	scripts      map[string][]Step
-	calls        []Call
-	streams      map[*stream]struct{}
-	init         bool
-	closed       bool
-	closeOnce    sync.Once
-	closeCount   int
+	mu            sync.Mutex
+	descriptor    core.Descriptor
+	capabilities  map[core.CapabilityScope]core.CapabilityResult
+	scripts       map[string][]Step
+	executeErrors map[string]*core.GatewayError
+	calls         []Call
+	streams       map[*stream]struct{}
+	init          bool
+	closed        bool
+	closeOnce     sync.Once
+	closeCount    int
 }
 
 func New(descriptor core.Descriptor, capabilities map[core.CapabilityScope]core.CapabilityResult, scripts ...Script) *Connector {
 	c := &Connector{
-		descriptor:   descriptor.Clone(),
-		capabilities: make(map[core.CapabilityScope]core.CapabilityResult, len(capabilities)),
-		scripts:      make(map[string][]Step, len(scripts)),
-		streams:      make(map[*stream]struct{}),
+		descriptor:    descriptor.Clone(),
+		capabilities:  make(map[core.CapabilityScope]core.CapabilityResult, len(capabilities)),
+		scripts:       make(map[string][]Step, len(scripts)),
+		executeErrors: make(map[string]*core.GatewayError, len(scripts)),
+		streams:       make(map[*stream]struct{}),
 	}
 	for scope, result := range capabilities {
 		c.capabilities[scope] = result.Clone()
 	}
 	for _, script := range scripts {
 		c.scripts[script.ID] = cloneSteps(script.Steps)
+		if script.ExecuteError != nil {
+			c.executeErrors[script.ID] = cloneGatewayError(script.ExecuteError)
+		}
 	}
 	return c
 }
@@ -112,6 +119,12 @@ func (c *Connector) Execute(ctx context.Context, request core.ExecutionRequest, 
 	defer c.mu.Unlock()
 	if c.closed || !c.init {
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "unavailable", Category: core.CategoryUnavailable, Message: "Scripted connector unavailable"}
+	}
+	if gatewayErr := c.executeErrors[request.ID]; gatewayErr != nil {
+		delete(c.executeErrors, request.ID)
+		delete(c.scripts, request.ID)
+		c.calls = append(c.calls, Call{Request: cloneRequest(request), Scope: scope})
+		return core.ExecutionResponse{}, cloneGatewayError(gatewayErr)
 	}
 	steps, ok := c.scripts[request.ID]
 	if !ok {
@@ -206,6 +219,9 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 		return core.StreamFrame{}, context.Canceled
 	}
 	s.next++
+	if step.Err != nil {
+		return core.StreamFrame{}, step.Err
+	}
 	return cloneFrame(step.Frame), nil
 }
 
@@ -222,7 +238,7 @@ func (s *stream) Close() error {
 func cloneSteps(steps []Step) []Step {
 	out := make([]Step, len(steps))
 	for i, step := range steps {
-		out[i] = Step{Frame: cloneFrame(step.Frame), Gate: step.Gate, Waiting: step.Waiting}
+		out[i] = Step{Frame: cloneFrame(step.Frame), Err: step.Err, Gate: step.Gate, Waiting: step.Waiting}
 	}
 	return out
 }
