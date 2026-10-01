@@ -3,8 +3,12 @@ package core
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 type registryComponent struct {
@@ -170,7 +174,7 @@ func TestRegistryConcurrentRegisterAndLookup(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 20 {
-				if component, descriptor, ok := r.Lookup(id); ok && (component == nil || descriptor.ID != "shared-implementation") {
+				if _, descriptor, ok := r.Lookup(id); ok && descriptor.ID != "shared-implementation" {
 					t.Errorf("Lookup(%q) returned inconsistent entry", id)
 					return
 				}
@@ -183,5 +187,227 @@ func TestRegistryConcurrentRegisterAndLookup(t *testing.T) {
 		if _, _, ok := r.Lookup(id); !ok {
 			t.Errorf("concurrent registration missing %q", id)
 		}
+	}
+}
+
+type lifecycleComponent struct {
+	descriptor Descriptor
+	initErr    error
+	initCalls  atomic.Int32
+	closeCalls atomic.Int32
+	health     atomic.Value
+}
+
+func newLifecycleComponent() *lifecycleComponent {
+	descriptor := validDescriptor(ComponentAdapter)
+	descriptor.Operations = []string{"example.required"}
+	c := &lifecycleComponent{descriptor: descriptor}
+	c.health.Store(Health{State: HealthReady})
+	return c
+}
+
+func (c *lifecycleComponent) Descriptor() Descriptor { return c.descriptor.Clone() }
+func (c *lifecycleComponent) Init(context.Context, ComponentConfig) error {
+	c.initCalls.Add(1)
+	return c.initErr
+}
+func (c *lifecycleComponent) Health(context.Context) Health { return c.health.Load().(Health) }
+func (*lifecycleComponent) Capabilities(context.Context, CapabilityScope) CapabilityResult {
+	return CapabilityResult{}
+}
+func (c *lifecycleComponent) Close(context.Context) error { c.closeCalls.Add(1); return nil }
+
+type blockingLifecycleComponent struct {
+	*lifecycleComponent
+	initStarted   chan struct{}
+	initGate      chan struct{}
+	healthStarted chan struct{}
+	healthGate    chan struct{}
+}
+
+func (c *blockingLifecycleComponent) Init(context.Context, ComponentConfig) error {
+	close(c.initStarted)
+	<-c.initGate
+	c.initCalls.Add(1)
+	return nil
+}
+
+func (c *blockingLifecycleComponent) Health(context.Context) Health {
+	c.healthStarted <- struct{}{}
+	<-c.healthGate
+	return c.lifecycleComponent.Health(context.Background())
+}
+
+func TestRegistryInitHealthAndAdmission(t *testing.T) {
+	r := registryForTest(t)
+	c := newLifecycleComponent()
+	if err := r.Register("lifecycle", c, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if component, descriptor, ok := r.Lookup("lifecycle"); !ok || descriptor.ID == "" || component != nil {
+		t.Fatal("pre-init descriptor lookup unavailable")
+	}
+	if _, _, ok := r.Admit(context.Background(), "lifecycle"); ok {
+		t.Fatal("uninitialized component admitted")
+	}
+	if err := r.Init(context.Background(), "lifecycle", ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if component, _, ok := r.Lookup("lifecycle"); !ok || component == nil {
+		t.Fatal("initialized component lookup unavailable")
+	}
+	if _, _, ok := r.Admit(context.Background(), "lifecycle"); !ok {
+		t.Fatal("healthy initialized component denied")
+	}
+	for _, state := range []HealthState{HealthUnavailable, HealthUnknown} {
+		c.health.Store(Health{State: state, Diagnostic: strings.Repeat("a", 255) + "é"})
+		if health := r.Health(context.Background(), "lifecycle"); health.State != state {
+			t.Fatalf("Health() = %q, want %q", health.State, state)
+		} else if len(health.Diagnostic) > maxHealthDiagnosticBytes {
+			t.Fatalf("Health() diagnostic has %d bytes", len(health.Diagnostic))
+		} else if !utf8.ValidString(health.Diagnostic) || len(health.Diagnostic) != 255 {
+			t.Fatalf("Health() diagnostic is not rune-boundary truncated: %q", health.Diagnostic)
+		}
+		if _, _, ok := r.Admit(context.Background(), "lifecycle"); ok {
+			t.Fatalf("component admitted with %q health", state)
+		}
+	}
+	c.health.Store(Health{State: HealthReady})
+	if _, _, ok := r.Admit(context.Background(), "lifecycle"); !ok {
+		t.Fatal("component did not recover after ready health")
+	}
+}
+
+func TestRegistryLookupDoesNotWaitForInitOrHealth(t *testing.T) {
+	base := newLifecycleComponent()
+	c := &blockingLifecycleComponent{
+		lifecycleComponent: base,
+		initStarted:        make(chan struct{}), initGate: make(chan struct{}),
+		healthStarted: make(chan struct{}, 2), healthGate: make(chan struct{}),
+	}
+	r := registryForTest(t)
+	if err := r.Register("blocking", c, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	initDone := make(chan error, 1)
+	go func() { initDone <- r.Init(context.Background(), "blocking", ComponentConfig{}) }()
+	<-c.initStarted
+	lookupDone := make(chan struct{})
+	go func() {
+		defer close(lookupDone)
+		if component, descriptor, ok := r.Lookup("blocking"); !ok || component != nil || descriptor.ID != base.descriptor.ID {
+			t.Errorf("Lookup during Init = (%v, %q, %v)", component, descriptor.ID, ok)
+		}
+	}()
+	waitLookup(t, lookupDone)
+	close(c.initGate)
+	if err := <-initDone; err != nil {
+		t.Fatal(err)
+	}
+
+	healthDone := make(chan struct{}, 2)
+	for range 2 {
+		go func() {
+			_ = r.Health(context.Background(), "blocking")
+			healthDone <- struct{}{}
+		}()
+	}
+	for range 2 {
+		select {
+		case <-c.healthStarted:
+		case <-time.After(time.Second):
+			t.Fatal("concurrent Health calls were serialized")
+		}
+	}
+	lookupDone = make(chan struct{})
+	go func() {
+		defer close(lookupDone)
+		if _, descriptor, ok := r.Lookup("blocking"); !ok || descriptor.ID != base.descriptor.ID {
+			t.Errorf("Lookup during Health returned descriptor %q, found=%v", descriptor.ID, ok)
+		}
+	}()
+	waitLookup(t, lookupDone)
+	close(c.healthGate)
+	for range 2 {
+		<-healthDone
+	}
+}
+
+func waitLookup(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Lookup blocked behind a component operation")
+	}
+}
+
+func TestRegistryFailedInitClosesPartialResources(t *testing.T) {
+	r := registryForTest(t)
+	c := newLifecycleComponent()
+	c.initErr = fmt.Errorf("synthetic init failure")
+	if err := r.Register("failed", c, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Init(context.Background(), "failed", ComponentConfig{}); err == nil {
+		t.Fatal("failed Init returned nil")
+	}
+	if c.closeCalls.Load() != 1 {
+		t.Fatalf("Close calls = %d, want 1", c.closeCalls.Load())
+	}
+	if health := r.Health(context.Background(), "failed"); health.State != HealthUnavailable {
+		t.Fatalf("failed component health = %q", health.State)
+	}
+	if _, _, ok := r.Admit(context.Background(), "failed"); ok {
+		t.Fatal("failed component admitted")
+	}
+}
+
+func TestRegistryConcurrentHealthAndAdmission(t *testing.T) {
+	r := registryForTest(t)
+	c := newLifecycleComponent()
+	if err := r.Register("concurrent", c, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Init(context.Background(), "concurrent", ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 100 {
+				c.health.Store(Health{State: HealthUnavailable, Diagnostic: string(make([]byte, 512))})
+				_ = r.Health(context.Background(), "concurrent")
+				_, _, _ = r.Admit(context.Background(), "concurrent")
+				c.health.Store(Health{State: HealthReady})
+			}
+		})
+	}
+	wg.Wait()
+}
+
+func TestRegistryConcurrentAlwaysReadyAdmissionNeverRejects(t *testing.T) {
+	r := registryForTest(t)
+	c := newLifecycleComponent()
+	if err := r.Register("always-ready", c, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Init(context.Background(), "always-ready", ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var denied atomic.Int32
+	for range 16 {
+		wg.Go(func() {
+			for range 1000 {
+				if _, _, ok := r.Admit(context.Background(), "always-ready"); !ok {
+					denied.Add(1)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if count := denied.Load(); count != 0 {
+		t.Fatalf("Admit denied %d of 16000 always-ready observations", count)
 	}
 }
