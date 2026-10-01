@@ -24,6 +24,27 @@ permissions:
   - action: "context7_*"
     resource: "*"
     effect: allow
+  - action: execute
+    resource: "*"
+    effect: allow
+  - action: gopls_go_workspace
+    resource: "*"
+    effect: allow
+  - action: gopls_go_search
+    resource: "*"
+    effect: allow
+  - action: gopls_go_file_context
+    resource: "*"
+    effect: allow
+  - action: gopls_go_package_api
+    resource: "*"
+    effect: allow
+  - action: gopls_go_symbol_references
+    resource: "*"
+    effect: allow
+  - action: gopls_go_diagnostics
+    resource: "*"
+    effect: allow
   - action: shell
     resource: "*"
     effect: allow

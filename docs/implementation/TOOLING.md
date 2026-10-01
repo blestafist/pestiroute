@@ -4,10 +4,10 @@ This plan covers tools for **building PestiRoute with OpenCode**, not the gatewa
 
 | When / trigger | Tool or practice | What to do and acceptance signal |
 | --- | --- | --- |
-| Now, M1 execution | Existing `AGENTS.md`, project agents, atomic task cards, and Context7 remote MCP | Keep Context7 as the only project MCP. Use it for library API documentation when needed; inspect project sources first. Verify the connection with `opencode mcp list` on the developer machine. The Planner → Worker → Reviewer flow and `/next n` use the existing agents; each worker receives exactly one READY card. |
+| Now, M2 binding and conformance work | Existing `AGENTS.md`, project agents, atomic task cards, Context7 and official gopls MCP | Use Context7 for external library/API documentation and gopls for Go navigation/diagnostics (see the verified check below). M1 is complete; [CURRENT](CURRENT.md) and [TASKS](TASKS.md#m2--connector-api-and-conformance-baseline) identify [M2-001](tasks/M2-001.md) as the initial READY planning slice, not implemented M2 functionality. The Planner → Worker → Reviewer flow and `/next n` use the existing agents; each worker receives exactly one READY card. |
 | M0 scaffold, then ongoing | Go toolchain and CI, built-in OpenCode file/shell tools | Pin Go in the scaffold; establish `gofmt`, vet, tests, race checks, and build in the task/CI. These checks provide evidence before introducing another code-navigation MCP. `CURRENT.md` records commands only after they work. |
 | When PR work becomes routine | Git CLI and GitHub integration already available to the developer | Use Git for scoped local diffs/commits and GitHub integration for PR review/CI where useful. Keep credentials out of the project config. No additional Git MCP is needed just to edit files or open a PR. |
-| M1–M2, only if code navigation becomes a measured bottleneck | Serena (candidate code-navigation MCP) | Try it on one Go task where repeated manual symbol/call-site searches cost time. Check supported Go indexing, OpenCode v2 connection and tool exposure, context overhead, and whether it finds references the built-in search misses. Keep it personal/disabled by default until it earns its place. |
+| M2 onward, only if navigation remains a measured bottleneck | Serena (candidate code-navigation MCP) | Evaluate only if targeted gopls and source searches leave a concrete gap. Check supported Go indexing, OpenCode v2 connection/tool exposure, context overhead, and additional useful references. Keep it personal/disabled by default; no installation now. |
 | When shell output repeatedly wastes context | Personal RTK plugin or a small output filter | A local RTK plugin is loaded on the inspected machine (see inventory below). Compare raw and filtered results on test failures, review diffs, and streaming diagnostics before project adoption. Verify exit status and decisive error context; plugin discovery alone does not prove those properties. |
 | M2–M4, when contract and protocol checks recur | Small project-local commands or skills (candidate) | Extract a repeatable checklist only after it has been used successfully on real tasks, for example contract conformance or fixture review. Prefer links to the owning docs over copied rules. Add no blanket skills package now; Ponytail guidance already lives in the worker agent. |
 | M3, when persistence and concurrent accounting exist | SQLite CLI and targeted diagnostics | Inspect schema and migration behavior with local commands and deterministic fixtures. Add a database MCP only if a specific repeated investigation cannot be handled clearly by CLI/tests; never expose production credentials by default. |
@@ -18,12 +18,47 @@ This plan covers tools for **building PestiRoute with OpenCode**, not the gatewa
 ## OpenCode v2 Gate
 
 - Current `.opencode/opencode.json` uses the native v2 `mcp.servers` shape; the five `.opencode/agents/*.md` definitions use native `permissions` rules and supported modes. `.opencode/commands/next.md` uses the v2 project command path, positional `$1`, and current-session execution with the `orchestrator` agent. The command is a prompt workflow, not a hard scheduler or a durable unattended job.
+- OpenCode V2 itself does not provide built-in LSP tools. Go semantic navigation and diagnostics here come from the separate official `gopls mcp` server, not a built-in `lsp` action.
 - Before enabling any candidate plugin/hook, test its **v2 plugin API** and the command/agent permissions on the installed version. A working v1 hook is not evidence of v2 compatibility. In particular, do not migrate an RTK output hook by copying its v1 file; validate its new entrypoint and output behavior on a disposable task first.
-- The earlier OpenCode v2.0.18 registry check exposed `next`, all five project agents, and `context7`. The current connection/plugin check is recorded below. Go source and `./scripts/check.sh` now exist and M0 checks have passed; see [CURRENT](CURRENT.md) for actual capabilities. This tooling inspection did not execute `/next` or validate an unattended task cycle. `/next 1` now starts with the bounded M1-004 planning card; subsequent cards need dependency and readiness review.
+- The earlier OpenCode v2.0.18 registry check exposed `next`, all five project agents, and `context7`. The historical inventory and new gopls check are separate below; plugins were not rechecked. See [CURRENT](CURRENT.md) for actual capabilities. This tooling inspection did not execute `/next` or validate an unattended task cycle. The next executable planning card is M2-001 per TASKS; subsequent cards need dependency and readiness review.
 
-## Inspected Inventory — 2026-09-29
+## gopls MCP for M2
+
+The official Go language server supplies semantic references and package relationships for M2 shared-binding changes. It supplements source reads and repository checks, not the contract or acceptance evidence.
+
+### Verified Check — 2026-10-01
+
+Commands and MCP calls from this checkout:
+
+| Level | Actual observation |
+| --- | --- |
+| Installed | `opencode --version` → `opencode v2.0.20`; `gopls version` → `golang.org/x/tools/gopls v0.23.0` |
+| Configured | Existing, uncommitted `.opencode/opencode.json` entry: local server `gopls`, command `["gopls", "mcp"]`. Inspected personal `~/.config/opencode/opencode.jsonc` has no gopls entry. This update preserves that existing project change; it does not install or duplicate a server. |
+| Connected | `opencode mcp list` reports gopls, Context7 and DuckDuckGo connected; Playwright disabled. This alone is not a successful tool call. |
+| Verified by call | `go_search({query: "AttemptScope"})` found the shared type in `internal/core/dispatch.go`. `go_symbol_references({file: "/home/pestix/code/pestiroute/internal/core/dispatch.go", symbol: "AttemptScope"})` returned 18 locations, including the declaration, gateway composition and core tests. `go_diagnostics({files: ["/home/pestix/code/pestiroute/internal/core/dispatch.go"]})` returned `No diagnostics.` |
+
+Diagnostics check workspace parse/build errors and additionally lint active files; this call covered the affected `internal/core` file/package but is not a test, vet, or race run. Other catalog operations below were discovered, not invoked during this check. Availability remains machine/session-specific.
+
+| Useful read-only operation | OpenCode permission action | Purpose |
+| --- | --- | --- |
+| `go_workspace` | `gopls_go_workspace` | Workspace/module overview |
+| `go_search` | `gopls_go_search` | Targeted fuzzy symbol search |
+| `go_file_context` | `gopls_go_file_context` | A file's cross-file dependencies |
+| `go_package_api` | `gopls_go_package_api` | API summary for selected Go package paths |
+| `go_symbol_references` | `gopls_go_symbol_references` | References to a type, function, field or method |
+| `go_diagnostics` | `gopls_go_diagnostics` | Workspace diagnostics plus active-file linting |
+
+Short scenario: before changing `AttemptScope`, locate it with `go_search`, obtain `go_symbol_references` using its absolute file path and symbol name, then read the affected declarations/callers/tests. Query file context or a package API only where relationships remain unclear. After substantial Go changes, request diagnostics with the affected absolute file paths and run the card's required checks. For small edits, skip unnecessary MCP calls; when unavailable, use `rg`, source reads and ordinary Go checks.
+
+Under default Code Mode, discover these tools and call `tools.gopls.go_symbol_references(...)` / `tools.gopls.go_diagnostics(...)` through `execute`. Reviewer explicitly allows `execute` and only the six read-only gopls actions above; nested permissions still apply. Its blanket deny continues to block `edit`, `subagent`, `gopls_go_rename_symbol` and unlisted MCP actions, including `gopls_go_vulncheck`. Worker/planner inherit the base MCP allowance and need no additional permissions; orchestrator delegates rather than querying source. No blanket MCP allow is added.
+
+If another developer already configures gopls personally, reuse it rather than automatically adding a project entry. Check configured state, connection, and an actual call separately before claiming verification.
+
+## Historical Inspected Inventory — 2026-09-29
 
 Commands run from this checkout: `opencode --version` → **v2.0.18**, `opencode mcp list`, and `opencode plugin list`.
+
+The following observations are preserved as history, not the current M2 inventory or a new plugin verification.
 
 | Item | Observed state | Scope / action now |
 | --- | --- | --- |
@@ -41,6 +76,7 @@ Run connection checks from the project directory so project configuration partic
 
 ```sh
 opencode --version
+gopls version
 opencode mcp list
 opencode plugin list
 ```
@@ -76,6 +112,6 @@ Merge entries into the existing file; preserve `default_agent` and unrelated set
 
 **Plugins:** for a verified V2-compatible published package, `opencode plugin add <package>@<version>` installs a global package plugin; verify with `opencode plugin list`. For a project, add the package/version or local path to the `plugins` array in its config. Paths resolve relative to that config file. Files/package directories under `.opencode/plugins/` or global `~/.config/opencode/plugins/` are auto-discovered; the inspected RTK uses the latter, so it is already connected. To reproduce that RTK setup elsewhere, obtain the same reviewed V2 plugin and its required binary first; this local inventory does not identify a published package to install. No speculative RTK package command is implied.
 
-Keep Serena, Graphify, database MCPs and additional output hooks conditional on the triggers above. **For M1 now: use Context7, built-in file/shell tools and the Go checks; no additional MCP/plugin installation is required.**
+Keep Serena, Graphify, database MCPs and additional output hooks conditional on the triggers above; do not install Serena or Graphify now. **For M2 now: use the available gopls MCP, Context7 for external documentation, built-in file/shell tools and the Go checks; no additional MCP/plugin installation is required.**
 
-References: [OpenCode v2 migration](https://opencode.ai/v2/docs/migrate-v1/), [commands](https://opencode.ai/v2/docs/commands/), [agents](https://opencode.ai/v2/docs/agents/), [MCP servers](https://opencode.ai/v2/docs/mcp-servers/), [configuration](https://opencode.ai/v2/docs/config/), [plugin loading](https://opencode.ai/v2/docs/plugins/), [V2 plugin API](https://opencode.ai/v2/docs/build/plugins/). Connection/loading instructions were checked against V2 documentation and Context7's V2 documentation index; no configuration was changed during this inspection.
+References: [OpenCode v2 migration](https://opencode.ai/v2/docs/migrate-v1/), [commands](https://opencode.ai/v2/docs/commands/), [agents](https://opencode.ai/v2/docs/agents/), [MCP servers](https://opencode.ai/v2/docs/mcp-servers/), [configuration](https://opencode.ai/v2/docs/config/), [tools](https://opencode.ai/v2/docs/tools/), [permissions](https://opencode.ai/v2/docs/permissions/), [V2 plugins](https://opencode.ai/v2/docs/build/plugins/). The new check used V2 MCP/tool/permission documentation and Context7's V2 documentation query; only worker guidance and reviewer permissions changed, not server/model settings.

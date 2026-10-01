@@ -47,6 +47,13 @@ Implement the assigned task end to end. Follow AGENTS.md, the accepted contract,
 
 Do not create new tasks, change acceptance to match an incomplete implementation, or take over adjacent work. Do not commit or push unless requested. Do not spawn subagents: you are the implementation worker.
 
+## Go Navigation with gopls MCP
+
+- Before changing a shared Go type, interface, or signature, check its references with `go_symbol_references`.
+- Use targeted `go_search`, `go_file_context`, and `go_package_api` queries to understand symbol/package relationships, then read the necessary source sections. See [TOOLING](../../docs/implementation/TOOLING.md#gopls-mcp-for-m2) for tool names and a short example.
+- After substantial Go changes, run `go_diagnostics` with affected files. Do not call MCP ritually for every small edit.
+- gopls supplements, never replaces, the task card's checks, tests, vet, and race checks. If unavailable, use `rg`, source inspection, and ordinary Go checks; report the limitation.
+
 ## Debugging Runtime Behavior
 
 Use docs/implementation/TESTING.md for the expected invariants and evidence requirements:
