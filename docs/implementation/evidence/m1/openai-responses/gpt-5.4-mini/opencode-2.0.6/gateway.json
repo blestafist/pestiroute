@@ -1,0 +1,3755 @@
+{
+  "date": "2026-10-01",
+  "client": {
+    "name": "OpenCode V2 CLI",
+    "version": "2.0.6"
+  },
+  "provider": "OpenAI public Responses API",
+  "model": "gpt-5.4-mini",
+  "transport": "HTTP streaming",
+  "gateway": {
+    "listen": "127.0.0.1:8080",
+    "configured_upstream": "bounded loopback streaming observer forwarding to https://api.openai.com/v1/responses",
+    "body_limit_bytes": 1048576,
+    "observer_body_limit_bytes": 65536,
+    "request_body_mutated": false,
+    "response_forwarding": "incremental 2048-byte reads/writes; no complete-response buffering"
+  },
+  "configuration": {
+    "provider_runtime": "@opencode/ai/providers/openai/responses",
+    "model_id": "gpt-5.4-mini",
+    "transport": "http",
+    "reasoning_config": "No reasoning/body override; standard OpenCode-generated field preserved unchanged",
+    "tool_permissions": "read only for alpha.txt and beta.txt",
+    "client_credential": "synthetic process-only credential; value not recorded",
+    "gateway_upstream_credential": "PESTIROUTE_UPSTREAM_BEARER; observer validated the header scope without recording its value",
+    "provider_credential": "OPENAI_API_KEY scope; value not recorded"
+  },
+  "verified_gateway_capabilities": [
+    "llm.streaming",
+    "llm.tools",
+    "llm.reasoning"
+  ],
+  "unverified_capabilities": [
+    "llm.tools.parallel"
+  ],
+  "observer_bounds": {
+    "client_and_gateway_limit_bytes": 1048576,
+    "upstream_observer_limit_bytes": 65536,
+    "continuation_12641_bytes_within_limit": true,
+    "actual_12641_byte_continuation_seen": false,
+    "upstream_post_ceiling_per_observer": 8
+  },
+  "historical_zero_egress_evidence": {
+    "date": "2026-10-01",
+    "client": {
+      "name": "OpenCode V2 CLI",
+      "version": "2.0.6"
+    },
+    "provider": "OpenAI public Responses API",
+    "model": "gpt-5.4-mini",
+    "transport": "HTTP streaming configured; no upstream stream was reached",
+    "gateway": {
+      "listen": "127.0.0.1:8080",
+      "configured_upstream": "loopback bounded streaming observer forwarding to https://api.openai.com/v1/responses",
+      "request_body_limit_bytes": 1048576,
+      "observer_request_body_limit_bytes": 65536,
+      "forwarding": "Ingress observer forwarded received request bytes unchanged; no request-body rewriting. Response chunks were relayed incrementally."
+    },
+    "credential_scope": {
+      "client": "synthetic client bearer supplied only to the isolated OpenCode process",
+      "gateway_upstream": "dedicated PESTIROUTE_UPSTREAM_BEARER environment scope",
+      "provider_observer": "OPENAI_API_KEY environment scope",
+      "values_recorded": false,
+      "upstream_credential_forwarded_to_provider": false
+    },
+    "capability_context": {
+      "verified_by_M1_029": [
+        "llm.streaming",
+        "llm.tools"
+      ],
+      "unknown_fail_closed": [
+        "llm.tools.parallel",
+        "llm.reasoning"
+      ]
+    },
+    "observer_limits": {
+      "gateway_body_bytes": 1048576,
+      "ingress_body_bytes": 65536,
+      "upstream_observer_body_bytes": 65536,
+      "max_upstream_responses_posts": 8,
+      "continuation_12641_bytes_within_configured_limits": true,
+      "continuation_body_observed": false,
+      "response_mode": "read-and-forward in 2048-byte chunks; bounded SSE event scratch 65536 bytes; no complete response buffering"
+    },
+    "scenarios": {
+      "single_tool": {
+        "manual_client_runs_for_this_card": 3,
+        "manual_run_limit": 2,
+        "run_limit_exceeded": true,
+        "history": [
+          {
+            "phase": "before M1-029",
+            "result": "Unsupported required capability before upstream; zero provider requests",
+            "request_structure": "not captured"
+          },
+          {
+            "phase": "follow-up default configuration",
+            "request_body_bytes": 26606,
+            "model": "gpt-5.4-mini",
+            "stream": true,
+            "tool_count": 11,
+            "tool_types": [
+              "function",
+              "function",
+              "function",
+              "function",
+              "function",
+              "function",
+              "function",
+              "function",
+              "function",
+              "function",
+              "function"
+            ],
+            "parallel_tool_calls": "absent",
+            "reasoning": "present",
+            "required_capabilities": [
+              "llm.streaming",
+              "llm.tools",
+              "llm.reasoning"
+            ],
+            "gateway_status": 400,
+            "upstream_requests": 0
+          },
+          {
+            "phase": "follow-up with documented model setting reasoningEffort=none",
+            "request_body_bytes": 26604,
+            "top_level_fields": [
+              "include",
+              "input",
+              "instructions",
+              "model",
+              "prompt_cache_key",
+              "reasoning",
+              "store",
+              "stream",
+              "text",
+              "tools"
+            ],
+            "model": "gpt-5.4-mini",
+            "stream": true,
+            "tools": [
+              "glob",
+              "grep",
+              "patch",
+              "question",
+              "read",
+              "shell",
+              "skill",
+              "subagent",
+              "webfetch",
+              "websearch",
+              "execute"
+            ],
+            "parallel_tool_calls": "absent",
+            "reasoning_fields": [
+              "effort",
+              "summary"
+            ],
+            "input_item_types": [
+              "message"
+            ],
+            "required_capabilities": [
+              "llm.streaming",
+              "llm.tools",
+              "llm.reasoning"
+            ],
+            "gateway_status": 400,
+            "gateway_error_code": "unsupported_capability",
+            "observer_first_response_byte_ms": 1.4,
+            "upstream_requests": 0
+          }
+        ],
+        "outcome": "Not demonstrated: the gateway rejected the OpenCode request's unknown reasoning requirement before egress. The standard reasoningEffort=none setting did not remove the reasoning field. No tool call, continuation, SSE event, or per-response usage was observed."
+      },
+      "parallel_tool": {
+        "manual_client_runs": 1,
+        "manual_run_limit": 2,
+        "request_body_bytes": 4896,
+        "top_level_fields": [
+          "include",
+          "input",
+          "instructions",
+          "model",
+          "prompt_cache_key",
+          "reasoning",
+          "store",
+          "stream",
+          "text",
+          "tools"
+        ],
+        "model": "gpt-5.4-mini",
+        "stream": true,
+        "tools": [
+          "read"
+        ],
+        "parallel_tool_calls": "absent",
+        "reasoning_fields": [
+          "effort",
+          "summary"
+        ],
+        "input_item_types": [
+          "message"
+        ],
+        "required_capabilities": [
+          "llm.streaming",
+          "llm.tools",
+          "llm.reasoning"
+        ],
+        "gateway_status": 400,
+        "gateway_error_code": "unsupported_capability",
+        "observer_first_response_byte_ms": 0.6,
+        "upstream_requests": 0,
+        "outcome": "Not demonstrated: the requested two-call interaction was rejected on the unknown reasoning requirement before any provider response. OpenCode emitted one read tool and omitted parallel_tool_calls; no parallel calls, client results, or backend continuation were observed."
+      }
+    },
+    "upstream_requests": [],
+    "accounting": {
+      "reported_provider_usage_this_follow_up": 0,
+      "provider_responses": 0,
+      "continuation_usage": "No continuation was sent; no provider usage was incurred in these attempts.",
+      "user_confirmed_free_allowance": "2.5M daily tokens; account hard zero-paid guard",
+      "prior_known_usage_minimum_tokens": 11451,
+      "prior_continuation_usage": "Unknown",
+      "cumulative_100k_cap_compliance": "Unverified; prior cumulative usage remains unknown."
+    },
+    "sanitization": {
+      "retained": "Request sizes, non-private structural fields, tool names, required capabilities, status/error code, and observer timing for pre-head errors.",
+      "excluded": "Credentials and auth headers, raw request/response bodies, prompts, file contents, generated text, reasoning contents, and provider payloads."
+    }
+  },
+  "follow_up_2": {
+    "single_tool": {
+      "scenario": "single read of alpha.txt; one authorized manual OpenCode invocation after M1-030",
+      "client_exit_code": 1,
+      "expected_marker_verified": false,
+      "upstream_request": {
+        "method": "POST",
+        "path": "/v1/responses",
+        "request_body_bytes": 4784,
+        "model": "gpt-5.4-mini",
+        "stream": true,
+        "required_capabilities": [
+          "llm.streaming",
+          "llm.tools",
+          "llm.reasoning"
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "read"
+          }
+        ],
+        "status": 200,
+        "content_type": "text/event-stream; charset=utf-8",
+        "first_byte_ms": 0.0,
+        "first_event_ms": 0.6,
+        "observer_error": "KeyError while appending the first parsed SSE event; event name and terminal usage were not persisted",
+        "reported_usage": "Unknown; response stream was truncated by observer error",
+        "continuation_observed": false,
+        "timing_origin": "first_event_ms was recorded after response headers; the first event name was lost when the observer hit KeyError"
+      },
+      "outcome": "Incomplete: upstream accepted the request (HTTP 200), but the observer hit a local KeyError on the first parsed event and the client exited unsuccessfully. No tool call, continuation, terminal usage, or client marker was captured. Provider usage for this response is unknown; no retry was made.",
+      "client_stdout_expected_marker": "not verified; raw output deleted"
+    },
+    "parallel_tool": {
+      "scenario": "requested parallel reads of alpha.txt and beta.txt; one authorized manual OpenCode invocation",
+      "client_exit_code": 0,
+      "client_expected_markers": {
+        "alpha.txt": "verified",
+        "beta.txt": "verified"
+      },
+      "parallel_tool_calls_request_field": "absent (OpenCode emitted no explicit parallel_tool_calls field)",
+      "requests": [
+        {
+          "post": 1,
+          "method": "POST",
+          "path": "/v1/responses",
+          "request_body_bytes": 4898,
+          "events": [
+            {
+              "t_ms": 0.7,
+              "type": "response.created",
+              "first_event": true
+            },
+            {
+              "t_ms": 1.2,
+              "type": "response.in_progress"
+            },
+            {
+              "t_ms": 247.2,
+              "type": "response.output_item.added",
+              "output_index": 0,
+              "item": {
+                "type": "reasoning",
+                "id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+              }
+            },
+            {
+              "t_ms": 870.9,
+              "type": "response.reasoning_summary_part.added",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 872.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 877.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 904.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 904.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 925.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 928.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 930.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 937.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 939.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 939.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 940.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 940.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 940.4,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 950.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 957.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 963.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 972.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 981.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 984.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 994.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 998.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1005.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1014.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1021.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1031.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1036.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1044.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1052.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1054.4,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1061.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1066.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1073.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1076.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1084.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1095.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1102.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1106.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1123.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1127.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1136.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1146.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1154.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1164.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1175.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1185.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1190.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1197.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1200.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1206.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1213.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1221.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1250.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1261.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1266.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1272.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1277.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1283.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1290.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1294.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1300.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1306.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1313.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1317.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1322.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1329.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1333.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1340.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1349.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1361.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1369.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1372.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1385.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1390.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1396.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1402.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1415.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1415.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1429.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1532.8,
+              "type": "response.reasoning_summary_text.done",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1547.1,
+              "type": "response.reasoning_summary_part.done",
+              "output_index": 0,
+              "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "t_ms": 1556.1,
+              "type": "response.output_item.done",
+              "output_index": 0,
+              "item": {
+                "type": "reasoning",
+                "id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+              }
+            },
+            {
+              "t_ms": 1559.7,
+              "type": "response.output_item.added",
+              "output_index": 1,
+              "item": {
+                "type": "function_call",
+                "id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+                "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+                "name": "read"
+              }
+            },
+            {
+              "t_ms": 1559.9,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3"
+            },
+            {
+              "t_ms": 1560.1,
+              "type": "response.function_call_arguments.done",
+              "output_index": 1,
+              "item_id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3"
+            },
+            {
+              "t_ms": 1561.9,
+              "type": "response.output_item.done",
+              "output_index": 1,
+              "item": {
+                "type": "function_call",
+                "id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+                "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+                "name": "read"
+              }
+            },
+            {
+              "t_ms": 1562.0,
+              "type": "response.output_item.added",
+              "output_index": 2,
+              "item": {
+                "type": "function_call",
+                "id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+                "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+                "name": "read"
+              }
+            },
+            {
+              "t_ms": 1562.1,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 2,
+              "item_id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843"
+            },
+            {
+              "t_ms": 1562.2,
+              "type": "response.function_call_arguments.done",
+              "output_index": 2,
+              "item_id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843"
+            },
+            {
+              "t_ms": 1562.2,
+              "type": "response.output_item.done",
+              "output_index": 2,
+              "item": {
+                "type": "function_call",
+                "id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+                "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+                "name": "read"
+              }
+            },
+            {
+              "t_ms": 1562.8,
+              "type": "response.completed",
+              "status": "completed",
+              "usage": {
+                "input_tokens": 949,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "output_tokens": 127,
+                "output_tokens_details": {
+                  "reasoning_tokens": 61
+                },
+                "total_tokens": 1076
+              },
+              "output_items": [
+                {
+                  "type": "reasoning",
+                  "id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+                },
+                {
+                  "type": "function_call",
+                  "id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+                  "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+                  "name": "read"
+                },
+                {
+                  "type": "function_call",
+                  "id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+                  "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+                  "name": "read"
+                }
+              ]
+            }
+          ],
+          "tool_calls": [
+            {
+              "item_id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+              "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+              "name": "read",
+              "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}"
+            },
+            {
+              "item_id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+              "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+              "name": "read",
+              "arguments": "{\"path\":\"beta.txt\",\"offset\":1,\"limit\":1}"
+            }
+          ],
+          "top_level_fields": [
+            "include",
+            "input",
+            "instructions",
+            "model",
+            "prompt_cache_key",
+            "reasoning",
+            "store",
+            "stream",
+            "text",
+            "tools"
+          ],
+          "model": "gpt-5.4-mini",
+          "stream": true,
+          "required_capabilities": [
+            "llm.streaming",
+            "llm.tools",
+            "llm.reasoning"
+          ],
+          "parallel_tool_calls": null,
+          "reasoning_fields": [
+            "effort",
+            "summary"
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "name": "read"
+            }
+          ],
+          "input_items": [
+            {
+              "type": "message"
+            }
+          ],
+          "status": 200,
+          "response_content_type": "text/event-stream; charset=utf-8",
+          "first_byte_ms": 0.0,
+          "first_event_ms": 0.7,
+          "usage_reported": true,
+          "upstream": "https://api.openai.com/v1/responses",
+          "event_order": [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.done",
+            "response.output_item.done",
+            "response.output_item.added",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+            "response.output_item.added",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+            "response.completed"
+          ],
+          "reported_usage": [
+            {
+              "input_tokens": 949,
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "output_tokens": 127,
+              "output_tokens_details": {
+                "reasoning_tokens": 61
+              },
+              "total_tokens": 1076
+            }
+          ],
+          "reported_usage_total_tokens": 1076,
+          "timing_origin": "event t_ms starts after upstream HTTP response headers; it is not POST-to-first-event latency"
+        },
+        {
+          "post": 2,
+          "method": "POST",
+          "path": "/v1/responses",
+          "request_body_bytes": 7774,
+          "events": [
+            {
+              "t_ms": 2.1,
+              "type": "response.created",
+              "first_event": true
+            },
+            {
+              "t_ms": 2.6,
+              "type": "response.in_progress"
+            },
+            {
+              "t_ms": 516.8,
+              "type": "response.output_item.added",
+              "output_index": 0,
+              "item": {
+                "type": "message",
+                "id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+              }
+            },
+            {
+              "t_ms": 518.4,
+              "type": "response.content_part.added",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 518.7,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 539.1,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 566.7,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 568.3,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 570.3,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 570.6,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 590.4,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 592.2,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 651.4,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 651.5,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 651.5,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 651.5,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 651.7,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 651.8,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 651.8,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 651.8,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 651.8,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 651.9,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 668.7,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 678.8,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 682.3,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 698.6,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 700.4,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 703.3,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 703.4,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 703.5,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 787.8,
+              "type": "response.output_text.done",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 787.9,
+              "type": "response.content_part.done",
+              "output_index": 0,
+              "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            },
+            {
+              "t_ms": 788.0,
+              "type": "response.output_item.done",
+              "output_index": 0,
+              "item": {
+                "type": "message",
+                "id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+              }
+            },
+            {
+              "t_ms": 788.3,
+              "type": "response.completed",
+              "status": "completed",
+              "usage": {
+                "input_tokens": 1132,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "output_tokens": 30,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 1162
+              },
+              "output_items": [
+                {
+                  "type": "message",
+                  "id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+                }
+              ]
+            }
+          ],
+          "tool_calls": [],
+          "top_level_fields": [
+            "include",
+            "input",
+            "instructions",
+            "model",
+            "prompt_cache_key",
+            "reasoning",
+            "store",
+            "stream",
+            "text",
+            "tools"
+          ],
+          "model": "gpt-5.4-mini",
+          "stream": true,
+          "required_capabilities": [
+            "llm.streaming",
+            "llm.tools",
+            "llm.reasoning"
+          ],
+          "parallel_tool_calls": null,
+          "reasoning_fields": [
+            "effort",
+            "summary"
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "name": "read"
+            }
+          ],
+          "input_items": [
+            {
+              "type": "message"
+            },
+            {
+              "type": "reasoning",
+              "id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+              "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+              "name": "read"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+              "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+              "name": "read"
+            },
+            {
+              "type": "function_call_output",
+              "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts"
+            },
+            {
+              "type": "function_call_output",
+              "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP"
+            }
+          ],
+          "status": 200,
+          "response_content_type": "text/event-stream; charset=utf-8",
+          "first_byte_ms": 0.0,
+          "first_event_ms": 2.1,
+          "usage_reported": true,
+          "upstream": "https://api.openai.com/v1/responses",
+          "event_order": [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.completed"
+          ],
+          "reported_usage": [
+            {
+              "input_tokens": 1132,
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "output_tokens": 30,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              },
+              "total_tokens": 1162
+            }
+          ],
+          "reported_usage_total_tokens": 1162,
+          "timing_origin": "event t_ms starts after upstream HTTP response headers; it is not POST-to-first-event latency"
+        }
+      ],
+      "tool_result_associations": [
+        {
+          "path": "alpha.txt",
+          "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+          "provider_item_id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+          "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}",
+          "client_marker_verified": true,
+          "result_in_continuation": true,
+          "client_result_status": "completed"
+        },
+        {
+          "path": "beta.txt",
+          "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+          "provider_item_id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+          "arguments": "{\"path\":\"beta.txt\",\"offset\":1,\"limit\":1}",
+          "client_marker_verified": true,
+          "result_in_continuation": true,
+          "client_result_status": "completed"
+        }
+      ],
+      "reported_usage_total_tokens": 2238,
+      "outcome": "Observed two read function calls in one completed response; OpenCode ran both local reads, both expected markers were verified, and matching function_call_output items were present in the next request. Both backend responses completed with reported usage.",
+      "terminal_usage_complete_for_every_upstream_request": true
+    }
+  },
+  "accounting": {
+    "parallel_completed_response_usage_tokens": 2238,
+    "single_response_usage": "Unknown: observer failed before terminal event",
+    "all_follow_up_2_usage_total": "Unknown; includes an incomplete single response",
+    "minimum_prior_reported_usage_tokens": 11451,
+    "minimum_known_usage_including_completed_parallel_tokens": 13689,
+    "older_unmeasured_continuation": "Unknown",
+    "user_confirmed_free_allowance": "2.5M daily tokens; hard zero-paid guard",
+    "cumulative_100k_batch_cap": "Unverified; prior and interrupted-response usage are unknown",
+    "single_usage_missing_reason": "Observer KeyError after HTTP 200 SSE headers and first event; do not impute zero or estimate.",
+    "known_current_completed_usage_tokens": 2238,
+    "cumulative_known_minimum_tokens": 15666,
+    "cumulative_total": "Unknown; includes unmeasured earlier continuation and follow-up2 single response.",
+    "follow_up_3_single_reported_tokens": 1977,
+    "follow_up_3_single_requests_reported_tokens": [
+      968,
+      1009
+    ],
+    "known_cumulative_minimum_tokens": 15666,
+    "earlier_unknown_usage_still_unmeasured": true
+  },
+  "sanitization": {
+    "retained": "Request sizes, model/stream/structural fields, event names/order/timing, IDs/indexes/call IDs, allowlisted read arguments, tool-result linkage, status and reported usage.",
+    "excluded": "Credentials/auth headers, raw request/response bodies, prompts, file contents, generated prose, reasoning contents, and raw private payloads."
+  },
+  "timing_note": "Response-event timing values are relative to receipt of upstream response headers; POST-to-first-byte latency was not measured.",
+  "upstream_requests_follow_up_2": [
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "request_body_bytes": 4784,
+      "model": "gpt-5.4-mini",
+      "stream": true,
+      "required_capabilities": [
+        "llm.streaming",
+        "llm.tools",
+        "llm.reasoning"
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "name": "read"
+        }
+      ],
+      "status": 200,
+      "content_type": "text/event-stream; charset=utf-8",
+      "first_byte_ms": 0.0,
+      "first_event_ms": 0.6,
+      "observer_error": "KeyError while appending the first parsed SSE event; event name and terminal usage were not persisted",
+      "reported_usage": "Unknown; response stream was truncated by observer error",
+      "continuation_observed": false,
+      "timing_origin": "first_event_ms was recorded after response headers; the first event name was lost when the observer hit KeyError"
+    },
+    {
+      "post": 1,
+      "method": "POST",
+      "path": "/v1/responses",
+      "request_body_bytes": 4898,
+      "events": [
+        {
+          "t_ms": 0.7,
+          "type": "response.created",
+          "first_event": true
+        },
+        {
+          "t_ms": 1.2,
+          "type": "response.in_progress"
+        },
+        {
+          "t_ms": 247.2,
+          "type": "response.output_item.added",
+          "output_index": 0,
+          "item": {
+            "type": "reasoning",
+            "id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+          }
+        },
+        {
+          "t_ms": 870.9,
+          "type": "response.reasoning_summary_part.added",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 872.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 877.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 904.6,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 904.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 925.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 928.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 930.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 937.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 939.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 939.9,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 940.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 940.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 940.4,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 950.6,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 957.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 963.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 972.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 981.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 984.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 994.6,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 998.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1005.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1014.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1021.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1031.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1036.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1044.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1052.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1054.4,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1061.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1066.6,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1073.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1076.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1084.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1095.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1102.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1106.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1123.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1127.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1136.9,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1146.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1154.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1164.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1175.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1185.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1190.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1197.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1200.6,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1206.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1213.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1221.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1250.9,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1261.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1266.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1272.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1277.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1283.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1290.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1294.9,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1300.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1306.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1313.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1317.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1322.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1329.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1333.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1340.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1349.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1361.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1369.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1372.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1385.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1390.8,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1396.6,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1402.7,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1415.0,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1415.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1429.1,
+          "type": "response.reasoning_summary_text.delta",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1532.8,
+          "type": "response.reasoning_summary_text.done",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1547.1,
+          "type": "response.reasoning_summary_part.done",
+          "output_index": 0,
+          "item_id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "t_ms": 1556.1,
+          "type": "response.output_item.done",
+          "output_index": 0,
+          "item": {
+            "type": "reasoning",
+            "id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+          }
+        },
+        {
+          "t_ms": 1559.7,
+          "type": "response.output_item.added",
+          "output_index": 1,
+          "item": {
+            "type": "function_call",
+            "id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+            "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+            "name": "read"
+          }
+        },
+        {
+          "t_ms": 1559.9,
+          "type": "response.function_call_arguments.delta",
+          "output_index": 1,
+          "item_id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3"
+        },
+        {
+          "t_ms": 1560.1,
+          "type": "response.function_call_arguments.done",
+          "output_index": 1,
+          "item_id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3"
+        },
+        {
+          "t_ms": 1561.9,
+          "type": "response.output_item.done",
+          "output_index": 1,
+          "item": {
+            "type": "function_call",
+            "id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+            "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+            "name": "read"
+          }
+        },
+        {
+          "t_ms": 1562.0,
+          "type": "response.output_item.added",
+          "output_index": 2,
+          "item": {
+            "type": "function_call",
+            "id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+            "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+            "name": "read"
+          }
+        },
+        {
+          "t_ms": 1562.1,
+          "type": "response.function_call_arguments.delta",
+          "output_index": 2,
+          "item_id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843"
+        },
+        {
+          "t_ms": 1562.2,
+          "type": "response.function_call_arguments.done",
+          "output_index": 2,
+          "item_id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843"
+        },
+        {
+          "t_ms": 1562.2,
+          "type": "response.output_item.done",
+          "output_index": 2,
+          "item": {
+            "type": "function_call",
+            "id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+            "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+            "name": "read"
+          }
+        },
+        {
+          "t_ms": 1562.8,
+          "type": "response.completed",
+          "status": "completed",
+          "usage": {
+            "input_tokens": 949,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 127,
+            "output_tokens_details": {
+              "reasoning_tokens": 61
+            },
+            "total_tokens": 1076
+          },
+          "output_items": [
+            {
+              "type": "reasoning",
+              "id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+              "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+              "name": "read"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+              "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+              "name": "read"
+            }
+          ]
+        }
+      ],
+      "tool_calls": [
+        {
+          "item_id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+          "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+          "name": "read",
+          "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}"
+        },
+        {
+          "item_id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+          "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+          "name": "read",
+          "arguments": "{\"path\":\"beta.txt\",\"offset\":1,\"limit\":1}"
+        }
+      ],
+      "top_level_fields": [
+        "include",
+        "input",
+        "instructions",
+        "model",
+        "prompt_cache_key",
+        "reasoning",
+        "store",
+        "stream",
+        "text",
+        "tools"
+      ],
+      "model": "gpt-5.4-mini",
+      "stream": true,
+      "required_capabilities": [
+        "llm.streaming",
+        "llm.tools",
+        "llm.reasoning"
+      ],
+      "parallel_tool_calls": null,
+      "reasoning_fields": [
+        "effort",
+        "summary"
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "name": "read"
+        }
+      ],
+      "input_items": [
+        {
+          "type": "message"
+        }
+      ],
+      "status": 200,
+      "response_content_type": "text/event-stream; charset=utf-8",
+      "first_byte_ms": 0.0,
+      "first_event_ms": 0.7,
+      "usage_reported": true,
+      "upstream": "https://api.openai.com/v1/responses",
+      "event_order": [
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.reasoning_summary_part.added",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.done",
+        "response.reasoning_summary_part.done",
+        "response.output_item.done",
+        "response.output_item.added",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.output_item.done",
+        "response.output_item.added",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.output_item.done",
+        "response.completed"
+      ],
+      "reported_usage": [
+        {
+          "input_tokens": 949,
+          "input_tokens_details": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0
+          },
+          "output_tokens": 127,
+          "output_tokens_details": {
+            "reasoning_tokens": 61
+          },
+          "total_tokens": 1076
+        }
+      ],
+      "reported_usage_total_tokens": 1076,
+      "timing_origin": "event t_ms starts after upstream HTTP response headers; it is not POST-to-first-event latency"
+    },
+    {
+      "post": 2,
+      "method": "POST",
+      "path": "/v1/responses",
+      "request_body_bytes": 7774,
+      "events": [
+        {
+          "t_ms": 2.1,
+          "type": "response.created",
+          "first_event": true
+        },
+        {
+          "t_ms": 2.6,
+          "type": "response.in_progress"
+        },
+        {
+          "t_ms": 516.8,
+          "type": "response.output_item.added",
+          "output_index": 0,
+          "item": {
+            "type": "message",
+            "id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+          }
+        },
+        {
+          "t_ms": 518.4,
+          "type": "response.content_part.added",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 518.7,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 539.1,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 566.7,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 568.3,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 570.3,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 570.6,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 590.4,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 592.2,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 651.4,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 651.5,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 651.5,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 651.5,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 651.7,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 651.8,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 651.8,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 651.8,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 651.8,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 651.9,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 668.7,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 678.8,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 682.3,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 698.6,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 700.4,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 703.3,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 703.4,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 703.5,
+          "type": "response.output_text.delta",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 787.8,
+          "type": "response.output_text.done",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 787.9,
+          "type": "response.content_part.done",
+          "output_index": 0,
+          "item_id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+        },
+        {
+          "t_ms": 788.0,
+          "type": "response.output_item.done",
+          "output_index": 0,
+          "item": {
+            "type": "message",
+            "id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+          }
+        },
+        {
+          "t_ms": 788.3,
+          "type": "response.completed",
+          "status": "completed",
+          "usage": {
+            "input_tokens": 1132,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 30,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 1162
+          },
+          "output_items": [
+            {
+              "type": "message",
+              "id": "msg_04b7561a8e257675016abdef7d4d4087d1a40150b21a54f2e6"
+            }
+          ]
+        }
+      ],
+      "tool_calls": [],
+      "top_level_fields": [
+        "include",
+        "input",
+        "instructions",
+        "model",
+        "prompt_cache_key",
+        "reasoning",
+        "store",
+        "stream",
+        "text",
+        "tools"
+      ],
+      "model": "gpt-5.4-mini",
+      "stream": true,
+      "required_capabilities": [
+        "llm.streaming",
+        "llm.tools",
+        "llm.reasoning"
+      ],
+      "parallel_tool_calls": null,
+      "reasoning_fields": [
+        "effort",
+        "summary"
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "name": "read"
+        }
+      ],
+      "input_items": [
+        {
+          "type": "message"
+        },
+        {
+          "type": "reasoning",
+          "id": "rs_04b7561a8e257675016abdef7a166087d19aebd58e8c791318"
+        },
+        {
+          "type": "function_call",
+          "id": "fc_04b7561a8e257675016abdef7b5e7087d1941a806fd27a0da3",
+          "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts",
+          "name": "read"
+        },
+        {
+          "type": "function_call",
+          "id": "fc_04b7561a8e257675016abdef7b5e7c87d189648d7cb56e1843",
+          "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP",
+          "name": "read"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_tOOeb5neJrlRA9DFvAcXJ3ts"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_5JQ4EyvDBiU9mFPS1jaorScP"
+        }
+      ],
+      "status": 200,
+      "response_content_type": "text/event-stream; charset=utf-8",
+      "first_byte_ms": 0.0,
+      "first_event_ms": 2.1,
+      "usage_reported": true,
+      "upstream": "https://api.openai.com/v1/responses",
+      "event_order": [
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed"
+      ],
+      "reported_usage": [
+        {
+          "input_tokens": 1132,
+          "input_tokens_details": {
+            "cache_write_tokens": 0,
+            "cached_tokens": 0
+          },
+          "output_tokens": 30,
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "total_tokens": 1162
+        }
+      ],
+      "reported_usage_total_tokens": 1162,
+      "timing_origin": "event t_ms starts after upstream HTTP response headers; it is not POST-to-first-event latency"
+    }
+  ],
+  "run_accounting": {
+    "historical_single_zero_egress_runs": 3,
+    "follow_up_2_single_observer_failure_runs": 1,
+    "follow_up_3_authorized_single_runs": 1,
+    "cumulative_single_runs": 5,
+    "follow_up_2_authorized_parallel_runs": 1,
+    "further_runs_made": 0,
+    "note": "Five single runs exceed the original two-run limit; all attempts and the later explicit authorizations are retained. No more runs are authorized."
+  },
+  "credential_scope_follow_up_2": {
+    "client_credentials_separate_from_upstream": true,
+    "gateway_upstream_bearer_validated": true,
+    "provider_accepted_upstream_auth_via_http_200": true,
+    "credential_values_or_headers_recorded": false
+  },
+  "follow_up_3": {
+    "single_tool": {
+      "scenario": "single read of alpha.txt followed by tool-result continuation; exactly one corrective manual OpenCode invocation after offline observer fixture passed",
+      "manual_client_runs": 1,
+      "historical_single_invocations_before_follow_up_3": 4,
+      "cumulative_single_invocations_for_card": 5,
+      "previously_authorized_run_limit_deviation_preserved": true,
+      "client_exit_code": 0,
+      "expected_marker_verified": true,
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/v1/responses",
+          "request_body_bytes": 4784,
+          "events": [
+            {
+              "t_ms": 1995.7,
+              "type": "response.created",
+              "first_event": true
+            },
+            {
+              "t_ms": 1996.1,
+              "type": "response.in_progress"
+            },
+            {
+              "t_ms": 2028.7,
+              "type": "response.output_item.added",
+              "output_index": 0,
+              "item": {
+                "type": "reasoning",
+                "id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+              }
+            },
+            {
+              "t_ms": 2353.9,
+              "type": "response.reasoning_summary_part.added",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2354.2,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2355.4,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2359.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2362.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2387.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2389.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2399.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2403.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2405.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2407.3,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2407.3,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2425.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2431.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2439.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2451.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2457.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2464.3,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2482.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2488.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2493.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2499.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2507.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2517.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2525.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2534.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2541.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2548.3,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2566.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2569.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2575.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2582.4,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2587.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2605.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2606.2,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2609.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2615.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2624.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2629.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2637.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2641.4,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2649.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2672.2,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2672.2,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2673.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2689.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2689.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2698.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2702.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2704.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2713.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2719.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2723.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2729.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2737.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2743.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2756.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2771.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2773.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2783.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2797.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2801.4,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2806.3,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2807.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2809.5,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2819.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2823.8,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2831.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2843.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2855.2,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2858.0,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2879.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2880.1,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2909.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2911.3,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2913.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2913.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2945.6,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2951.7,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2951.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2963.9,
+              "type": "response.reasoning_summary_text.delta",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2991.9,
+              "type": "response.reasoning_summary_text.done",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 2997.5,
+              "type": "response.reasoning_summary_part.done",
+              "output_index": 0,
+              "item_id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "t_ms": 3002.6,
+              "type": "response.output_item.done",
+              "output_index": 0,
+              "item": {
+                "type": "reasoning",
+                "id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+              }
+            },
+            {
+              "t_ms": 3007.7,
+              "type": "response.output_item.added",
+              "output_index": 1,
+              "item": {
+                "type": "function_call",
+                "id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d",
+                "call_id": "call_SwcE17DI84L9wQp5y5ZAv8xS",
+                "name": "read"
+              }
+            },
+            {
+              "t_ms": 3013.4,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3023.6,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3023.8,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3025.6,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3038.1,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3043.7,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3045.4,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3083.6,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3095.8,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3133.5,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3141.8,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3143.6,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3147.9,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3149.5,
+              "type": "response.function_call_arguments.delta",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3151.5,
+              "type": "response.function_call_arguments.done",
+              "output_index": 1,
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d"
+            },
+            {
+              "t_ms": 3153.4,
+              "type": "response.output_item.done",
+              "output_index": 1,
+              "item": {
+                "type": "function_call",
+                "id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d",
+                "call_id": "call_SwcE17DI84L9wQp5y5ZAv8xS",
+                "name": "read"
+              }
+            },
+            {
+              "t_ms": 3160.9,
+              "type": "response.completed",
+              "status": "completed",
+              "usage": {
+                "input_tokens": 927,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "output_tokens": 41,
+                "output_tokens_details": {
+                  "reasoning_tokens": 13
+                },
+                "total_tokens": 968
+              },
+              "output_items": [
+                {
+                  "type": "reasoning",
+                  "id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+                },
+                {
+                  "type": "function_call",
+                  "id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d",
+                  "call_id": "call_SwcE17DI84L9wQp5y5ZAv8xS",
+                  "name": "read"
+                }
+              ]
+            }
+          ],
+          "tool_calls": [
+            {
+              "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d",
+              "call_id": "call_SwcE17DI84L9wQp5y5ZAv8xS",
+              "name": "read",
+              "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":5}"
+            }
+          ],
+          "post": 1,
+          "top_level_fields": [
+            "include",
+            "input",
+            "instructions",
+            "model",
+            "prompt_cache_key",
+            "reasoning",
+            "store",
+            "stream",
+            "text",
+            "tools"
+          ],
+          "model": "gpt-5.4-mini",
+          "stream": true,
+          "required_capabilities": [
+            "llm.streaming",
+            "llm.tools",
+            "llm.reasoning"
+          ],
+          "parallel_tool_calls": null,
+          "reasoning_fields": [
+            "effort",
+            "summary"
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "name": "read"
+            }
+          ],
+          "input_items": [
+            {
+              "type": "message"
+            }
+          ],
+          "status": 200,
+          "response_content_type": "text/event-stream; charset=utf-8",
+          "first_byte_ms": 1995.2,
+          "first_event_ms": 1995.7,
+          "usage_reported": true,
+          "upstream": "https://api.openai.com/v1/responses",
+          "event_order": [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.done",
+            "response.output_item.done",
+            "response.output_item.added",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+            "response.completed"
+          ],
+          "reported_usage": [
+            {
+              "input_tokens": 927,
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "output_tokens": 41,
+              "output_tokens_details": {
+                "reasoning_tokens": 13
+              },
+              "total_tokens": 968
+            }
+          ],
+          "reported_usage_total_tokens": 968,
+          "timing_origin": "t_ms and first_event_ms are measured from upstream POST start; no wall-clock timestamps or raw event payloads retained"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/responses",
+          "request_body_bytes": 6961,
+          "events": [
+            {
+              "t_ms": 1107.5,
+              "type": "response.created",
+              "first_event": true
+            },
+            {
+              "t_ms": 1107.9,
+              "type": "response.in_progress"
+            },
+            {
+              "t_ms": 1890.3,
+              "type": "response.output_item.added",
+              "output_index": 0,
+              "item": {
+                "type": "message",
+                "id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+              }
+            },
+            {
+              "t_ms": 1890.3,
+              "type": "response.content_part.added",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1890.3,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1890.3,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1890.8,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1890.8,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1890.8,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1890.8,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1891.1,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1891.1,
+              "type": "response.output_text.delta",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1891.1,
+              "type": "response.output_text.done",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1891.1,
+              "type": "response.content_part.done",
+              "output_index": 0,
+              "item_id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+            },
+            {
+              "t_ms": 1891.5,
+              "type": "response.output_item.done",
+              "output_index": 0,
+              "item": {
+                "type": "message",
+                "id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+              }
+            },
+            {
+              "t_ms": 1891.9,
+              "type": "response.completed",
+              "status": "completed",
+              "usage": {
+                "input_tokens": 997,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "output_tokens": 12,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 1009
+              },
+              "output_items": [
+                {
+                  "type": "message",
+                  "id": "msg_0029f25b5d9d5c23016abe4b730bb887d196cd79fa9f7f47a2"
+                }
+              ]
+            }
+          ],
+          "tool_calls": [],
+          "post": 2,
+          "top_level_fields": [
+            "include",
+            "input",
+            "instructions",
+            "model",
+            "prompt_cache_key",
+            "reasoning",
+            "store",
+            "stream",
+            "text",
+            "tools"
+          ],
+          "model": "gpt-5.4-mini",
+          "stream": true,
+          "required_capabilities": [
+            "llm.streaming",
+            "llm.tools",
+            "llm.reasoning"
+          ],
+          "parallel_tool_calls": null,
+          "reasoning_fields": [
+            "effort",
+            "summary"
+          ],
+          "tools": [
+            {
+              "type": "function",
+              "name": "read"
+            }
+          ],
+          "input_items": [
+            {
+              "type": "message"
+            },
+            {
+              "type": "reasoning",
+              "id": "rs_0029f25b5d9d5c23016abe4b70a69487d1b5d4fcbe9b6d6aa9"
+            },
+            {
+              "type": "function_call",
+              "id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d",
+              "call_id": "call_SwcE17DI84L9wQp5y5ZAv8xS",
+              "name": "read"
+            },
+            {
+              "type": "function_call_output",
+              "call_id": "call_SwcE17DI84L9wQp5y5ZAv8xS"
+            }
+          ],
+          "status": 200,
+          "response_content_type": "text/event-stream; charset=utf-8",
+          "first_byte_ms": 1107.1,
+          "first_event_ms": 1107.5,
+          "usage_reported": true,
+          "upstream": "https://api.openai.com/v1/responses",
+          "event_order": [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.completed"
+          ],
+          "reported_usage": [
+            {
+              "input_tokens": 997,
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "output_tokens": 12,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              },
+              "total_tokens": 1009
+            }
+          ],
+          "reported_usage_total_tokens": 1009,
+          "timing_origin": "t_ms and first_event_ms are measured from upstream POST start; no wall-clock timestamps or raw event payloads retained"
+        }
+      ],
+      "tool_result_association": {
+        "path": "alpha.txt",
+        "item_id": "fc_0029f25b5d9d5c23016abe4b719bfc87d1a82de98c68519e6d",
+        "call_id": "call_SwcE17DI84L9wQp5y5ZAv8xS",
+        "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":5}",
+        "continuation_input_item": {
+          "type": "function_call_output",
+          "call_id": "call_SwcE17DI84L9wQp5y5ZAv8xS"
+        },
+        "client_marker_verified": true
+      },
+      "reported_usage_total_tokens": 1977,
+      "terminal_usage_complete_for_every_upstream_request": true,
+      "outcome": "Completed: first Responses request streamed a read tool call and argument deltas, OpenCode returned the matching local tool result in the next request, and the backend continuation completed. Both requests reported usage."
+    }
+  },
+  "observer_implementation": {
+    "source": "scripts/m1-gateway-observer.py (repository-relative)",
+    "max_upstream_request_body_bytes": 65536,
+    "max_sse_event_scratch_bytes": 65536,
+    "max_upstream_posts_per_observer": 8,
+    "response_forwarding": "2048-byte reads and immediate writes/flushes; no complete-response buffering",
+    "offline_regression": "python3 scripts/m1-gateway-observer.py --self-test",
+    "fixture_covers": [
+      "missing optional event keys",
+      "unknown event type",
+      "split CRLF SSE delimiters",
+      "tool argument deltas",
+      "terminal usage",
+      "private delta text exclusion"
+    ]
+  }
+}
