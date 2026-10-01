@@ -16,7 +16,7 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | Document | Owns |
 | --- | --- |
 | [Current](implementation/CURRENT.md) | Verified state, immediate focus, blockers, available commands |
-| [Tasks](implementation/TASKS.md) | Task status, owner, dependencies, scope, result, primary check |
+| [Tasks](implementation/TASKS.md) | Task status, owner, dependencies, scope, result, primary check; [bounded M2 plan](implementation/TASKS.md#m2--connector-api-and-conformance-baseline) |
 | [Task template](implementation/tasks/TEMPLATE.md) | Planner's format for bounded task cards in `implementation/tasks/` |
 | [Roadmap](implementation/ROADMAP.md) | Milestones and acceptance gates; not a task checklist |
 | [Stack](implementation/STACK.md) | Toolchain, libraries, build and operational conventions |

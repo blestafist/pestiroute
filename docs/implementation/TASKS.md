@@ -89,3 +89,63 @@ Existing IDs retain their purpose: M1-001 is now fixed-response composition afte
 | [M1-026](tasks/M1-026.md) | DONE | GPT-6 Luna (M1-026 worker) | M1-025, M1-031 | Observe live direct/gateway streaming interruption and cancellation | Observer-side EOF followed CLI SIGINT/process exit; in-client HTTP abort and gateway teardown remain unverified; direct attempt limit reached | `python3 scripts/m1-gateway-observer.py --self-test`, evidence review, `./scripts/check.sh`, and `git diff --check` |
 | [M1-003](tasks/M1-003.md) | DONE | GPT-6 Luna (M1-003 worker) | M1-024, M1-025, M1-026 | Compare versioned direct/gateway evidence and report supported/unknown observations | Supplementary direct and gateway parallel continuations completed with paired HEAD/binary/observer provenance; `llm.tools.parallel` remains unknown; historical M1-025 revision explicitly unknown | Sanitized supplementary JSON structural comparison, observer self-test, and `./scripts/check.sh` |
 | [M1-027](tasks/M1-027.md) | DONE | GPT-6 Luna (M1-027 worker) | M1-022, M1-003 | Verify every M1 roadmap gate and hand off actual scope to M2 | M1 roadmap gates audited; honest limits documented (tools.parallel unknown, cancellation linked to deterministic proof, historical revision unknown with supplementary HEAD 21d5c13 proven); M2 handoff scoped | Acceptance-to-evidence audit, TestResponsesCancel(Before|After)Head, and `./scripts/check.sh` |
+
+## M2 — Connector API and Conformance Baseline
+
+These 34 bounded cards cover [M2](ROADMAP.md#m2--connector-api-and-conformance-baseline) against the completed M1 code at `d4c76d0`. **Assign one READY card per worker session, never the milestone or a dependency chain.** M2-001 is the initial executable planning slice; every dependent card is DRAFT until actual prerequisite results and concrete checks support promotion. Later milestones remain outcomes in ROADMAP; these candidates do not authorize implementation before their dependencies.
+
+M1 already supplies the opaque envelope, Head/Body/Complete, typed errors, checked streams and cancellation. Extend that binding rather than replace it. The observed migration seams are the fixed model/protocol/capability allowlist in `internal/core/dispatch.go`, fixed model validation in Adapter Decode, composition-owned `fixedTarget`/capability wiring, constructor-held credentials and finalization at Complete before validating trailing EOF. They are planning inputs, not permission to fix adjacent cards in one session.
+
+Keep shared types and runtime independent of concrete components. New package names/configuration fields remain candidates until M2-001 fixes the binding; refresh linked code/test names before READY. Each card links only its relevant contract sections and current code. No new paid/live run is required: historical M1 evidence stays version-scoped and `llm.tools.parallel` remains unknown for its live target.
+
+**M2 limits:** native execution, explicit identity model routes, selected in-memory account scopes, environment-backed scoped services, one attempt per request and bounded in-memory observations. Multiple disjoint routes may select different instances/accounts; no automatic alternative target selection, replay, load balancing, aliases/model rewriting, cross-account stateful portability or session APIs. SQLite, durable secrets/usage, virtual keys, admission limits, reservations/reconciliation, OAuth persistence/refresh and actual bounded fallback belong to M3. Translation/new protocols and IPC remain later milestones. The M3 YAML example is not an M2 checklist.
+
+### Execution Groups
+
+| Group | Cards | Bounded result |
+| --- | --- | --- |
+| Binding and scoped services | M2-001–M2-004 | Concrete Go signatures, descriptors/support operations and isolated invocation services |
+| Registry and components | M2-005–M2-012 | Lifecycle-managed native/Adapter wrappers and deterministic scripted Connector |
+| Eligibility and runtime | M2-013–M2-018 | Explicit scoped routing, common dispatch, attempt records and validated terminal finalization |
+| Startup integration | M2-019–M2-021 | Compatible local topology, common composition and bounded shutdown |
+| Conformance | M2-022–M2-028 | One reusable runner and small lifecycle/bytes/failure/usage/cancellation/backpressure suites |
+| Integration and closure | M2-029–M2-034 | Routed failure proof, M1 regressions, concurrency/import checks, local procedure and acceptance audit |
+
+Groups describe outcomes, not assignment bundles or status. The dependency column alone determines promotion. After the binding is complete, independent candidates can be prepared separately; avoid concurrent edits to the same shared files. If a card grows beyond one verifiable result, preserve its ID/scope and register a new bounded follow-up rather than absorbing a neighboring deliverable.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M2-001](tasks/M2-001.md) | READY | — | M1-027 | Specify the M2 Go binding and migration seams | — | Manual v1/signature and scenario mapping; local links/anchors; `git diff --check` |
+| [M2-002](tasks/M2-002.md) | DRAFT | — | M2-001 | Add shared descriptor and capability-scope types | — | [Direct proof](tasks/M2-002.md#verification) and `./scripts/check.sh` |
+| [M2-003](tasks/M2-003.md) | DRAFT | — | M2-002 | Bind model, estimate and authentication support operations | — | [Direct proof](tasks/M2-003.md#verification) and `./scripts/check.sh` |
+| [M2-004](tasks/M2-004.md) | DRAFT | — | M2-002 | Implement invocation-scoped runtime services | — | [Direct proof](tasks/M2-004.md#verification) and `./scripts/check.sh` |
+| [M2-005](tasks/M2-005.md) | DRAFT | — | M2-002 | Validate registry identities and API compatibility | — | [Direct proof](tasks/M2-005.md#verification) and `./scripts/check.sh` |
+| [M2-006](tasks/M2-006.md) | DRAFT | — | M2-005 | Gate registry availability on Init and Health | — | [Direct proof](tasks/M2-006.md#verification) and `./scripts/check.sh` |
+| [M2-007](tasks/M2-007.md) | DRAFT | — | M2-006 | Close registry components safely and idempotently | — | [Direct proof](tasks/M2-007.md#verification) and `./scripts/check.sh` |
+| [M2-008](tasks/M2-008.md) | DRAFT | — | M2-003 | Wrap the native Connector lifecycle and support operations | — | [Direct proof](tasks/M2-008.md#verification) and `./scripts/check.sh` |
+| [M2-009](tasks/M2-009.md) | DRAFT | — | M2-004, M2-008 | Move native Execute behind scoped Connector services | — | [Direct proof](tasks/M2-009.md#verification) and `./scripts/check.sh` |
+| [M2-010](tasks/M2-010.md) | DRAFT | — | M2-002 | Expose the Responses Adapter as a managed component | — | [Direct proof](tasks/M2-010.md#verification) and `./scripts/check.sh` |
+| [M2-011](tasks/M2-011.md) | DRAFT | — | M2-003, M2-004 | Add a scripted Connector for valid deterministic execution | — | [Direct proof](tasks/M2-011.md#verification) and `./scripts/check.sh` |
+| [M2-012](tasks/M2-012.md) | DRAFT | — | M2-011 | Add scripted failures and malformed stream sequences | — | [Direct proof](tasks/M2-012.md#verification) and `./scripts/check.sh` |
+| [M2-013](tasks/M2-013.md) | DRAFT | — | M2-003, M2-006, M2-010 | Implement exact scoped model and capability eligibility | — | [Direct proof](tasks/M2-013.md#verification) and `./scripts/check.sh` |
+| [M2-014](tasks/M2-014.md) | DRAFT | — | M2-005, M2-013 | Select explicit native routes deterministically | — | [Direct proof](tasks/M2-014.md#verification) and `./scripts/check.sh` |
+| [M2-015](tasks/M2-015.md) | DRAFT | — | M2-010, M2-014 | Move model allowlisting from Responses Decode to routing | — | [Direct proof](tasks/M2-015.md#verification) and `./scripts/check.sh` |
+| [M2-016](tasks/M2-016.md) | DRAFT | — | M2-004, M2-007, M2-012, M2-014 | Dispatch through registry, route and scoped context | — | [Direct proof](tasks/M2-016.md#verification) and `./scripts/check.sh` |
+| [M2-017](tasks/M2-017.md) | DRAFT | — | M2-016 | Record bounded in-memory attempt observations | — | [Direct proof](tasks/M2-017.md#verification) and `./scripts/check.sh` |
+| [M2-018](tasks/M2-018.md) | DRAFT | — | M2-012, M2-017 | Validate terminal EOF before finalizing stream success | — | [Direct proof](tasks/M2-018.md#verification) and `./scripts/check.sh` |
+| [M2-019](tasks/M2-019.md) | DRAFT | — | M2-001, M2-004, M2-014 | Load minimal M2 topology without breaking M1 startup | — | [Direct proof](tasks/M2-019.md#verification) and `./scripts/check.sh` |
+| [M2-020](tasks/M2-020.md) | DRAFT | — | M2-009, M2-015, M2-018, M2-019 | Compose managed Adapter and native registry at startup | — | [Direct proof](tasks/M2-020.md#verification) and `./scripts/check.sh` |
+| [M2-021](tasks/M2-021.md) | DRAFT | — | M2-007, M2-020 | Drain and cancel managed components on shutdown | — | [Direct proof](tasks/M2-021.md#verification) and `./scripts/check.sh` |
+| [M2-022](tasks/M2-022.md) | DRAFT | — | M2-009, M2-012, M2-018 | Create the reusable conformance runner and factories | — | [Direct proof](tasks/M2-022.md#verification) and `./scripts/check.sh` |
+| [M2-023](tasks/M2-023.md) | DRAFT | — | M2-022 | Add lifecycle and scoped-service conformance cases | — | [Direct proof](tasks/M2-023.md#verification) and `./scripts/check.sh` |
+| [M2-024](tasks/M2-024.md) | DRAFT | — | M2-022 | Add opacity and incremental-delivery conformance cases | — | [Direct proof](tasks/M2-024.md#verification) and `./scripts/check.sh` |
+| [M2-025](tasks/M2-025.md) | DRAFT | — | M2-022 | Add stream-contract violation conformance cases | — | [Direct proof](tasks/M2-025.md#verification) and `./scripts/check.sh` |
+| [M2-026](tasks/M2-026.md) | DRAFT | — | M2-022 | Add error, usage and no-replay conformance cases | — | [Direct proof](tasks/M2-026.md#verification) and `./scripts/check.sh` |
+| [M2-027](tasks/M2-027.md) | DRAFT | — | M2-022 | Add cancellation and partial-Close conformance cases | — | [Direct proof](tasks/M2-027.md#verification) and `./scripts/check.sh` |
+| [M2-028](tasks/M2-028.md) | DRAFT | — | M2-024 | Add bounded-backpressure conformance cases | — | [Direct proof](tasks/M2-028.md#verification) and `./scripts/check.sh` |
+| [M2-029](tasks/M2-029.md) | DRAFT | — | M2-018, M2-019 | Verify routed runtime failures with scripted Connectors | — | [Direct proof](tasks/M2-029.md#verification) and `./scripts/check.sh` |
+| [M2-030](tasks/M2-030.md) | DRAFT | — | M2-021, M2-029 | Run the assembled M1 native regression on M2 | — | [Direct proof](tasks/M2-030.md#verification) and `./scripts/check.sh` |
+| [M2-031](tasks/M2-031.md) | DRAFT | — | M2-018, M2-021, M2-027 | Verify concurrent attempt and scope isolation | — | [Direct proof](tasks/M2-031.md#verification) and `./scripts/check.sh` |
+| [M2-032](tasks/M2-032.md) | DRAFT | — | M2-020, M2-022 | Enforce provider-agnostic Core and registry dependencies | — | [Direct proof](tasks/M2-032.md#verification) and `./scripts/check.sh` |
+| [M2-033](tasks/M2-033.md) | DRAFT | — | M2-023, M2-025, M2-026, M2-028, M2-030, M2-031, M2-032 | Document runnable M2 topology and verification | — | [Direct proof](tasks/M2-033.md#verification) and `./scripts/check.sh` |
+| [M2-034](tasks/M2-034.md) | DRAFT | — | M2-024, M2-029, M2-033 | Audit M2 acceptance and prepare the M3 handoff | — | [Direct proof](tasks/M2-034.md#verification) and `./scripts/check.sh` |
