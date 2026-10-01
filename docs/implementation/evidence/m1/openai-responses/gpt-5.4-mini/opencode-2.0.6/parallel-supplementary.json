@@ -1,0 +1,1713 @@
+{
+  "date": "2026-10-01",
+  "scenario": "Supplementary direct parallel-tools Responses run; harmless alpha.txt and beta.txt only; same OpenCode 2.0.6 / gpt-5.4-mini / HTTP Responses baseline. Temporary loopback observer forwarded direct to OpenAI; no PestiRoute gateway.",
+  "provenance": {
+    "git_head_at_capture": "21d5c13757baada4cab1cd27b152da392dc23ea5",
+    "working_tree_runtime_sources_clean": true,
+    "observer_script": "scripts/m1-gateway-observer.py",
+    "observer_script_mtime": "2026-10-01T15:01:42.941269099+02:00",
+    "observer_script_sha256": "36fad17e505cc859f70198889fc3054b65c09b6fc6e9eab489ec78d1c8d13e2f",
+    "trace_materialized_at": "2026-10-01T15:18:53.522290377+02:00",
+    "trace_timestamp_note": "This is the sanitized trace copy/materialization timestamp; original observer did not write wall-clock timestamps into individual events.",
+    "client": "OpenCode V2 CLI 2.0.6",
+    "provider": "OpenAI public Responses API",
+    "model": "gpt-5.4-mini",
+    "transport": "HTTP streaming",
+    "observer_max_body_bytes": 65536,
+    "credential_handling": "Client used a synthetic process-only bearer; observer used existing process-scoped provider credential. Values absent from evidence.",
+    "project": "Disposable alpha.txt/beta.txt harmless marker files; files and generated text not retained."
+  },
+  "manual_client_invocations": 2,
+  "non_egress_setup_attempt": {
+    "result": "Observer rejected an initial wrong model before provider forwarding; subsequent client retries were blocked by its stop latch. No provider HTTP request/usage. Root cause for invalid request was the invocation omitting OPENCODE_CONFIG; corrected on the sole successful invocation.",
+    "provider_posts": 0
+  },
+  "successful_invocation": {
+    "client_exit_code": 0,
+    "expected_alpha_and_beta_markers_verified": true,
+    "provider_posts": 2,
+    "reported_total_tokens": 11528,
+    "parallel_tool_calls_wire_field": null,
+    "tool_calls": [
+      {
+        "item_id": "fc_09278eb91e399d25016abe5dbaa63087d2bac1e957541b308e",
+        "call_id": "call_x1AfLCOiSsxwozjkhvpQbV8w",
+        "name": "read",
+        "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":2}"
+      },
+      {
+        "item_id": "fc_09278eb91e399d25016abe5dbaa64487d283b01997cc5813d3",
+        "call_id": "call_YveyUOOPBJNqoPQFH3TLQcDQ",
+        "name": "read",
+        "arguments": "{\"path\":\"beta.txt\",\"offset\":1,\"limit\":2}"
+      }
+    ],
+    "result_associations_in_continuation": [
+      {
+        "type": "function_call_output",
+        "call_id": "call_x1AfLCOiSsxwozjkhvpQbV8w"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_YveyUOOPBJNqoPQFH3TLQcDQ"
+      }
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/v1/responses",
+        "request_body_bytes": 26790,
+        "events": [
+          {
+            "t_ms": 1687.0,
+            "type": "response.created",
+            "first_event": true
+          },
+          {
+            "t_ms": 1792.0,
+            "type": "response.in_progress"
+          },
+          {
+            "t_ms": 1792.0,
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+              "type": "reasoning",
+              "id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+            }
+          },
+          {
+            "t_ms": 2311.7,
+            "type": "response.reasoning_summary_part.added",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2312.1,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2317.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2319.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2351.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2353.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2358.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2359.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2359.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2367.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2376.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2381.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2387.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2395.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2401.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2415.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2419.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2423.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2435.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2443.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2449.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2457.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2465.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2473.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2479.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2487.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2497.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2501.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2515.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2527.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2537.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2547.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2553.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2565.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2571.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2579.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2585.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2595.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2599.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2620.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2620.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2623.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2633.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2641.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2651.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2661.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2669.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2677.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2687.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2691.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2701.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2715.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2727.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2733.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2743.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2749.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2757.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2768.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2773.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2797.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2805.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2819.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2825.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2835.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2851.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2851.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2857.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2865.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2871.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2881.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2903.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2913.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2921.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2925.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2933.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2953.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2955.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2968.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2975.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2981.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2985.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 2997.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 3006.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 3009.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 3015.5,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 3021.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 3231.7,
+            "type": "response.reasoning_summary_text.done",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 3237.3,
+            "type": "response.reasoning_summary_part.done",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "t_ms": 3246.7,
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+              "type": "reasoning",
+              "id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+            }
+          },
+          {
+            "t_ms": 3247.3,
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+              "type": "function_call",
+              "id": "fc_09278eb91e399d25016abe5dbaa63087d2bac1e957541b308e",
+              "call_id": "call_x1AfLCOiSsxwozjkhvpQbV8w",
+              "name": "read"
+            }
+          },
+          {
+            "t_ms": 3251.5,
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "item_id": "fc_09278eb91e399d25016abe5dbaa63087d2bac1e957541b308e"
+          },
+          {
+            "t_ms": 3253.2,
+            "type": "response.function_call_arguments.done",
+            "output_index": 1,
+            "item_id": "fc_09278eb91e399d25016abe5dbaa63087d2bac1e957541b308e"
+          },
+          {
+            "t_ms": 3255.3,
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+              "type": "function_call",
+              "id": "fc_09278eb91e399d25016abe5dbaa63087d2bac1e957541b308e",
+              "call_id": "call_x1AfLCOiSsxwozjkhvpQbV8w",
+              "name": "read"
+            }
+          },
+          {
+            "t_ms": 3261.3,
+            "type": "response.output_item.added",
+            "output_index": 2,
+            "item": {
+              "type": "function_call",
+              "id": "fc_09278eb91e399d25016abe5dbaa64487d283b01997cc5813d3",
+              "call_id": "call_YveyUOOPBJNqoPQFH3TLQcDQ",
+              "name": "read"
+            }
+          },
+          {
+            "t_ms": 3269.3,
+            "type": "response.function_call_arguments.delta",
+            "output_index": 2,
+            "item_id": "fc_09278eb91e399d25016abe5dbaa64487d283b01997cc5813d3"
+          },
+          {
+            "t_ms": 3283.4,
+            "type": "response.function_call_arguments.done",
+            "output_index": 2,
+            "item_id": "fc_09278eb91e399d25016abe5dbaa64487d283b01997cc5813d3"
+          },
+          {
+            "t_ms": 3291.4,
+            "type": "response.output_item.done",
+            "output_index": 2,
+            "item": {
+              "type": "function_call",
+              "id": "fc_09278eb91e399d25016abe5dbaa64487d283b01997cc5813d3",
+              "call_id": "call_YveyUOOPBJNqoPQFH3TLQcDQ",
+              "name": "read"
+            }
+          },
+          {
+            "t_ms": 3298.7,
+            "type": "response.completed",
+            "status": "completed",
+            "usage": {
+              "input_tokens": 5569,
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "output_tokens": 131,
+              "output_tokens_details": {
+                "reasoning_tokens": 65
+              },
+              "total_tokens": 5700
+            },
+            "output_items": [
+              {
+                "type": "reasoning",
+                "id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+              },
+              {
+                "type": "function_call",
+                "id": "fc_09278eb91e399d25016abe5dbaa63087d2bac1e957541b308e",
+                "call_id": "call_x1AfLCOiSsxwozjkhvpQbV8w",
+                "name": "read"
+              },
+              {
+                "type": "function_call",
+                "id": "fc_09278eb91e399d25016abe5dbaa64487d283b01997cc5813d3",
+                "call_id": "call_YveyUOOPBJNqoPQFH3TLQcDQ",
+                "name": "read"
+              }
+            ]
+          }
+        ],
+        "tool_calls": [
+          {
+            "item_id": "fc_09278eb91e399d25016abe5dbaa63087d2bac1e957541b308e",
+            "call_id": "call_x1AfLCOiSsxwozjkhvpQbV8w",
+            "name": "read",
+            "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":2}"
+          },
+          {
+            "item_id": "fc_09278eb91e399d25016abe5dbaa64487d283b01997cc5813d3",
+            "call_id": "call_YveyUOOPBJNqoPQFH3TLQcDQ",
+            "name": "read",
+            "arguments": "{\"path\":\"beta.txt\",\"offset\":1,\"limit\":2}"
+          }
+        ],
+        "post": 1,
+        "top_level_fields": [
+          "include",
+          "input",
+          "instructions",
+          "model",
+          "prompt_cache_key",
+          "reasoning",
+          "store",
+          "stream",
+          "text",
+          "tools"
+        ],
+        "model": "gpt-5.4-mini",
+        "stream": true,
+        "required_capabilities": [
+          "llm.streaming",
+          "llm.tools",
+          "llm.reasoning"
+        ],
+        "parallel_tool_calls": null,
+        "reasoning_fields": [
+          "effort",
+          "summary"
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "glob"
+          },
+          {
+            "type": "function",
+            "name": "grep"
+          },
+          {
+            "type": "function",
+            "name": "patch"
+          },
+          {
+            "type": "function",
+            "name": "question"
+          },
+          {
+            "type": "function",
+            "name": "read"
+          },
+          {
+            "type": "function",
+            "name": "shell"
+          },
+          {
+            "type": "function",
+            "name": "skill"
+          },
+          {
+            "type": "function",
+            "name": "subagent"
+          },
+          {
+            "type": "function",
+            "name": "webfetch"
+          },
+          {
+            "type": "function",
+            "name": "websearch"
+          },
+          {
+            "type": "function",
+            "name": "execute"
+          }
+        ],
+        "input_items": [
+          {
+            "type": "message"
+          }
+        ],
+        "status": 200,
+        "response_content_type": "text/event-stream; charset=utf-8",
+        "first_byte_ms": 1683.9,
+        "first_event_type": "response.created",
+        "first_event_ms": 1687.0,
+        "client_transport_closed": true,
+        "cancellation_signal_propagated": true,
+        "upstream_socket_closed": true,
+        "stream_end": "client_disconnect",
+        "observer_error": "downstream_disconnect"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/responses",
+        "request_body_bytes": 29720,
+        "events": [
+          {
+            "t_ms": 1153.4,
+            "type": "response.created",
+            "first_event": true
+          },
+          {
+            "t_ms": 1257.4,
+            "type": "response.in_progress"
+          },
+          {
+            "t_ms": 1258.1,
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+              "type": "reasoning",
+              "id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+            }
+          },
+          {
+            "t_ms": 1556.3,
+            "type": "response.reasoning_summary_part.added",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1556.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1566.1,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1576.2,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1583.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1609.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1635.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1646.1,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1653.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1664.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1670.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1681.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1688.2,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1698.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1705.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1714.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1726.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1737.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1748.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1764.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1767.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1771.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1781.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1788.1,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1799.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1806.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1833.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1841.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1853.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1863.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1875.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1879.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1887.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1894.1,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1899.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1908.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1915.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1922.4,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1930.1,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1935.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1943.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1954.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1959.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1973.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1981.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1991.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 1997.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2007.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2014.3,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2023.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2031.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2037.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2048.1,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2057.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2065.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2083.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2089.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2116.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2121.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2133.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2141.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2170.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2180.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2193.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2201.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2209.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2218.1,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2223.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2236.0,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2241.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2251.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2261.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2279.7,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2287.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2295.6,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2302.1,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2315.8,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2323.9,
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2351.0,
+            "type": "response.reasoning_summary_text.done",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2351.4,
+            "type": "response.reasoning_summary_part.done",
+            "output_index": 0,
+            "item_id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+          },
+          {
+            "t_ms": 2354.9,
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+              "type": "reasoning",
+              "id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+            }
+          },
+          {
+            "t_ms": 2359.6,
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+              "type": "message",
+              "id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+            }
+          },
+          {
+            "t_ms": 2364.6,
+            "type": "response.content_part.added",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2366.1,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2369.6,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2371.6,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2383.8,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2383.8,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2383.8,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2385.6,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2387.6,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2389.8,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2397.5,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2397.8,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2400.5,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2402.1,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2405.6,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2407.7,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2411.9,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2418.0,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2427.7,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2454.1,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2479.7,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2488.0,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2488.2,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2488.4,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2488.5,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2488.7,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2489.6,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2489.9,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2490.1,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2491.7,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2491.9,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2493.7,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2503.8,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2504.1,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2504.3,
+            "type": "response.output_text.delta",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2504.4,
+            "type": "response.output_text.done",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2505.5,
+            "type": "response.content_part.done",
+            "output_index": 1,
+            "item_id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+          },
+          {
+            "t_ms": 2505.9,
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+              "type": "message",
+              "id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+            }
+          },
+          {
+            "t_ms": 2524.8,
+            "type": "response.completed",
+            "status": "completed",
+            "usage": {
+              "input_tokens": 5756,
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 5632
+              },
+              "output_tokens": 72,
+              "output_tokens_details": {
+                "reasoning_tokens": 32
+              },
+              "total_tokens": 5828
+            },
+            "output_items": [
+              {
+                "type": "reasoning",
+                "id": "rs_09278eb91e399d25016abe5dbc068487d2b030d758cf4b9193"
+              },
+              {
+                "type": "message",
+                "id": "msg_09278eb91e399d25016abe5dbd248087d2aeae4fa105aa774d"
+              }
+            ]
+          }
+        ],
+        "tool_calls": [],
+        "post": 2,
+        "top_level_fields": [
+          "include",
+          "input",
+          "instructions",
+          "model",
+          "prompt_cache_key",
+          "reasoning",
+          "store",
+          "stream",
+          "text",
+          "tools"
+        ],
+        "model": "gpt-5.4-mini",
+        "stream": true,
+        "required_capabilities": [
+          "llm.streaming",
+          "llm.tools",
+          "llm.reasoning"
+        ],
+        "parallel_tool_calls": null,
+        "reasoning_fields": [
+          "effort",
+          "summary"
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "glob"
+          },
+          {
+            "type": "function",
+            "name": "grep"
+          },
+          {
+            "type": "function",
+            "name": "patch"
+          },
+          {
+            "type": "function",
+            "name": "question"
+          },
+          {
+            "type": "function",
+            "name": "read"
+          },
+          {
+            "type": "function",
+            "name": "shell"
+          },
+          {
+            "type": "function",
+            "name": "skill"
+          },
+          {
+            "type": "function",
+            "name": "subagent"
+          },
+          {
+            "type": "function",
+            "name": "webfetch"
+          },
+          {
+            "type": "function",
+            "name": "websearch"
+          },
+          {
+            "type": "function",
+            "name": "execute"
+          }
+        ],
+        "input_items": [
+          {
+            "type": "message"
+          },
+          {
+            "type": "reasoning",
+            "id": "rs_09278eb91e399d25016abe5db93f6487d290f6b2efc51cb8ac"
+          },
+          {
+            "type": "function_call",
+            "id": "fc_09278eb91e399d25016abe5dbaa63087d2bac1e957541b308e",
+            "call_id": "call_x1AfLCOiSsxwozjkhvpQbV8w",
+            "name": "read"
+          },
+          {
+            "type": "function_call",
+            "id": "fc_09278eb91e399d25016abe5dbaa64487d283b01997cc5813d3",
+            "call_id": "call_YveyUOOPBJNqoPQFH3TLQcDQ",
+            "name": "read"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_x1AfLCOiSsxwozjkhvpQbV8w"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_YveyUOOPBJNqoPQFH3TLQcDQ"
+          }
+        ],
+        "status": 200,
+        "response_content_type": "text/event-stream; charset=utf-8",
+        "first_byte_ms": 1151.2,
+        "first_event_type": "response.created",
+        "first_event_ms": 1153.4,
+        "usage_reported": true,
+        "stream_end": "eof"
+      }
+    ]
+  },
+  "sanitization": "Observer captured only allowlisted structural Responses metadata, complete arguments for alpha.txt/beta.txt, usage and timing. No credentials, headers, request/response payloads, prompts, file contents, generated text or reasoning content retained."
+}

@@ -1,0 +1,404 @@
+{
+  "date": "2026-09-30",
+  "client": {
+    "name": "OpenCode V2 CLI",
+    "version": "2.0.6"
+  },
+  "provider": "OpenAI public Responses API",
+  "model": "gpt-5.4-mini",
+  "transport": "HTTP streaming",
+  "scope": "Direct leg only via temporary loopback streaming observer forwarding to api.openai.com over HTTPS; no PestiRoute gateway.",
+  "scenario": "Parallel read requests for two harmless local files; one manually initiated OpenCode run (within <=2).",
+  "observer_limits": {
+    "max_upstream_responses_posts": 8,
+    "max_request_body_bytes": 8192,
+    "max_output_tokens_per_response": 512,
+    "lockout_after_body_or_API_error": true
+  },
+  "upstream_requests": [
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "upstream": "https://api.openai.com/v1/responses",
+      "status": 200,
+      "model": "gpt-5.4-mini",
+      "stream": true,
+      "request_body_bytes": 7802,
+      "enforced_max_output_tokens": 512,
+      "first_byte_ms": 703.8,
+      "input_item_types": [
+        "message",
+        "message"
+      ],
+      "events": [
+        {
+          "type": "response.created",
+          "t_ms": 704.4
+        },
+        {
+          "type": "response.in_progress",
+          "t_ms": 704.8
+        },
+        {
+          "type": "response.output_item.added",
+          "t_ms": 908.8,
+          "output_index": 0,
+          "item": {
+            "id": "rs_0e2ba94e44047d10016abd77eb607487d2b5975f986661e783",
+            "type": "reasoning"
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "t_ms": 1907.5,
+          "output_index": 0,
+          "item": {
+            "id": "rs_0e2ba94e44047d10016abd77eb607487d2b5975f986661e783",
+            "type": "reasoning"
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "t_ms": 1911.4,
+          "output_index": 1,
+          "item": {
+            "id": "msg_0e2ba94e44047d10016abd77ec5e9487d2b93344acb15ef355",
+            "type": "message"
+          }
+        },
+        {
+          "type": "response.content_part.added",
+          "t_ms": 1915.2,
+          "item_id": "msg_0e2ba94e44047d10016abd77ec5e9487d2b93344acb15ef355",
+          "output_index": 1
+        },
+        {
+          "type": "response.output_text.done",
+          "t_ms": 2959.1,
+          "item_id": "msg_0e2ba94e44047d10016abd77ec5e9487d2b93344acb15ef355",
+          "output_index": 1
+        },
+        {
+          "type": "response.content_part.done",
+          "t_ms": 2959.3,
+          "item_id": "msg_0e2ba94e44047d10016abd77ec5e9487d2b93344acb15ef355",
+          "output_index": 1
+        },
+        {
+          "type": "response.output_item.done",
+          "t_ms": 2960.9,
+          "output_index": 1,
+          "item": {
+            "id": "msg_0e2ba94e44047d10016abd77ec5e9487d2b93344acb15ef355",
+            "type": "message"
+          }
+        },
+        {
+          "type": "response.completed",
+          "t_ms": 2983.8,
+          "response_id": "resp_0e2ba94e44047d10016abd77eac4dc87d2a3b66e550b0b2764",
+          "status": "completed",
+          "usage": {
+            "input_tokens": 1511,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 328,
+            "output_tokens_details": {
+              "reasoning_tokens": 120
+            },
+            "total_tokens": 1839
+          },
+          "output_items": [
+            {
+              "id": "rs_0e2ba94e44047d10016abd77eb607487d2b5975f986661e783",
+              "type": "reasoning"
+            },
+            {
+              "id": "msg_0e2ba94e44047d10016abd77ec5e9487d2b93344acb15ef355",
+              "type": "message"
+            }
+          ]
+        }
+      ],
+      "conservative_exposure_proxy": {
+        "value": 8314,
+        "arithmetic": "7802 request-body bytes + 512 max-output tokens = 8314",
+        "interpretation": "Mixed byte/token planning proxy only; not measured provider token usage and not a proven token upper bound."
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "upstream": "https://api.openai.com/v1/responses",
+      "status": 200,
+      "model": "gpt-5.4-mini",
+      "stream": true,
+      "request_body_bytes": 5913,
+      "enforced_max_output_tokens": 512,
+      "first_byte_ms": 968.8,
+      "input_item_types": [
+        "message"
+      ],
+      "events": [
+        {
+          "type": "response.created",
+          "t_ms": 969.3
+        },
+        {
+          "type": "response.in_progress",
+          "t_ms": 969.8
+        },
+        {
+          "type": "response.output_item.added",
+          "t_ms": 1502.3,
+          "output_index": 0,
+          "item": {
+            "id": "rs_075a1793df205f73016abd77eef91087d295b6ac3ebd1cf267",
+            "type": "reasoning"
+          }
+        },
+        {
+          "type": "response.reasoning_summary_part.added",
+          "t_ms": 2209.8,
+          "item_id": "rs_075a1793df205f73016abd77eef91087d295b6ac3ebd1cf267",
+          "output_index": 0
+        },
+        {
+          "type": "response.reasoning_summary_text.done",
+          "t_ms": 3094.5,
+          "item_id": "rs_075a1793df205f73016abd77eef91087d295b6ac3ebd1cf267",
+          "output_index": 0
+        },
+        {
+          "type": "response.reasoning_summary_part.done",
+          "t_ms": 3094.7,
+          "item_id": "rs_075a1793df205f73016abd77eef91087d295b6ac3ebd1cf267",
+          "output_index": 0
+        },
+        {
+          "type": "response.output_item.done",
+          "t_ms": 3096.4,
+          "output_index": 0,
+          "item": {
+            "id": "rs_075a1793df205f73016abd77eef91087d295b6ac3ebd1cf267",
+            "type": "reasoning"
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "t_ms": 3099.6,
+          "output_index": 1,
+          "item": {
+            "id": "msg_075a1793df205f73016abd77f091e087d2af30cdd2d55c9233",
+            "type": "message"
+          }
+        },
+        {
+          "type": "response.content_part.added",
+          "t_ms": 3101.4,
+          "item_id": "msg_075a1793df205f73016abd77f091e087d2af30cdd2d55c9233",
+          "output_index": 1
+        },
+        {
+          "type": "response.output_text.done",
+          "t_ms": 3228.0,
+          "item_id": "msg_075a1793df205f73016abd77f091e087d2af30cdd2d55c9233",
+          "output_index": 1
+        },
+        {
+          "type": "response.content_part.done",
+          "t_ms": 3239.9,
+          "item_id": "msg_075a1793df205f73016abd77f091e087d2af30cdd2d55c9233",
+          "output_index": 1
+        },
+        {
+          "type": "response.output_item.done",
+          "t_ms": 3243.6,
+          "output_index": 1,
+          "item": {
+            "id": "msg_075a1793df205f73016abd77f091e087d2af30cdd2d55c9233",
+            "type": "message"
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "t_ms": 3246.3,
+          "output_index": 2,
+          "item": {
+            "id": "fc_075a1793df205f73016abd77f0b30487d29dab6ecd37ca7b0e",
+            "type": "function_call",
+            "call_id": "call_Zf7WUiGC6jckZIzEDJpoUMb0",
+            "name": "read"
+          }
+        },
+        {
+          "type": "response.function_call_arguments.done",
+          "t_ms": 3246.7,
+          "item_id": "fc_075a1793df205f73016abd77f0b30487d29dab6ecd37ca7b0e",
+          "output_index": 2,
+          "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}"
+        },
+        {
+          "type": "response.output_item.done",
+          "t_ms": 3247.6,
+          "output_index": 2,
+          "item": {
+            "id": "fc_075a1793df205f73016abd77f0b30487d29dab6ecd37ca7b0e",
+            "type": "function_call",
+            "call_id": "call_Zf7WUiGC6jckZIzEDJpoUMb0",
+            "name": "read"
+          }
+        },
+        {
+          "type": "response.output_item.added",
+          "t_ms": 3247.8,
+          "output_index": 3,
+          "item": {
+            "id": "fc_075a1793df205f73016abd77f0b31887d2baf42f43effe9306",
+            "type": "function_call",
+            "call_id": "call_it1iFEgGyNndmPOtcCCC1rfz",
+            "name": "read"
+          }
+        },
+        {
+          "type": "response.function_call_arguments.done",
+          "t_ms": 3249.5,
+          "item_id": "fc_075a1793df205f73016abd77f0b31887d2baf42f43effe9306",
+          "output_index": 3,
+          "arguments": "{\"path\":\"beta.txt\",\"offset\":1,\"limit\":1}"
+        },
+        {
+          "type": "response.output_item.done",
+          "t_ms": 3249.6,
+          "output_index": 3,
+          "item": {
+            "id": "fc_075a1793df205f73016abd77f0b31887d2baf42f43effe9306",
+            "type": "function_call",
+            "call_id": "call_it1iFEgGyNndmPOtcCCC1rfz",
+            "name": "read"
+          }
+        },
+        {
+          "type": "response.completed",
+          "t_ms": 3250.0,
+          "response_id": "resp_075a1793df205f73016abd77edb35887d29a947000dfccf9a7",
+          "status": "completed",
+          "usage": {
+            "input_tokens": 1164,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 148,
+            "output_tokens_details": {
+              "reasoning_tokens": 67
+            },
+            "total_tokens": 1312
+          },
+          "output_items": [
+            {
+              "id": "rs_075a1793df205f73016abd77eef91087d295b6ac3ebd1cf267",
+              "type": "reasoning"
+            },
+            {
+              "id": "msg_075a1793df205f73016abd77f091e087d2af30cdd2d55c9233",
+              "type": "message"
+            },
+            {
+              "id": "fc_075a1793df205f73016abd77f0b30487d29dab6ecd37ca7b0e",
+              "type": "function_call",
+              "call_id": "call_Zf7WUiGC6jckZIzEDJpoUMb0",
+              "name": "read",
+              "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}"
+            },
+            {
+              "id": "fc_075a1793df205f73016abd77f0b31887d2baf42f43effe9306",
+              "type": "function_call",
+              "call_id": "call_it1iFEgGyNndmPOtcCCC1rfz",
+              "name": "read",
+              "arguments": "{\"path\":\"beta.txt\",\"offset\":1,\"limit\":1}"
+            }
+          ]
+        }
+      ],
+      "conservative_exposure_proxy": {
+        "value": 6425,
+        "arithmetic": "5913 request-body bytes + 512 max-output tokens = 6425",
+        "interpretation": "Mixed byte/token planning proxy only; not measured provider token usage and not a proven token upper bound."
+      }
+    }
+  ],
+  "parallel_calls": [
+    {
+      "call_id": "call_Zf7WUiGC6jckZIzEDJpoUMb0",
+      "provider_item_id": "fc_075a1793df205f73016abd77f0b30487d29dab6ecd37ca7b0e",
+      "arguments": "{\"path\":\"alpha.txt\",\"offset\":1,\"limit\":1}",
+      "name": "read",
+      "path": "alpha.txt",
+      "client_result_status": "completed",
+      "expected_marker_verified": true
+    },
+    {
+      "call_id": "call_it1iFEgGyNndmPOtcCCC1rfz",
+      "provider_item_id": "fc_075a1793df205f73016abd77f0b31887d2baf42f43effe9306",
+      "arguments": "{\"path\":\"beta.txt\",\"offset\":1,\"limit\":1}",
+      "name": "read",
+      "path": "beta.txt",
+      "client_result_status": "completed",
+      "expected_marker_verified": true
+    }
+  ],
+  "client_tool_results": [
+    {
+      "client_call_id": "call_Zf7WUiGC6jckZIzEDJpoUMb0",
+      "provider_item_id": "fc_075a1793df205f73016abd77f0b30487d29dab6ecd37ca7b0e",
+      "tool": "read",
+      "path": "alpha.txt",
+      "client_tool_status": "completed",
+      "result_present": true,
+      "expected_marker_verified": true
+    },
+    {
+      "client_call_id": "call_it1iFEgGyNndmPOtcCCC1rfz",
+      "provider_item_id": "fc_075a1793df205f73016abd77f0b31887d2baf42f43effe9306",
+      "tool": "read",
+      "path": "beta.txt",
+      "client_tool_status": "completed",
+      "result_present": true,
+      "expected_marker_verified": true
+    }
+  ],
+  "continuation": {
+    "client_attempted_posts_after_calls": 2,
+    "provider_forwarded": false,
+    "reason": "each continuation POST exceeded the 8192-byte observer request-body limit (12,641 bytes); both were blocked before egress. Observer error ended the run; no retry run was made.",
+    "backend_received_tool_results": false
+  },
+  "accounting": {
+    "reported_provider_tokens": 3151,
+    "complete_usage_for_every_forwarded_request": true,
+    "blocked_client_posts_provider_tokens": 0,
+    "blocked_posts_body_bytes": 12641,
+    "daily_free_quota": "User-confirmed 2.5M remaining allowance; zero paid spend.",
+    "sum_of_mixed_unit_exposure_proxy_values": {
+      "value": 14739,
+      "arithmetic": "8,314 + 6,425 = 14,739; sum of request bytes and output-token limits, not actual token usage or a proven token upper bound."
+    },
+    "known_or_reported_batch_usage_minimum_tokens": 11451,
+    "usage_components_tokens": {
+      "instrumented_single_tool": 7132,
+      "earlier_single_tool_step_only": 1168,
+      "parallel_run": 3151
+    },
+    "prior_continuation_usage": "Unknown; the earlier uninstrumented run did not report continuation usage.",
+    "user_authorized_batch_cap_tokens": 100000,
+    "batch_cap_compliance": "Unverified: cumulative usage is unknown because of the prior unmeasured continuation. The cap is an authorization, not evidence that total consumption stayed within it.",
+    "account_free_and_paid_guard": "User-confirmed 2.5M daily free quota and account-level zero-paid enforcement; does not establish consumed aggregate."
+  },
+  "outcome": "Two parallel function calls with distinct call IDs, indices, full arguments and matching completed client-side read results were observed. API continuation with tool results was not demonstrated because observer rejected the oversized body before forwarding; do not claim backend continuation/result acceptance.",
+  "sanitization": {
+    "capture": "Structural Responses event metadata, IDs, indexes, usage, and complete alpha/beta function arguments only. No generated prose or reasoning text retained. Client-side tool result bodies are omitted; only completed status and an in-memory expected-marker check result are recorded."
+  }
+}

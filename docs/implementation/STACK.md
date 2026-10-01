@@ -22,6 +22,8 @@ These are initial preferences. The SQLite driver will be validated with a small 
 
 ## HTTP and Streaming
 
+The [M1 native binding and startup note](M1-BINDING.md) fixes the initial single-target JSON subset and component handoffs; the broader stack choices below are not an M1 implementation checklist.
+
 Each connector instance has a reusable HTTP client with connection pooling. Timeouts are separated into connection establishment, TLS handshake, response header reception, and idle time for active streams. A single short global `Client.Timeout` is unsuitable for long agent responses.
 
 Transport and SDK defaults must preserve the [one-attempt and replay rules](CONTRACT.md#connector-contract). Inference clients must disable automatic redirect following and SDK retries; audit `http.Transport` replay behavior, including replayable bodies and idempotency headers, so one Execute cannot silently resend inference. A redirect or transient transport error is classified by the Connector under the existing retry rules, not automatically followed. Scoped credentials must not travel to an unselected redirect target.

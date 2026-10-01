@@ -144,3 +144,23 @@ func TestCancellation(t *testing.T) {
 	cancel()
 	receive(t, got.Cancelled)
 }
+
+func TestCancellationDuringResponseWrite(t *testing.T) {
+	sent := make(chan struct{})
+	s := New(Response{Steps: []Step{{Data: bytes.Repeat([]byte{'x'}, 12<<20), Sent: sent}}})
+	defer s.Close()
+	res, err := http.Get(s.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := receive(t, s.Requests)
+	select {
+	case <-sent:
+		t.Fatal("large upstream write completed without a body reader")
+	case <-time.After(250 * time.Millisecond):
+	}
+	if err := res.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	receive(t, request.Cancelled)
+}
