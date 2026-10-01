@@ -190,18 +190,21 @@ func executionError(err error) *GatewayError {
 }
 
 type attemptStream struct {
-	source    Stream
-	ctx       context.Context
-	result    AttemptResult
-	observe   func(AttemptResult)
-	finish    func(AttemptResult)
-	stopMu    sync.Mutex
-	stop      func() bool
-	mu        sync.Mutex // Serializes Head handoff and terminal observation.
-	done      bool
-	published chan struct{}
-	commit    bool
-	closed    sync.Once
+	source     Stream
+	ctx        context.Context
+	result     AttemptResult
+	observe    func(AttemptResult)
+	finish     func(AttemptResult)
+	stopMu     sync.Mutex
+	stop       func() bool
+	mu         sync.Mutex // Serializes Head handoff and terminal observation.
+	done       bool
+	closing    bool
+	closeCause error
+	published  chan struct{}
+	commit     bool
+	pending    *CompleteFrame
+	closed     sync.Once
 }
 
 func (s *attemptStream) finalize(outcome Outcome, usage *UsageReport, err *GatewayError, preHeadGateway bool) bool {
@@ -214,6 +217,13 @@ func (s *attemptStream) finalize(outcome Outcome, usage *UsageReport, err *Gatew
 		}
 		return false
 	}
+	r, published := s.reserveLocked(outcome, usage, err, preHeadGateway)
+	s.mu.Unlock()
+	s.publish(r, published)
+	return true
+}
+
+func (s *attemptStream) reserveLocked(outcome Outcome, usage *UsageReport, err *GatewayError, preHeadGateway bool) (AttemptResult, chan struct{}) {
 	s.done = true
 	s.published = make(chan struct{})
 	r := s.result
@@ -228,21 +238,52 @@ func (s *attemptStream) finalize(outcome Outcome, usage *UsageReport, err *Gatew
 	}
 	r.Error = err
 	r.EndedAt = time.Now()
-	s.mu.Unlock()
+	return r, s.published
+}
+
+func (s *attemptStream) publish(r AttemptResult, published chan struct{}) {
 	if s.observe != nil {
 		s.observe(r)
 	}
-	close(s.published)
+	close(published)
 	if s.finish != nil {
 		s.finish(r)
 	}
-	return true
+}
+
+// finalizeEOF arbitrates orderly EOF against Close under the lifecycle lock.
+func (s *attemptStream) finalizeEOF(pending *CompleteFrame) error {
+	s.mu.Lock()
+	if s.done {
+		published, cause := s.published, s.closeCause
+		s.mu.Unlock()
+		if published != nil {
+			<-published
+		}
+		return cause
+	}
+	outcome, usage, gatewayErr := pending.Outcome, pending.Usage, pending.Error
+	if s.closing {
+		cause := s.closeCause
+		if cause == nil {
+			cause = context.Canceled
+		}
+		outcome, usage, gatewayErr = OutcomeCancelled, pending.Usage, executionError(cause)
+		r, published := s.reserveLocked(outcome, usage, gatewayErr, false)
+		s.mu.Unlock()
+		s.publish(r, published)
+		return cause
+	}
+	r, published := s.reserveLocked(outcome, usage, gatewayErr, false)
+	s.mu.Unlock()
+	s.publish(r, published)
+	return nil
 }
 
 func (s *attemptStream) handoff(head bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.done {
+	if s.done || s.closing {
 		return false
 	}
 	if head {
@@ -253,6 +294,16 @@ func (s *attemptStream) handoff(head bool) bool {
 
 func (s *attemptStream) Close() error {
 	var err error
+	cause := s.ctx.Err()
+	if cause == nil {
+		cause = context.Canceled
+	}
+	s.mu.Lock()
+	if !s.done {
+		s.closing = true
+		s.closeCause = cause
+	}
+	s.mu.Unlock()
 	s.closed.Do(func() {
 		s.stopMu.Lock()
 		if s.stop != nil {
@@ -261,10 +312,6 @@ func (s *attemptStream) Close() error {
 		s.stopMu.Unlock()
 		err = s.source.Close()
 	})
-	cause := s.ctx.Err()
-	if cause == nil {
-		cause = context.Canceled
-	}
 	s.fail(cause)
 	return err
 }
@@ -274,12 +321,31 @@ func (s *attemptStream) fail(err error) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		outcome = OutcomeCancelled
 	}
+	s.mu.Lock()
+	pending := s.pending
+	closing, closeCause := s.closing, s.closeCause
+	s.mu.Unlock()
+	if closing {
+		if closeCause == nil {
+			closeCause = context.Canceled
+		}
+		err = closeCause
+		outcome = OutcomeCancelled
+	}
 	var gatewayErr *GatewayError
-	preHeadGateway := errors.As(err, &gatewayErr)
+	preHeadGateway := !closing && pending == nil && errors.As(err, &gatewayErr)
 	if !preHeadGateway {
+		if pending != nil && outcome != OutcomeCancelled {
+			outcome = OutcomeFailed
+			err = ErrStreamContract
+		}
 		gatewayErr = executionError(err)
 	}
-	s.finalize(outcome, nil, gatewayErr, preHeadGateway)
+	var usage *UsageReport
+	if pending != nil {
+		usage = pending.Usage
+	}
+	s.finalize(outcome, usage, gatewayErr, preHeadGateway)
 }
 
 func (s *attemptStream) Next(ctx context.Context) (StreamFrame, error) {
@@ -289,7 +355,20 @@ func (s *attemptStream) Next(ctx context.Context) (StreamFrame, error) {
 	}
 	f, err := s.source.Next(ctx)
 	if err != nil {
-		if err != io.EOF {
+		if err == io.EOF {
+			s.mu.Lock()
+			pending := s.pending
+			s.mu.Unlock()
+			if pending == nil {
+				s.fail(ErrStreamContract)
+				s.Close()
+				return StreamFrame{}, ErrStreamContract
+			}
+			if cause := s.finalizeEOF(pending); cause != nil {
+				s.Close()
+				return StreamFrame{}, cause
+			}
+		} else {
 			s.fail(err)
 		}
 		s.Close()
@@ -301,10 +380,18 @@ func (s *attemptStream) Next(ctx context.Context) (StreamFrame, error) {
 			return StreamFrame{}, context.Canceled
 		}
 	case FrameComplete:
-		if !s.finalize(f.Complete.Outcome, f.Complete.Usage, f.Complete.Error, false) {
+		s.mu.Lock()
+		if s.done || s.closing {
+			cause := s.closeCause
+			s.mu.Unlock()
+			if cause != nil {
+				return StreamFrame{}, cause
+			}
 			return StreamFrame{}, context.Canceled
 		}
-		s.Close()
+		complete := *f.Complete
+		s.pending = &complete
+		s.mu.Unlock()
 	case FrameBody:
 		if !s.handoff(false) {
 			return StreamFrame{}, context.Canceled

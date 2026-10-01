@@ -26,6 +26,67 @@ type gatedFrame struct {
 	closed  atomic.Int32
 }
 
+type trailingStream struct {
+	frames  []StreamFrame
+	err     error
+	gate    <-chan struct{}
+	waiting chan<- struct{}
+	closed  chan struct{}
+	index   int
+	once    sync.Once
+}
+
+type slowCloseAfterComplete struct {
+	frames       []StreamFrame
+	index        int
+	closeStarted chan struct{}
+	allowClose   chan struct{}
+	closeOnce    sync.Once
+}
+
+func (s *slowCloseAfterComplete) Next(context.Context) (StreamFrame, error) {
+	if s.index < len(s.frames) {
+		frame := s.frames[s.index]
+		s.index++
+		return frame, nil
+	}
+	<-s.closeStarted
+	return StreamFrame{}, io.EOF
+}
+
+func (s *slowCloseAfterComplete) Close() error {
+	s.closeOnce.Do(func() { close(s.closeStarted) })
+	<-s.allowClose
+	return nil
+}
+
+func (s *trailingStream) Next(ctx context.Context) (StreamFrame, error) {
+	if s.index < len(s.frames) {
+		frame := s.frames[s.index]
+		s.index++
+		return frame, nil
+	}
+	if s.waiting != nil {
+		s.waiting <- struct{}{}
+		s.waiting = nil
+	}
+	if s.gate != nil {
+		select {
+		case <-s.gate:
+		case <-s.closed:
+			return StreamFrame{}, context.Canceled
+		case <-ctx.Done():
+			return StreamFrame{}, ctx.Err()
+		}
+	}
+	if s.err != nil {
+		return StreamFrame{}, s.err
+	}
+	return StreamFrame{}, io.EOF
+}
+
+func (s *trailingStream) Close() error { s.once.Do(func() { close(s.closed) }); return nil }
+
 func (s *gatedFrame) Next(context.Context) (StreamFrame, error) {
 	close(s.entered)
 	<-s.release
@@ -171,6 +232,9 @@ func TestDispatchRouteRegistryEligibilityAndScopedServices(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if _, err := response.Stream.Next(ctx); err != io.EOF {
+			t.Fatalf("terminal read: %v", err)
+		}
 		if len(connectors[i].calls) != 1 || connectors[i].calls[0].ID == "client-id" {
 			t.Fatalf("request identity was not runtime-owned: %+v", connectors[i].calls)
 		}
@@ -243,6 +307,9 @@ func TestDispatchEligibilityAndIdentity(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	if _, err := resp.Stream.Next(context.Background()); err != io.EOF {
+		t.Fatalf("terminal read: %v", err)
+	}
 	if calls != 1 || finals != 1 {
 		t.Fatalf("calls %d finalizations %d", calls, finals)
 	}
@@ -256,6 +323,9 @@ func TestDispatchEligibilityAndIdentity(t *testing.T) {
 		if _, e := resp.Stream.Next(context.Background()); e != nil {
 			t.Fatal(e)
 		}
+	}
+	if _, err := resp.Stream.Next(context.Background()); err != io.EOF {
+		t.Fatalf("terminal read: %v", err)
 	}
 	d.Connector["llm.reasoning"] = Unknown
 	if _, err = d.Execute(context.Background(), r); err == nil || err.Code != "unsupported_capability" {
@@ -311,6 +381,246 @@ func TestDispatchTerminalPaths(t *testing.T) {
 			}
 			if tc.usage == nil && results[0].Usage.Source != UsageUnknown {
 				t.Fatalf("unknown usage: %+v", results[0].Usage)
+			}
+		})
+	}
+}
+
+func TestAttemptStreamWaitsForTerminalEOF(t *testing.T) {
+	usageTokens := int64(19)
+	usage := &UsageReport{InputTokens: &usageTokens, Source: UsageProvider, Completeness: UsagePartial}
+	for _, tc := range []struct {
+		name     string
+		trailing []StreamFrame
+		err      error
+		outcome  Outcome
+	}{
+		{name: "clean EOF", outcome: OutcomeSucceeded},
+		{name: "body after complete", trailing: []StreamFrame{body()}, outcome: OutcomeFailed},
+		{name: "duplicate complete", trailing: []StreamFrame{complete()}, outcome: OutcomeFailed},
+		{name: "unknown frame", trailing: []StreamFrame{{Type: FrameType("unknown")}}, outcome: OutcomeFailed},
+		{name: "stream error", err: errors.New("upstream detail"), outcome: OutcomeFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &trailingStream{frames: []StreamFrame{head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded, Usage: usage}}}, err: tc.err, closed: make(chan struct{})}
+			p.frames = append(p.frames, tc.trailing...)
+			var results []AttemptResult
+			d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) { results = append(results, r) }, Target: targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+				return ExecutionResponse{Stream: p}, nil
+			})}
+			response, gatewayErr := d.Execute(context.Background(), request())
+			if gatewayErr != nil {
+				t.Fatal(gatewayErr)
+			}
+			if _, err := response.Stream.Next(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := response.Stream.Next(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != 0 {
+				t.Fatalf("published before terminal EOF: %+v", results)
+			}
+			if _, err := response.Stream.Next(context.Background()); tc.outcome == OutcomeSucceeded && err != io.EOF {
+				t.Fatalf("terminal read: %v", err)
+			} else if tc.outcome != OutcomeSucceeded && err == nil {
+				t.Fatal("trailing stream was not rejected")
+			}
+			if len(results) != 1 || results[0].Outcome != tc.outcome || tc.outcome != OutcomeSucceeded && (results[0].Error == nil || results[0].Error.Code != "execution_failed") || !results[0].HasUsage || results[0].Usage.InputTokens == nil || *results[0].Usage.InputTokens != usageTokens {
+				t.Fatalf("terminal result: %+v", results)
+			}
+			select {
+			case <-p.closed:
+			default:
+				t.Fatal("source was not closed")
+			}
+			if _, err := response.Stream.Next(context.Background()); err == nil {
+				t.Fatal("stream remained open after terminal result")
+			}
+			if len(results) != 1 {
+				t.Fatalf("duplicate publication: %+v", results)
+			}
+		})
+	}
+}
+
+func TestAttemptStreamCancellationWhileAwaitingEOF(t *testing.T) {
+	entered, gate := make(chan struct{}, 1), make(chan struct{})
+	inputTokens := int64(3)
+	p := &trailingStream{frames: []StreamFrame{head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded, Usage: &UsageReport{InputTokens: &inputTokens, Source: UsageProvider, Completeness: UsagePartial}}}}, gate: gate, waiting: entered, closed: make(chan struct{})}
+	var results []AttemptResult
+	finalized := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) { results = append(results, r); finalized <- struct{}{} }, Target: targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+		return ExecutionResponse{Stream: p}, nil
+	})}
+	response, gatewayErr := d.Execute(ctx, request())
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	for range 2 {
+		if _, err := response.Stream.Next(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finished := make(chan error, 1)
+	go func() { _, err := response.Stream.Next(ctx); finished <- err }()
+	<-entered
+	cancel()
+	if err := <-finished; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled terminal read: %v", err)
+	}
+	select {
+	case <-finalized:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled attempt was not finalized")
+	}
+	if len(results) != 1 {
+		t.Fatalf("terminal publication count: %d", len(results))
+	}
+	if results[0].Outcome != OutcomeCancelled {
+		t.Fatalf("cancelled pending outcome: %q", results[0].Outcome)
+	}
+	if !results[0].HasUsage || results[0].Usage.InputTokens == nil || *results[0].Usage.InputTokens != inputTokens {
+		t.Fatalf("cancelled pending usage: has=%v report=%+v", results[0].HasUsage, results[0].Usage)
+	}
+	select {
+	case <-p.closed:
+	default:
+		t.Fatal("cancelled source was not closed")
+	}
+}
+
+func TestAttemptStreamDeadlineWhileAwaitingEOF(t *testing.T) {
+	entered, gate := make(chan struct{}, 1), make(chan struct{})
+	p := &trailingStream{frames: []StreamFrame{head(), complete()}, gate: gate, waiting: entered, closed: make(chan struct{})}
+	var results []AttemptResult
+	finalized := make(chan struct{}, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) { results = append(results, r); finalized <- struct{}{} }, Target: targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+		return ExecutionResponse{Stream: p}, nil
+	})}
+	response, gatewayErr := d.Execute(ctx, request())
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	for range 2 {
+		if _, err := response.Stream.Next(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finished := make(chan error, 1)
+	go func() { _, err := response.Stream.Next(ctx); finished <- err }()
+	<-entered
+	if err := <-finished; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline terminal read: %v", err)
+	}
+	select {
+	case <-finalized:
+	case <-time.After(time.Second):
+		t.Fatal("deadline attempt was not finalized")
+	}
+	if len(results) != 1 || results[0].Outcome != OutcomeCancelled || results[0].Error == nil || results[0].Error.Code != "execution_timeout" {
+		t.Fatalf("deadline outcome: %+v", results)
+	}
+}
+
+func TestAttemptStreamExplicitCloseWinsPendingEOF(t *testing.T) {
+	inputTokens := int64(11)
+	p := &slowCloseAfterComplete{
+		frames:       []StreamFrame{head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded, Usage: &UsageReport{InputTokens: &inputTokens, Source: UsageProvider, Completeness: UsagePartial}}}},
+		closeStarted: make(chan struct{}), allowClose: make(chan struct{}),
+	}
+	var results []AttemptResult
+	finalized := make(chan struct{}, 1)
+	d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) { results = append(results, r); finalized <- struct{}{} }, Target: targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+		return ExecutionResponse{Stream: p}, nil
+	})}
+	response, gatewayErr := d.Execute(context.Background(), request())
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	for range 2 {
+		if _, err := response.Stream.Next(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	closeDone := make(chan struct{})
+	go func() { _ = response.Stream.Close(); close(closeDone) }()
+	<-p.closeStarted // Close has marked the attempt terminal but is held in source.Close.
+	nextDone := make(chan error, 1)
+	go func() { _, err := response.Stream.Next(context.Background()); nextDone <- err }()
+	select {
+	case <-finalized:
+	case <-time.After(time.Second):
+		t.Fatal("EOF did not publish cancellation while source.Close was blocked")
+	}
+	if len(results) != 1 || results[0].Outcome != OutcomeCancelled || !results[0].HasUsage || results[0].Usage.InputTokens == nil || *results[0].Usage.InputTokens != inputTokens {
+		t.Fatalf("explicit Close result: %+v", results)
+	}
+	select {
+	case <-closeDone:
+		t.Fatal("source.Close was not held by the gate")
+	default:
+	}
+	close(p.allowClose)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after releasing source.Close")
+	}
+	if err := <-nextDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next after explicit Close: %v", err)
+	}
+	_ = response.Stream.Close()
+	if len(results) != 1 {
+		t.Fatalf("duplicate terminal publication: %+v", results)
+	}
+}
+
+func TestAttemptStreamIncompleteTerminals(t *testing.T) {
+	inputTokens := int64(5)
+	for _, tc := range []struct {
+		name    string
+		frames  []StreamFrame
+		outcome Outcome
+	}{
+		{name: "failed Head-to-Complete", frames: []StreamFrame{head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeFailed, Error: &GatewayError{Code: "upstream_failed", Category: CategoryUnavailable}, Usage: &UsageReport{InputTokens: &inputTokens, Source: UsageProvider, Completeness: UsagePartial}}}}, outcome: OutcomeFailed},
+		{name: "premature EOF", frames: []StreamFrame{head()}, outcome: OutcomeIncomplete},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &trailingStream{frames: tc.frames, closed: make(chan struct{})}
+			var results []AttemptResult
+			d := &Dispatcher{AccountID: "selected", Finalize: func(r AttemptResult) { results = append(results, r) }, Target: targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+				return ExecutionResponse{Stream: p}, nil
+			})}
+			response, gatewayErr := d.Execute(context.Background(), request())
+			if gatewayErr != nil {
+				t.Fatal(gatewayErr)
+			}
+			for range len(tc.frames) {
+				if _, err := response.Stream.Next(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := response.Stream.Next(context.Background()); tc.outcome == OutcomeFailed && err != io.EOF || tc.outcome == OutcomeIncomplete && err == nil {
+				t.Fatalf("unexpected terminal result: %v", err)
+			}
+			if len(results) != 1 || results[0].Outcome != tc.outcome {
+				t.Fatalf("terminal results: %+v", results)
+			}
+			if tc.outcome == OutcomeFailed && (!results[0].HasUsage || results[0].Usage.InputTokens == nil || *results[0].Usage.InputTokens != inputTokens) {
+				t.Fatalf("failed completion lost usage: %+v", results[0])
+			}
+			select {
+			case <-p.closed:
+			default:
+				t.Fatal("source was not closed")
+			}
+			_ = response.Stream.Close()
+			if len(results) != 1 {
+				t.Fatalf("duplicate terminal publication: %+v", results)
 			}
 		})
 	}
@@ -559,6 +869,9 @@ func TestDispatchConcurrentIsolationAndCancellation(t *testing.T) {
 			successBody = string(frame.Body.Data)
 		}
 	}
+	if _, err := responses[1].Stream.Next(context.Background()); err != io.EOF {
+		t.Fatalf("terminal read: %v", err)
+	}
 	if successBody != "successful opaque bytes" {
 		t.Fatalf("successful payload crossed requests: %q", successBody)
 	}
@@ -685,6 +998,9 @@ func TestAttemptObservation(t *testing.T) {
 		if _, err := response.Stream.Next(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := response.Stream.Next(context.Background()); err != io.EOF {
+		t.Fatalf("terminal read: %v", err)
 	}
 	first := observations.Snapshot()
 	if len(first) != 1 {
@@ -845,7 +1161,14 @@ func assertAttemptObservationPublicationWaitsForWinner(t *testing.T) {
 		t.Fatalf("head handoff: %+v, %v", frame, err)
 	}
 	result := make(chan error, 1)
-	go func() { _, err := response.Stream.Next(context.Background()); result <- err }()
+	go func() {
+		if _, err := response.Stream.Next(context.Background()); err != nil {
+			result <- err
+			return
+		}
+		_, err := response.Stream.Next(context.Background())
+		result <- err
+	}()
 	<-sink.entered
 	closed := make(chan struct{})
 	go func() { _ = response.Stream.Close(); close(closed) }()
@@ -858,7 +1181,7 @@ func assertAttemptObservationPublicationWaitsForWinner(t *testing.T) {
 		t.Fatalf("observation published before gate release: %+v", got)
 	}
 	close(sink.release)
-	if err := <-result; err != nil {
+	if err := <-result; err != io.EOF {
 		t.Fatal(err)
 	}
 	select {
