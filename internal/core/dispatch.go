@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 )
 
 const m1Protocol = "openai.responses.v1"
@@ -34,9 +35,15 @@ const (
 type AttemptResult struct {
 	RequestID string
 	Scope     AttemptScope
+	Route     RouteIdentity
+	Adapter   InstanceID
+	Connector InstanceID
+	StartedAt time.Time
+	EndedAt   time.Time
 	Committed bool
 	Outcome   Outcome
 	Usage     UsageReport
+	HasUsage  bool
 	Error     *GatewayError
 }
 
@@ -48,11 +55,12 @@ type Dispatcher struct {
 	Services interface {
 		ForAttempt(AttemptScope) InvocationServices
 	}
-	AccountID string
-	Mode      string // Empty uses the M1 native mode.
-	Adapter   map[Capability]CapabilityState
-	Connector map[Capability]CapabilityState
-	Finalize  func(AttemptResult)
+	AccountID    string
+	Mode         string // Empty uses the M1 native mode.
+	Adapter      map[Capability]CapabilityState
+	Connector    map[Capability]CapabilityState
+	Finalize     func(AttemptResult)
+	Observations AttemptObservationSink
 }
 
 func newID() (string, error) {
@@ -68,6 +76,8 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		return ExecutionResponse{}, executionError(err)
 	}
 	var connector Connector
+	var route RouteIdentity
+	var adapterID, connectorID InstanceID
 	legacy := d.Routes == nil
 	if legacy {
 		if in.Model != m1Model {
@@ -95,6 +105,7 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		if !ok || d.Services == nil {
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 		}
+		route, adapterID, connectorID = selection.Route.Identity, selection.Route.Adapter, selection.Route.Connector
 		scope := CapabilityScope{Protocol: in.Payload.Protocol, Mode: mode, Model: in.Model, AccountID: d.AccountID}
 		candidate := EligibilityCandidate{
 			Scope: scope, Adapter: selection.Adapter.Descriptor(), Connector: selection.Connector.Descriptor(),
@@ -119,11 +130,21 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	}
 	in.ID = requestID
 	scope := AttemptScope{ID: attemptID, AccountID: d.AccountID, Mode: "native"}
-	result := AttemptResult{RequestID: requestID, Scope: scope, Outcome: OutcomeIncomplete, Usage: UsageReport{Source: UsageUnknown, Completeness: UsageUnknownCompleteness}}
+	result := AttemptResult{RequestID: requestID, Scope: scope, Route: route, Adapter: adapterID, Connector: connectorID, Outcome: OutcomeIncomplete, Usage: UsageReport{Source: UsageUnknown, Completeness: UsageUnknownCompleteness}, StartedAt: time.Now()}
+	observe := func(r AttemptResult) {
+		if d.Observations != nil {
+			d.Observations.TryRecord(observationFromResult(r))
+		}
+	}
 	finish := func(r AttemptResult) {
 		if d.Finalize != nil {
 			d.Finalize(r)
 		}
+	}
+	finishBeforeStream := func(r AttemptResult) {
+		r.EndedAt = time.Now()
+		observe(r)
+		finish(r)
 	}
 	var response ExecutionResponse
 	var gatewayErr *GatewayError
@@ -141,17 +162,17 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 			result.Outcome = OutcomeCancelled
 		}
 		result.Error = gatewayErr
-		finish(result)
+		finishBeforeStream(result)
 		return ExecutionResponse{}, gatewayErr
 	}
 	if response.Stream == nil {
 		gatewayErr = executionError(ErrStreamContract)
 		result.Outcome = OutcomeFailed
 		result.Error = gatewayErr
-		finish(result)
+		finishBeforeStream(result)
 		return ExecutionResponse{}, gatewayErr
 	}
-	s := &attemptStream{source: NewCheckedStream(response.Stream, in.Payload.Protocol), ctx: ctx, result: result, finish: finish}
+	s := &attemptStream{source: NewCheckedStream(response.Stream, in.Payload.Protocol), ctx: ctx, result: result, observe: observe, finish: finish}
 	s.stopMu.Lock()
 	s.stop = context.AfterFunc(ctx, func() { s.Close() })
 	s.stopMu.Unlock()
@@ -169,25 +190,32 @@ func executionError(err error) *GatewayError {
 }
 
 type attemptStream struct {
-	source Stream
-	ctx    context.Context
-	result AttemptResult
-	finish func(AttemptResult)
-	stopMu sync.Mutex
-	stop   func() bool
-	mu     sync.Mutex // Serializes Head handoff and terminal observation.
-	done   bool
-	commit bool
-	closed sync.Once
+	source    Stream
+	ctx       context.Context
+	result    AttemptResult
+	observe   func(AttemptResult)
+	finish    func(AttemptResult)
+	stopMu    sync.Mutex
+	stop      func() bool
+	mu        sync.Mutex // Serializes Head handoff and terminal observation.
+	done      bool
+	published chan struct{}
+	commit    bool
+	closed    sync.Once
 }
 
 func (s *attemptStream) finalize(outcome Outcome, usage *UsageReport, err *GatewayError, preHeadGateway bool) bool {
 	s.mu.Lock()
 	if s.done {
+		published := s.published
 		s.mu.Unlock()
+		if published != nil {
+			<-published
+		}
 		return false
 	}
 	s.done = true
+	s.published = make(chan struct{})
 	r := s.result
 	r.Committed = s.commit
 	if preHeadGateway && !s.commit {
@@ -196,10 +224,18 @@ func (s *attemptStream) finalize(outcome Outcome, usage *UsageReport, err *Gatew
 	r.Outcome = outcome
 	if usage != nil {
 		r.Usage = *usage
+		r.HasUsage = true
 	}
 	r.Error = err
+	r.EndedAt = time.Now()
 	s.mu.Unlock()
-	s.finish(r) // Never invoke an observer under the handoff lock.
+	if s.observe != nil {
+		s.observe(r)
+	}
+	close(s.published)
+	if s.finish != nil {
+		s.finish(r)
+	}
 	return true
 }
 

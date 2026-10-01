@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -151,7 +152,11 @@ func TestDispatchRouteRegistryEligibilityAndScopedServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	services := &testServices{}
-	d := &Dispatcher{Routes: routes, AccountID: "account-a", Services: services}
+	observations, err := NewInMemoryAttemptObservations(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Dispatcher{Routes: routes, AccountID: "account-a", Services: services, Observations: observations}
 	for i, model := range []string{"model-a", "model-b"} {
 		r := request()
 		r.Model = model
@@ -175,6 +180,10 @@ func TestDispatchRouteRegistryEligibilityAndScopedServices(t *testing.T) {
 	}
 	if len(connectors[0].calls) != 1 || len(connectors[1].calls) != 1 || len(services.scopes) != 2 || services.scopes[0].ID == "" || services.scopes[0].AccountID != "account-a" || services.scopes[0].Mode != ModeNative {
 		t.Fatal("both routed implementations must execute once with scoped services")
+	}
+	gotObservations := observations.Snapshot()
+	if len(gotObservations) != 2 || gotObservations[0].Route.Model != "model-a" || gotObservations[0].Adapter != "adapter" || gotObservations[0].Connector != "connector-a" || gotObservations[0].AccountID != "account-a" || gotObservations[1].Route.Model != "model-b" || gotObservations[1].Connector != "connector-b" {
+		t.Fatalf("route/instance identities missing from observations: %+v", gotObservations)
 	}
 	r := request()
 	r.Model = "model-b"
@@ -643,5 +652,221 @@ func TestDispatchConcurrentTerminalSignals(t *testing.T) {
 				t.Fatalf("EOF incorrectly finalized success: %+v", results[0])
 			}
 		})
+	}
+}
+
+func TestAttemptObservation(t *testing.T) {
+	observations, err := NewInMemoryAttemptObservations(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count atomic.Int32
+	d := &Dispatcher{AccountID: "selected-account", Observations: observations, Target: targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+		count.Add(1)
+		input := int64(7)
+		zero, reasoning, cached := int64(0), int64(2), int64(1)
+		usage := &UsageReport{InputTokens: &input, OutputTokens: &zero, ReasoningTokens: &reasoning, CachedTokens: &cached, Source: UsageProvider, Completeness: UsagePartial}
+		return ExecutionResponse{Stream: &scriptedStream{frames: []StreamFrame{
+			head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded, Usage: usage}},
+		}}}, nil
+	})}
+	// Validation rejects before attempt identity allocation and observation.
+	if _, gatewayErr := d.Execute(context.Background(), ExecutionRequest{}); gatewayErr == nil {
+		t.Fatal("invalid request was accepted")
+	}
+	if len(observations.Snapshot()) != 0 || count.Load() != 0 {
+		t.Fatal("pre-Execute rejection was observed or executed")
+	}
+	response, gatewayErr := d.Execute(context.Background(), request())
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	for range 2 {
+		if _, err := response.Stream.Next(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := observations.Snapshot()
+	if len(first) != 1 {
+		t.Fatalf("observations: %+v", first)
+	}
+	observation := first[0]
+	if observation.RequestID == "" || observation.AttemptID == "" || observation.RequestID == observation.AttemptID || observation.AccountID != "selected-account" || observation.Mode != ModeNative || !observation.Committed || observation.Outcome != OutcomeSucceeded || observation.Duration < 0 || observation.EndedAt.Before(observation.StartedAt) {
+		t.Fatalf("invalid terminal observation: %+v", observation)
+	}
+	if observation.Usage == nil || observation.Usage.InputTokens == nil || *observation.Usage.InputTokens != 7 || observation.Usage.OutputTokens == nil || *observation.Usage.OutputTokens != 0 || observation.Usage.ReasoningTokens == nil || *observation.Usage.ReasoningTokens != 2 || observation.Usage.CachedTokens == nil || *observation.Usage.CachedTokens != 1 || observation.Usage.Completeness != UsagePartial {
+		t.Fatalf("lost nullable partial usage: %+v", observation.Usage)
+	}
+	*observation.Usage.InputTokens = 99
+	*observation.Usage.OutputTokens = 99
+	*first[0].Usage.InputTokens = 101
+	stored := observations.Snapshot()[0].Usage
+	if stored.InputTokens == nil || *stored.InputTokens != 7 || stored.OutputTokens == nil || *stored.OutputTokens != 0 || stored.ReasoningTokens == nil || *stored.ReasoningTokens != 2 || stored.CachedTokens == nil || *stored.CachedTokens != 1 {
+		t.Fatalf("snapshot exposed mutable state or merged usage categories: %+v", stored)
+	}
+	zero := int64(0)
+	copyStore, _ := NewInMemoryAttemptObservations(1)
+	copyStore.TryRecord(AttemptObservation{Usage: &UsageReport{OutputTokens: &zero}})
+	zero = 5
+	copySnapshot := copyStore.Snapshot()[0]
+	if copySnapshot.Usage.OutputTokens == nil || *copySnapshot.Usage.OutputTokens != 0 || copySnapshot.Usage.InputTokens != nil {
+		t.Fatalf("zero and unknown usage were conflated: %+v", copySnapshot.Usage)
+	}
+	*copySnapshot.Usage.OutputTokens = 6
+	if got := copyStore.Snapshot()[0].Usage.OutputTokens; got == nil || *got != 0 {
+		t.Fatalf("snapshot mutation changed retained zero usage: %v", got)
+	}
+	for i := range 4 {
+		observations.TryRecord(AttemptObservation{RequestID: string(rune('a' + i))})
+	}
+	bounded := observations.Snapshot()
+	if len(bounded) != 3 || bounded[0].RequestID != "b" || bounded[2].RequestID != "d" {
+		t.Fatalf("collector did not retain bounded newest observations: %+v", bounded)
+	}
+
+	var failed []AttemptObservation
+	failedStore, _ := NewInMemoryAttemptObservations(2)
+	d.Observations = failedStore
+	d.Target = targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+		return ExecutionResponse{}, &GatewayError{Code: "opaque-secret-code", Category: CategoryUnavailable, Retryable: true, RetryDisposition: RetryUnsafe, Provider: "private-provider", OriginalError: "private diagnostic", Message: "private message"}
+	})
+	if _, gatewayErr := d.Execute(context.Background(), request()); gatewayErr == nil {
+		t.Fatal("expected pre-Head connector failure")
+	}
+	failed = failedStore.Snapshot()
+	if len(failed) != 1 || failed[0].Outcome != OutcomeFailed || failed[0].Committed || failed[0].ErrorCategory != CategoryUnavailable || !failed[0].Retryable || failed[0].RetryDisposition != RetryUnsafe || failed[0].Usage != nil {
+		t.Fatalf("invalid sanitized connector failure observation: %+v", failed)
+	}
+	// A cancelled attempt also finalizes once; repeated Close cannot duplicate it.
+	cancelStore, _ := NewInMemoryAttemptObservations(2)
+	d.Observations = cancelStore
+	d.Target = targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+		return ExecutionResponse{Stream: &scriptedStream{frames: []StreamFrame{head()}}}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	response, gatewayErr = d.Execute(ctx, request())
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	if _, err := response.Stream.Next(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	_ = response.Stream.Close()
+	_ = response.Stream.Close()
+	cancelled := cancelStore.Snapshot()
+	if len(cancelled) != 1 || cancelled[0].Outcome != OutcomeCancelled || !cancelled[0].Committed {
+		t.Fatalf("cancellation did not publish exactly one committed outcome: %+v", cancelled)
+	}
+
+	// Complete errors and stream interruptions retain only classified metadata.
+	for name, stream := range map[string]*scriptedStream{
+		"incomplete":     {frames: []StreamFrame{head()}, err: errors.New("private transport detail")},
+		"complete-error": {frames: []StreamFrame{head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeFailed, Error: &GatewayError{Category: CategoryRateLimited, Retryable: true, RetryDisposition: RetryUnknown, Provider: "private-provider", OriginalError: "private diagnostic", Message: "private message"}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, err := NewInMemoryAttemptObservations(1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.Observations = store
+			d.Target = targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+				return ExecutionResponse{Stream: stream}, nil
+			})
+			response, gatewayErr := d.Execute(context.Background(), request())
+			if gatewayErr != nil {
+				t.Fatal(gatewayErr)
+			}
+			for range len(stream.frames) + 1 {
+				if _, err := response.Stream.Next(context.Background()); err != nil {
+					break
+				}
+			}
+			got := store.Snapshot()
+			if len(got) != 1 {
+				t.Fatalf("expected terminal observation: %+v", got)
+			}
+			if name == "incomplete" && (got[0].Outcome != OutcomeIncomplete || got[0].ErrorCategory != CategoryInternal) {
+				t.Fatalf("incomplete stream was not classified: %+v", got[0])
+			}
+			if name == "complete-error" && (got[0].Outcome != OutcomeFailed || got[0].ErrorCategory != CategoryRateLimited || !got[0].Retryable || got[0].RetryDisposition != RetryUnknown) {
+				t.Fatalf("Complete error was not classified: %+v", got[0])
+			}
+		})
+	}
+
+	// Concurrent ring writes and snapshots stay bounded and race-free.
+	concurrent, _ := NewInMemoryAttemptObservations(16)
+	var workers sync.WaitGroup
+	for i := range 8 {
+		workers.Add(1)
+		go func(worker int) {
+			defer workers.Done()
+			for j := range 100 {
+				concurrent.TryRecord(AttemptObservation{RequestID: fmt.Sprintf("%d-%d", worker, j)})
+				_ = concurrent.Snapshot()
+			}
+		}(i)
+	}
+	workers.Wait()
+	if got := concurrent.Snapshot(); len(got) != 16 {
+		t.Fatalf("concurrent collector exceeded/lost capacity: %d", len(got))
+	}
+	assertAttemptObservationPublicationWaitsForWinner(t)
+}
+
+type gatedObservationSink struct {
+	store   AttemptObservationSink
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *gatedObservationSink) TryRecord(observation AttemptObservation) bool {
+	close(s.entered)
+	<-s.release
+	return s.store.TryRecord(observation)
+}
+
+func assertAttemptObservationPublicationWaitsForWinner(t *testing.T) {
+	t.Helper()
+	store, err := NewInMemoryAttemptObservations(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &gatedObservationSink{store: store, entered: make(chan struct{}), release: make(chan struct{})}
+	d := &Dispatcher{AccountID: "selected", Observations: sink, Target: targetFunc(func(context.Context, ExecutionRequest, AttemptScope) (ExecutionResponse, *GatewayError) {
+		return ExecutionResponse{Stream: &scriptedStream{frames: []StreamFrame{head(), complete()}}}, nil
+	})}
+	response, gatewayErr := d.Execute(context.Background(), request())
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != FrameHead {
+		t.Fatalf("head handoff: %+v, %v", frame, err)
+	}
+	result := make(chan error, 1)
+	go func() { _, err := response.Stream.Next(context.Background()); result <- err }()
+	<-sink.entered
+	closed := make(chan struct{})
+	go func() { _ = response.Stream.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("losing Close returned before terminal observation publication")
+	case <-time.After(time.Millisecond):
+	}
+	if got := store.Snapshot(); len(got) != 0 {
+		t.Fatalf("observation published before gate release: %+v", got)
+	}
+	close(sink.release)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("losing Close did not finish after observation publication")
+	}
+	if got := store.Snapshot(); len(got) != 1 || got[0].Outcome != OutcomeSucceeded {
+		t.Fatalf("winner's terminal observation missing or duplicated: %+v", got)
 	}
 }
