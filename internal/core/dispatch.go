@@ -70,7 +70,7 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 	}
 	for capability := range in.Capabilities {
-		if (capability != "llm.streaming" && capability != "llm.tools" && capability != "llm.structured_output") || d.Adapter[capability] != Supported || d.Connector[capability] != Supported {
+		if (capability != "llm.streaming" && capability != "llm.tools" && capability != "llm.reasoning" && capability != "llm.structured_output") || d.Adapter[capability] != Supported || d.Connector[capability] != Supported {
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_capability", Category: CategoryUnsupportedFeature, Message: "Unsupported required capability"}
 		}
 	}

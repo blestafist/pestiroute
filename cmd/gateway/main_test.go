@@ -1850,7 +1850,6 @@ func TestResponsesToolCapabilityAdmissionAndUnknown(t *testing.T) {
 		name, request string
 	}{
 		{"parallel", `{"model":"gpt-5.4-mini","tools":[{"type":"function","name":"read"}],"parallel_tool_calls":true}`},
-		{"reasoning", `{"model":"gpt-5.4-mini","reasoning":{"effort":"low"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp, body := post(tc.request)
@@ -1869,6 +1868,94 @@ func TestResponsesToolCapabilityAdmissionAndUnknown(t *testing.T) {
 	}
 }
 
+func TestResponsesReasoningCapabilityPreservesOpaqueAndStreamsUsage(t *testing.T) {
+	const stream = "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_fixture\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque+cipher==\"}}\n\n" +
+		"event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"opaque delta\"}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":7,\"output_tokens_details\":{\"reasoning_tokens\":5}}}}\n\n"
+	upstream := fakeupstream.New(fakeupstream.Response{Status: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: []byte(stream)})
+	defer upstream.Close()
+	finals := make(chan core.AttemptResult, 2)
+	var ready atomic.Bool
+	h, closeTransport := handlerWithFinalize(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic",
+		MaxRequestBodyBytes: 4096, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s"}, &ready, func(r core.AttemptResult) { finals <- r })
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	post := func(body string) (*http.Response, []byte) {
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d body=%s", resp.StatusCode, data)
+		}
+		return resp, data
+	}
+	request := `{"model":"gpt-5.4-mini","stream":true,"reasoning":{"effort":"low"},"unknown":{"preserve":[1,2]}}`
+	_, body := post(request)
+	if string(body) != stream {
+		t.Fatalf("SSE changed: %q", body)
+	}
+	captured := receiveRequest(t, upstream)
+	if string(captured.Body) != request {
+		t.Fatalf("request changed: %q", captured.Body)
+	}
+	result := <-finals
+	if result.Outcome != core.OutcomeSucceeded || result.Usage.InputTokens == nil || *result.Usage.InputTokens != 12 || result.Usage.OutputTokens == nil || *result.Usage.OutputTokens != 7 || result.Usage.ReasoningTokens == nil || *result.Usage.ReasoningTokens != 5 {
+		t.Fatalf("reasoning usage not observed: %+v", result)
+	}
+	continuation := `{"model":"gpt-5.4-mini","stream":true,"input":[{"type":"reasoning","id":"rs_fixture","encrypted_content":"opaque+cipher=="}]}`
+	_, _ = post(continuation)
+	captured = receiveRequest(t, upstream)
+	if string(captured.Body) != continuation {
+		t.Fatalf("encrypted reasoning continuation changed: %q", captured.Body)
+	}
+	if upstream.RequestCount() != 2 {
+		t.Fatalf("upstream requests=%d", upstream.RequestCount())
+	}
+}
+
+func TestResponsesReasoningSSEIsDeliveredBeforeUpstreamCompletion(t *testing.T) {
+	first := []byte("event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"early reasoning event\"}\n\n")
+	last := []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+	gate, sent := make(chan struct{}), make(chan struct{})
+	upstream := fakeupstream.New(fakeupstream.Response{Status: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: first, Sent: sent}, {Gate: gate, Data: last}}})
+	defer upstream.Close()
+	var ready atomic.Bool
+	h, closeTransport := handler(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic",
+		MaxRequestBodyBytes: 4096, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s"}, &ready)
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini","stream":true,"reasoning":{"effort":"low"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	select {
+	case <-sent:
+	case <-time.After(time.Second):
+		t.Fatal("fake upstream did not send reasoning event")
+	}
+	gotFirst := make([]byte, len(first))
+	if _, err := io.ReadFull(resp.Body, gotFirst); err != nil || !bytes.Equal(gotFirst, first) {
+		t.Fatalf("reasoning event was not delivered before completion: got=%q err=%v", gotFirst, err)
+	}
+	close(gate)
+	remaining, err := io.ReadAll(resp.Body)
+	if err != nil || !bytes.Equal(remaining, last) {
+		t.Fatalf("terminal SSE got=%q err=%v", remaining, err)
+	}
+}
+
 func TestResponsesToolCapabilitiesAreScopedToVerifiedTargets(t *testing.T) {
 	for _, tc := range []struct {
 		name, endpoint string
@@ -1876,6 +1963,7 @@ func TestResponsesToolCapabilitiesAreScopedToVerifiedTargets(t *testing.T) {
 	}{
 		{"verified public endpoint", "https://api.openai.com/v1/responses", true},
 		{"loopback fixture", "http://127.0.0.1:12345/v1/responses", true},
+		{"loopback wrong path", "http://127.0.0.1:12345/unverified", false},
 		{"other host", "https://unverified.invalid/v1/responses", false},
 		{"other path", "https://api.openai.com/other/v1/responses", false},
 		{"http public endpoint", "http://api.openai.com/v1/responses", false},
@@ -1884,19 +1972,45 @@ func TestResponsesToolCapabilitiesAreScopedToVerifiedTargets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			adapterCaps, connectorCaps := dispatchCapabilities(tc.endpoint)
 			for label, capabilities := range map[string]map[core.Capability]core.CapabilityState{"adapter": adapterCaps, "connector": connectorCaps} {
-				if tc.wantSupported && (capabilities["llm.tools"] != core.Supported || capabilities["llm.streaming"] != core.Supported) {
-					t.Errorf("%s capabilities=%v, want supported tool/stream", label, capabilities)
+				if tc.wantSupported && (capabilities["llm.tools"] != core.Supported || capabilities["llm.streaming"] != core.Supported || capabilities["llm.reasoning"] != core.Supported) {
+					t.Errorf("%s capabilities=%v, want supported tool/stream/reasoning", label, capabilities)
 				}
 				if !tc.wantSupported && len(capabilities) != 0 {
 					t.Errorf("%s capabilities=%v, want no declared support", label, capabilities)
 				}
-				for _, unproven := range []core.Capability{"llm.tools.parallel", "llm.reasoning"} {
+				for _, unproven := range []core.Capability{"llm.tools.parallel"} {
 					if _, declared := capabilities[unproven]; declared {
 						t.Errorf("%s advertised unproven %s=%s", label, unproven, capabilities[unproven])
 					}
 				}
 			}
 		})
+	}
+}
+
+func TestResponsesUnverifiedTargetRejectsBeforeUpstreamEgress(t *testing.T) {
+	upstream := fakeupstream.New(fakeupstream.Response{Status: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`)})
+	defer upstream.Close()
+	var ready atomic.Bool
+	h, closeTransport := handler(config{UpstreamEndpoint: upstream.URL + "/unverified", UpstreamCredentialEnv: "TEST_UPSTREAM", credential: "synthetic",
+		MaxRequestBodyBytes: 4096, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s"}, &ready)
+	defer closeTransport()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini","reasoning":{"effort":"low"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var got struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	decodeErr := json.Unmarshal(body, &got)
+	if readErr != nil || decodeErr != nil || resp.StatusCode != http.StatusBadRequest || got.Error.Code != "unsupported_capability" || upstream.RequestCount() != 0 {
+		t.Fatalf("unverified target status=%d code=%q egress=%d read=%v decode=%v", resp.StatusCode, got.Error.Code, upstream.RequestCount(), readErr, decodeErr)
 	}
 }
 

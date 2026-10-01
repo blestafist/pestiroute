@@ -9,9 +9,9 @@
 
 ## Immediate Focus
 
-M1-024 direct real-client tool baseline is DONE: single-tool continuation captured; two parallel calls and matching client results observed, but backend continuation rejected by observer before egress and recorded as not demonstrated (downstream parallel gate in M1-003/M1-027 not met). M1-029 is DONE: exact baseline target and fake-fixture `llm.tools` capability wired, verified, and committed locally (`40d06b366e3974bd632b13e924b5f00182b155c9`), awaiting push at batch completion; unproven parallel tools and reasoning remain fail-closed `unknown`. M1-025 is unblocked and READY for gateway real-client single/parallel tool smoke execution. User confirmed zero-paid guard and 2.5M daily quota for `gpt-5.4-mini`; known reported usage is >=11,451 tokens, with earlier continuation unmeasured so exact 100k batch-cap compliance is unverified. Subsequent candidates (M1-026..M1-027) remain DRAFT. Unrelated `.opencode/agents/git-worker.md` edit preserved unstaged.
+M1-024 direct real-client tool baseline is DONE: single-tool continuation captured; two parallel calls and matching client results observed, but backend continuation rejected by observer before egress and recorded as not demonstrated (downstream parallel gate in M1-003/M1-027 not met). M1-029 is DONE. M1-030 is DONE (scoped gateway reasoning capability wired and verified; 4/5 smoke objective tasks completed). M1-025 is unblocked and READY for final gateway tool continuation execution. User confirmed zero-paid guard and 2.5M daily quota for `gpt-5.4-mini`; known reported usage is >=11,451 tokens, with earlier continuation unmeasured so exact 100k batch-cap compliance is unverified. Subsequent candidates (M1-026..M1-027) remain DRAFT. Unrelated `.opencode/agents/git-worker.md` edit and pre-existing M1-025 evidence drafts preserved unstaged.
 
-M1 has [29 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
+M1 has [30 bounded cards](TASKS.md#m1--transparent-responses-proxy-planning-candidates); assign one READY card per worker session, never the milestone. Real-provider smoke remains a separate gate. Task statuses and dependencies live only in TASKS.
 
 ## Open Inputs
 

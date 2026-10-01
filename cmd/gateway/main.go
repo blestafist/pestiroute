@@ -192,11 +192,11 @@ func dispatchCapabilities(endpoint string) (map[core.Capability]core.CapabilityS
 		return nil, nil
 	}
 	verifiedTarget := target.Scheme == "https" && target.Host == "api.openai.com" && target.EscapedPath() == "/v1/responses"
-	fixtureTarget := target.Scheme == "http" && isLoopbackHost(target.Hostname())
+	fixtureTarget := target.Scheme == "http" && isLoopbackHost(target.Hostname()) && target.EscapedPath() == "/v1/responses"
 	if !verifiedTarget && !fixtureTarget {
 		return nil, nil
 	}
-	capabilities := map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported, "llm.tools": core.Supported}
+	capabilities := map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported, "llm.tools": core.Supported, "llm.reasoning": core.Supported}
 	return capabilities, capabilities
 }
 
@@ -223,8 +223,8 @@ func handlerWithLifecycle(c config, ready, draining *atomic.Bool, finalize func(
 		TLSHandshakeTimeout: tlsHandshake, ResponseHeaderTimeout: responseHeader, StreamIdleTimeout: streamIdle,
 	})
 	dispatch := &core.Dispatcher{Target: fixedTarget{transport}, AccountID: c.UpstreamCredentialEnv, Finalize: finalize}
-	// M1-024 verified streaming and single-tool continuation for the sole
-	// configured account/model. Parallel tools and reasoning remain unknown.
+	// M1-024 verified streaming, reasoning items and single-tool continuation
+	// for the sole configured account/model. Parallel tools remain unknown.
 	dispatch.Adapter, dispatch.Connector = dispatchCapabilities(c.UpstreamEndpoint)
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
 		if draining.Load() {

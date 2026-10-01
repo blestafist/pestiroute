@@ -54,7 +54,7 @@ func request() ExecutionRequest {
 
 func TestDispatchEligibilityAndIdentity(t *testing.T) {
 	var calls, finals int
-	d := &Dispatcher{AccountID: "selected", Adapter: map[Capability]CapabilityState{"llm.tools": Supported}, Connector: map[Capability]CapabilityState{"llm.tools": Supported}}
+	d := &Dispatcher{AccountID: "selected", Adapter: map[Capability]CapabilityState{"llm.tools": Supported, "llm.reasoning": Supported}, Connector: map[Capability]CapabilityState{"llm.tools": Supported, "llm.reasoning": Supported}}
 	d.Finalize = func(AttemptResult) { finals++ }
 	d.Target = targetFunc(func(_ context.Context, r ExecutionRequest, s AttemptScope) (ExecutionResponse, *GatewayError) {
 		calls++
@@ -65,7 +65,6 @@ func TestDispatchEligibilityAndIdentity(t *testing.T) {
 	})
 	for _, mutate := range []func(*ExecutionRequest){
 		func(r *ExecutionRequest) { r.Payload.Protocol = "other" },
-		func(r *ExecutionRequest) { r.Capabilities = map[Capability]struct{}{"llm.reasoning": {}} },
 		func(r *ExecutionRequest) { r.Capabilities = map[Capability]struct{}{"llm.tools.parallel": {}} },
 	} {
 		r := request()
@@ -99,6 +98,24 @@ func TestDispatchEligibilityAndIdentity(t *testing.T) {
 	}
 	if calls != 1 || finals != 1 {
 		t.Fatalf("calls %d finalizations %d", calls, finals)
+	}
+	r = request()
+	r.Capabilities = map[Capability]struct{}{"llm.reasoning": {}}
+	resp, err = d.Execute(context.Background(), r)
+	if err != nil {
+		t.Fatalf("supported reasoning rejected: %v", err)
+	}
+	for range 2 {
+		if _, e := resp.Stream.Next(context.Background()); e != nil {
+			t.Fatal(e)
+		}
+	}
+	d.Connector["llm.reasoning"] = Unknown
+	if _, err = d.Execute(context.Background(), r); err == nil || err.Code != "unsupported_capability" {
+		t.Fatalf("reasoning without connector support: %v", err)
+	}
+	if calls != 2 || finals != 2 {
+		t.Fatalf("rejected request reached target/finalized: calls=%d finals=%d", calls, finals)
 	}
 }
 
