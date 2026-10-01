@@ -76,13 +76,13 @@
         "terminal_event_or_usage": "not observed"
       }
     ],
-    "gateway_internal_teardown": "unverified live; connection EOF is consistent with teardown but does not prove it. Deterministic lifecycle evidence: M1-014 TestStreaming_ClientDisconnect; M1-031 TestDispatchCancelAndPreExecuteFailure.",
+    "gateway_internal_teardown": "unverified live; connection EOF is consistent with teardown but does not prove it. Deterministic lifecycle evidence: M1-014 TestResponsesCancelBeforeHead and TestResponsesCancelAfterHead in cmd/gateway/main_test.go; M1-031 TestDispatchCancelAndPreExecuteFailure.",
     "follow_up_requests_or_retries": 0
   },
   "limitations": [
     "Direct leg used two attempts (the card maximum); its first attempt did not retain final transport evidence.",
     "No terminal usage was reported for interrupted streams; token usage and remote compute/billing effects are unknown.",
     "PTY SIGINT terminated the CLI process. Subsequent socket EOF and observer upstream close do not prove an in-client HTTP abort or remote provider compute cancellation.",
-    "Deterministic lifecycle references: M1-014 TestStreaming_ClientDisconnect; M1-031 TestDispatchCancelAndPreExecuteFailure and fixed-response cancellation regression."
+    "Deterministic lifecycle references: M1-014 TestResponsesCancelBeforeHead and TestResponsesCancelAfterHead in cmd/gateway/main_test.go; M1-031 TestDispatchCancelAndPreExecuteFailure and fixed-response cancellation regression."
   ]
 }
