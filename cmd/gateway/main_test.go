@@ -1358,6 +1358,9 @@ func TestInferenceConfig(t *testing.T) {
 	if err != nil || string(c.credential) != credential {
 		t.Fatalf("valid inference configuration: %v", err)
 	}
+	if len(c.Components) != 2 || len(c.Routes) != 1 || c.Routes[0].Protocol != responsesProtocol || c.Routes[0].Mode != core.ModeNative || c.Routes[0].Model != "gpt-5.4-mini" || c.Routes[0].Account != "PESTIROUTE_TEST_CREDENTIAL" || c.Routes[0].Adapter != "responses-adapter" || c.Routes[0].Connector != "responses-connector" || string(c.Credentials["PESTIROUTE_TEST_CREDENTIAL"]) != credential {
+		t.Fatalf("legacy topology normalization is incomplete: components=%d routes=%d", len(c.Components), len(c.Routes))
+	}
 	if c, err = check(valid, []string{"-listen", "[::1]:0"}); err != nil || c.Listen != "[::1]:0" {
 		t.Fatalf("flag precedence: %v", err)
 	}
@@ -1415,6 +1418,165 @@ func TestInferenceConfig(t *testing.T) {
 	}
 	if _, err := check(map[string]any{"listen": "0.0.0.0:0"}, nil); err != nil {
 		t.Errorf("probe-only bind: %v", err)
+	}
+}
+
+func TestTopologyConfig(t *testing.T) {
+	const credential = "synthetic-topology-secret-never-print"
+	t.Setenv("PESTIROUTE_TOPOLOGY_CREDENTIAL", credential)
+	path := t.TempDir() + "/topology.json"
+	valid := map[string]any{
+		"listen": "127.0.0.1:0",
+		"components": []any{
+			map[string]any{"id": "adapter-a", "implementation": "pestiroute.responses.native", "kind": "adapter"},
+			map[string]any{"id": "connector-a", "implementation": "pestiroute.responses.native", "kind": "connector",
+				"endpoint": "http://127.0.0.1:1234/v1/responses", "credential_env": "PESTIROUTE_TOPOLOGY_CREDENTIAL",
+				"max_request_body_bytes": 1024, "max_request_header_bytes": 4096,
+				"connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "1s", "stream_idle_timeout": "1s"},
+		},
+		"routes": []any{
+			map[string]any{"protocol": responsesProtocol, "mode": "native", "model": "model-a", "account": "account-a", "adapter": "adapter-a", "connector": "connector-a", "capabilities": map[string]string{"llm.streaming": "supported"}},
+			map[string]any{"protocol": responsesProtocol, "mode": "native", "model": "model-b", "account": "account-b", "adapter": "adapter-a", "connector": "connector-a"},
+		},
+	}
+	check := func(fields map[string]any) (config, error) {
+		t.Helper()
+		data, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		c, _, err := loadConfig([]string{"-config", path})
+		if strings.Contains(fmt.Sprintf("%+v %#v %v", c, c, err), credential) {
+			t.Fatal("resolved credential leaked")
+		}
+		return c, err
+	}
+	c, err := check(valid)
+	if err != nil || len(c.Routes) != 2 || string(c.Credentials["PESTIROUTE_TOPOLOGY_CREDENTIAL"]) != credential {
+		t.Fatalf("valid two-route topology: components=%d routes=%d err=%v", len(c.Components), len(c.Routes), err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(map[string]any)
+	}{
+		{"wrong protocol", func(v map[string]any) { v["routes"].([]any)[0].(map[string]any)["protocol"] = "other.protocol.v1" }},
+		{"duplicate component IDs", func(v map[string]any) { v["components"].([]any)[1].(map[string]any)["id"] = "adapter-a" }},
+		{"missing adapter", func(v map[string]any) { v["routes"].([]any)[0].(map[string]any)["adapter"] = "missing" }},
+		{"wrong connector kind", func(v map[string]any) { v["routes"].([]any)[0].(map[string]any)["connector"] = "adapter-a" }},
+		{"wrong component kind", func(v map[string]any) { v["components"].([]any)[0].(map[string]any)["kind"] = "connector" }},
+		{"wrong implementation", func(v map[string]any) { v["components"].([]any)[0].(map[string]any)["implementation"] = "unknown.impl" }},
+		{"duplicate route", func(v map[string]any) { v["routes"].([]any)[1] = v["routes"].([]any)[0] }},
+		{"non-native route", func(v map[string]any) { v["routes"].([]any)[0].(map[string]any)["mode"] = "translation" }},
+		{"missing route model", func(v map[string]any) { delete(v["routes"].([]any)[0].(map[string]any), "model") }},
+		{"invalid capability state", func(v map[string]any) {
+			v["routes"].([]any)[0].(map[string]any)["capabilities"] = map[string]string{"llm.streaming": "maybe"}
+		}},
+		{"adapter connector config", func(v map[string]any) {
+			v["components"].([]any)[0].(map[string]any)["endpoint"] = "http://127.0.0.1/v1/responses"
+		}},
+		{"non-loopback endpoint", func(v map[string]any) {
+			v["components"].([]any)[1].(map[string]any)["endpoint"] = "http://example.test/v1/responses"
+		}},
+		{"unset credential", func(v map[string]any) {
+			v["components"].([]any)[1].(map[string]any)["credential_env"] = "PESTIROUTE_UNSET_TOPOLOGY_CREDENTIAL"
+		}},
+		{"empty credential", func(v map[string]any) {
+			t.Setenv("PESTIROUTE_EMPTY_TOPOLOGY_CREDENTIAL", "")
+			v["components"].([]any)[1].(map[string]any)["credential_env"] = "PESTIROUTE_EMPTY_TOPOLOGY_CREDENTIAL"
+		}},
+		{"mixed config", func(v map[string]any) { v["upstream_endpoint"] = "http://127.0.0.1/v1/responses" }},
+		{"remote listener", func(v map[string]any) { v["listen"] = "0.0.0.0:0" }},
+		{"unknown nested field", func(v map[string]any) { v["components"].([]any)[0].(map[string]any)["secret"] = credential }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(valid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(data, &fields); err != nil {
+				t.Fatal(err)
+			}
+			tc.edit(fields)
+			if _, err := check(fields); err == nil {
+				t.Fatal("expected invalid topology error")
+			}
+		})
+	}
+	for _, body := range []string{`{"components":null,"routes":[]}`, `{"components":[],"routes":[null]}`, `{"components":[],"routes":[],"unknown":1}`} {
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := loadConfig([]string{"-config", path}); err == nil {
+			t.Errorf("expected strict rejection of %s", body)
+		}
+	}
+	for _, body := range []string{
+		`{"components":[],"routes":[]}`,
+		`{"Components":[{"id":"x"}],"Routes":[{"mode":"bad"}],"listen":"0.0.0.0:1"}`,
+		`{"components":[{"id":"adapter-a","implementation":"pestiroute.responses.native","kind":"adapter"}]}`,
+		`{"routes":[]}`,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := loadConfig([]string{"-config", path}); err == nil {
+			t.Errorf("expected incomplete topology rejection: %s", body)
+		}
+	}
+	for _, field := range []string{"Components", "COMPONENTS", "cOmPoNeNtS", "Routes", "ROUTES", "upstream_Endpoint", "Upstream_endpoint"} {
+		t.Run("case-sensitive top-level key "+field, func(t *testing.T) {
+			data, err := json.Marshal(valid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(data, &fields); err != nil {
+				t.Fatal(err)
+			}
+			switch field {
+			case "Components", "COMPONENTS", "cOmPoNeNtS":
+				fields[field] = fields["components"]
+				delete(fields, "components")
+			case "Routes", "ROUTES":
+				fields[field] = fields["routes"]
+				delete(fields, "routes")
+			default:
+				fields[field] = "https://api.example.test/v1/responses"
+			}
+			encoded, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, encoded, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := loadConfig([]string{"-config", path}); err == nil {
+				t.Fatalf("accepted case-variant key %q", field)
+			}
+		})
+	}
+	for _, body := range []string{
+		`{"components":[{"ID":"adapter-a","implementation":"pestiroute.responses.native","kind":"adapter"}],"routes":[]}`,
+		`{"components":[{"id":"adapter-a","implementation":"pestiroute.responses.native","kind":"adapter"}],"routes":[{"protocol":"openai.responses.v1","Mode":"native","model":"m","account":"a","adapter":"adapter-a","connector":"connector-a"}]}`,
+		`{"components":[{"id":"adapter-a","implementation":"pestiroute.responses.native","kind":"adapter"}],"routes":[{"protocol":"openai.responses.v1","mode":"native","mOdEl":"m","account":"a","adapter":"adapter-a","connector":"connector-a"}]}`,
+		`{"components":[{"id":"connector-a","implementation":"pestiroute.responses.native","kind":"connector","endpoint":"http://127.0.0.1/v1/responses","credential_env":"PESTIROUTE_TOPOLOGY_CREDENTIAL","max_request_body_bytes":1,"max_request_header_bytes":1,"connect_timeout":"1s","tls_handshake_timeout":"1s","response_header_timeout":"1s","stream_idle_timeout":"1s"}],"routes":[]}`,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := loadConfig([]string{"-config", path}); err == nil {
+			t.Errorf("accepted case-variant nested key: %s", body)
+		}
+	}
+	if _, err := check(map[string]any{"components": valid["components"]}); err == nil {
+		t.Fatal("partial topology accepted")
+	}
+	if _, err := check(map[string]any{"components": valid["components"], "routes": valid["routes"], "listen": "localhost:8080"}); err == nil {
+		t.Fatal("hostname inference bind accepted")
 	}
 }
 

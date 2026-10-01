@@ -35,16 +35,46 @@ type config struct {
 	ResponseHeaderTimeout string `json:"response_header_timeout"`
 	StreamIdleTimeout     string `json:"stream_idle_timeout"`
 	credential            secret
+	Components            []topologyComponent `json:"components,omitempty"`
+	Routes                []topologyRoute     `json:"routes,omitempty"`
+	Credentials           map[string]secret   `json:"-"`
+}
+
+type topologyComponent struct {
+	ID             core.InstanceID    `json:"id"`
+	Implementation string             `json:"implementation"`
+	Kind           core.ComponentKind `json:"kind"`
+	Endpoint       string             `json:"endpoint,omitempty"`
+	CredentialEnv  string             `json:"credential_env,omitempty"`
+	MaxBodyBytes   int64              `json:"max_request_body_bytes,omitempty"`
+	MaxHeaderBytes int64              `json:"max_request_header_bytes,omitempty"`
+	ConnectTimeout string             `json:"connect_timeout,omitempty"`
+	TLSTimeout     string             `json:"tls_handshake_timeout,omitempty"`
+	HeaderTimeout  string             `json:"response_header_timeout,omitempty"`
+	IdleTimeout    string             `json:"stream_idle_timeout,omitempty"`
+}
+
+type topologyRoute struct {
+	Protocol     string                                   `json:"protocol"`
+	Mode         string                                   `json:"mode"`
+	Model        string                                   `json:"model"`
+	Account      string                                   `json:"account"`
+	Adapter      core.InstanceID                          `json:"adapter"`
+	Connector    core.InstanceID                          `json:"connector"`
+	Capabilities map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
 }
 
 // secret stays in runtime state, never in configuration output or diagnostics.
 type secret string
+
+const responsesProtocol = "openai.responses.v1"
 
 func (secret) String() string   { return "[REDACTED]" }
 func (secret) GoString() string { return "[REDACTED]" }
 
 func (c config) String() string {
 	c.credential = ""
+	c.Credentials = nil
 	type view config
 	return fmt.Sprintf("%+v", view(c))
 }
@@ -80,6 +110,12 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		}
 		if trimmed := bytes.TrimSpace(data); len(trimmed) == 0 || trimmed[0] != '{' {
 			return config{}, 0, fmt.Errorf("config %q: expected JSON object", *path)
+		}
+		if err := rejectNullValues(data); err != nil {
+			return config{}, 0, fmt.Errorf("config %q: %w", *path, err)
+		}
+		if err := validateJSONFieldSpellings(data); err != nil {
+			return config{}, 0, fmt.Errorf("config %q: %w", *path, err)
 		}
 		decoder := json.NewDecoder(bytes.NewReader(data))
 		decoder.DisallowUnknownFields()
@@ -118,7 +154,26 @@ func loadConfig(args []string) (config, time.Duration, error) {
 			count++
 		}
 	}
-	if count != 0 {
+	m2 := false
+	for _, field := range []string{"components", "routes"} {
+		if _, ok := supplied[field]; ok {
+			m2 = true
+		}
+	}
+	if count != 0 && m2 {
+		return config{}, 0, errors.New("legacy upstream fields cannot be mixed with M2 components or routes")
+	}
+	if m2 {
+		if _, components := supplied["components"]; !components {
+			return config{}, 0, errors.New("M2 topology requires components and routes")
+		}
+		if _, routes := supplied["routes"]; !routes {
+			return config{}, 0, errors.New("M2 topology requires components and routes")
+		}
+		if err := validateTopology(&c); err != nil {
+			return config{}, 0, err
+		}
+	} else if count != 0 {
 		if count != len(fields) {
 			return config{}, 0, errors.New("partial inference configuration: all upstream, limit and timeout fields are required")
 		}
@@ -151,8 +206,187 @@ func loadConfig(args []string) (config, time.Duration, error) {
 			return config{}, 0, errors.New("upstream_credential_env is unset or empty")
 		}
 		c.credential = secret(value)
+		c.Components = legacyComponents(c)
+		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector"}}
+		c.Credentials = map[string]secret{c.UpstreamCredentialEnv: c.credential}
 	}
 	return c, d, nil
+}
+
+func validateJSONFieldSpellings(data []byte) error {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return nil // The strict decoder below preserves the established syntax diagnostic.
+	}
+	if err := checkJSONKeys(object, map[string]bool{
+		"listen": true, "shutdown_timeout": true, "upstream_endpoint": true,
+		"upstream_credential_env": true, "max_request_body_bytes": true,
+		"max_request_header_bytes": true, "connect_timeout": true,
+		"tls_handshake_timeout": true, "response_header_timeout": true,
+		"stream_idle_timeout": true, "components": true, "routes": true,
+	}); err != nil {
+		return err
+	}
+	for _, group := range []struct {
+		field string
+		keys  map[string]bool
+	}{
+		{"components", map[string]bool{
+			"id": true, "implementation": true, "kind": true, "endpoint": true,
+			"credential_env": true, "max_request_body_bytes": true,
+			"max_request_header_bytes": true, "connect_timeout": true,
+			"tls_handshake_timeout": true, "response_header_timeout": true,
+			"stream_idle_timeout": true,
+		}},
+		{"routes", map[string]bool{
+			"protocol": true, "mode": true, "model": true, "account": true,
+			"adapter": true, "connector": true, "capabilities": true,
+		}},
+	} {
+		raw, ok := object[group.field]
+		if !ok {
+			continue
+		}
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			continue // Type/syntax errors are reported by the strict struct decoder.
+		}
+		for i, item := range items {
+			var entry map[string]json.RawMessage
+			if err := json.Unmarshal(item, &entry); err != nil || entry == nil {
+				continue
+			}
+			if err := checkJSONKeys(entry, group.keys); err != nil {
+				return fmt.Errorf("%s[%d]: %w", group.field, i, err)
+			}
+		}
+	}
+	return nil
+}
+
+func checkJSONKeys(object map[string]json.RawMessage, allowed map[string]bool) error {
+	for key := range object {
+		if !allowed[key] {
+			return fmt.Errorf("unknown configuration field %q", key)
+		}
+	}
+	return nil
+}
+
+func rejectNullValues(data []byte) error {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil // The strict decoder below returns the established JSON diagnostic.
+	}
+	var visit func(any, string) string
+	visit = func(v any, path string) string {
+		switch x := v.(type) {
+		case nil:
+			return path
+		case []any:
+			for i, item := range x {
+				if got := visit(item, fmt.Sprintf("%s[%d]", path, i)); got != "" {
+					return got
+				}
+			}
+		case map[string]any:
+			for key, item := range x {
+				next := key
+				if path != "" {
+					next = path + "." + key
+				}
+				if got := visit(item, next); got != "" {
+					return got
+				}
+			}
+		}
+		return ""
+	}
+	if field := visit(value, ""); field != "" {
+		return fmt.Errorf("%s must not be null", field)
+	}
+	return nil
+}
+
+func legacyComponents(c config) []topologyComponent {
+	return []topologyComponent{
+		{ID: "responses-adapter", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
+		{ID: "responses-connector", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector,
+			Endpoint: c.UpstreamEndpoint, CredentialEnv: c.UpstreamCredentialEnv, MaxBodyBytes: c.MaxRequestBodyBytes,
+			MaxHeaderBytes: c.MaxRequestHeaderBytes, ConnectTimeout: c.ConnectTimeout, TLSTimeout: c.TLSHandshakeTimeout,
+			HeaderTimeout: c.ResponseHeaderTimeout, IdleTimeout: c.StreamIdleTimeout},
+	}
+}
+
+func validateTopology(c *config) error {
+	if len(c.Components) == 0 || len(c.Routes) == 0 {
+		return errors.New("M2 components and routes must be non-empty")
+	}
+	if host, _, _ := net.SplitHostPort(c.Listen); host != "127.0.0.1" && host != "::1" {
+		return errors.New("inference listen must bind numeric loopback (127.0.0.1 or ::1)")
+	}
+	components := make(map[core.InstanceID]core.ComponentKind, len(c.Components))
+	c.Credentials = make(map[string]secret)
+	for i := range c.Components {
+		component := &c.Components[i]
+		if component.ID == "" || component.Implementation != "pestiroute.responses.native" || (component.Kind != core.ComponentAdapter && component.Kind != core.ComponentConnector) {
+			return fmt.Errorf("component %d requires a valid id, implementation, and kind", i)
+		}
+		if _, exists := components[component.ID]; exists {
+			return fmt.Errorf("duplicate component instance ID %q", component.ID)
+		}
+		components[component.ID] = component.Kind
+		if component.Kind == core.ComponentAdapter {
+			if component.Endpoint != "" || component.CredentialEnv != "" || component.MaxBodyBytes != 0 || component.MaxHeaderBytes != 0 || component.ConnectTimeout != "" || component.TLSTimeout != "" || component.HeaderTimeout != "" || component.IdleTimeout != "" {
+				return fmt.Errorf("adapter component %q has connector configuration", component.ID)
+			}
+			continue
+		}
+		if component.Endpoint == "" || component.CredentialEnv == "" || component.MaxBodyBytes <= 0 || component.MaxHeaderBytes <= 0 {
+			return fmt.Errorf("connector component %q requires endpoint, credential_env, and positive limits", component.ID)
+		}
+		endpoint, err := url.Parse(component.Endpoint)
+		if err != nil || endpoint == nil || endpoint.Host == "" || endpoint.Opaque != "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.ForceQuery || strings.Contains(component.Endpoint, "#") || !strings.HasSuffix(endpoint.EscapedPath(), "/v1/responses") || (endpoint.Scheme != "https" && (endpoint.Scheme != "http" || !isLoopbackHost(endpoint.Hostname()))) {
+			return fmt.Errorf("component %q has invalid endpoint", component.ID)
+		}
+		for _, entry := range []struct{ name, value string }{{"connect_timeout", component.ConnectTimeout}, {"tls_handshake_timeout", component.TLSTimeout}, {"response_header_timeout", component.HeaderTimeout}, {"stream_idle_timeout", component.IdleTimeout}} {
+			d, err := time.ParseDuration(entry.value)
+			if err != nil || d <= 0 {
+				return fmt.Errorf("component %q %s must be positive", component.ID, entry.name)
+			}
+		}
+		if strings.TrimSpace(component.CredentialEnv) == "" || strings.Contains(component.CredentialEnv, "=") {
+			return fmt.Errorf("component %q credential_env must name a non-empty environment variable", component.ID)
+		}
+		value, ok := os.LookupEnv(component.CredentialEnv)
+		if !ok || value == "" {
+			return fmt.Errorf("component %q credential_env is unset or empty", component.ID)
+		}
+		c.Credentials[component.CredentialEnv] = secret(value)
+	}
+	seen := make(map[core.RouteIdentity]struct{}, len(c.Routes))
+	for _, route := range c.Routes {
+		if route.Protocol != responsesProtocol || route.Mode != core.ModeNative || route.Model == "" || route.Account == "" || route.Adapter == "" || route.Connector == "" {
+			return errors.New("route requires supported protocol, native mode, model, account, adapter, and connector")
+		}
+		identity := core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: route.Protocol, Mode: route.Mode, Model: route.Model}, AccountID: route.Account}
+		if _, exists := seen[identity]; exists {
+			return fmt.Errorf("duplicate route identity %+v", identity)
+		}
+		seen[identity] = struct{}{}
+		if components[route.Adapter] != core.ComponentAdapter {
+			return fmt.Errorf("route adapter instance %q is missing or has the wrong kind", route.Adapter)
+		}
+		if components[route.Connector] != core.ComponentConnector {
+			return fmt.Errorf("route connector instance %q is missing or has the wrong kind", route.Connector)
+		}
+		for capability, state := range route.Capabilities {
+			if capability == "" || (state != core.Supported && state != core.Unsupported && state != core.Unknown) {
+				return fmt.Errorf("route has invalid capability declaration")
+			}
+		}
+	}
+	return nil
 }
 
 func isLoopbackHost(host string) bool {
