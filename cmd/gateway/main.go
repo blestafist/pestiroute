@@ -49,6 +49,7 @@ type config struct {
 	policyStore           core.PolicyStore
 	accountAuthorizer     core.AccountAuthorizer
 	logger                *slog.Logger
+	protected             *protectedConfig
 }
 
 type topologyComponent struct {
@@ -99,7 +100,8 @@ func (c config) GoString() string { return c.String() }
 func loadConfig(args []string) (config, time.Duration, error) {
 	flags := flag.NewFlagSet("gateway", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	path := flags.String("config", "", "JSON configuration file")
+	path := flags.String("config", "", "configuration file")
+	format := flags.String("config-format", "json", "configuration format (json or yaml)")
 	listen := flags.String("listen", "", "listener address")
 	timeout := flags.String("shutdown-timeout", "", "graceful shutdown duration")
 	if err := flags.Parse(args); err != nil {
@@ -109,6 +111,25 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		return config{}, 0, fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
 	c := config{Listen: "127.0.0.1:8080", ShutdownTimeout: "5s"}
+	if *format != "json" && *format != "yaml" {
+		return config{}, 0, fmt.Errorf("unsupported config format %q (want json or yaml)", *format)
+	}
+	if *format == "yaml" {
+		if *path == "" {
+			return config{}, 0, errors.New("-config is required with -config-format yaml")
+		}
+		loaded, err := loadProtectedYAML(*path)
+		if err != nil {
+			return config{}, 0, err
+		}
+		c.Listen = loaded.Server.Listen
+		c.ShutdownTimeout = loaded.Server.ShutdownTimeout
+		d, _ := time.ParseDuration(c.ShutdownTimeout)
+		c.DatabasePath = loaded.Storage.Path
+		c.MasterKeyFile = loaded.Secrets.MasterKeyFile
+		c.protected = &loaded
+		return c, d, nil
+	}
 	var supplied map[string]json.RawMessage
 	if *path != "" {
 		file, err := os.Open(*path)
@@ -869,6 +890,9 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 	c, timeout, err := loadConfig(args)
 	if err != nil {
 		return err
+	}
+	if c.protected != nil {
+		return errors.New("protected YAML passed schema validation, but SQLite reference verification and protected runtime composition are not implemented (M3-030)")
 	}
 	var ready atomic.Bool
 	var draining atomic.Bool
