@@ -10,11 +10,11 @@ The running gateway accepts legacy single-target and strict M2 topology JSON on 
 
 ## Immediate Focus
 
-[M3-001](tasks/M3-001.md) is DONE; [M3-STORAGE.md](M3-STORAGE.md) and DEC-005 fix storage ownership, acknowledged accounting, crash recovery and master-key file policy without application changes.
+[M3-001](tasks/M3-001.md) and [M3-002](tasks/M3-002.md) are DONE. SQLite driver `modernc.org/sqlite` v1.60.1 is validated and pinned; `internal/storage/sqlite.Open` establishes the file-backed connection pragma seam (WAL, `synchronous=FULL`, foreign keys, 500 ms busy timeout) with verified CGO-free build and offline checks.
 
-The immediate planning focus is refining the next registered candidate [M3-002](tasks/M3-002.md) (SQLite driver spike/pinning) and promoting it from DRAFT to READY once driver checks are concrete. All remaining M3 cards stay DRAFT until prerequisites are DONE. Do not implement a dependency chain in one session or use the optional `TryRecord` observation sink as the durable ledger.
+The next eligible registered candidate is [M3-003](tasks/M3-003.md) (bind access, admission and durable accounting), currently DRAFT. All remaining M3 cards stay DRAFT until prerequisites are DONE and cards are promoted. Do not implement a dependency chain in one session or use the optional `TryRecord` observation sink as the durable ledger.
 
-SQLite, persistent accounts/credentials/usage, virtual keys, RPM/TPM reservations/reconciliation, recovery, protected YAML startup and bounded fallback are planned, not implemented. The [YAML example](CONFIGURATION.md#proposed-yaml) remains draft pending M3-004. OAuth runtime sessions/serialization use scripted validation in M3; real provider flows remain M5.1. Stateful cross-target affinity, protocol translation and IPC remain outside M3.
+Persistent accounts/credentials/usage, virtual keys, RPM/TPM reservations/reconciliation, recovery, protected YAML startup and bounded fallback are planned, not implemented. The [YAML example](CONFIGURATION.md#proposed-yaml) remains draft pending M3-004. OAuth runtime sessions/serialization use scripted validation in M3; real provider flows remain M5.1. Stateful cross-target affinity, protocol translation and IPC remain outside M3.
 
 Use the existing project agents, atomic cards, Context7, gopls and file/shell/Go checks. [The M3 tooling gate](TOOLING.md#m3-tooling-gate) recommends an optional local SQLite CLI; no new MCP/plugin is required. The old machine-local tool inventory has not been reverified here.
 

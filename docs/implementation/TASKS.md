@@ -200,7 +200,7 @@ This table maps outcomes, not test results. M3-046 may close the milestone only 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
 | [M3-001](tasks/M3-001.md) | DONE | GPT-6 Luna (M3-001 worker) | M2-034 | Fix the M3 storage and crash-consistency design | M3 storage, acknowledged accounting, recovery, and master-key design specified in M3-STORAGE.md; implementation remains future M3 scope | [Direct proof](tasks/M3-001.md#verification) and `git diff --check` |
-| [M3-002](tasks/M3-002.md) | DRAFT | — | M3-001 | Validate and pin the SQLite driver | — | [Direct proof](tasks/M3-002.md#verification) |
+| [M3-002](tasks/M3-002.md) | DONE | GPT-6 Luna / reviewer (ses_f024cd190ffeUUVOA8fbGzpCNq) | M3-001 | Validate and pin the SQLite driver | Pinned modernc.org/sqlite v1.60.1; Open seam configures WAL, FULL sync, foreign keys, 500ms busy timeout; file-backed tests verify reopen, contention, cancellation, network isolation | `go test -race -count=5 ./internal/storage/sqlite/...`, `CGO_ENABLED=0 go test ./internal/storage/sqlite/...`, `./scripts/check.sh` |
 | [M3-003](tasks/M3-003.md) | DRAFT | — | M3-001, M3-002 | Bind access, admission and durable accounting | — | [Direct proof](tasks/M3-003.md#verification) |
 | [M3-004](tasks/M3-004.md) | DRAFT | — | M3-003 | Specify M3 configuration and retry admission | — | [Direct proof](tasks/M3-004.md#verification) |
 | [M3-005](tasks/M3-005.md) | DRAFT | — | M3-002 | Implement transactional schema migrations | — | [Direct proof](tasks/M3-005.md#verification) |
@@ -245,4 +245,3 @@ This table maps outcomes, not test results. M3-046 may close the milestone only 
 | [M3-044](tasks/M3-044.md) | DRAFT | — | M3-036, M3-039, M3-041, M3-043 | Run protected native regressions and enforce boundaries | — | [Direct proof](tasks/M3-044.md#verification) |
 | [M3-045](tasks/M3-045.md) | DRAFT | — | M3-031, M3-032, M3-036, M3-040, M3-041, M3-042, M3-044 | Document runnable M3 setup and recovery operations | — | [Direct proof](tasks/M3-045.md#verification) |
 | [M3-046](tasks/M3-046.md) | DRAFT | — | M3-045 | Audit every M3 gate and prepare the M4 handoff | — | [Direct proof](tasks/M3-046.md#verification) |
-

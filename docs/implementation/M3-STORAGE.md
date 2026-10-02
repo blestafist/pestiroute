@@ -18,6 +18,14 @@ API or a quiesced, checkpointed backup. Shutdown stops admission, drains active
 requests for the configured bounded grace, then cancels remaining work and
 closes storage; it must not wait indefinitely for a writer.
 
+The M3-002 driver spike pins pure-Go `modernc.org/sqlite` v1.60.1. The initial
+`internal/storage/sqlite.Open` seam configures WAL, `synchronous=FULL`,
+`foreign_keys=ON`, and `busy_timeout=500` on every pooled connection through the
+driver DSN. Temporary file-backed tests passed on Linux/amd64 with Go 1.27.1
+and `CGO_ENABLED=0`; other deployment platforms are not verified. A context
+cancelled while SQLite is inside its busy handler returns after the bounded
+500 ms wait, rather than interrupting that wait immediately.
+
 Gateway-originated writes go through one runtime-owned writer with a bounded
 queue (or direct serialized calls); queue saturation returns an error rather
 than growing memory without bound. The local CLI uses the same runtime-owned
