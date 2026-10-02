@@ -10,6 +10,10 @@ Each component has `id`, `implementation` (`pestiroute.responses.native`), and `
 
 Each route requires `protocol` (`openai.responses.v1`), `mode` (`native`), non-empty `model`, `account`, and references to a registered adapter and connector of the matching kinds. Route identities must be unique. Optional `capabilities` maps non-empty capability names to `supported`, `unsupported`, or `unknown`; declarations do not establish provider-wide support. The runtime uses the explicitly configured identity routes; no automatic fallback is configured.
 
+Capability declarations are passed to the selected Connector for its exact protocol/mode/model/account scope. `unsupported` and `unknown` restrict admission even when the historical baseline supports that feature. Numeric-loopback HTTP fixtures can explicitly declare additional supported capabilities; external endpoints retain the established M1 support ceiling, including unknown parallel tools. Adapter support describes the native client format independently of the opaque model ID; both Adapter and Connector must still support every requested capability.
+
+Ingress Decode is bounded by the largest configured request limits so it can identify a route. Before Execute, the gateway checks the selected Connector's body and header limits against the admitted body size and original HTTP headers, including headers stripped from upstream forwarding. Another route's larger limits cannot authorize an oversized request; chunked bodies are checked by their actual admitted size.
+
 The old single-target JSON form remains supported: `upstream_endpoint`, `upstream_credential_env`, positive body/header limits, and all four positive connector timeouts are required together. It normalizes to the built-in Responses adapter/connector and one native `gpt-5.4-mini` route. It must not be mixed with `components` or `routes`. As with M2 topology, inference listens only on numeric loopback and endpoint rules apply. This compatibility form is not the M3 schema.
 
 ## State Separation

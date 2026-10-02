@@ -189,6 +189,16 @@ component descriptor, and never claim live/provider-verified support merely
 because a fixture declares it. Runtime eligibility still requires `supported`
 from both selected components.
 
+In the native Responses implementation, route capability declarations are
+included in the Connector's opaque Init configuration for that exact scope.
+Explicit `unsupported`/`unknown` values restrict its declaration. Additional
+`supported` values are allowed for numeric-loopback HTTP fixtures only;
+external endpoints retain the M1 evidence ceiling, including unknown parallel
+tools. The Adapter declares native-format support independently of model
+identity; it does not claim backend feature support. Ingress uses bounded
+topology-wide limits for Decode, then validates the selected Connector's body
+and original-header limits before Execute, without another payload decode.
+
 Keep startup JSON strict and backward compatible. The legacy form remains the
 M1 single configured native target and maps internally to one explicit route
 using its existing protocol/model/account/credential selection and current
