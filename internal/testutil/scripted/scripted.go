@@ -141,17 +141,23 @@ func (c *Connector) Execute(ctx context.Context, request core.ExecutionRequest, 
 			return core.ExecutionResponse{}, &core.GatewayError{Code: "credential_unavailable", Category: core.CategoryUnauthenticated, Message: "Selected credential is unavailable"}
 		}
 	}
-	if gatewayErr := c.executeErrors[request.ID]; gatewayErr != nil {
-		delete(c.executeErrors, request.ID)
-		delete(c.scripts, request.ID)
+	scriptID := request.ID
+	steps, ok := c.scripts[scriptID]
+	if !ok && c.executeErrors[scriptID] == nil {
+		// An empty-ID script is a one-shot default for runtime-assigned IDs.
+		scriptID = ""
+		steps, ok = c.scripts[scriptID]
+	}
+	if gatewayErr := c.executeErrors[scriptID]; gatewayErr != nil {
+		delete(c.executeErrors, scriptID)
+		delete(c.scripts, scriptID)
 		c.calls = append(c.calls, Call{Request: cloneRequest(request), Scope: scope})
 		return core.ExecutionResponse{}, cloneGatewayError(gatewayErr)
 	}
-	steps, ok := c.scripts[request.ID]
 	if !ok {
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "script_not_found", Category: core.CategoryInvalidRequest, Message: "No execution script"}
 	}
-	delete(c.scripts, request.ID)
+	delete(c.scripts, scriptID)
 	c.calls = append(c.calls, Call{Request: cloneRequest(request), Scope: scope})
 	s := &stream{steps: steps, done: make(chan struct{}), owner: c}
 	c.streams[s] = struct{}{}
