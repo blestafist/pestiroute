@@ -50,6 +50,9 @@ func TestLedgerIntentLifecycleIdempotencyNullableUsageAndReopen(t *testing.T) {
 	if err := repo.CreateAttempt(ctx, attempt); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO reservations (attempt_id,estimated_tokens,state) VALUES (?,?,'held')`, attempt.ID, attempt.EstimateTokens); err != nil {
+		t.Fatal(err)
+	}
 	if err := repo.CreateAttempt(ctx, attempt); err != nil {
 		t.Fatalf("identical attempt: %v", err)
 	}
@@ -131,6 +134,9 @@ func TestLedgerIntentLifecycleIdempotencyNullableUsageAndReopen(t *testing.T) {
 	}
 	third := AttemptRecord{ID: "attempt-2", RequestID: request.ID, Ordinal: 3, AccountID: account.ID, Connector: "connector", RouteID: "route", BudgetPolicy: "known", EstimateTokens: 20, EstimateMethod: "fixture", State: "reserved"}
 	if err := repo.CreateAttempt(ctx, third); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO reservations (attempt_id,estimated_tokens,state) VALUES (?,?,'held')`, third.ID, third.EstimateTokens); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE requests SET state='failed' WHERE id=?`, request.ID); err != nil {

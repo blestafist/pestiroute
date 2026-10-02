@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 )
@@ -54,6 +55,10 @@ type TerminalAttempt struct {
 type ReservationRecord struct {
 	AttemptID       string
 	EstimatedTokens int64
+	ActualTokens    *int64
+	EffectiveCharge int64
+	State           string
+	ReconciledAt    *time.Time
 }
 
 type Ledger struct {
@@ -568,12 +573,19 @@ func (r *Ledger) FinalizeAttempt(ctx context.Context, terminal TerminalAttempt) 
 		}
 	}()
 	var current string
-	err = conn.QueryRowContext(ctx, `SELECT state FROM attempts WHERE id=?`, terminal.AttemptID).Scan(&current)
+	var dispatchedAt sql.NullInt64
+	err = conn.QueryRowContext(ctx, `SELECT state,dispatched_at FROM attempts WHERE id=?`, terminal.AttemptID).Scan(&current, &dispatchedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrLedgerNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("read attempt before finalization: %w", err)
+	}
+	var estimate int64
+	if err := conn.QueryRowContext(ctx, `SELECT estimated_tokens FROM reservations WHERE attempt_id=?`, terminal.AttemptID).Scan(&estimate); errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("reservation for attempt %q: %w", terminal.AttemptID, ErrLedgerNotFound)
+	} else if err != nil {
+		return fmt.Errorf("read attempt reservation: %w", err)
 	}
 	if current != "reserved" && current != "intent" {
 		var got UsageRecord
@@ -590,7 +602,15 @@ func (r *Ledger) FinalizeAttempt(ctx context.Context, terminal TerminalAttempt) 
 		if recorded.Valid {
 			got.RecordedAt = fromUnixMillis(recorded.Int64)
 		}
-		if current == terminal.State && usageEqual(got, usage) && existingFinished.Valid && existingFinished.Int64 == millis(terminal.FinishedAt) && (gotCommitted != 0) == terminal.Committed && nullableStringPtrEqual(gotCategory, terminal.ErrorCategory) && nullableStringPtrEqual(gotReason, terminal.ErrorReason) {
+		reservation, err := readReservation(ctx, conn, terminal.AttemptID)
+		if err != nil {
+			return err
+		}
+		expected, err := settlement(estimate, usage, dispatchedAt.Valid)
+		if err != nil {
+			return err
+		}
+		if current == terminal.State && usageEqual(got, usage) && existingFinished.Valid && existingFinished.Int64 == millis(terminal.FinishedAt) && (gotCommitted != 0) == terminal.Committed && nullableStringPtrEqual(gotCategory, terminal.ErrorCategory) && nullableStringPtrEqual(gotReason, terminal.ErrorReason) && reservation.State == expected.state && reservation.EffectiveCharge == expected.charge && ptrEqual(reservation.ActualTokens, expected.actual) && reservation.ReconciledAt != nil {
 			return nil
 		}
 		return fmt.Errorf("finalize attempt %q: %w", usage.AttemptID, ErrLedgerConflict)
@@ -603,11 +623,97 @@ func (r *Ledger) FinalizeAttempt(ctx context.Context, terminal TerminalAttempt) 
 	if err != nil {
 		return fmt.Errorf("insert terminal usage: %w", err)
 	}
+	result, err := settlement(estimate, usage, current == "intent")
+	if err != nil {
+		return err
+	}
+	// Sample only after BEGIN IMMEDIATE has acquired the writer lock.
+	reconciled := millis(r.now())
+	if _, err := conn.ExecContext(ctx, `UPDATE reservations SET state=?,actual_tokens=?,effective_charge=?,reconciled_at=? WHERE attempt_id=? AND state='held'`, result.state, result.actual, result.charge, reconciled, terminal.AttemptID); err != nil {
+		return fmt.Errorf("reconcile attempt reservation: %w", err)
+	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return fmt.Errorf("commit attempt finalization: %w", err)
 	}
 	committed = true
 	return nil
+}
+
+type settlementResult struct {
+	state  string
+	actual *int64
+	charge int64
+}
+
+func settlement(estimate int64, usage UsageRecord, dispatched bool) (settlementResult, error) {
+	if estimate < 0 {
+		return settlementResult{}, fmt.Errorf("settle reservation: %w: negative estimate", ErrLedgerConflict)
+	}
+	for _, token := range []*int64{usage.InputTokens, usage.OutputTokens, usage.ReasoningTokens, usage.CachedTokens} {
+		if token != nil && *token < 0 {
+			return settlementResult{}, fmt.Errorf("settle reservation: %w: negative usage", ErrLedgerConflict)
+		}
+	}
+	if !dispatched {
+		return settlementResult{state: "released"}, nil
+	}
+	if usage.Completeness == "complete" && usage.InputTokens != nil && usage.OutputTokens != nil {
+		total, ok := checkedTokenSum(*usage.InputTokens, *usage.OutputTokens)
+		if !ok {
+			return settlementResult{}, fmt.Errorf("settle reservation: %w: token overflow", ErrLedgerConflict)
+		}
+		actual := total
+		return settlementResult{state: "settled", actual: &actual, charge: total}, nil
+	}
+	lower := int64(0)
+	for _, token := range []*int64{usage.InputTokens, usage.OutputTokens} {
+		if token != nil {
+			var ok bool
+			lower, ok = checkedTokenSum(lower, *token)
+			if !ok {
+				return settlementResult{}, fmt.Errorf("settle reservation: %w: token overflow", ErrLedgerConflict)
+			}
+		}
+	}
+	if lower < estimate {
+		lower = estimate
+	}
+	return settlementResult{state: "conservative", charge: lower}, nil
+}
+
+func checkedTokenSum(a, b int64) (int64, bool) {
+	if a < 0 || b < 0 || a > math.MaxInt64-b {
+		return 0, false
+	}
+	return a + b, true
+}
+
+func readReservation(ctx context.Context, conn *sql.Conn, id string) (ReservationRecord, error) {
+	var reservation ReservationRecord
+	var actual, reconciled sql.NullInt64
+	err := conn.QueryRowContext(ctx, `SELECT attempt_id,estimated_tokens,actual_tokens,COALESCE(effective_charge,0),state,reconciled_at FROM reservations WHERE attempt_id=?`, id).Scan(&reservation.AttemptID, &reservation.EstimatedTokens, &actual, &reservation.EffectiveCharge, &reservation.State, &reconciled)
+	if err != nil {
+		return ReservationRecord{}, fmt.Errorf("read reservation: %w", err)
+	}
+	reservation.ActualTokens = nullIntPtr(actual)
+	if reconciled.Valid {
+		t := fromUnixMillis(reconciled.Int64)
+		reservation.ReconciledAt = &t
+	}
+	return reservation, nil
+}
+
+func (r *Ledger) GetReservation(ctx context.Context, attemptID string) (ReservationRecord, error) {
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return ReservationRecord{}, fmt.Errorf("acquire reservation connection: %w", err)
+	}
+	defer conn.Close()
+	reservation, err := readReservation(ctx, conn, attemptID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ReservationRecord{}, ErrLedgerNotFound
+	}
+	return reservation, err
 }
 
 func usageEqual(a, b UsageRecord) bool {
