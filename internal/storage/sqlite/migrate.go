@@ -134,6 +134,46 @@ var schemaMigrations = []migration{{
 	},
 }}
 
+// CurrentSchemaVersion is the newest schema version supported by this binary.
+func CurrentSchemaVersion() int { return len(schemaMigrations) }
+
+// SchemaVersion reads and validates the applied migration journal without
+// creating tables or applying pending migrations.
+func SchemaVersion(ctx context.Context, db *sql.DB) (int, error) {
+	var exists bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'
+	)`).Scan(&exists); err != nil {
+		return 0, fmt.Errorf("read sqlite schema version: %w", err)
+	}
+	if !exists {
+		return 0, nil
+	}
+	rows, err := db.QueryContext(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return 0, fmt.Errorf("read sqlite migration journal: %w", err)
+	}
+	defer rows.Close()
+	current := 0
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			return 0, fmt.Errorf("read sqlite migration version: %w", err)
+		}
+		if version != current+1 || version > CurrentSchemaVersion() {
+			return 0, fmt.Errorf("invalid or unsupported sqlite schema version %d", version)
+		}
+		current = version
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("read sqlite migration journal: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("close sqlite migration journal: %w", err)
+	}
+	return current, nil
+}
+
 // Migrate applies every pending schema migration atomically.
 func Migrate(ctx context.Context, db *sql.DB) error {
 	return migrate(ctx, db, schemaMigrations)

@@ -673,6 +673,9 @@ func run(ctx context.Context, args []string) error {
 }
 
 func runWithFinalize(ctx context.Context, args []string, finalize func(core.AttemptResult)) error {
+	if len(args) > 0 && args[0] == "admin" {
+		return runAdmin(adminEnvironment{ctx: ctx, args: args[1:], stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr})
+	}
 	c, timeout, err := loadConfig(args)
 	if err != nil {
 		return err
