@@ -311,7 +311,7 @@ func cancellationFixtures() []cancellationFixture {
 			}
 			steps := []fakeupstream.Step{{Gate: firstGate, Data: incrementalFirst}}
 			if gate != nil {
-				steps = append(steps, fakeupstream.Step{Gate: gate, Sent: sent, Data: incrementalTerminal})
+				steps = append(steps, fakeupstream.Step{Gate: gate, Waiting: sent, Data: incrementalTerminal})
 			} else {
 				steps = append(steps, fakeupstream.Step{Data: incrementalTerminal})
 			}

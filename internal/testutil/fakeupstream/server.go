@@ -23,10 +23,11 @@ type Request struct {
 // Step is one stream write. Closing Gate permits the write; Sent closes after
 // the write has been flushed. Drop closes the connection after this step.
 type Step struct {
-	Gate <-chan struct{}
-	Sent chan<- struct{}
-	Data []byte
-	Drop bool
+	Gate    <-chan struct{}
+	Waiting chan<- struct{} // Notified when the handler reaches Gate.
+	Sent    chan<- struct{}
+	Data    []byte
+	Drop    bool
 }
 
 // Response describes a fixed response or a sequence of independently gated
@@ -125,6 +126,12 @@ func New(response Response) *Server {
 		w.(http.Flusher).Flush()
 		for _, step := range response.Steps {
 			if step.Gate != nil {
+				if step.Waiting != nil {
+					select {
+					case step.Waiting <- struct{}{}:
+					default:
+					}
+				}
 				select {
 				case <-step.Gate:
 				case <-r.Context().Done():
