@@ -105,6 +105,24 @@ func TestSQLiteVirtualKeyStoreProtectedHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := sqlite.NewVirtualKeys(db)
+	accounts := sqlite.NewAccounts(db)
+	if _, err := accounts.Create(ctx, sqlite.Account{ID: "account", Connector: "connector", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	accountAuthorizer := sqliteAccountAuthorizer{accounts: accounts}
+	for _, tc := range []struct {
+		account, connector string
+		wantErr            bool
+	}{
+		{"account", "connector", false},
+		{"account", "other-connector", true},
+		{"missing-account", "connector", true},
+	} {
+		err := accountAuthorizer.AuthorizeAccount(ctx, tc.account, tc.connector)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("account authorization (%q, %q) error = %v", tc.account, tc.connector, err)
+		}
+	}
 	valid, err := keys.Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +147,8 @@ func TestSQLiteVirtualKeyStoreProtectedHandler(t *testing.T) {
 	var logOutput bytes.Buffer
 	spy := &principalSpyConnector{}
 	cfg := config{
-		Listen: "127.0.0.1:0", keyStore: sqliteVirtualKeyStore{keys: keys}, logger: slog.New(slog.NewTextHandler(&logOutput, nil)),
+		Listen: "127.0.0.1:0", keyStore: sqliteVirtualKeyStore{keys: keys}, policyStore: sqlitePolicyStore{policies: policies},
+		accountAuthorizer: accountAuthorizer, logger: slog.New(slog.NewTextHandler(&logOutput, nil)),
 		Components: []topologyComponent{
 			{ID: "adapter", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
 			{ID: "connector", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector,
@@ -207,5 +226,32 @@ func TestSQLiteVirtualKeyStoreProtectedHandler(t *testing.T) {
 	afterExec, afterSupport, afterSeen := spy.snapshot()
 	if afterExec != beforeExec || afterSupport != beforeSupport || len(afterSeen) != len(beforeSeen) || logOutput.Len() != beforeLogs {
 		t.Fatalf("duplicate Authorization reached dispatch/support/logging")
+	}
+
+	beforeExec, beforeSupport, beforeSeen = spy.snapshot()
+	if _, err := policies.Update(ctx, policy.ID, policy.Revision, sqlite.UpdateKeyPolicyParams{
+		Enabled: true, Models: []string{}, Connectors: []string{"connector"}, RPM: 10, TPM: 1000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deniedByPolicy, err := keys.Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision + 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := post("Bearer " + deniedByPolicy.Secret); w.Code != http.StatusForbidden || !bytes.Contains(w.Body.Bytes(), []byte(`"code":"permission_denied"`)) {
+		t.Fatalf("model policy denial = %d %s", w.Code, w.Body.String())
+	}
+	if gotExec, gotSupport, gotSeen := spy.snapshot(); gotExec != beforeExec || gotSupport != beforeSupport || len(gotSeen) != len(beforeSeen) {
+		t.Fatal("model policy denial reached connector or support operation")
+	}
+
+	if _, err := accounts.SetEnabled(ctx, "account", false); err != nil {
+		t.Fatal(err)
+	}
+	if w := post("Bearer " + valid.Secret); w.Code != http.StatusForbidden || !bytes.Contains(w.Body.Bytes(), []byte(`"code":"permission_denied"`)) {
+		t.Fatalf("disabled account denial = %d %s", w.Code, w.Body.String())
+	}
+	if gotExec, gotSupport, gotSeen := spy.snapshot(); gotExec != beforeExec || gotSupport != beforeSupport || len(gotSeen) != len(beforeSeen) {
+		t.Fatal("disabled account denial reached connector or support operation")
 	}
 }

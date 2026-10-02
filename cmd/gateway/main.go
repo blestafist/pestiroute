@@ -46,6 +46,8 @@ type config struct {
 	Routes                []topologyRoute     `json:"routes,omitempty"`
 	Credentials           map[string]secret   `json:"-"`
 	keyStore              core.KeyStore
+	policyStore           core.PolicyStore
+	accountAuthorizer     core.AccountAuthorizer
 	logger                *slog.Logger
 }
 
@@ -85,6 +87,8 @@ func (c config) String() string {
 	c.credential = ""
 	c.Credentials = nil
 	c.keyStore = nil
+	c.policyStore = nil
+	c.accountAuthorizer = nil
 	c.logger = nil
 	type view config
 	return fmt.Sprintf("%+v", view(c))
@@ -634,8 +638,17 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	var services interface {
 		ForAttempt(core.AttemptScope) core.InvocationServices
 	} = core.NewEnvironmentServices(credentials, transports, c.logger)
+	policyStore := c.policyStore
+	accountAuthorizer := c.accountAuthorizer
 	if persistentDB != nil {
-		services = core.NewPersistentServices(sqliteAccountReader{accounts: sqlite.NewAccounts(persistentDB)}, sqliteCredentialReader{credentials: sqlite.NewCredentials(persistentDB), key: persistentKey}, persistentRefs, transports, c.logger)
+		accounts := sqlite.NewAccounts(persistentDB)
+		services = core.NewPersistentServices(sqliteAccountReader{accounts: accounts}, sqliteCredentialReader{credentials: sqlite.NewCredentials(persistentDB), key: persistentKey}, persistentRefs, transports, c.logger)
+		if policyStore == nil {
+			policyStore = sqlitePolicyStore{policies: sqlite.NewKeyPolicies(persistentDB)}
+		}
+		if accountAuthorizer == nil {
+			accountAuthorizer = sqliteAccountAuthorizer{accounts: accounts}
+		}
 	}
 	if legacy {
 		services = fixedLegacyServices{account: c.UpstreamCredentialEnv, credential: []byte(c.credential), transport: transports[c.UpstreamCredentialEnv]}
@@ -651,7 +664,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		}
 		protocolAdapters[route.Model] = component.(core.ProtocolAdapter)
 		routeLimits[route.Model] = connectorLimits[route.Connector]
-		dispatchers[route.Model] = &core.Dispatcher{Routes: table, Services: services, AccountID: route.Account, Finalize: finalize}
+		dispatchers[route.Model] = &core.Dispatcher{Routes: table, Services: services, Policies: policyStore, Accounts: accountAuthorizer, AccountID: route.Account, Finalize: finalize}
 	}
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
 		if draining.Load() {
@@ -708,6 +721,32 @@ func (s sqliteVirtualKeyStore) Verify(ctx context.Context, token string) (core.T
 		return core.TrustedPrincipal{}, err
 	}
 	return core.TrustedPrincipal{KeyID: principal.KeyID, PolicyID: principal.PolicyID, KeyRevision: principal.KeyRevision, PolicyRevision: principal.PolicyRevision}, nil
+}
+
+type sqlitePolicyStore struct{ policies *sqlite.KeyPolicies }
+
+func (s sqlitePolicyStore) Snapshot(ctx context.Context, principal core.TrustedPrincipal) (core.PolicySnapshot, error) {
+	snapshot, err := s.policies.Snapshot(ctx, sqlite.TrustedPrincipal{
+		KeyID: principal.KeyID, PolicyID: principal.PolicyID,
+		KeyRevision: principal.KeyRevision, PolicyRevision: principal.PolicyRevision,
+	})
+	if err != nil {
+		return core.PolicySnapshot{}, err
+	}
+	return core.PolicySnapshot{
+		ID: snapshot.ID, Revision: snapshot.Revision, Enabled: snapshot.Enabled,
+		Models: snapshot.Models, Connectors: snapshot.Connectors, RPM: snapshot.RPM, TPM: snapshot.TPM,
+	}, nil
+}
+
+type sqliteAccountAuthorizer struct{ accounts *sqlite.Accounts }
+
+func (a sqliteAccountAuthorizer) AuthorizeAccount(ctx context.Context, accountID, connector string) error {
+	account, err := a.accounts.Get(ctx, accountID)
+	if err != nil || !account.Enabled || account.Connector != connector {
+		return core.ErrPermissionDenied
+	}
+	return nil
 }
 
 // configuredCredentialRefs projects connector credential record IDs onto the

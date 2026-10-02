@@ -21,6 +21,21 @@ type testKeyStore struct {
 	lastToken atomic.Value
 }
 
+type testPolicyStore struct{ snapshot core.PolicySnapshot }
+
+func (s testPolicyStore) Snapshot(context.Context, core.TrustedPrincipal) (core.PolicySnapshot, error) {
+	return s.snapshot, nil
+}
+
+type testAccountAuthorizer struct{}
+
+func (testAccountAuthorizer) AuthorizeAccount(_ context.Context, account, connector string) error {
+	if account == "AUTH_TEST_PROVIDER" && connector == "responses-connector" {
+		return nil
+	}
+	return core.ErrPermissionDenied
+}
+
 func (s *testKeyStore) Verify(_ context.Context, token string) (core.TrustedPrincipal, error) {
 	s.calls.Add(1)
 	s.lastToken.Store(token)
@@ -47,9 +62,12 @@ func TestProtectedAuthAndCredentialSeparation(t *testing.T) {
 	defer upstream.Close()
 	store := &testKeyStore{principal: core.TrustedPrincipal{KeyID: "key-id", PolicyID: "policy-id", KeyRevision: 3, PolicyRevision: 7}}
 	ready := &atomic.Bool{}
+	policyStore := testPolicyStore{snapshot: core.PolicySnapshot{ID: "policy-id", Revision: 7, Enabled: true,
+		Models: []string{"gpt-5.4-mini"}, Connectors: []string{"responses-connector"}}}
 	h, closeHandler := handler(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "AUTH_TEST_PROVIDER",
 		credential: secret(provider), MaxRequestBodyBytes: 4096, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s",
-		TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s", keyStore: store}, ready)
+		TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s", keyStore: store,
+		policyStore: policyStore, accountAuthorizer: testAccountAuthorizer{}}, ready)
 	defer closeHandler()
 	server := httptest.NewServer(h)
 	defer server.Close()

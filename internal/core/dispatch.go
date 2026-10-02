@@ -52,6 +52,8 @@ type AttemptResult struct {
 type Dispatcher struct {
 	Target   Target
 	Routes   *RouteTable
+	Policies PolicyStore
+	Accounts AccountAuthorizer
 	Services interface {
 		ForAttempt(AttemptScope) InvocationServices
 	}
@@ -127,8 +129,19 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		if !ok || d.Services == nil {
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 		}
-		route, adapterID, connectorID = selection.Route.Identity, selection.Route.Adapter, selection.Route.Connector
 		scope := CapabilityScope{Protocol: in.Payload.Protocol, Mode: mode, Model: in.Model, AccountID: d.AccountID}
+		_, principalPresent := TrustedPrincipalFromContext(ctx)
+		protected := principalPresent || d.Policies != nil
+		var authorization CandidateAuthorization
+		if protected {
+			authorization, err = LoadCandidateAuthorization(ctx, d.Policies)
+			if err != nil {
+				return ExecutionResponse{}, authorizationError(err)
+			}
+			if err := authorization.AuthorizeTarget(ctx, in.Model, string(selection.Route.Connector), d.AccountID, d.Accounts); err != nil {
+				return ExecutionResponse{}, authorizationError(err)
+			}
+		}
 		candidate := EligibilityCandidate{
 			Scope: scope, Adapter: selection.Adapter.Descriptor(), Connector: selection.Connector.Descriptor(),
 			InitializedAndReady: true, AdapterCapabilityScope: scope, ConnectorCapabilityScope: scope,
@@ -138,9 +151,19 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		for capability := range in.Capabilities {
 			requirements.Request[capability] = struct{}{}
 		}
-		if candidate.Eligible(scope, requirements) != nil {
-			return ExecutionResponse{}, &GatewayError{Code: "unsupported_capability", Category: CategoryUnsupportedFeature, Message: "Unsupported required capability"}
+		if protected {
+			if authErr := authorization.AuthorizeEligibility(scope, candidate, requirements); authErr != nil {
+				if errors.Is(authErr, ErrPermissionDenied) || ctx.Err() != nil {
+					return ExecutionResponse{}, authorizationError(authErr)
+				}
+				return ExecutionResponse{}, &GatewayError{Code: "unsupported_capability", Category: CategoryUnsupportedFeature, Message: "Unsupported required capability"}
+			}
+		} else {
+			if candidate.Eligible(scope, requirements) != nil {
+				return ExecutionResponse{}, &GatewayError{Code: "unsupported_capability", Category: CategoryUnsupportedFeature, Message: "Unsupported required capability"}
+			}
 		}
+		route, adapterID, connectorID = selection.Route.Identity, selection.Route.Adapter, selection.Route.Connector
 	}
 	requestID, err := newID()
 	if err != nil {
@@ -209,6 +232,16 @@ func executionError(err error) *GatewayError {
 		return &GatewayError{Code: "execution_timeout", Category: CategoryTimeout, Message: "Execution timed out"}
 	}
 	return &GatewayError{Code: "execution_failed", Category: CategoryInternal, Message: "Execution failed"}
+}
+
+func authorizationError(err error) *GatewayError {
+	if errors.Is(err, context.Canceled) {
+		return executionError(context.Canceled)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return executionError(context.DeadlineExceeded)
+	}
+	return &GatewayError{Code: "permission_denied", Category: CategoryPermissionDenied, Message: "Permission denied"}
 }
 
 type attemptStream struct {
