@@ -1590,14 +1590,30 @@ func TestConfiguredRoutesComposeFixedAndSSE(t *testing.T) {
 	defer fixed.Close()
 	stream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")})
 	defer stream.Close()
-	c := config{Components: []topologyComponent{
-		{ID: "adapter", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
-		{ID: "fixed", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector, Endpoint: fixed.URL + "/v1/responses", CredentialEnv: "PESTIROUTE_ROUTE_A", MaxBodyBytes: 4096, MaxHeaderBytes: 4096, ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "2s", IdleTimeout: "5s"},
-		{ID: "stream", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector, Endpoint: stream.URL + "/v1/responses", CredentialEnv: "PESTIROUTE_ROUTE_B", MaxBodyBytes: 4096, MaxHeaderBytes: 4096, ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "2s", IdleTimeout: "5s"},
-	}, Routes: []topologyRoute{
-		{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "fixed-model", Account: "account-a", Adapter: "adapter", Connector: "fixed"},
-		{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: "account-b", Adapter: "adapter", Connector: "stream"},
-	}}
+	topology := map[string]any{
+		"listen": "127.0.0.1:0",
+		"components": []map[string]any{
+			{"id": "adapter", "implementation": "pestiroute.responses.native", "kind": "adapter"},
+			{"id": "fixed", "implementation": "pestiroute.responses.native", "kind": "connector", "endpoint": fixed.URL + "/v1/responses", "credential_env": "PESTIROUTE_ROUTE_A", "max_request_body_bytes": 4096, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "2s", "stream_idle_timeout": "5s"},
+			{"id": "stream", "implementation": "pestiroute.responses.native", "kind": "connector", "endpoint": stream.URL + "/v1/responses", "credential_env": "PESTIROUTE_ROUTE_B", "max_request_body_bytes": 4096, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "2s", "stream_idle_timeout": "5s"},
+		},
+		"routes": []map[string]any{
+			{"protocol": responsesProtocol, "mode": core.ModeNative, "model": "fixed-model", "account": "account-a", "adapter": "adapter", "connector": "fixed"},
+			{"protocol": responsesProtocol, "mode": core.ModeNative, "model": "gpt-5.4-mini", "account": "account-b", "adapter": "adapter", "connector": "stream"},
+		},
+	}
+	data, err := json.Marshal(topology)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := t.TempDir() + "/topology.json"
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := loadConfig([]string{"-config", configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
 	var ready, draining atomic.Bool
 	h, closeComponents, err := composeHandler(c, &ready, &draining, nil)
 	if err != nil {
@@ -1616,9 +1632,9 @@ func TestConfiguredRoutesComposeFixedAndSSE(t *testing.T) {
 		{"fixed-model", false, fixed, "application/json", `{"fixed":true}`},
 		{"gpt-5.4-mini", true, stream, "text/event-stream", "event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"},
 	} {
-		body := `{"model":"` + tc.model + `","stream":true}`
+		body := `{"model":"` + tc.model + `","unknown":{"preserve":[1,true]},"stream":true}`
 		if !tc.streaming {
-			body = `{"model":"` + tc.model + `"}`
+			body = `{"model":"` + tc.model + `","unknown":{"preserve":[1,true]}}`
 		}
 		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(body))
 		if err != nil {
@@ -1634,8 +1650,17 @@ func TestConfiguredRoutesComposeFixedAndSSE(t *testing.T) {
 		if tc.streaming {
 			wantCredential = credentialB
 		}
-		if string(captured.Header.Get("Authorization")) != "Bearer "+wantCredential {
-			t.Fatalf("wrong route credential: %q", captured.Header.Get("Authorization"))
+		if captured.Method != http.MethodPost || captured.Path != "/v1/responses" || !bytes.Equal(captured.Body, []byte(body)) || captured.Header.Get("Authorization") != "Bearer "+wantCredential {
+			t.Fatalf("%s route request changed or used wrong credential: exact body=%t credential=%t", tc.model, bytes.Equal(captured.Body, []byte(body)), captured.Header.Get("Authorization") == "Bearer "+wantCredential)
+		}
+		other := fixed
+		if tc.upstream == fixed {
+			other = stream
+		}
+		select {
+		case unexpected := <-other.Requests:
+			t.Fatalf("%s request interfered with other route: %s %q", tc.model, unexpected.Method, unexpected.Path)
+		default:
 		}
 	}
 }
