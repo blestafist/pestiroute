@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 )
 
 var ErrCredentialUnavailable = errors.New("credential unavailable")
@@ -51,7 +52,7 @@ func (p *EnvironmentServices) ForAttempt(scope AttemptScope) InvocationServices 
 	}
 	var logger *slog.Logger
 	if p.logger != nil {
-		logger = slog.New(redactingHandler{next: p.logger.Handler(), secrets: values})
+		logger = slog.New(redactingHandler{next: p.logger.Handler(), secrets: newSecretSet(values)})
 	}
 	transport := p.transports[scope.AccountID]
 	if transport == nil {
@@ -79,7 +80,7 @@ func (a environmentCredentialAccess) Get(ctx context.Context, name string) ([]by
 
 type redactingHandler struct {
 	next    slog.Handler
-	secrets []string
+	secrets *secretSet
 }
 
 func (h redactingHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -110,12 +111,36 @@ func (h redactingHandler) WithGroup(name string) slog.Handler {
 }
 
 func (h redactingHandler) redact(value string) string {
-	for _, secret := range h.secrets {
+	for _, secret := range h.secrets.values() {
 		if secret != "" {
 			value = strings.ReplaceAll(value, secret, "[REDACTED]")
 		}
 	}
 	return value
+}
+
+type secretSet struct {
+	mu         sync.RWMutex
+	valuesList []string
+}
+
+func newSecretSet(values []string) *secretSet {
+	return &secretSet{valuesList: append([]string(nil), values...)}
+}
+
+func (s *secretSet) add(value []byte) {
+	if len(value) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.valuesList = append(s.valuesList, string(value))
+	s.mu.Unlock()
+}
+
+func (s *secretSet) values() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string(nil), s.valuesList...)
 }
 
 func redactAttr(attr slog.Attr, redact func(string) string) slog.Attr {

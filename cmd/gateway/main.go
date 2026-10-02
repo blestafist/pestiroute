@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -22,6 +23,8 @@ import (
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	connector "github.com/blestafist/pestiroute/internal/connector/responses"
 	"github.com/blestafist/pestiroute/internal/core"
+	secure "github.com/blestafist/pestiroute/internal/crypto"
+	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
 type config struct {
@@ -35,6 +38,8 @@ type config struct {
 	TLSHandshakeTimeout   string `json:"tls_handshake_timeout"`
 	ResponseHeaderTimeout string `json:"response_header_timeout"`
 	StreamIdleTimeout     string `json:"stream_idle_timeout"`
+	DatabasePath          string `json:"database_path,omitempty"`
+	MasterKeyFile         string `json:"master_key_file,omitempty"`
 	credential            secret
 	Components            []topologyComponent `json:"components,omitempty"`
 	Routes                []topologyRoute     `json:"routes,omitempty"`
@@ -149,6 +154,10 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		return config{}, 0, fmt.Errorf("invalid shutdown_timeout %q: must be a positive duration", c.ShutdownTimeout)
 	}
 	fields := []string{"upstream_endpoint", "upstream_credential_env", "max_request_body_bytes", "max_request_header_bytes", "connect_timeout", "tls_handshake_timeout", "response_header_timeout", "stream_idle_timeout"}
+	persistent := c.DatabasePath != "" || c.MasterKeyFile != ""
+	if persistent && (c.DatabasePath == "" || c.MasterKeyFile == "") {
+		return config{}, 0, errors.New("database_path and master_key_file must be configured together")
+	}
 	count := 0
 	for _, field := range fields {
 		if _, ok := supplied[field]; ok {
@@ -174,6 +183,8 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		if err := validateTopology(&c); err != nil {
 			return config{}, 0, err
 		}
+	} else if persistent {
+		return config{}, 0, errors.New("persistent credentials require M2 components and routes")
 	} else if count != 0 {
 		if count != len(fields) {
 			return config{}, 0, errors.New("partial inference configuration: all upstream, limit and timeout fields are required")
@@ -210,6 +221,9 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		c.Components = legacyComponents(c)
 		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector"}}
 		c.Credentials = map[string]secret{c.UpstreamCredentialEnv: c.credential}
+		if persistent {
+			return config{}, 0, errors.New("persistent credentials require M2 components and routes")
+		}
 	}
 	return c, d, nil
 }
@@ -225,6 +239,7 @@ func validateJSONFieldSpellings(data []byte) error {
 		"max_request_header_bytes": true, "connect_timeout": true,
 		"tls_handshake_timeout": true, "response_header_timeout": true,
 		"stream_idle_timeout": true, "components": true, "routes": true,
+		"database_path": true, "master_key_file": true,
 	}); err != nil {
 		return err
 	}
@@ -356,14 +371,19 @@ func validateTopology(c *config) error {
 				return fmt.Errorf("component %q %s must be positive", component.ID, entry.name)
 			}
 		}
-		if strings.TrimSpace(component.CredentialEnv) == "" || strings.Contains(component.CredentialEnv, "=") {
-			return fmt.Errorf("component %q credential_env must name a non-empty environment variable", component.ID)
+		if strings.TrimSpace(component.CredentialEnv) == "" {
+			return fmt.Errorf("component %q credential reference must be non-empty", component.ID)
 		}
-		value, ok := os.LookupEnv(component.CredentialEnv)
-		if !ok || value == "" {
-			return fmt.Errorf("component %q credential_env is unset or empty", component.ID)
+		if c.DatabasePath == "" {
+			if strings.Contains(component.CredentialEnv, "=") {
+				return fmt.Errorf("component %q credential_env must name an environment variable", component.ID)
+			}
+			value, ok := os.LookupEnv(component.CredentialEnv)
+			if !ok || value == "" {
+				return fmt.Errorf("component %q credential_env is unset or empty", component.ID)
+			}
+			c.Credentials[component.CredentialEnv] = secret(value)
 		}
-		c.Credentials[component.CredentialEnv] = secret(value)
 	}
 	seen := make(map[core.RouteIdentity]struct{}, len(c.Routes))
 	for _, route := range c.Routes {
@@ -456,18 +476,55 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	if len(c.Components) == 0 {
 		return mux, func(context.Context) error { return nil }, nil
 	}
+	var persistentRefs map[string]map[string]string
+	if c.DatabasePath != "" {
+		var err error
+		persistentRefs, err = configuredCredentialRefs(c)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	var persistentDB *sql.DB
+	var persistentKey secure.MasterKey
+	if c.DatabasePath != "" {
+		key, err := secure.LoadMasterKey(c.MasterKeyFile)
+		if err != nil {
+			return nil, nil, errors.New("invalid runtime master key file")
+		}
+		db, err := sqlite.Open(c.DatabasePath)
+		if err != nil {
+			return nil, nil, errors.New("cannot open runtime database")
+		}
+		version, err := sqlite.SchemaVersion(context.Background(), db)
+		if err != nil || version != sqlite.CurrentSchemaVersion() {
+			_ = db.Close()
+			return nil, nil, errors.New("runtime database is not fully migrated")
+		}
+		persistentDB, persistentKey = db, key
+	}
 	versions := map[core.ComponentKind]core.APIVersion{
 		core.ComponentAdapter: {Major: 1}, core.ComponentConnector: {Major: 1},
 	}
 	registry, err := core.NewRegistry(versions, nil)
 	if err != nil {
+		if persistentDB != nil {
+			_ = persistentDB.Close()
+		}
 		return nil, nil, err
 	}
 	var closeOnce sync.Once
 	closeDone := make(chan struct{})
 	var closeErr error
 	closeComponents := func(ctx context.Context) error {
-		closeOnce.Do(func() { go func() { closeErr = registry.Close(ctx); close(closeDone) }() })
+		closeOnce.Do(func() {
+			go func() {
+				closeErr = registry.Close(ctx)
+				if persistentDB != nil {
+					closeErr = errors.Join(closeErr, persistentDB.Close())
+				}
+				close(closeDone)
+			}()
+		})
 		select {
 		case <-closeDone:
 			return closeErr
@@ -568,6 +625,9 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	var services interface {
 		ForAttempt(core.AttemptScope) core.InvocationServices
 	} = core.NewEnvironmentServices(credentials, transports, nil)
+	if persistentDB != nil {
+		services = core.NewPersistentServices(sqliteAccountReader{accounts: sqlite.NewAccounts(persistentDB)}, sqliteCredentialReader{credentials: sqlite.NewCredentials(persistentDB), key: persistentKey}, persistentRefs, transports, nil)
+	}
 	if legacy {
 		services = fixedLegacyServices{account: c.UpstreamCredentialEnv, credential: []byte(c.credential), transport: transports[c.UpstreamCredentialEnv]}
 	}
@@ -613,6 +673,30 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	return mux, closeComponents, nil
 }
 
+// configuredCredentialRefs projects connector credential record IDs onto the
+// account-only InvocationServices scope. Until the binding carries route refs,
+// one account must resolve to one persistent credential record.
+func configuredCredentialRefs(c config) (map[string]map[string]string, error) {
+	if c.DatabasePath == "" {
+		return nil, nil
+	}
+	refsByConnector := make(map[core.InstanceID]string)
+	for _, component := range c.Components {
+		if component.Kind == core.ComponentConnector {
+			refsByConnector[component.ID] = component.CredentialEnv
+		}
+	}
+	refsByAccount := make(map[string]map[string]string)
+	for _, route := range c.Routes {
+		ref := refsByConnector[route.Connector]
+		if existing := refsByAccount[route.Account]; existing != nil && existing["bearer"] != ref {
+			return nil, errors.New("persistent credential references conflict for one account")
+		}
+		refsByAccount[route.Account] = map[string]string{"bearer": ref}
+	}
+	return refsByAccount, nil
+}
+
 type fixedLegacyServices struct {
 	account    string
 	credential []byte
@@ -643,6 +727,36 @@ type unavailableCredential struct{}
 
 func (unavailableCredential) Get(context.Context, string) ([]byte, error) {
 	return nil, core.ErrCredentialUnavailable
+}
+
+type sqliteAccountReader struct{ accounts *sqlite.Accounts }
+
+func (r sqliteAccountReader) GetAccount(ctx context.Context, id string) (core.RuntimeAccount, error) {
+	account, err := r.accounts.Get(ctx, id)
+	if err != nil {
+		return core.RuntimeAccount{}, err
+	}
+	return core.RuntimeAccount{Enabled: account.Enabled}, nil
+}
+
+type sqliteCredentialReader struct {
+	credentials *sqlite.Credentials
+	key         secure.MasterKey
+}
+
+func (r sqliteCredentialReader) GetCredential(ctx context.Context, accountID, id string) (core.RuntimeCredential, error) {
+	credential, err := r.credentials.Get(ctx, accountID, id)
+	if err != nil {
+		return core.RuntimeCredential{}, err
+	}
+	value, err := secure.Open(r.key, secure.Envelope{
+		FormatVersion: credential.FormatVersion, KeyVersion: credential.KeyVersion,
+		Nonce: credential.Nonce, Ciphertext: credential.Ciphertext,
+	}, "credentials", credential.ID, credential.AccountID)
+	if err != nil {
+		return core.RuntimeCredential{}, err
+	}
+	return core.RuntimeCredential{Value: value, ExpiresAt: credential.ExpiresAt}, nil
 }
 
 func firstAdapter(adapters map[string]core.ProtocolAdapter) core.ProtocolAdapter {
