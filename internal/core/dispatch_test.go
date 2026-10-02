@@ -143,6 +143,113 @@ type dispatchConnector struct {
 	creds []string
 }
 
+type concurrentRouteCall struct {
+	request ExecutionRequest
+	scope   AttemptScope
+	token   string
+}
+
+type concurrentRouteConnector struct {
+	registryComponent
+	caps       map[CapabilityScope]CapabilityResult
+	entered    chan<- concurrentRouteCall
+	release    <-chan struct{}
+	malform    atomic.Bool
+	holds      map[string]<-chan struct{}
+	frameEntry chan<- string
+	closeCalls atomic.Int32
+}
+
+type concurrentServices struct{}
+
+func (*concurrentServices) ForAttempt(scope AttemptScope) InvocationServices {
+	return InvocationServices{Credentials: attemptCredential{account: scope.AccountID}}
+}
+
+func (c *concurrentRouteConnector) Capabilities(_ context.Context, scope CapabilityScope) CapabilityResult {
+	return c.caps[scope].Clone()
+}
+
+func (c *concurrentRouteConnector) Execute(ctx context.Context, in ExecutionRequest, scope AttemptScope, services InvocationServices) (ExecutionResponse, *GatewayError) {
+	token, err := services.Credentials.Get(ctx, "token")
+	if err != nil {
+		return ExecutionResponse{}, executionError(err)
+	}
+	c.entered <- concurrentRouteCall{request: in, scope: scope, token: string(token)}
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return ExecutionResponse{}, executionError(ctx.Err())
+	}
+	input := int64(len(in.Payload.Body))
+	usage := &UsageReport{InputTokens: &input, Source: UsageProvider, Completeness: UsageComplete}
+	key := scope.AccountID + ":" + in.Model
+	if streamRelease, ok := c.holds[key]; ok {
+		return ExecutionResponse{Stream: &heldAttemptStream{
+			key: key, entered: c.frameEntry, release: streamRelease, closed: make(chan struct{}),
+			body: append([]byte(nil), in.Payload.Body...), usage: usage,
+		}}, nil
+	}
+	if c.malform.CompareAndSwap(true, false) {
+		return ExecutionResponse{Stream: &scriptedStream{frames: []StreamFrame{head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded, Usage: usage}}, body()}}}, nil
+	}
+	return ExecutionResponse{Stream: &scriptedStream{frames: []StreamFrame{head(), {Type: FrameBody, Body: &BodyFrame{Data: append([]byte(nil), in.Payload.Body...)}}, {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded, Usage: usage}}}}}, nil
+}
+
+func (*concurrentRouteConnector) Models(context.Context, ModelQuery, InvocationServices) (ModelsResult, *GatewayError) {
+	return ModelsResult{}, nil
+}
+func (*concurrentRouteConnector) EstimateUsage(context.Context, UsageQuery, InvocationServices) (EstimateResult, *GatewayError) {
+	return EstimateResult{}, nil
+}
+func (*concurrentRouteConnector) Authenticate(context.Context, AuthRequest, InvocationServices) (AuthResult, *GatewayError) {
+	return AuthResult{}, nil
+}
+func (c *concurrentRouteConnector) Close(context.Context) error {
+	c.closeCalls.Add(1)
+	return nil
+}
+
+type heldAttemptStream struct {
+	key     string
+	entered chan<- string
+	release <-chan struct{}
+	closed  chan struct{}
+	once    sync.Once
+	index   int
+	body    []byte
+	usage   *UsageReport
+}
+
+func (s *heldAttemptStream) Next(ctx context.Context) (StreamFrame, error) {
+	switch s.index {
+	case 0:
+		s.index++
+		return head(), nil
+	case 1:
+		s.index++
+		s.entered <- s.key
+		select {
+		case <-s.release:
+			return StreamFrame{Type: FrameBody, Body: &BodyFrame{Data: append([]byte(nil), s.body...)}}, nil
+		case <-s.closed:
+			return StreamFrame{}, context.Canceled
+		case <-ctx.Done():
+			return StreamFrame{}, ctx.Err()
+		}
+	case 2:
+		s.index++
+		return StreamFrame{Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded, Usage: s.usage}}, nil
+	default:
+		return StreamFrame{}, io.EOF
+	}
+}
+
+func (s *heldAttemptStream) Close() error {
+	s.once.Do(func() { close(s.closed) })
+	return nil
+}
+
 func (c *dispatchConnector) Capabilities(_ context.Context, scope CapabilityScope) CapabilityResult {
 	return c.caps[scope].Clone()
 }
@@ -905,6 +1012,431 @@ func TestDispatchConcurrentIsolationAndCancellation(t *testing.T) {
 		} else if result.Outcome != OutcomeSucceeded {
 			t.Fatalf("successful request corrupted: %+v", result)
 		}
+	}
+}
+
+func TestDispatchConcurrentRouteAccountIsolationAndObservations(t *testing.T) {
+	ctx := context.Background()
+	protocol := "openai.responses.v1"
+	models := []string{"route-a", "route-b"}
+	accounts := []string{"account-a", "account-b"}
+	registry, err := NewRegistry(map[ComponentKind]APIVersion{ComponentAdapter: {Major: 1}, ComponentConnector: {Major: 1}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &testAdapter{registryComponent: registryComponent{descriptor: validDescriptor(ComponentAdapter)}, caps: make(map[CapabilityScope]CapabilityResult)}
+	if err := registry.Register("adapter", adapter, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Init(ctx, "adapter", ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan concurrentRouteCall, len(models)*len(accounts))
+	release := make(chan struct{})
+	var routes []Route
+	for _, account := range accounts {
+		for _, model := range models {
+			scope := CapabilityScope{Protocol: protocol, Mode: ModeNative, Model: model, AccountID: account}
+			adapter.caps[scope] = CapabilityResult{}
+			id := InstanceID("connector-" + account + "-" + model)
+			descriptor := validDescriptor(ComponentConnector)
+			descriptor.ID = string(id)
+			connector := &concurrentRouteConnector{
+				registryComponent: registryComponent{descriptor: descriptor},
+				caps:              map[CapabilityScope]CapabilityResult{scope: {}}, entered: entered, release: release,
+			}
+			if account == "account-b" && model == "route-b" {
+				connector.malform.Store(true)
+			}
+			if err := registry.Register(id, connector, ComponentConnector); err != nil {
+				t.Fatal(err)
+			}
+			if err := registry.Init(ctx, id, ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			routes = append(routes, Route{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: protocol, Mode: ModeNative, Model: model}, AccountID: account}, Adapter: "adapter", Connector: id})
+		}
+	}
+	table, err := NewRouteTable(routes, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observations, err := NewInMemoryAttemptObservations(len(routes) + 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	services := &concurrentServices{}
+	dispatchers := make(map[string]*Dispatcher, len(accounts))
+	var resultMu sync.Mutex
+	results := make([]AttemptResult, 0, len(routes))
+	type completed struct {
+		model, account string
+		request        ExecutionRequest
+		frames         []StreamFrame
+		err            error
+	}
+	done := make(chan completed, len(routes))
+	start := make(chan struct{})
+	for _, account := range accounts {
+		d := &Dispatcher{Routes: table, AccountID: account, Services: services, Observations: observations, Finalize: func(r AttemptResult) {
+			resultMu.Lock()
+			results = append(results, r)
+			resultMu.Unlock()
+		}}
+		dispatchers[account] = d
+		for _, model := range models {
+			go func(account, model string, d *Dispatcher) {
+				<-start
+				r := request()
+				r.Model = model
+				r.Payload.Body = []byte("opaque:" + account + ":" + model)
+				response, gatewayErr := d.Execute(ctx, r)
+				if gatewayErr != nil {
+					done <- completed{account: account, model: model, err: gatewayErr}
+					return
+				}
+				var frames []StreamFrame
+				for {
+					frame, nextErr := response.Stream.Next(ctx)
+					if nextErr == io.EOF {
+						break
+					}
+					if nextErr != nil {
+						done <- completed{account: account, model: model, frames: frames, err: nextErr}
+						return
+					}
+					frames = append(frames, frame)
+				}
+				done <- completed{account: account, model: model, request: r, frames: frames}
+			}(account, model, d)
+		}
+	}
+	close(start)
+	calls := make(map[string]concurrentRouteCall, len(routes))
+	for range len(routes) {
+		select {
+		case call := <-entered:
+			key := call.scope.AccountID + ":" + call.request.Model
+			if _, exists := calls[key]; exists {
+				t.Fatalf("duplicate routed call %s", key)
+			}
+			calls[key] = call
+			wantToken := call.scope.AccountID + "-secret"
+			if call.token != wantToken || string(call.request.Payload.Body) != "opaque:"+key || call.request.ID == "client-id" || call.scope.ID == "client-id" {
+				t.Fatalf("scope/payload/credential crossed: %+v", call)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("only %d/%d routed calls entered", len(calls), len(routes))
+		}
+	}
+	close(release)
+	for range len(routes) {
+		select {
+		case result := <-done:
+			if result.account == "account-b" && result.model == "route-b" {
+				if result.err == nil || len(result.frames) != 2 {
+					t.Fatalf("malformed trailing frame was accepted: %+v", result)
+				}
+			} else if result.err != nil || len(result.frames) != 3 || result.frames[1].Type != FrameBody || string(result.frames[1].Body.Data) != string(result.request.Payload.Body) {
+				t.Fatalf("isolated execution failed: %+v", result)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("concurrent attempts did not settle")
+		}
+	}
+	got := observations.Snapshot()
+	if len(got) != len(routes) {
+		t.Fatalf("observations=%+v", got)
+	}
+	seen := make(map[string]bool, len(routes))
+	for _, observation := range got {
+		key := observation.AccountID + ":" + observation.Route.Model
+		call, ok := calls[key]
+		wantOutcome := OutcomeSucceeded
+		if key == "account-b:route-b" {
+			wantOutcome = OutcomeFailed
+		}
+		if !ok || seen[observation.AttemptID] || observation.RequestID != call.request.ID || observation.AttemptID != call.scope.ID || observation.Outcome != wantOutcome || observation.Usage == nil || observation.Usage.InputTokens == nil || *observation.Usage.InputTokens != int64(len(call.request.Payload.Body)) {
+			t.Fatalf("observation crossed or lost attempt usage: %+v call=%+v", observation, call)
+		}
+		seen[observation.AttemptID] = true
+	}
+	resultMu.Lock()
+	if len(results) != len(routes) {
+		resultMu.Unlock()
+		t.Fatalf("terminal results=%+v", results)
+	}
+	for _, result := range results {
+		key := result.Scope.AccountID + ":" + result.Route.Model
+		call, ok := calls[key]
+		wantOutcome := OutcomeSucceeded
+		if key == "account-b:route-b" {
+			wantOutcome = OutcomeFailed
+		}
+		if !ok || result.RequestID != call.request.ID || result.Scope.ID != call.scope.ID || result.Outcome != wantOutcome || !result.HasUsage || result.Usage.InputTokens == nil || *result.Usage.InputTokens != int64(len(call.request.Payload.Body)) {
+			resultMu.Unlock()
+			t.Fatalf("terminal result crossed or lost attempt usage: %+v call=%+v", result, call)
+		}
+	}
+	resultMu.Unlock()
+	followup := request()
+	followup.Model = "route-b"
+	followup.Payload.Body = []byte("opaque:follow-up")
+	response, gatewayErr := dispatchers["account-b"].Execute(ctx, followup)
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	for range 3 {
+		frame, err := response.Stream.Next(ctx)
+		if err != nil {
+			t.Fatalf("independent follow-up was corrupted: %v", err)
+		}
+		if frame.Type == FrameBody && string(frame.Body.Data) != string(followup.Payload.Body) {
+			t.Fatalf("follow-up payload crossed attempts: got %q want %q", frame.Body.Data, followup.Payload.Body)
+		}
+	}
+	if _, err := response.Stream.Next(ctx); err != io.EOF {
+		t.Fatalf("follow-up terminal read: %v", err)
+	}
+	followupObservations := observations.Snapshot()
+	if len(followupObservations) != len(routes)+1 || followupObservations[len(followupObservations)-1].Outcome != OutcomeSucceeded || followupObservations[len(followupObservations)-1].AccountID != "account-b" {
+		t.Fatalf("follow-up observation corrupted: %+v", followupObservations)
+	}
+	select {
+	case call := <-entered:
+		if call.scope.AccountID != "account-b" || call.request.Model != "route-b" || string(call.request.Payload.Body) != string(followup.Payload.Body) || call.token != "account-b-secret" || call.scope.ID == calls["account-b:route-b"].scope.ID {
+			t.Fatalf("follow-up scope, credential, or body crossed attempts: %+v", call)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("follow-up connector call was not recorded")
+	}
+}
+
+func TestDispatchConcurrentRouteShutdownCloseAndCancelIsolation(t *testing.T) {
+	ctx := context.Background()
+	protocol := "openai.responses.v1"
+	models, accounts := []string{"route-a", "route-b"}, []string{"account-a", "account-b"}
+	registry, err := NewRegistry(map[ComponentKind]APIVersion{ComponentAdapter: {Major: 1}, ComponentConnector: {Major: 1}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopes := make(map[CapabilityScope]CapabilityResult)
+	adapter := &testAdapter{registryComponent: registryComponent{descriptor: validDescriptor(ComponentAdapter)}, caps: scopes}
+	if err := registry.Register("adapter", adapter, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Init(ctx, "adapter", ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	enteredExec := make(chan concurrentRouteCall, len(models)*len(accounts))
+	releaseExec := make(chan struct{})
+	enteredFrames := make(chan string, len(models)*len(accounts))
+	releases := make(map[string]chan struct{}, len(models)*len(accounts))
+	var routes []Route
+	for _, account := range accounts {
+		for _, model := range models {
+			key := account + ":" + model
+			scope := CapabilityScope{Protocol: protocol, Mode: ModeNative, Model: model, AccountID: account}
+			scopes[scope] = CapabilityResult{}
+			releases[key] = make(chan struct{})
+			routes = append(routes, Route{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: protocol, Mode: ModeNative, Model: model}, AccountID: account}, Adapter: "adapter", Connector: "shared-connector"})
+		}
+	}
+	connectorDescriptor := validDescriptor(ComponentConnector)
+	connectorDescriptor.ID = "shared-connector"
+	connector := &concurrentRouteConnector{
+		registryComponent: registryComponent{descriptor: connectorDescriptor}, caps: scopes,
+		entered: enteredExec, release: releaseExec, holds: make(map[string]<-chan struct{}, len(releases)), frameEntry: enteredFrames,
+	}
+	for key, release := range releases {
+		connector.holds[key] = release
+	}
+	if err := registry.Register("shared-connector", connector, ComponentConnector); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Init(ctx, "shared-connector", ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	table, err := NewRouteTable(routes, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observations, err := NewInMemoryAttemptObservations(len(routes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	services := &concurrentServices{}
+	var resultMu sync.Mutex
+	results := make([]AttemptResult, 0, len(routes))
+	dispatchers := make(map[string]*Dispatcher)
+	for _, account := range accounts {
+		dispatchers[account] = &Dispatcher{Routes: table, AccountID: account, Services: services, Observations: observations, Finalize: func(result AttemptResult) {
+			resultMu.Lock()
+			results = append(results, result)
+			resultMu.Unlock()
+		}}
+	}
+	type response struct {
+		stream Stream
+		cancel context.CancelFunc
+	}
+	responses := make(map[string]response, len(routes))
+	responseCh := make(chan struct {
+		key      string
+		response ExecutionResponse
+		cancel   context.CancelFunc
+		err      *GatewayError
+	}, len(routes))
+	startExec := make(chan struct{})
+	for _, account := range accounts {
+		for _, model := range models {
+			account, model := account, model
+			key := account + ":" + model
+			attemptCtx, cancel := context.WithCancel(ctx)
+			go func() {
+				<-startExec
+				request := request()
+				request.Model = model
+				request.Payload.Body = []byte("held:" + key)
+				result, gatewayErr := dispatchers[account].Execute(attemptCtx, request)
+				responseCh <- struct {
+					key      string
+					response ExecutionResponse
+					cancel   context.CancelFunc
+					err      *GatewayError
+				}{key, result, cancel, gatewayErr}
+			}()
+		}
+	}
+	close(startExec)
+	calls := make(map[string]concurrentRouteCall, len(routes))
+	for range len(routes) {
+		select {
+		case call := <-enteredExec:
+			key := call.scope.AccountID + ":" + call.request.Model
+			calls[key] = call
+			if call.token != call.scope.AccountID+"-secret" || string(call.request.Payload.Body) != "held:"+key {
+				t.Fatalf("shared Connector crossed scoped invocation: %+v", call)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("only %d/%d shared Connector executions entered", len(calls), len(routes))
+		}
+	}
+	close(releaseExec)
+	for range len(routes) {
+		select {
+		case got := <-responseCh:
+			if got.err != nil {
+				t.Fatalf("Execute failed before terminal race: %v", got.err)
+			}
+			responses[got.key] = response{stream: got.response.Stream, cancel: got.cancel}
+		case <-time.After(time.Second):
+			t.Fatal("concurrent Execute calls did not return")
+		}
+	}
+	type readResult struct {
+		key    string
+		frames []StreamFrame
+		err    error
+	}
+	readDone := make(chan readResult, len(routes))
+	for key, attempt := range responses {
+		go func(key string, stream Stream) {
+			var frames []StreamFrame
+			for {
+				frame, nextErr := stream.Next(context.Background())
+				if nextErr != nil {
+					readDone <- readResult{key: key, frames: frames, err: nextErr}
+					return
+				}
+				frames = append(frames, frame)
+			}
+		}(key, attempt.stream)
+	}
+	for range len(routes) {
+		select {
+		case <-enteredFrames:
+		case <-time.After(time.Second):
+			t.Fatal("attempt streams failed to hold at the synchronized frame gate")
+		}
+	}
+	startSignals := make(chan struct{})
+	var signals sync.WaitGroup
+	signals.Add(5)
+	go func() { defer signals.Done(); <-startSignals; responses["account-a:route-a"].cancel() }()
+	go func() { defer signals.Done(); <-startSignals; _ = responses["account-a:route-b"].stream.Close() }()
+	registryClosed := make(chan error, 1)
+	go func() { defer signals.Done(); <-startSignals; registryClosed <- registry.Close(context.Background()) }()
+	go func() { defer signals.Done(); <-startSignals; responses["account-b:route-a"].cancel() }()
+	go func() { defer signals.Done(); <-startSignals; close(releases["account-b:route-b"]) }()
+	close(startSignals)
+	signals.Wait()
+	select {
+	case err := <-registryClosed:
+		if err != nil {
+			t.Fatalf("concurrent Registry.Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Registry.Close did not finish")
+	}
+	if got := connector.closeCalls.Load(); got != 1 {
+		t.Fatalf("shared connector Close calls=%d want 1", got)
+	}
+	readResults := make(map[string]readResult, len(routes))
+	for range len(routes) {
+		select {
+		case result := <-readDone:
+			readResults[result.key] = result
+		case <-time.After(time.Second):
+			t.Fatal("attempt reader goroutine did not settle")
+		}
+	}
+	for key, result := range readResults {
+		if key == "account-b:route-b" {
+			if result.err != io.EOF || len(result.frames) != 3 || string(result.frames[1].Body.Data) != string(calls[key].request.Payload.Body) {
+				t.Fatalf("healthy attempt was affected by concurrent shutdown signals: %s %+v", key, result)
+			}
+		} else if !errors.Is(result.err, context.Canceled) || len(result.frames) != 1 || result.frames[0].Type != FrameHead {
+			t.Fatalf("cancel/Close did not settle attempt %s cleanly: %+v", key, result)
+		}
+	}
+	resultMu.Lock()
+	defer resultMu.Unlock()
+	if len(results) != len(routes) {
+		t.Fatalf("terminal results=%+v want=%d", results, len(routes))
+	}
+	gotObservations := observations.Snapshot()
+	if len(gotObservations) != len(routes) {
+		t.Fatalf("terminal observations=%+v want=%d", gotObservations, len(routes))
+	}
+	seen := make(map[string]bool, len(routes))
+	for _, result := range results {
+		key := result.Scope.AccountID + ":" + result.Route.Model
+		call, ok := calls[key]
+		wantOutcome := OutcomeCancelled
+		if key == "account-b:route-b" {
+			wantOutcome = OutcomeSucceeded
+		}
+		if !ok || seen[result.Scope.ID] || result.RequestID != call.request.ID || result.Scope.ID != call.scope.ID || result.Outcome != wantOutcome {
+			t.Fatalf("terminal result crossed attempts: %+v call=%+v", result, call)
+		}
+		seen[result.Scope.ID] = true
+		if key == "account-b:route-b" {
+			if !result.HasUsage || result.Usage.InputTokens == nil || *result.Usage.InputTokens != int64(len(call.request.Payload.Body)) {
+				t.Fatalf("healthy usage attribution lost: %+v", result)
+			}
+		} else if result.HasUsage || result.Usage.Source != UsageUnknown {
+			t.Fatalf("cancelled attempt inherited another attempt's usage: %+v", result)
+		}
+	}
+	observed := make(map[string]bool, len(routes))
+	for _, observation := range gotObservations {
+		key := observation.AccountID + ":" + observation.Route.Model
+		call, ok := calls[key]
+		if !ok || observed[observation.AttemptID] || observation.RequestID != call.request.ID || observation.AttemptID != call.scope.ID || observation.AccountID != call.scope.AccountID {
+			t.Fatalf("observation lost route/account ownership: %+v call=%+v", observation, call)
+		}
+		observed[observation.AttemptID] = true
 	}
 }
 
