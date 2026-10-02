@@ -10,9 +10,9 @@ The running gateway accepts legacy single-target and strict M2 topology JSON on 
 
 ## Immediate Focus
 
-Execute the design-only [M3-001](tasks/M3-001.md), the sole READY row in the [46-card M3 plan](TASKS.md#m3--access-accounts-and-accounting). It fixes storage/schema ownership, acknowledged dispatch/terminal persistence, conservative crash recovery and master-key handling against the existing `InvocationServices`, `AttemptResult` and nullable `UsageReport`. Do not implement a dependency chain in one session or use the optional `TryRecord` observation sink as the durable ledger.
+[M3-001](tasks/M3-001.md) is DONE; [M3-STORAGE.md](M3-STORAGE.md) and DEC-005 fix storage ownership, acknowledged accounting, crash recovery and master-key file policy without application changes.
 
-The plan starts from the M2 merge `f33a507` on `dev-m3`. After M3-001 is verified, the Planner refines the driver spike, access/accounting binding and configuration/retry binding from actual results before promoting their DRAFT cards. All remaining M3 cards stay DRAFT until prerequisites are DONE and package/check names are concrete. [ROADMAP](ROADMAP.md#m3--access-accounts-and-accounting) owns milestone outcomes; TASKS owns readiness and dependencies.
+The immediate planning focus is refining the next registered candidate [M3-002](tasks/M3-002.md) (SQLite driver spike/pinning) and promoting it from DRAFT to READY once driver checks are concrete. All remaining M3 cards stay DRAFT until prerequisites are DONE. Do not implement a dependency chain in one session or use the optional `TryRecord` observation sink as the durable ledger.
 
 SQLite, persistent accounts/credentials/usage, virtual keys, RPM/TPM reservations/reconciliation, recovery, protected YAML startup and bounded fallback are planned, not implemented. The [YAML example](CONFIGURATION.md#proposed-yaml) remains draft pending M3-004. OAuth runtime sessions/serialization use scripted validation in M3; real provider flows remain M5.1. Stateful cross-target affinity, protocol translation and IPC remain outside M3.
 

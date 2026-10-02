@@ -199,7 +199,7 @@ This table maps outcomes, not test results. M3-046 may close the milestone only 
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M3-001](tasks/M3-001.md) | READY | — | M2-034 | Fix the M3 storage and crash-consistency design | — | [Direct proof](tasks/M3-001.md#verification) and `git diff --check` |
+| [M3-001](tasks/M3-001.md) | DONE | GPT-6 Luna (M3-001 worker) | M2-034 | Fix the M3 storage and crash-consistency design | M3 storage, acknowledged accounting, recovery, and master-key design specified in M3-STORAGE.md; implementation remains future M3 scope | [Direct proof](tasks/M3-001.md#verification) and `git diff --check` |
 | [M3-002](tasks/M3-002.md) | DRAFT | — | M3-001 | Validate and pin the SQLite driver | — | [Direct proof](tasks/M3-002.md#verification) |
 | [M3-003](tasks/M3-003.md) | DRAFT | — | M3-001, M3-002 | Bind access, admission and durable accounting | — | [Direct proof](tasks/M3-003.md#verification) |
 | [M3-004](tasks/M3-004.md) | DRAFT | — | M3-003 | Specify M3 configuration and retry admission | — | [Direct proof](tasks/M3-004.md#verification) |

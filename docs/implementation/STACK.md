@@ -40,7 +40,9 @@ The SSE parser is located in the connector or its protocol helper. It must corre
 
 SQLite stores accounts, encrypted credentials, virtual keys, usage data, and the migration journal. WAL mode, busy timeout, and short transactions reduce contention; network calls are never made inside SQL transactions. For a single-process setup, a serialized writer is acceptable if load tests confirm sufficient throughput.
 
-Credentials are encrypted using standard library primitives, such as AES-GCM with a unique nonce and AAD that binds the ciphertext to the credential ID and format version. The master key comes from a separate file or environment variable and is not stored in the same database. Virtual keys are generated from cryptographically random bytes, displayed upon creation, and stored only as a digest with a separate public identifier.
+Credentials are encrypted using standard library primitives, such as AES-GCM with a unique nonce and AAD that binds the ciphertext to the credential ID and format version. For the proposed M3 protected startup, the master key comes from a permission-checked external file and is not stored in the database; see the key policy below. Virtual keys are generated from cryptographically random bytes, displayed upon creation, and stored only as a digest with a separate public identifier.
+
+The M3-specific schema, writer/repository boundary, acknowledged intent and terminal writes, conservative recovery, key-file policy, and crash traces are fixed in [M3-STORAGE.md](M3-STORAGE.md). That design narrows the initial master-key source to a protected external file; it does not add implementation support or change the M2 startup path.
 
 ## Observability
 

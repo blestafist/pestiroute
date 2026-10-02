@@ -20,6 +20,8 @@ The old single-target JSON form remains supported: `upstream_endpoint`, `upstrea
 
 The proposed M3 design uses YAML to describe the desired topology: listener, connector instances, routes, and policy defaults. SQLite would store mutable state: accounts, credentials, virtual keys, auth sessions, attempts, and usage. Secrets in YAML would be replaced with credential references. Startup validation should identify missing references and incompatible protocol/mode combinations before the first client request. These capabilities are not part of the implemented M2 startup path.
 
+The detailed proposed entity keys, relations, migrations, durable accounting boundary, and crash recovery policy are specified in [M3-STORAGE.md](M3-STORAGE.md). The note is design only; it does not imply a SQLite repository or protected YAML loader exists.
+
 Hot reload is not required for the initial MVP. Configuration is applied in full at startup; administrative operations on keys and accounts use storage and runtime services. The initial management interface is local CLI commands; a separate admin API may be added later.
 
 ## Proposed YAML
