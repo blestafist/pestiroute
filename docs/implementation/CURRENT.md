@@ -11,7 +11,7 @@
 
 M1 is complete; [M1-027](tasks/M1-027.md#completion-evidence) maps its gates to deterministic regressions and scoped live evidence. The live baseline is OpenCode 2.0.6 / OpenAI Responses / `gpt-5.4-mini`: tools and reasoning have recorded scoped support; `llm.tools.parallel` remains unknown. Supplementary paired runs have clean `21d5c13` provenance; the original M1-025 revision is unknown. Live in-client HTTP abort/internal gateway teardown and remote compute cancellation remain unverified; local disconnect/cancellation proofs pass. Preserve these limits when generalizing declarations.
 
-[M2 planning](TASKS.md#m2--connector-api-and-conformance-baseline) contains 34 bounded cards based on completed M1 code. Tasks [M2-001](tasks/M2-001.md) through [M2-024](tasks/M2-024.md) are verified DONE. Next eligible registered candidate is [M2-025](tasks/M2-025.md) (stream-contract violation conformance cases).
+[M2 planning](TASKS.md#m2--connector-api-and-conformance-baseline) contains 34 bounded cards based on completed M1 code. Tasks [M2-001](tasks/M2-001.md) through [M2-025](tasks/M2-025.md) are verified DONE. Next eligible registered candidate is [M2-026](tasks/M2-026.md) (error, usage and no-replay conformance cases).
 
 M2 extends the existing envelope/frames/errors. It adds managed components/registry, scoped services, explicit native identity routes, one-attempt observations and native/scripted conformance. Keep SQLite, durable secrets/usage, virtual keys, limits, OAuth flows and automatic fallback for M3; new protocol translation and IPC remain later work. All planned M2 verification uses deterministic local fixtures.
 

@@ -349,8 +349,8 @@ func TestDispatchTerminalPaths(t *testing.T) {
 	}{
 		{"success", []StreamFrame{head(), body(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded, Usage: partial}}}, nil, OutcomeSucceeded, true, partial},
 		{"pre-head error", nil, pre, OutcomeFailed, false, nil},
-		{"unexpected EOF", []StreamFrame{head(), body()}, nil, OutcomeIncomplete, true, nil},
-		{"invalid ordering", []StreamFrame{body()}, nil, OutcomeIncomplete, false, nil},
+		{"unexpected EOF", []StreamFrame{head(), body()}, nil, OutcomeFailed, true, nil},
+		{"invalid ordering", []StreamFrame{body()}, nil, OutcomeFailed, false, nil},
 		{"post-head error", []StreamFrame{head()}, errors.New("drop"), OutcomeIncomplete, true, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -582,12 +582,13 @@ func TestAttemptStreamExplicitCloseWinsPendingEOF(t *testing.T) {
 func TestAttemptStreamIncompleteTerminals(t *testing.T) {
 	inputTokens := int64(5)
 	for _, tc := range []struct {
-		name    string
-		frames  []StreamFrame
-		outcome Outcome
+		name          string
+		frames        []StreamFrame
+		outcome       Outcome
+		contractError bool
 	}{
 		{name: "failed Head-to-Complete", frames: []StreamFrame{head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeFailed, Error: &GatewayError{Code: "upstream_failed", Category: CategoryUnavailable}, Usage: &UsageReport{InputTokens: &inputTokens, Source: UsageProvider, Completeness: UsagePartial}}}}, outcome: OutcomeFailed},
-		{name: "premature EOF", frames: []StreamFrame{head()}, outcome: OutcomeIncomplete},
+		{name: "premature EOF", frames: []StreamFrame{head()}, outcome: OutcomeFailed, contractError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &trailingStream{frames: tc.frames, closed: make(chan struct{})}
@@ -604,13 +605,13 @@ func TestAttemptStreamIncompleteTerminals(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := response.Stream.Next(context.Background()); tc.outcome == OutcomeFailed && err != io.EOF || tc.outcome == OutcomeIncomplete && err == nil {
+			if _, err := response.Stream.Next(context.Background()); tc.contractError && !errors.Is(err, ErrStreamContract) || !tc.contractError && err != io.EOF {
 				t.Fatalf("unexpected terminal result: %v", err)
 			}
 			if len(results) != 1 || results[0].Outcome != tc.outcome {
 				t.Fatalf("terminal results: %+v", results)
 			}
-			if tc.outcome == OutcomeFailed && (!results[0].HasUsage || results[0].Usage.InputTokens == nil || *results[0].Usage.InputTokens != inputTokens) {
+			if tc.outcome == OutcomeFailed && !tc.contractError && (!results[0].HasUsage || results[0].Usage.InputTokens == nil || *results[0].Usage.InputTokens != inputTokens) {
 				t.Fatalf("failed completion lost usage: %+v", results[0])
 			}
 			select {

@@ -318,6 +318,9 @@ func (s *attemptStream) Close() error {
 
 func (s *attemptStream) fail(err error) {
 	outcome := OutcomeIncomplete
+	if errors.Is(err, ErrStreamContract) {
+		outcome = OutcomeFailed
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		outcome = OutcomeCancelled
 	}
@@ -369,6 +372,14 @@ func (s *attemptStream) Next(ctx context.Context) (StreamFrame, error) {
 				return StreamFrame{}, cause
 			}
 		} else {
+			s.mu.Lock()
+			pending := s.pending
+			s.mu.Unlock()
+			if pending != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				s.fail(ErrStreamContract)
+				_ = s.Close()
+				return StreamFrame{}, ErrStreamContract
+			}
 			s.fail(err)
 		}
 		s.Close()
