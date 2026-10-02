@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestLedgerLifecycleIdempotencyNullableUsageAndReopen(t *testing.T) {
+func TestLedgerIntentLifecycleIdempotencyNullableUsageAndReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.db")
 	db, err := Open(path)
 	if err != nil {
@@ -94,6 +94,9 @@ func TestLedgerLifecycleIdempotencyNullableUsageAndReopen(t *testing.T) {
 	if err := repo.FinalizeAttempt(ctx, conflicting); !errors.Is(err, ErrLedgerConflict) {
 		t.Fatalf("conflicting finalize = %v", err)
 	}
+	if err := repo.RecordDispatchIntent(ctx, attempt.ID, now); !errors.Is(err, ErrLedgerConflict) {
+		t.Fatalf("terminal attempt intent = %v", err)
+	}
 	var usageCount int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_records WHERE attempt_id=?`, attempt.ID).Scan(&usageCount); err != nil || usageCount != 1 {
 		t.Fatalf("usage rows after concurrent identical finalization = %d, %v", usageCount, err)
@@ -107,6 +110,34 @@ func TestLedgerLifecycleIdempotencyNullableUsageAndReopen(t *testing.T) {
 	got, err := repo.GetUsage(ctx, attempt.ID)
 	if err != nil || got.InputTokens == nil || *got.InputTokens != inTokens || got.OutputTokens != nil || got.ReasoningTokens != nil || got.CachedTokens == nil || *got.CachedTokens != cachedTokens || !got.RecordedAt.Equal(now) {
 		t.Fatalf("usage with nullable counters = %#v, %v", got, err)
+	}
+	second := AttemptRecord{ID: "attempt-uncertain", RequestID: request.ID, Ordinal: 2, AccountID: account.ID, Connector: "connector", RouteID: "route", BudgetPolicy: "known", EstimateTokens: 20, EstimateMethod: "fixture", State: "reserved"}
+	if err := repo.CreateAttempt(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := repo.RecordDispatchIntent(cancelled, second.ID, now); err == nil {
+		t.Fatal("cancelled intent unexpectedly succeeded")
+	}
+	if got, err := repo.GetAttempt(ctx, second.ID); err != nil || got.State != "reserved" || got.DispatchedAt != nil {
+		t.Fatalf("cancelled intent changed attempt: %#v, %v", got, err)
+	}
+	if err := repo.RecordDispatchIntent(ctx, second.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordDispatchIntent(ctx, second.ID, now.Add(time.Millisecond)); !errors.Is(err, ErrLedgerConflict) {
+		t.Fatalf("conflicting intent timestamp = %v", err)
+	}
+	third := AttemptRecord{ID: "attempt-2", RequestID: request.ID, Ordinal: 3, AccountID: account.ID, Connector: "connector", RouteID: "route", BudgetPolicy: "known", EstimateTokens: 20, EstimateMethod: "fixture", State: "reserved"}
+	if err := repo.CreateAttempt(ctx, third); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE requests SET state='failed' WHERE id=?`, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordDispatchIntent(ctx, third.ID, now); !errors.Is(err, ErrLedgerConflict) {
+		t.Fatalf("intent for non-admitted request = %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -123,20 +154,22 @@ func TestLedgerLifecycleIdempotencyNullableUsageAndReopen(t *testing.T) {
 	if got, err := repo.GetAttempt(ctx, attempt.ID); err != nil || got.State != "succeeded" || !got.Committed || got.AccountID != account.ID || got.FinishedAt == nil || !got.FinishedAt.Equal(finished) {
 		t.Fatalf("reopened attempt = %#v, %v", got, err)
 	}
+	if got, err := repo.GetAttempt(ctx, second.ID); err != nil || got.State != "intent" || got.DispatchedAt == nil || !got.DispatchedAt.Equal(now) {
+		t.Fatalf("reopened dispatch intent = %#v, %v", got, err)
+	}
+	if got, err := repo.GetAttempt(ctx, third.ID); err != nil || got.State != "reserved" || got.DispatchedAt != nil {
+		t.Fatalf("reopened undispatched attempt = %#v, %v", got, err)
+	}
 	got, err = repo.GetUsage(ctx, attempt.ID)
 	if err != nil || got.Source != "provider" || !got.RecordedAt.Equal(now) || got.InputTokens == nil || *got.InputTokens != inTokens || got.CachedTokens == nil || *got.CachedTokens != cachedTokens {
 		t.Fatalf("reopened usage = %#v, %v", got, err)
 	}
 	category, reason := "timeout", "upstream_timeout"
-	second := AttemptRecord{ID: "attempt-2", RequestID: request.ID, Ordinal: 2, AccountID: account.ID, Connector: "connector", RouteID: "route", BudgetPolicy: "known", EstimateTokens: 20, EstimateMethod: "fixture", State: "reserved"}
-	if err := repo.CreateAttempt(ctx, second); err != nil {
+	secondUsage := UsageRecord{AttemptID: third.ID, Source: "unknown", Completeness: "unknown", RecordedAt: now}
+	if err := repo.FinalizeAttempt(ctx, TerminalAttempt{AttemptID: third.ID, State: "failed", ErrorCategory: &category, ErrorReason: &reason, Usage: secondUsage, FinishedAt: finished}); err != nil {
 		t.Fatal(err)
 	}
-	secondUsage := UsageRecord{AttemptID: second.ID, Source: "unknown", Completeness: "unknown", RecordedAt: now}
-	if err := repo.FinalizeAttempt(ctx, TerminalAttempt{AttemptID: second.ID, State: "failed", ErrorCategory: &category, ErrorReason: &reason, Usage: secondUsage, FinishedAt: finished}); err != nil {
-		t.Fatal(err)
-	}
-	stored, err := repo.GetAttempt(ctx, second.ID)
+	stored, err := repo.GetAttempt(ctx, third.ID)
 	if err != nil || stored.ErrorCategory == nil || *stored.ErrorCategory != category || stored.ErrorReason == nil || *stored.ErrorReason != reason {
 		t.Fatalf("terminal sanitized error metadata = %#v, %v", stored, err)
 	}

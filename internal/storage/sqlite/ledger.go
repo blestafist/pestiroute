@@ -493,33 +493,53 @@ func (r *Ledger) CreateAttempt(ctx context.Context, v AttemptRecord) error {
 }
 
 func (r *Ledger) RecordDispatchIntent(ctx context.Context, id string, at time.Time) error {
-	if at.IsZero() {
-		return fmt.Errorf("record dispatch intent: %w: timestamp is required", ErrLedgerConflict)
+	if id == "" || at.IsZero() {
+		return fmt.Errorf("record dispatch intent: %w: attempt ID and timestamp are required", ErrLedgerConflict)
 	}
-	res, err := r.db.ExecContext(ctx, `UPDATE attempts SET state='intent', dispatched_at=? WHERE id=? AND state='reserved'`, millis(at), id)
+	conn, err := r.db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("record dispatch intent: %w", err)
+		return fmt.Errorf("acquire dispatch intent connection: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("record dispatch intent result: %w", err)
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("begin dispatch intent: %w", err)
 	}
-	if n == 1 {
-		return nil
-	}
-	var state string
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	var requestState, state string
 	var dispatched sql.NullInt64
-	err = r.db.QueryRowContext(ctx, `SELECT state, dispatched_at FROM attempts WHERE id=?`, id).Scan(&state, &dispatched)
+	err = conn.QueryRowContext(ctx, `SELECT q.state,a.state,a.dispatched_at FROM attempts a JOIN requests q ON q.id=a.request_id WHERE a.id=?`, id).Scan(&requestState, &state, &dispatched)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrLedgerNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("read dispatch intent: %w", err)
 	}
+	if requestState != "admitted" {
+		return fmt.Errorf("record dispatch intent for closed request %q: %w", id, ErrLedgerConflict)
+	}
 	if state == "intent" && dispatched.Valid && dispatched.Int64 == millis(at) {
+		if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+			return fmt.Errorf("commit duplicate dispatch intent: %w", err)
+		}
+		committed = true
 		return nil
 	}
-	return fmt.Errorf("record dispatch intent %q: %w", id, ErrLedgerConflict)
+	if state != "reserved" || dispatched.Valid {
+		return fmt.Errorf("record dispatch intent %q: %w", id, ErrLedgerConflict)
+	}
+	if _, err := conn.ExecContext(ctx, `UPDATE attempts SET state='intent', dispatched_at=? WHERE id=? AND state='reserved'`, millis(at), id); err != nil {
+		return fmt.Errorf("update dispatch intent: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("commit dispatch intent: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func (r *Ledger) FinalizeAttempt(ctx context.Context, terminal TerminalAttempt) error {
