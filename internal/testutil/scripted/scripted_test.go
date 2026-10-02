@@ -38,7 +38,7 @@ func TestConcurrentScriptsAreIsolatedAndCaptured(t *testing.T) {
 		go func() {
 			<-start
 			scope := core.AttemptScope{ID: "attempt-" + id, AccountID: "account-" + id, Mode: "native"}
-			request := core.ExecutionRequest{ID: id, Payload: core.RawPayload{Body: []byte(id)}}
+			request := core.ExecutionRequest{ID: id, Payload: core.RawPayload{Protocol: "proto", Body: []byte(id)}}
 			response, gatewayErr := connector.Execute(context.Background(), request, scope, core.InvocationServices{})
 			request.Payload.Body[0] = 'x'
 			executed <- execution{id: id, response: response, err: gatewayErr}
@@ -105,11 +105,12 @@ func TestGateBoundsPullAndCancellationAndClose(t *testing.T) {
 	if err := connector.Init(context.Background(), core.ComponentConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	response, gatewayErr := connector.Execute(context.Background(), core.ExecutionRequest{ID: "blocked"}, core.AttemptScope{}, core.InvocationServices{})
+	request := core.ExecutionRequest{ID: "blocked", Payload: core.RawPayload{Protocol: "proto"}}
+	response, gatewayErr := connector.Execute(context.Background(), request, core.AttemptScope{}, core.InvocationServices{})
 	if gatewayErr != nil {
 		t.Fatal(gatewayErr)
 	}
-	if _, duplicateErr := connector.Execute(context.Background(), core.ExecutionRequest{ID: "blocked"}, core.AttemptScope{}, core.InvocationServices{}); duplicateErr == nil || connector.CallCount() != 1 {
+	if _, duplicateErr := connector.Execute(context.Background(), request, core.AttemptScope{}, core.InvocationServices{}); duplicateErr == nil || connector.CallCount() != 1 {
 		t.Fatalf("duplicate execution accepted: err=%v calls=%d", duplicateErr, connector.CallCount())
 	}
 	if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
@@ -155,9 +156,9 @@ func TestGateBoundsPullAndCancellationAndClose(t *testing.T) {
 func TestCloseInterruptsBlockedNextAndCapabilitySnapshot(t *testing.T) {
 	gate := make(chan struct{})
 	waiting := make(chan struct{}, 1)
-	scope := core.CapabilityScope{Protocol: "proto", Mode: "native", Model: "m", AccountID: "a"}
+	capabilityScope := core.CapabilityScope{Protocol: "proto", Mode: "native", Model: "m", AccountID: "a"}
 	declared := core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}}
-	connector := New(testDescriptor(), map[core.CapabilityScope]core.CapabilityResult{scope: declared}, Script{ID: "close", Steps: []Step{{Frame: core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: "proto"}}, Gate: gate, Waiting: waiting}}})
+	connector := New(testDescriptor(), map[core.CapabilityScope]core.CapabilityResult{capabilityScope: declared}, Script{ID: "close", Steps: []Step{{Frame: core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: "proto"}}, Gate: gate, Waiting: waiting}}})
 	descriptor := connector.Descriptor()
 	if descriptor.ID != "scripted" || descriptor.Kind != core.ComponentConnector {
 		t.Fatalf("descriptor = %#v", descriptor)
@@ -175,14 +176,16 @@ func TestCloseInterruptsBlockedNextAndCapabilitySnapshot(t *testing.T) {
 		t.Fatalf("Authenticate = %#v, %v", auth, err)
 	}
 	declared.Values["llm.streaming"] = core.Unsupported
-	got := connector.Capabilities(context.Background(), scope)
+	got := connector.Capabilities(context.Background(), capabilityScope)
 	if got.State("llm.streaming") != core.Supported {
 		t.Fatalf("capability snapshot = %v", got.State("llm.streaming"))
 	}
 	if connector.Health(context.Background()).State != core.HealthUnavailable {
 		t.Fatal("uninitialized connector is not unavailable")
 	}
-	if _, err := connector.Execute(context.Background(), core.ExecutionRequest{ID: "close"}, core.AttemptScope{}, core.InvocationServices{}); err == nil {
+	request := core.ExecutionRequest{ID: "close", Model: "m", Payload: core.RawPayload{Protocol: "proto"}}
+	scope := core.AttemptScope{AccountID: "a", Mode: "native"}
+	if _, err := connector.Execute(context.Background(), request, scope, core.InvocationServices{}); err == nil {
 		t.Fatal("Execute before Init accepted")
 	}
 	if err := connector.Init(context.Background(), core.ComponentConfig{}); err != nil {
@@ -191,7 +194,7 @@ func TestCloseInterruptsBlockedNextAndCapabilitySnapshot(t *testing.T) {
 	if connector.Health(context.Background()).State != core.HealthReady {
 		t.Fatal("initialized connector is not ready")
 	}
-	response, gatewayErr := connector.Execute(context.Background(), core.ExecutionRequest{ID: "close"}, core.AttemptScope{}, core.InvocationServices{})
+	response, gatewayErr := connector.Execute(context.Background(), request, scope, core.InvocationServices{})
 	if gatewayErr != nil {
 		t.Fatal(gatewayErr)
 	}
@@ -225,7 +228,7 @@ func TestWaitingNotificationSendCanBeCancelledOrClosed(t *testing.T) {
 			if err := connector.Init(context.Background(), core.ComponentConfig{}); err != nil {
 				t.Fatal(err)
 			}
-			response, gatewayErr := connector.Execute(context.Background(), core.ExecutionRequest{ID: action}, core.AttemptScope{}, core.InvocationServices{})
+			response, gatewayErr := connector.Execute(context.Background(), core.ExecutionRequest{ID: action, Payload: core.RawPayload{Protocol: "proto"}}, core.AttemptScope{}, core.InvocationServices{})
 			if gatewayErr != nil {
 				t.Fatal(gatewayErr)
 			}
@@ -271,11 +274,11 @@ func TestFailureAndMalformedScriptsRemainRaw(t *testing.T) {
 	if err := connector.Init(context.Background(), core.ComponentConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	response, got := connector.Execute(context.Background(), core.ExecutionRequest{ID: "pre"}, core.AttemptScope{}, core.InvocationServices{})
+	response, got := connector.Execute(context.Background(), core.ExecutionRequest{ID: "pre", Payload: core.RawPayload{Protocol: "proto"}}, core.AttemptScope{}, core.InvocationServices{})
 	if response.Stream != nil || got == nil || got.RetryDisposition != core.RetrySafe {
 		t.Fatalf("pre-Head error normalized: response=%#v error=%#v", response, got)
 	}
-	response, got = connector.Execute(context.Background(), core.ExecutionRequest{ID: "unknown-retry"}, core.AttemptScope{}, core.InvocationServices{})
+	response, got = connector.Execute(context.Background(), core.ExecutionRequest{ID: "unknown-retry", Payload: core.RawPayload{Protocol: "proto"}}, core.AttemptScope{}, core.InvocationServices{})
 	if response.Stream != nil || got == nil || got.RetryDisposition != "" || got.Retryable {
 		t.Fatalf("unknown retry disposition changed: response=%#v error=%#v", response, got)
 	}
@@ -387,7 +390,7 @@ func TestCloseTerminatesGatedStepError(t *testing.T) {
 
 func executeScript(t *testing.T, connector *Connector, id string) core.ExecutionResponse {
 	t.Helper()
-	response, err := connector.Execute(context.Background(), core.ExecutionRequest{ID: id}, core.AttemptScope{}, core.InvocationServices{})
+	response, err := connector.Execute(context.Background(), core.ExecutionRequest{ID: id, Payload: core.RawPayload{Protocol: "proto"}}, core.AttemptScope{}, core.InvocationServices{})
 	if err != nil {
 		t.Fatal(err)
 	}

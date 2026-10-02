@@ -90,7 +90,7 @@ func TestConnectorInitRejectsInvalidConfigAndUnknownEndpointCapability(t *testin
 	if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(`{"transport":{"endpoint":"ftp://example.com/v1/responses","credential":"x"},"model":"gpt-5.4-mini","account_id":"account-a"}`)}); err == nil {
 		t.Fatal("invalid endpoint configuration was accepted")
 	}
-	if got := c.Health(context.Background()).State; got != core.HealthUnknown {
+	if got := c.Health(context.Background()).State; got != core.HealthUnavailable {
 		t.Fatalf("health after failed init = %q", got)
 	}
 	if err := c.Init(context.Background(), core.ComponentConfig{Data: componentConfigJSON("http://example.com/v1/responses")}); err != nil {

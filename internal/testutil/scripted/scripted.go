@@ -4,6 +4,7 @@ package scripted
 import (
 	"context"
 	"io"
+	"slices"
 	"sync"
 
 	"github.com/blestafist/pestiroute/internal/core"
@@ -111,7 +112,7 @@ func (c *Connector) Close(context.Context) error {
 	return nil
 }
 
-func (c *Connector) Execute(ctx context.Context, request core.ExecutionRequest, scope core.AttemptScope, _ core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
+func (c *Connector) Execute(ctx context.Context, request core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
 	if err := ctx.Err(); err != nil {
 		return core.ExecutionResponse{}, cancelled(err)
 	}
@@ -119,6 +120,25 @@ func (c *Connector) Execute(ctx context.Context, request core.ExecutionRequest, 
 	defer c.mu.Unlock()
 	if c.closed || !c.init {
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "unavailable", Category: core.CategoryUnavailable, Message: "Scripted connector unavailable"}
+	}
+	if !declaresProtocol(c.descriptor, request.Payload.Protocol) {
+		return core.ExecutionResponse{}, &core.GatewayError{Code: "unsupported_protocol", Category: core.CategoryUnsupportedFeature, Message: "Scripted connector does not declare the request protocol"}
+	}
+	if len(c.capabilities) != 0 {
+		if _, ok := c.capabilities[core.CapabilityScope{
+			Protocol: request.Payload.Protocol, Mode: scope.Mode, Model: request.Model, AccountID: scope.AccountID,
+		}]; !ok {
+			return core.ExecutionResponse{}, &core.GatewayError{Code: "scope_mismatch", Category: core.CategoryPermissionDenied, Message: "Scripted connector does not declare the selected scope"}
+		}
+	}
+	if declaresAuthMethod(c.descriptor, "bearer") {
+		if services.Credentials == nil {
+			return core.ExecutionResponse{}, &core.GatewayError{Code: "credential_unavailable", Category: core.CategoryUnauthenticated, Message: "Selected credential is unavailable"}
+		}
+		credential, err := services.Credentials.Get(ctx, "bearer")
+		if err != nil || len(credential) == 0 {
+			return core.ExecutionResponse{}, &core.GatewayError{Code: "credential_unavailable", Category: core.CategoryUnauthenticated, Message: "Selected credential is unavailable"}
+		}
 	}
 	if gatewayErr := c.executeErrors[request.ID]; gatewayErr != nil {
 		delete(c.executeErrors, request.ID)
@@ -135,6 +155,14 @@ func (c *Connector) Execute(ctx context.Context, request core.ExecutionRequest, 
 	s := &stream{steps: steps, done: make(chan struct{}), owner: c}
 	c.streams[s] = struct{}{}
 	return core.ExecutionResponse{Stream: s}, nil
+}
+
+func declaresProtocol(descriptor core.Descriptor, protocol string) bool {
+	return slices.Contains(descriptor.Protocols, protocol)
+}
+
+func declaresAuthMethod(descriptor core.Descriptor, method string) bool {
+	return slices.Contains(descriptor.AuthMethods, method)
 }
 
 // Models, EstimateUsage and Authenticate intentionally report unsupported;

@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/blestafist/pestiroute/internal/connector/responses"
@@ -23,12 +25,15 @@ const (
 )
 
 type fixture struct {
-	connector core.Connector
-	request   core.ExecutionRequest
-	scope     core.AttemptScope
-	services  core.InvocationServices
-	wantBody  []byte
-	close     func()
+	connector  core.Connector
+	init       func(context.Context) error
+	failedInit func() error
+	request    core.ExecutionRequest
+	scope      core.AttemptScope
+	services   func() core.InvocationServices
+	wantBody   []byte
+	callCount  func() int64
+	close      func()
 }
 
 type factory struct {
@@ -82,6 +87,378 @@ func TestConformance(t *testing.T) {
 	}
 }
 
+func TestConformanceLifecycleAndScopedServices(t *testing.T) {
+	factories := []factory{
+		{name: "native-loopback", new: nativeFixture},
+		{name: "scripted", new: scriptedFixture},
+	}
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			fx := f.new(t)
+			t.Cleanup(fx.close)
+			descriptor := fx.connector.Descriptor()
+			if err := descriptor.Validate(core.ComponentConnector); err != nil {
+				t.Fatalf("descriptor before Init invalid: %v", err)
+			}
+			if descriptor.ID == "" || !descriptor.SupportsAPIVersion(core.APIVersion{Major: 1}) || !slices.Contains(descriptor.Operations, "execute") {
+				t.Fatalf("incomplete pre-Init descriptor: %+v", descriptor)
+			}
+			if err := assertPreInitGate(fx.connector, fx.request, fx.scope, fx.services()); err != nil {
+				t.Fatal(err)
+			}
+			if got := fx.callCount(); got != 0 {
+				t.Fatalf("pre-Init Execute reached upstream/script: %d calls", got)
+			}
+
+			if err := fx.init(context.Background()); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+			if fx.connector.Health(context.Background()).State != core.HealthReady {
+				t.Fatal("connector not ready after successful Init")
+			}
+			if got := fx.connector.Descriptor(); !descriptorsEqual(descriptor, got) {
+				t.Fatalf("descriptor changed across Init: before=%+v after=%+v", descriptor, got)
+			}
+			services := fx.services()
+			assertExecuteRejected(t, fx.connector, fx.request, fx.scope, core.InvocationServices{}) // bearer credential is mandatory in both descriptors
+			wrongProtocol := fx.request
+			wrongProtocol.Payload.Protocol = "undeclared.protocol"
+			assertExecuteRejected(t, fx.connector, wrongProtocol, fx.scope, services)
+			wrongAccount := fx.scope
+			wrongAccount.AccountID = "other-account"
+			assertExecuteRejected(t, fx.connector, fx.request, wrongAccount, services)
+			wrongMode := fx.scope
+			wrongMode.Mode = "translated"
+			assertExecuteRejected(t, fx.connector, fx.request, wrongMode, services)
+			wrongModel := fx.request
+			wrongModel.Model = "other-model"
+			assertExecuteRejected(t, fx.connector, wrongModel, fx.scope, services)
+			if got := fx.callCount(); got != 0 {
+				t.Fatalf("rejected credential/protocol/scope call reached upstream/script: %d calls", got)
+			}
+			models, err := fx.connector.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: "native", AccountID: account}, services)
+			if err != nil || !honestModelsResult(models) {
+				t.Fatalf("valid scoped Models result=%+v error=%v", models, err)
+			}
+			otherModels, err := fx.connector.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: "native", AccountID: "other-account"}, services)
+			if err != nil || otherModels.Supported || len(otherModels.Models) != 0 {
+				t.Fatalf("cross-account Models result=%+v error=%v", otherModels, err)
+			}
+			if result, err := fx.connector.EstimateUsage(context.Background(), core.UsageQuery{}, services); err != nil || result.Supported || result.Known || result.Usage != nil {
+				t.Fatalf("unsupported usage estimate fabricated result=%+v error=%v", result, err)
+			}
+			if result, err := fx.connector.Authenticate(context.Background(), core.AuthRequest{}, services); err != nil || result.Supported || result.State != "" || len(result.Credentials) != 0 {
+				t.Fatalf("unsupported authentication fabricated result=%+v error=%v", result, err)
+			}
+			if err := fx.connector.Close(context.Background()); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			if err := fx.connector.Close(context.Background()); err != nil {
+				t.Fatalf("repeated Close: %v", err)
+			}
+			if scripted, ok := fx.connector.(*scripted.Connector); ok && scripted.CloseCount() != 1 {
+				t.Fatalf("scripted Close count=%d, want exactly one", scripted.CloseCount())
+			}
+			if fx.connector.Health(context.Background()).State != core.HealthUnavailable {
+				t.Fatal("connector not unavailable after Close")
+			}
+			if err := assertPostCloseGate(fx.connector, fx.request, fx.scope, fx.services()); err != nil {
+				t.Fatal(err)
+			}
+			if got := fx.callCount(); got != 0 {
+				t.Fatalf("pre/post-lifecycle Execute reached upstream/script: %d calls", got)
+			}
+		})
+	}
+}
+
+func TestConformanceFailedInitIsUnavailable(t *testing.T) {
+	for _, f := range []factory{{name: "native-loopback", new: nativeFixture}, {name: "scripted", new: scriptedFixture}} {
+		t.Run(f.name, func(t *testing.T) {
+			fx := f.new(t)
+			t.Cleanup(fx.close)
+			err := fx.failedInit()
+			if err == nil {
+				t.Fatal("invalid/cancelled Init unexpectedly succeeded")
+			}
+			if fx.connector.Health(context.Background()).State != core.HealthUnavailable {
+				t.Fatalf("health after failed Init = %q, want unavailable", fx.connector.Health(context.Background()).State)
+			}
+			rejectUnavailable(t, fx)
+			if got := fx.callCount(); got != 0 {
+				t.Fatalf("failed-Init Execute reached upstream/script: %d calls", got)
+			}
+			if err := fx.connector.Close(context.Background()); err != nil {
+				t.Fatalf("Close after failed Init: %v", err)
+			}
+			if err := fx.connector.Close(context.Background()); err != nil {
+				t.Fatalf("repeated Close after failed Init: %v", err)
+			}
+		})
+	}
+}
+
+func assertExecuteRejected(t *testing.T, connector core.Connector, request core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) {
+	t.Helper()
+	if _, gatewayErr := connector.Execute(context.Background(), request, scope, services); gatewayErr == nil || gatewayErr.Code == "" || gatewayErr.Category == "" {
+		t.Fatalf("Execute did not return a classified rejection for protocol=%q model=%q account=%q mode=%q: %+v", request.Payload.Protocol, request.Model, scope.AccountID, scope.Mode, gatewayErr)
+	}
+}
+
+func validModelsResult(result core.ModelsResult) bool {
+	if !result.Supported || len(result.Models) == 0 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(result.Models))
+	for _, model := range result.Models {
+		if model.ID == "" {
+			return false
+		}
+		if _, exists := seen[model.ID]; exists {
+			return false
+		}
+		seen[model.ID] = struct{}{}
+	}
+	return true
+}
+
+func honestModelsResult(result core.ModelsResult) bool {
+	if !result.Supported {
+		return len(result.Models) == 0
+	}
+	return validModelsResult(result)
+}
+
+func TestConformanceFailedInitReleasesPartialResourceOnce(t *testing.T) {
+	connector := &partialInitConnector{}
+	if err := assertFailedInitCleanup(connector); err != nil {
+		t.Fatal(err)
+	}
+	if connector.releaseCount != 1 || connector.closeCount != 1 {
+		t.Fatalf("release count=%d close count=%d, want one each", connector.releaseCount, connector.closeCount)
+	}
+}
+
+func TestConformanceRejectsFailedInitCleanupMutation(t *testing.T) {
+	connector := &partialInitConnector{leakOnClose: true}
+	if err := assertFailedInitCleanup(connector); err == nil {
+		t.Fatal("leaking failed-Init fixture passed conformance assertion")
+	}
+}
+
+func TestConformanceRejectsLifecycleGateMutations(t *testing.T) {
+	preInitReady := &partialInitConnector{readyBeforeInit: true}
+	if err := assertPreInitGate(preInitReady, core.ExecutionRequest{}, core.AttemptScope{}, core.InvocationServices{}); err == nil {
+		t.Fatal("pre-Init-ready fixture passed lifecycle assertion")
+	}
+	afterCloseAccepts := &partialInitConnector{acceptAfterClose: true}
+	if err := afterCloseAccepts.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := assertPostCloseGate(afterCloseAccepts, core.ExecutionRequest{}, core.AttemptScope{}, core.InvocationServices{}); err == nil {
+		t.Fatal("post-Close-execution fixture passed lifecycle assertion")
+	}
+}
+
+func assertPreInitGate(connector core.Connector, request core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) error {
+	if connector.Health(context.Background()).State == core.HealthReady {
+		return errors.New("connector reports ready before Init")
+	}
+	_, gatewayErr := connector.Execute(context.Background(), request, scope, services)
+	if gatewayErr == nil || gatewayErr.Category != core.CategoryUnavailable {
+		return errors.New("Execute before Init did not return unavailable")
+	}
+	return nil
+}
+
+func assertPostCloseGate(connector core.Connector, request core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) error {
+	if connector.Health(context.Background()).State != core.HealthUnavailable {
+		return fmt.Errorf("Health after Close = %q, want unavailable", connector.Health(context.Background()).State)
+	}
+	_, gatewayErr := connector.Execute(context.Background(), request, scope, services)
+	if gatewayErr == nil || gatewayErr.Category != core.CategoryUnavailable {
+		return errors.New("Execute after Close did not return unavailable")
+	}
+	return nil
+}
+
+func assertFailedInitCleanup(connector *partialInitConnector) error {
+	if err := connector.Init(context.Background(), core.ComponentConfig{}); err == nil {
+		return errors.New("failed-Init fixture unexpectedly initialized")
+	}
+	if connector.Health(context.Background()).State != core.HealthUnavailable {
+		return errors.New("failed-Init fixture reported ready")
+	}
+	_, gatewayErr := connector.Execute(context.Background(), core.ExecutionRequest{}, core.AttemptScope{}, core.InvocationServices{})
+	if gatewayErr == nil || gatewayErr.Category != core.CategoryUnavailable {
+		return errors.New("failed-Init fixture admitted execution")
+	}
+	if err := connector.Close(context.Background()); err != nil {
+		return fmt.Errorf("first Close: %w", err)
+	}
+	if err := connector.Close(context.Background()); err != nil {
+		return fmt.Errorf("repeated Close: %w", err)
+	}
+	if connector.resource || connector.releaseCount != 1 || connector.closeCount != 1 {
+		return fmt.Errorf("partial resource cleanup mismatch: resource=%v releases=%d closes=%d", connector.resource, connector.releaseCount, connector.closeCount)
+	}
+	return nil
+}
+
+// partialInitConnector is a deliberately small conformance fixture for the
+// contract obligation the concrete native/scripted fixtures cannot exercise:
+// both validate before allocating any resource that could need failed-Init cleanup.
+type partialInitConnector struct {
+	resource         bool
+	leakOnClose      bool
+	readyBeforeInit  bool
+	acceptAfterClose bool
+	releaseCount     int
+	closeCount       int
+	closed           bool
+}
+
+func (*partialInitConnector) Descriptor() core.Descriptor {
+	return core.Descriptor{
+		ID: "conformance.partial-init", Kind: core.ComponentConnector, ImplementationVersion: "test",
+		APIVersions: []core.APIVersion{{Major: 1}}, Protocols: []string{protocol},
+		Operations: []string{"execute"}, ConnectorType: "test",
+	}
+}
+
+func (c *partialInitConnector) Init(context.Context, core.ComponentConfig) error {
+	c.resource = true
+	return errors.New("synthetic failure after allocation")
+}
+
+func (c *partialInitConnector) Health(context.Context) core.Health {
+	if c.readyBeforeInit && !c.closed {
+		return core.Health{State: core.HealthReady}
+	}
+	return core.Health{State: core.HealthUnavailable}
+}
+
+func (*partialInitConnector) Capabilities(context.Context, core.CapabilityScope) core.CapabilityResult {
+	return core.CapabilityResult{}
+}
+
+func (c *partialInitConnector) Close(context.Context) error {
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+	c.closeCount++
+	if c.resource && !c.leakOnClose {
+		c.resource = false
+		c.releaseCount++
+	}
+	return nil
+}
+
+func (c *partialInitConnector) Execute(context.Context, core.ExecutionRequest, core.AttemptScope, core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
+	if c.closed && c.acceptAfterClose {
+		return core.ExecutionResponse{}, nil
+	}
+	return core.ExecutionResponse{}, &core.GatewayError{Code: "unavailable", Category: core.CategoryUnavailable, Message: "not initialized"}
+}
+
+func (*partialInitConnector) Models(context.Context, core.ModelQuery, core.InvocationServices) (core.ModelsResult, *core.GatewayError) {
+	return core.ModelsResult{}, nil
+}
+
+func (*partialInitConnector) EstimateUsage(context.Context, core.UsageQuery, core.InvocationServices) (core.EstimateResult, *core.GatewayError) {
+	return core.EstimateResult{}, nil
+}
+
+func (*partialInitConnector) Authenticate(context.Context, core.AuthRequest, core.InvocationServices) (core.AuthResult, *core.GatewayError) {
+	return core.AuthResult{}, nil
+}
+
+func TestConformanceNativeScopeCredentialsAndSupport(t *testing.T) {
+	fx := nativeFixture(t)
+	t.Cleanup(fx.close)
+	if err := fx.init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		request core.ExecutionRequest
+		scope   core.AttemptScope
+		service core.InvocationServices
+		code    string
+	}{
+		{name: "missing-credentials", request: fx.request, scope: fx.scope, service: core.InvocationServices{}, code: "credential_unavailable"},
+		{name: "account-mismatch", request: fx.request, scope: core.AttemptScope{AccountID: "other", Mode: "native"}, service: fx.services(), code: "scope_mismatch"},
+		{name: "model-mismatch", request: core.ExecutionRequest{ID: request, Model: "other", Payload: fx.request.Payload}, scope: fx.scope, service: fx.services(), code: "scope_mismatch"},
+		{name: "mode-mismatch", request: fx.request, scope: core.AttemptScope{AccountID: account, Mode: "translated"}, service: fx.services(), code: "unsupported_mode"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, gatewayErr := fx.connector.Execute(context.Background(), tc.request, tc.scope, tc.service)
+			if gatewayErr == nil || gatewayErr.Code != tc.code {
+				t.Fatalf("Execute error=%+v, want code %q", gatewayErr, tc.code)
+			}
+		})
+	}
+	if got := fx.callCount(); got != 0 {
+		t.Fatalf("rejected scoped Execute reached upstream: %d calls", got)
+	}
+	services := fx.services()
+	models, err := fx.connector.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: "native", AccountID: account}, services)
+	if err != nil || !models.Supported || len(models.Models) != 1 || models.Models[0].ID != model {
+		t.Fatalf("valid scoped Models result=%+v error=%v", models, err)
+	}
+	wrongModels, err := fx.connector.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: "native", AccountID: "other"}, services)
+	if err != nil || wrongModels.Supported || len(wrongModels.Models) != 0 {
+		t.Fatalf("cross-account Models result=%+v error=%v", wrongModels, err)
+	}
+	estimate, err := fx.connector.EstimateUsage(context.Background(), core.UsageQuery{Protocol: protocol, Mode: "native", Model: model, AccountID: account}, services)
+	if err != nil || estimate.Supported || estimate.Known || estimate.Usage != nil {
+		t.Fatalf("unsupported usage estimate fabricated result=%+v error=%v", estimate, err)
+	}
+	auth, err := fx.connector.Authenticate(context.Background(), core.AuthRequest{AccountID: account}, services)
+	if err != nil || auth.Supported || auth.State != "" || len(auth.Credentials) != 0 {
+		t.Fatalf("unsupported authentication fabricated result=%+v error=%v", auth, err)
+	}
+}
+
+func rejectUnavailable(t *testing.T, fx fixture) {
+	t.Helper()
+	_, gatewayErr := fx.connector.Execute(context.Background(), fx.request, fx.scope, fx.services())
+	if gatewayErr == nil || gatewayErr.Category != core.CategoryUnavailable {
+		t.Fatalf("Execute error=%+v, want unavailable gateway error", gatewayErr)
+	}
+}
+
+func descriptorsEqual(a, b core.Descriptor) bool {
+	return a.ID == b.ID && a.Kind == b.Kind && a.ImplementationVersion == b.ImplementationVersion &&
+		versionsEqual(a.APIVersions, b.APIVersions) && stringsEqual(a.Protocols, b.Protocols) &&
+		stringsEqual(a.Operations, b.Operations) && a.ConnectorType == b.ConnectorType && stringsEqual(a.AuthMethods, b.AuthMethods)
+}
+
+func versionsEqual(a, b []core.APIVersion) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func stringsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func nativeFixture(t *testing.T) fixture {
 	t.Helper()
 	upstream := fakeupstream.New(fakeupstream.Response{
@@ -96,23 +473,25 @@ func nativeFixture(t *testing.T) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := connector.Init(context.Background(), core.ComponentConfig{Data: config}); err != nil {
-		upstream.Close()
-		t.Fatal(err)
-	}
 	t.Setenv("PESTIROUTE_CONFORMANCE_TOKEN", "synthetic-token")
-	services := core.NewEnvironmentServices(
-		map[string]map[string]string{account: {"bearer": "PESTIROUTE_CONFORMANCE_TOKEN"}},
-		map[string]core.HTTPDoer{account: connector.HTTPDoer()}, nil,
-	).ForAttempt(core.AttemptScope{AccountID: account, Mode: "native"})
 	return fixture{
 		connector: connector,
+		init:      func(ctx context.Context) error { return connector.Init(ctx, core.ComponentConfig{Data: config}) },
+		failedInit: func() error {
+			return connector.Init(context.Background(), core.ComponentConfig{Data: []byte(`{"unknown":true}`)})
+		},
 		request: core.ExecutionRequest{ID: request, Model: model, Payload: core.RawPayload{
 			Protocol: protocol, ContentType: "application/json", Body: []byte(`{"model":"gpt-5.4-mini","input":"test"}`),
 		}},
-		scope:    core.AttemptScope{ID: "conformance-attempt", AccountID: account, Mode: "native"},
-		services: services,
-		wantBody: []byte(`{"status":"completed","opaque":{"native":true}}`),
+		scope: core.AttemptScope{ID: "conformance-attempt", AccountID: account, Mode: "native"},
+		services: func() core.InvocationServices {
+			return core.NewEnvironmentServices(
+				map[string]map[string]string{account: {"bearer": "PESTIROUTE_CONFORMANCE_TOKEN"}},
+				map[string]core.HTTPDoer{account: connector.HTTPDoer()}, nil,
+			).ForAttempt(core.AttemptScope{AccountID: account, Mode: "native"})
+		},
+		wantBody:  []byte(`{"status":"completed","opaque":{"native":true}}`),
+		callCount: upstream.RequestCount,
 		close: func() {
 			if err := connector.Close(context.Background()); err != nil {
 				t.Errorf("close connector: %v", err)
@@ -128,7 +507,7 @@ func scriptedFixture(t *testing.T) fixture {
 	connector := scripted.New(core.Descriptor{
 		ID: "conformance.scripted", Kind: core.ComponentConnector, ImplementationVersion: "test",
 		APIVersions: []core.APIVersion{{Major: 1}}, Protocols: []string{protocol},
-		Operations: []string{"execute"}, ConnectorType: "test",
+		Operations: []string{"execute"}, ConnectorType: "test", AuthMethods: []string{"bearer"},
 	}, map[core.CapabilityScope]core.CapabilityResult{scope: {Values: map[core.Capability]core.CapabilityState{
 		"llm.images": core.Unsupported,
 	}}}, scripted.Script{ID: request, Steps: []scripted.Step{
@@ -136,14 +515,24 @@ func scriptedFixture(t *testing.T) fixture {
 		{Frame: core.StreamFrame{Type: core.FrameBody, Body: &core.BodyFrame{Data: []byte(`{"status":"completed","opaque":{"scripted":true}}`)}}},
 		{Frame: core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: core.OutcomeSucceeded}}},
 	}})
-	if err := connector.Init(context.Background(), core.ComponentConfig{}); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("PESTIROUTE_CONFORMANCE_TOKEN", "synthetic-token")
 	return fixture{
 		connector: connector,
-		request:   core.ExecutionRequest{ID: request, Model: model, Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: []byte(`{"model":"gpt-5.4-mini","input":"test"}`)}},
-		scope:     core.AttemptScope{ID: "conformance-attempt", AccountID: account, Mode: "native"},
-		wantBody:  []byte(`{"status":"completed","opaque":{"scripted":true}}`),
+		init:      func(ctx context.Context) error { return connector.Init(ctx, core.ComponentConfig{}) },
+		failedInit: func() error {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return connector.Init(ctx, core.ComponentConfig{})
+		},
+		request:  core.ExecutionRequest{ID: request, Model: model, Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: []byte(`{"model":"gpt-5.4-mini","input":"test"}`)}},
+		scope:    core.AttemptScope{ID: "conformance-attempt", AccountID: account, Mode: "native"},
+		wantBody: []byte(`{"status":"completed","opaque":{"scripted":true}}`),
+		services: func() core.InvocationServices {
+			return core.NewEnvironmentServices(
+				map[string]map[string]string{account: {"bearer": "PESTIROUTE_CONFORMANCE_TOKEN"}}, nil, nil,
+			).ForAttempt(core.AttemptScope{AccountID: account, Mode: "native"})
+		},
+		callCount: func() int64 { return int64(connector.CallCount()) },
 		close: func() {
 			if err := connector.Close(context.Background()); err != nil {
 				t.Errorf("close connector: %v", err)
@@ -154,7 +543,16 @@ func scriptedFixture(t *testing.T) fixture {
 
 func runBaseline(fx fixture) error {
 	ctx := context.Background()
-	result, gatewayErr := fx.connector.Execute(ctx, fx.request, fx.scope, fx.services)
+	if fx.init != nil {
+		if err := fx.init(ctx); err != nil {
+			return err
+		}
+	}
+	var services core.InvocationServices
+	if fx.services != nil {
+		services = fx.services()
+	}
+	result, gatewayErr := fx.connector.Execute(ctx, fx.request, fx.scope, services)
 	if gatewayErr != nil {
 		return gatewayErr
 	}

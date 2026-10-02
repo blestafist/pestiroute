@@ -56,6 +56,7 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 	if c.closed || c.state == core.HealthReady {
 		return errors.New("Responses connector cannot be initialized in its current state")
 	}
+	c.state = core.HealthUnavailable
 	var cfg componentConfig
 	d := json.NewDecoder(strings.NewReader(string(config.Data)))
 	d.DisallowUnknownFields()
