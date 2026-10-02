@@ -84,6 +84,17 @@ func (c *Connector) Health(context.Context) core.Health {
 	return core.Health{State: c.state}
 }
 
+// HTTPDoer exposes the connector's already-configured single-target transport
+// for invocation-scoped runtime services.
+func (c *Connector) HTTPDoer() core.HTTPDoer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.transport == nil || c.state != core.HealthReady {
+		return nil
+	}
+	return c.transport.client
+}
+
 func (c *Connector) Capabilities(_ context.Context, scope core.CapabilityScope) core.CapabilityResult {
 	c.mu.Lock()
 	defer c.mu.Unlock()

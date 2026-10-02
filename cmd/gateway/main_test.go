@@ -1580,6 +1580,112 @@ func TestTopologyConfig(t *testing.T) {
 	}
 }
 
+func TestConfiguredRoutesComposeFixedAndSSE(t *testing.T) {
+	const credentialA, credentialB = "synthetic-route-a", "synthetic-route-b"
+	t.Setenv("PESTIROUTE_ROUTE_A", credentialA)
+	t.Setenv("PESTIROUTE_ROUTE_B", credentialB)
+	fixed := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"fixed":true}`)})
+	defer fixed.Close()
+	stream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")})
+	defer stream.Close()
+	c := config{Components: []topologyComponent{
+		{ID: "adapter", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
+		{ID: "fixed", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector, Endpoint: fixed.URL + "/v1/responses", CredentialEnv: "PESTIROUTE_ROUTE_A", MaxBodyBytes: 4096, MaxHeaderBytes: 4096, ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "2s", IdleTimeout: "5s"},
+		{ID: "stream", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector, Endpoint: stream.URL + "/v1/responses", CredentialEnv: "PESTIROUTE_ROUTE_B", MaxBodyBytes: 4096, MaxHeaderBytes: 4096, ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "2s", IdleTimeout: "5s"},
+	}, Routes: []topologyRoute{
+		{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "fixed-model", Account: "account-a", Adapter: "adapter", Connector: "fixed"},
+		{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: "account-b", Adapter: "adapter", Connector: "stream"},
+	}}
+	var ready, draining atomic.Bool
+	h, closeComponents, err := composeHandler(c, &ready, &draining, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeComponents()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	for _, tc := range []struct {
+		model     string
+		streaming bool
+		upstream  *fakeupstream.Server
+		wantType  string
+		wantBody  string
+	}{
+		{"fixed-model", false, fixed, "application/json", `{"fixed":true}`},
+		{"gpt-5.4-mini", true, stream, "text/event-stream", "event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"},
+	} {
+		body := `{"model":"` + tc.model + `","stream":true}`
+		if !tc.streaming {
+			body = `{"model":"` + tc.model + `"}`
+		}
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		responseBody, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), tc.wantType) || string(responseBody) != tc.wantBody {
+			t.Fatalf("%s: status=%d type=%q body=%q read=%v", tc.model, resp.StatusCode, resp.Header.Get("Content-Type"), responseBody, readErr)
+		}
+		captured := <-tc.upstream.Requests
+		wantCredential := credentialA
+		if tc.streaming {
+			wantCredential = credentialB
+		}
+		if string(captured.Header.Get("Authorization")) != "Bearer "+wantCredential {
+			t.Fatalf("wrong route credential: %q", captured.Header.Get("Authorization"))
+		}
+	}
+}
+
+func TestCompositionFailureDoesNotMarkReady(t *testing.T) {
+	var ready, draining atomic.Bool
+	c := config{Components: []topologyComponent{
+		{ID: "adapter", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
+		{ID: "connector", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector, Endpoint: "", CredentialEnv: "unused", MaxBodyBytes: 1024, MaxHeaderBytes: 1024, ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "1s", IdleTimeout: "1s"},
+	}, Routes: []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: "account", Adapter: "adapter", Connector: "connector"}}}
+	adapterComponent := &lifecycleStub{kind: core.ComponentAdapter}
+	connectorComponent := &lifecycleStub{kind: core.ComponentConnector, initErr: fmt.Errorf("synthetic startup failure")}
+	_, _, err := composeHandlerWithFactory(c, &ready, &draining, nil, func(item topologyComponent) core.Component {
+		if item.Kind == core.ComponentAdapter {
+			return adapterComponent
+		}
+		return connectorComponent
+	})
+	if err == nil {
+		t.Fatal("connector initialization unexpectedly succeeded")
+	}
+	if ready.Load() {
+		t.Fatal("failed startup marked gateway ready")
+	}
+	if adapterComponent.closed != 1 || connectorComponent.closed != 1 {
+		t.Fatalf("partial startup cleanup: adapter closes=%d connector closes=%d", adapterComponent.closed, connectorComponent.closed)
+	}
+}
+
+type lifecycleStub struct {
+	kind    core.ComponentKind
+	initErr error
+	closed  int
+}
+
+func (s *lifecycleStub) Descriptor() core.Descriptor {
+	d := core.Descriptor{ID: "test", Kind: s.kind, ImplementationVersion: "1", APIVersions: []core.APIVersion{{Major: 1}}, Protocols: []string{responsesProtocol}}
+	if s.kind == core.ComponentConnector {
+		d.ConnectorType = "api"
+		d.AuthMethods = []string{"bearer"}
+	}
+	return d
+}
+func (s *lifecycleStub) Init(context.Context, core.ComponentConfig) error { return s.initErr }
+func (*lifecycleStub) Health(context.Context) core.Health {
+	return core.Health{State: core.HealthReady}
+}
+func (*lifecycleStub) Capabilities(context.Context, core.CapabilityScope) core.CapabilityResult {
+	return core.CapabilityResult{}
+}
+func (s *lifecycleStub) Close(context.Context) error { s.closed++; return nil }
+
 func TestProbes(t *testing.T) {
 	var ready atomic.Bool
 	srv := &http.Server{Handler: probes(&ready)}
@@ -2116,38 +2222,6 @@ func TestResponsesReasoningSSEIsDeliveredBeforeUpstreamCompletion(t *testing.T) 
 	remaining, err := io.ReadAll(resp.Body)
 	if err != nil || !bytes.Equal(remaining, last) {
 		t.Fatalf("terminal SSE got=%q err=%v", remaining, err)
-	}
-}
-
-func TestResponsesToolCapabilitiesAreScopedToVerifiedTargets(t *testing.T) {
-	for _, tc := range []struct {
-		name, endpoint string
-		wantSupported  bool
-	}{
-		{"verified public endpoint", "https://api.openai.com/v1/responses", true},
-		{"loopback fixture", "http://127.0.0.1:12345/v1/responses", true},
-		{"loopback wrong path", "http://127.0.0.1:12345/unverified", false},
-		{"other host", "https://unverified.invalid/v1/responses", false},
-		{"other path", "https://api.openai.com/other/v1/responses", false},
-		{"http public endpoint", "http://api.openai.com/v1/responses", false},
-		{"explicit port", "https://api.openai.com:443/v1/responses", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			adapterCaps, connectorCaps := dispatchCapabilities(tc.endpoint)
-			for label, capabilities := range map[string]map[core.Capability]core.CapabilityState{"adapter": adapterCaps, "connector": connectorCaps} {
-				if tc.wantSupported && (capabilities["llm.tools"] != core.Supported || capabilities["llm.streaming"] != core.Supported || capabilities["llm.reasoning"] != core.Supported) {
-					t.Errorf("%s capabilities=%v, want supported tool/stream/reasoning", label, capabilities)
-				}
-				if !tc.wantSupported && len(capabilities) != 0 {
-					t.Errorf("%s capabilities=%v, want no declared support", label, capabilities)
-				}
-				for _, unproven := range []core.Capability{"llm.tools.parallel"} {
-					if _, declared := capabilities[unproven]; declared {
-						t.Errorf("%s advertised unproven %s=%s", label, unproven, capabilities[unproven])
-					}
-				}
-			}
-		})
 	}
 }
 

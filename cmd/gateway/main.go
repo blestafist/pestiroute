@@ -411,46 +411,10 @@ func probes(ready *atomic.Bool) *http.ServeMux {
 	return mux
 }
 
-type connectorTarget struct {
-	connector  core.Connector
-	credential secret
-}
-
-func (t connectorTarget) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope) (core.ExecutionResponse, *core.GatewayError) {
-	services := core.InvocationServices{Credentials: attemptCredential{value: []byte(t.credential)}}
-	return t.connector.Execute(ctx, req, scope, services)
-}
-
-type attemptCredential struct{ value []byte }
-
-func (c attemptCredential) Get(ctx context.Context, name string) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if name != "bearer" || len(c.value) == 0 {
-		return nil, core.ErrCredentialUnavailable
-	}
-	return append([]byte(nil), c.value...), nil
-}
-
 type responsesInit struct {
 	Transport connector.Config `json:"transport"`
 	Model     string           `json:"model"`
 	AccountID string           `json:"account_id"`
-}
-
-func dispatchCapabilities(endpoint string) (map[core.Capability]core.CapabilityState, map[core.Capability]core.CapabilityState) {
-	target, err := url.Parse(endpoint)
-	if err != nil || target == nil {
-		return nil, nil
-	}
-	verifiedTarget := target.Scheme == "https" && target.Host == "api.openai.com" && target.EscapedPath() == "/v1/responses"
-	fixtureTarget := target.Scheme == "http" && isLoopbackHost(target.Hostname()) && target.EscapedPath() == "/v1/responses"
-	if !verifiedTarget && !fixtureTarget {
-		return nil, nil
-	}
-	capabilities := map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported, "llm.tools": core.Supported, "llm.reasoning": core.Supported}
-	return capabilities, capabilities
 }
 
 func handler(c config, ready *atomic.Bool) (http.Handler, func()) {
@@ -464,39 +428,221 @@ func handlerWithFinalize(c config, ready *atomic.Bool, finalize func(core.Attemp
 
 func handlerWithLifecycle(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult)) (http.Handler, func()) {
 	mux := probes(ready)
-	if c.UpstreamEndpoint == "" {
+	h, closeComponents, err := composeHandler(c, ready, draining, finalize)
+	if err != nil {
 		return mux, func() {}
 	}
-	connect, _ := time.ParseDuration(c.ConnectTimeout)
-	tlsHandshake, _ := time.ParseDuration(c.TLSHandshakeTimeout)
-	responseHeader, _ := time.ParseDuration(c.ResponseHeaderTimeout)
-	streamIdle, _ := time.ParseDuration(c.StreamIdleTimeout)
-	implementation := connector.NewConnector()
-	configBytes, _ := json.Marshal(responsesInit{Transport: connector.Config{
-		Endpoint: c.UpstreamEndpoint, ConnectTimeout: connect,
-		TLSHandshakeTimeout: tlsHandshake, ResponseHeaderTimeout: responseHeader, StreamIdleTimeout: streamIdle,
-	}, Model: "gpt-5.4-mini", AccountID: c.UpstreamCredentialEnv})
-	if err := implementation.Init(context.Background(), core.ComponentConfig{Data: configBytes}); err != nil {
-		return mux, func() { _ = implementation.Close(context.Background()) }
+	return h, closeComponents
+}
+
+func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult)) (http.Handler, func(), error) {
+	return composeHandlerWithFactory(c, ready, draining, finalize, func(item topologyComponent) core.Component {
+		if item.Kind == core.ComponentAdapter {
+			return adapter.NewAdapter()
+		}
+		return connector.NewConnector()
+	})
+}
+
+func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component) (http.Handler, func(), error) {
+	mux := probes(ready)
+	legacy := len(c.Components) == 0 && c.UpstreamEndpoint != ""
+	if legacy {
+		c.Components = legacyComponents(c)
+		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector"}}
 	}
-	dispatch := &core.Dispatcher{Target: connectorTarget{connector: implementation, credential: c.credential}, AccountID: c.UpstreamCredentialEnv, Finalize: finalize}
-	// M1-024 verified streaming, reasoning items and single-tool continuation
-	// for the sole configured account/model. Parallel tools remain unknown.
-	dispatch.Adapter, dispatch.Connector = dispatchCapabilities(c.UpstreamEndpoint)
+	if len(c.Components) == 0 {
+		return mux, func() {}, nil
+	}
+	versions := map[core.ComponentKind]core.APIVersion{
+		core.ComponentAdapter: {Major: 1}, core.ComponentConnector: {Major: 1},
+	}
+	registry, err := core.NewRegistry(versions, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	closeComponents := func() { _ = registry.Close(context.Background()) }
+	componentConfigs := make(map[core.InstanceID]core.ComponentConfig, len(c.Components))
+	connectorRoutes := make(map[core.InstanceID]topologyRoute)
+	accountConnectors := make(map[string]core.InstanceID)
+	for _, route := range c.Routes {
+		if previous, ok := accountConnectors[route.Account]; ok && previous != route.Connector {
+			closeComponents()
+			return nil, nil, fmt.Errorf("account %q maps to multiple connectors", route.Account)
+		}
+		accountConnectors[route.Account] = route.Connector
+		if prev, ok := connectorRoutes[route.Connector]; ok && (prev.Account != route.Account || prev.Model != route.Model) {
+			closeComponents()
+			return nil, nil, fmt.Errorf("connector %q cannot serve multiple account/model scopes", route.Connector)
+		}
+		connectorRoutes[route.Connector] = route
+	}
+	maxBody, maxHeader := c.MaxRequestBodyBytes, c.MaxRequestHeaderBytes
+	for _, item := range c.Components {
+		if item.Kind == core.ComponentConnector {
+			if item.MaxBodyBytes > maxBody {
+				maxBody = item.MaxBodyBytes
+			}
+			if item.MaxHeaderBytes > maxHeader {
+				maxHeader = item.MaxHeaderBytes
+			}
+		}
+	}
+	for _, item := range c.Components {
+		instance := construct(item)
+		var cfg any
+		if item.Kind == core.ComponentAdapter {
+			cfg = adapterConfig{MaxBodyBytes: maxBody, MaxHeaderBytes: maxHeader}
+		} else {
+			connect, _ := time.ParseDuration(item.ConnectTimeout)
+			tlsHandshake, _ := time.ParseDuration(item.TLSTimeout)
+			responseHeader, _ := time.ParseDuration(item.HeaderTimeout)
+			streamIdle, _ := time.ParseDuration(item.IdleTimeout)
+			route := connectorRoutes[item.ID]
+			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(responsesInit{Transport: connector.Config{
+				Endpoint: item.Endpoint, ConnectTimeout: connect, TLSHandshakeTimeout: tlsHandshake,
+				ResponseHeaderTimeout: responseHeader, StreamIdleTimeout: streamIdle,
+			}, Model: route.Model, AccountID: route.Account})}
+		}
+		if err := registry.Register(item.ID, instance, item.Kind); err != nil {
+			closeComponents()
+			return nil, nil, err
+		}
+		if item.Kind == core.ComponentAdapter {
+			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(cfg)}
+		}
+	}
+	routes := make([]core.Route, 0, len(c.Routes))
+	credentials := make(map[string]map[string]string)
+	models := make(map[string]topologyRoute)
+	for _, item := range c.Routes {
+		if previous, ok := models[item.Model]; ok && previous.Account != item.Account {
+			closeComponents()
+			return nil, nil, fmt.Errorf("model %q has ambiguous account routes", item.Model)
+		}
+		models[item.Model] = item
+		routes = append(routes, core.Route{Identity: core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: item.Protocol, Mode: item.Mode, Model: item.Model}, AccountID: item.Account}, Adapter: item.Adapter, Connector: item.Connector})
+		credentials[item.Account] = map[string]string{"bearer": credentialEnv(c, item.Connector)}
+	}
+	table, err := core.NewRouteTable(routes, registry)
+	if err != nil {
+		closeComponents()
+		return nil, nil, err
+	}
+	for _, item := range c.Components {
+		if err := registry.Init(context.Background(), item.ID, componentConfigs[item.ID]); err != nil {
+			closeComponents()
+			return nil, nil, fmt.Errorf("initialize component %q: %w", item.ID, err)
+		}
+	}
+	transports := make(map[string]core.HTTPDoer, len(credentials))
+	for _, route := range c.Routes {
+		component, _, ok := registry.Admit(context.Background(), route.Connector)
+		if !ok {
+			closeComponents()
+			return nil, nil, fmt.Errorf("connector %q is unavailable", route.Connector)
+		}
+		managed, ok := component.(interface{ HTTPDoer() core.HTTPDoer })
+		if !ok {
+			closeComponents()
+			return nil, nil, fmt.Errorf("connector %q has no scoped transport", route.Connector)
+		}
+		transports[route.Account] = managed.HTTPDoer()
+	}
+	var services interface {
+		ForAttempt(core.AttemptScope) core.InvocationServices
+	} = core.NewEnvironmentServices(credentials, transports, nil)
+	if legacy {
+		services = fixedLegacyServices{account: c.UpstreamCredentialEnv, credential: []byte(c.credential), transport: transports[c.UpstreamCredentialEnv]}
+	}
+	dispatchers := make(map[string]*core.Dispatcher, len(models))
+	protocolAdapters := make(map[string]core.ProtocolAdapter, len(models))
+	for _, route := range c.Routes {
+		component, _, ok := registry.Admit(context.Background(), route.Adapter)
+		if !ok {
+			closeComponents()
+			return nil, nil, fmt.Errorf("adapter %q is unavailable", route.Adapter)
+		}
+		protocolAdapters[route.Model] = component.(core.ProtocolAdapter)
+		dispatchers[route.Model] = &core.Dispatcher{Routes: table, Services: services, AccountID: route.Account, Finalize: finalize}
+	}
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
 		if draining.Load() {
 			http.Error(w, "gateway is shutting down", http.StatusServiceUnavailable)
 			return
 		}
-		req, gatewayErr := adapter.Decode(r, c.MaxRequestBodyBytes, c.MaxRequestHeaderBytes)
+		protocolAdapter := firstAdapter(protocolAdapters)
+		req, gatewayErr := protocolAdapter.Decode(r.Context(), core.ClientRequest{Transport: r})
 		if gatewayErr != nil {
-			_ = adapter.Encode(w, r, core.ExecutionResponse{}, gatewayErr)
+			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
 			return
 		}
+		dispatch := dispatchers[req.Model]
+		if dispatch == nil {
+			gatewayErr = &core.GatewayError{Code: "unsupported_target", Category: core.CategoryUnsupportedFeature, Message: "Unsupported execution target"}
+			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
+			return
+		}
+		protocolAdapter = protocolAdapters[req.Model]
 		resp, gatewayErr := dispatch.Execute(r.Context(), req)
-		_ = adapter.Encode(w, r, resp, gatewayErr)
+		_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, resp)
 	})
-	return mux, func() { _ = implementation.Close(context.Background()) }
+	return mux, closeComponents, nil
+}
+
+type fixedLegacyServices struct {
+	account    string
+	credential []byte
+	transport  core.HTTPDoer
+}
+
+func (s fixedLegacyServices) ForAttempt(scope core.AttemptScope) core.InvocationServices {
+	var access core.CredentialAccess = fixedLegacyCredential(s.credential)
+	if scope.AccountID != s.account {
+		access = unavailableCredential{}
+	}
+	return core.InvocationServices{Credentials: access, Transport: s.transport}
+}
+
+type fixedLegacyCredential []byte
+
+func (c fixedLegacyCredential) Get(ctx context.Context, name string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if name != "bearer" || len(c) == 0 {
+		return nil, core.ErrCredentialUnavailable
+	}
+	return append([]byte(nil), c...), nil
+}
+
+type unavailableCredential struct{}
+
+func (unavailableCredential) Get(context.Context, string) ([]byte, error) {
+	return nil, core.ErrCredentialUnavailable
+}
+
+func firstAdapter(adapters map[string]core.ProtocolAdapter) core.ProtocolAdapter {
+	for _, value := range adapters {
+		return value
+	}
+	return nil
+}
+
+type adapterConfig struct {
+	MaxBodyBytes   int64 `json:"max_body_bytes"`
+	MaxHeaderBytes int64 `json:"max_header_bytes"`
+}
+
+func mustJSON(value any) []byte { data, _ := json.Marshal(value); return data }
+
+func credentialEnv(c config, id core.InstanceID) string {
+	for _, item := range c.Components {
+		if item.ID == id {
+			return item.CredentialEnv
+		}
+	}
+	return ""
 }
 
 func run(ctx context.Context, args []string) error {
@@ -504,14 +650,17 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	var ready atomic.Bool
+	var draining atomic.Bool
+	h, closeTransport, err := composeHandler(c, &ready, &draining, nil)
+	if err != nil {
+		return fmt.Errorf("initialize gateway: %w", err)
+	}
+	defer closeTransport()
 	listener, err := net.Listen("tcp", c.Listen)
 	if err != nil {
 		return fmt.Errorf("listen %q: %w", c.Listen, err)
 	}
-	var ready atomic.Bool
-	var draining atomic.Bool
-	h, closeTransport := handlerWithLifecycle(c, &ready, &draining, nil)
-	defer closeTransport()
 	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
 	done := make(chan error, 1)
 	go func() {
