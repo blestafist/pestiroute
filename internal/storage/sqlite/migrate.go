@@ -20,10 +20,34 @@ var schemaMigrations = []migration{{
 		version INTEGER PRIMARY KEY,
 		applied_at TEXT NOT NULL
 	)`},
+}, {
+	version: 2,
+	statements: []string{
+		`CREATE TABLE accounts (
+			id TEXT PRIMARY KEY,
+			connector TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE credentials (
+			id TEXT PRIMARY KEY,
+			account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+			format_version INTEGER NOT NULL,
+			key_version TEXT NOT NULL,
+			nonce BLOB NOT NULL,
+			ciphertext BLOB NOT NULL,
+			expires_at INTEGER,
+			revision INTEGER NOT NULL CHECK (revision >= 1),
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			UNIQUE (account_id, id)
+		)`,
+		`CREATE INDEX idx_credentials_account_id ON credentials(account_id)`,
+	},
 }}
 
-// Migrate applies every pending schema migration atomically. The baseline
-// version creates only the journal; entity DDL belongs to later storage tasks.
+// Migrate applies every pending schema migration atomically.
 func Migrate(ctx context.Context, db *sql.DB) error {
 	return migrate(ctx, db, schemaMigrations)
 }
