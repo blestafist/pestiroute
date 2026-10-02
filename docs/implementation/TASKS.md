@@ -149,3 +149,100 @@ Groups describe outcomes, not assignment bundles or status. The dependency colum
 | [M2-032](tasks/M2-032.md) | DONE | OpenCode subagent (ses_f03e62dc6ffelKayR5L0AuL2OX) | M2-020, M2-022 | Enforce provider-agnostic Core and registry dependencies | Recursive production Core package imports verified standard-library-only; AST guards reject provider branching and universal LLM types; negative fixtures verified | `go test -race -count=1 ./internal/core/...` and `./scripts/check.sh`; see [evidence](tasks/M2-032.md#completion-evidence) |
 | [M2-033](tasks/M2-033.md) | DONE | GPT-6 Luna / OpenCode reviewer (ses_f03d48f49ffeKebU4dwtI7OL8j) | M2-023, M2-025, M2-026, M2-028, M2-030, M2-031, M2-032 | Document runnable M2 topology and verification | Local multi-route and legacy topology procedure, configuration boundary documentation, and offline regression commands verified | [Direct proof](tasks/M2-033.md#verification) and `./scripts/check.sh`; see [evidence](tasks/M2-033.md#completion-evidence) |
 | [M2-034](tasks/M2-034.md) | DONE | Codex review follow-up | M2-024, M2-029, M2-033 | Audit M2 acceptance and prepare the M3 handoff | All M2 gates mapped to executed evidence; scoped route admission and terminal EOF fixes verified; M3 storage planning handoff prepared | [Direct proof](tasks/M2-034.md#verification) and `./scripts/check.sh` |
+
+## M3 — Access, Accounts and Accounting
+
+These 46 cards plan [M3](ROADMAP.md#m3--access-accounts-and-accounting) from the completed M2 merge `f33a507` on `dev-m3`. **Assign one READY card per worker session, never the milestone, a group or a dependency chain.** M3-001 is READY because M2-034 is DONE and its design-only check is concrete. All other cards are DRAFT: the Planner must inspect actual prerequisite results, settle relevant decisions and refine direct checks before promotion. No M3 implementation is claimed.
+
+This is the user's explicitly requested full current-milestone breakdown. It preserves just-ahead execution: first settle the storage binding and driver, then access/accounting/configuration semantics. Pending package names, schemas, test suites and CLI syntax are candidates, not independent specifications. Do not copy complete contracts into cards or read the whole milestone in each session. Use CURRENT, the selected row/card, its exact linked sections and affected source. Specifications/ADRs are worker-owned deliverables where the Planner's edit permissions do not cover them.
+
+### Milestone boundary and observed seams
+
+The accepted v1 contract stays authoritative. Production Core currently permits only standard-library imports; inject small runtime-owned interfaces and wire SQLite, YAML and secret implementations at the composition root. Keep `RawPayload`, incremental `Head / Body / Complete / EOF`, Connector authentication/estimation and scoped credentials. The in-memory `TryRecord` observation ring and void `Finalize` callback cannot provide durable write acknowledgement by themselves.
+
+M3 covers a single gateway process with persistent SQLite state and a concurrent local administrative CLI, strict versioned protected configuration, encrypted credentials and auth temporary state, virtual keys/policies, exact native model/connector restrictions, RPM/TPM admission, per-attempt reservations/reconciliation, restart recovery and explicit bounded safe fallback. OAuth runtime infrastructure is verified with a scripted Connector; real provider/device/browser flows and account-specific refresh behavior remain M5.1. Existing JSON startup remains an explicit loopback development compatibility path; protected configuration never silently downgrades to it.
+
+Fallback is opt-in and ordered. It rechecks authorization, enabled account, exact capability scope, selected-target body/header limits, estimation and available token budget. Only retryable, explicitly safe, uncommitted failures may advance within attempt/deadline bounds. Missing/unknown affinity evidence denies cross-target fallback; known stateful requests stay on a singleton target until affinity is implemented. Core never parses provider errors, Responses state fields or SSE. RPM counts the accepted client request once; each actual Execute owns a distinct attempt and reservation.
+
+No new protocol/translation Connector, model aliases, load balancing, hot reload, admin HTTP/UI, pricing/cost budgets, secret-key rotation system, production-data migration, external IPC or real-provider smoke is included. 9Gateway provides behavioral lessons through [its source map](../references/9gateway-migration.md); source copying still requires resolved provenance/license and validation. New dependencies require explicit cache/CI preparation before the existing offline checks, not network access hidden inside the check script.
+
+### Execution groups
+
+| Group | Cards | Bounded result |
+| --- | --- | --- |
+| Storage/runtime/configuration decisions | M3-001–M3-004 | Reviewed concrete bindings and driver evidence before dependent code |
+| Migrations and encrypted storage | M3-005–M3-010 | Small migration/repository boundaries and restart-safe credentials |
+| Accounts, keys, policies, CLI and ingress | M3-011–M3-020 | Local management, selected credentials, protected authorization and strict configuration |
+| Durable admission and settlement | M3-021–M3-026 | One request identity, per-attempt reservations, acknowledged intent and idempotent charges |
+| Dispatch, recovery and assembled startup | M3-027–M3-032 | Accounted protected execution, persistence failure handling and crash/restart proof |
+| Provider-neutral auth infrastructure | M3-033–M3-036 | Protected sessions and serialized refresh proven with scripted auth |
+| Safe bounded fallback | M3-037–M3-041 | Authorized ordered targets, conservative affinity gate and per-attempt accounting |
+| Acceptance, operations and closure | M3-042–M3-046 | Access/limit races, durable stream regressions, local recovery/backup and gate audit |
+
+Groups describe outcomes, not assignment bundles or readiness. The dependency column alone owns prerequisites. Default to one writer; do not edit shared migrations, dispatch, startup or registry concurrently. Each implementation card includes its own direct tests; verification cards add cross-boundary/race/crash evidence. If a card expands, preserve its ID and register a bounded follow-up.
+
+### Acceptance coverage
+
+| M3 outcome / risk | Direct delivery and proof |
+| --- | --- |
+| Schema/migrations and encrypted credentials survive restart; master key stays external | M3-002, M3-005–M3-010, M3-015, M3-017, M3-030, M3-032 |
+| Revoked/unauthorized keys, models, connectors and accounts never reach upstream | M3-012–M3-013, M3-016, M3-018–M3-019, M3-037, M3-042 |
+| Concurrent RPM/TPM admission cannot bypass limits or partially charge rejections | M3-022–M3-025, M3-042 |
+| Usage is nullable, not double-counted, and settled once including fallback | M3-008, M3-021, M3-026–M3-027, M3-031, M3-040 |
+| Interrupted/uncertain work recovers conservatively without automatic replay | M3-025, M3-028–M3-032, M3-043 |
+| Fallback obeys policy, safe delivery, commit, affinity and attempt/deadline limits | M3-004, M3-037–M3-041 |
+| Runtime auth owns protected state and serializes refresh without SQL/network overlap | M3-033–M3-036 |
+| Native streaming, opacity, cancellation and Core boundaries remain intact | M3-027–M3-028, M3-043–M3-044 |
+| Setup, local administration, WAL-safe backup/restore and final acceptance are reproducible | M3-014–M3-016, M3-031, M3-045–M3-046 |
+
+This table maps outcomes, not test results. M3-046 may close the milestone only when all gates have applicable executed evidence on the final source; unknown/missing proof remains a blocker.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M3-001](tasks/M3-001.md) | READY | — | M2-034 | Fix the M3 storage and crash-consistency design | — | [Direct proof](tasks/M3-001.md#verification) and `git diff --check` |
+| [M3-002](tasks/M3-002.md) | DRAFT | — | M3-001 | Validate and pin the SQLite driver | — | [Direct proof](tasks/M3-002.md#verification) |
+| [M3-003](tasks/M3-003.md) | DRAFT | — | M3-001, M3-002 | Bind access, admission and durable accounting | — | [Direct proof](tasks/M3-003.md#verification) |
+| [M3-004](tasks/M3-004.md) | DRAFT | — | M3-003 | Specify M3 configuration and retry admission | — | [Direct proof](tasks/M3-004.md#verification) |
+| [M3-005](tasks/M3-005.md) | DRAFT | — | M3-002 | Implement transactional schema migrations | — | [Direct proof](tasks/M3-005.md#verification) |
+| [M3-006](tasks/M3-006.md) | DRAFT | — | M3-001, M3-005 | Create account and credential schema | — | [Direct proof](tasks/M3-006.md#verification) |
+| [M3-007](tasks/M3-007.md) | DRAFT | — | M3-003, M3-005 | Create virtual-key and policy schema | — | [Direct proof](tasks/M3-007.md#verification) |
+| [M3-008](tasks/M3-008.md) | DRAFT | — | M3-003, M3-005 | Create request, attempt and reservation schema | — | [Direct proof](tasks/M3-008.md#verification) |
+| [M3-009](tasks/M3-009.md) | DRAFT | — | M3-001 | Load the master key and encrypt credential envelopes | — | [Direct proof](tasks/M3-009.md#verification) |
+| [M3-010](tasks/M3-010.md) | DRAFT | — | M3-006, M3-009 | Persist encrypted credentials with revision checks | — | [Direct proof](tasks/M3-010.md#verification) |
+| [M3-011](tasks/M3-011.md) | DRAFT | — | M3-006, M3-010 | Implement persistent account lifecycle | — | [Direct proof](tasks/M3-011.md#verification) |
+| [M3-012](tasks/M3-012.md) | DRAFT | — | M3-007 | Generate, verify and revoke persistent virtual keys | — | [Direct proof](tasks/M3-012.md#verification) |
+| [M3-013](tasks/M3-013.md) | DRAFT | — | M3-007, M3-003 | Validate and persist key policies | — | [Direct proof](tasks/M3-013.md#verification) |
+| [M3-014](tasks/M3-014.md) | DRAFT | — | M3-005, M3-009 | Add the local administration command boundary | — | [Direct proof](tasks/M3-014.md#verification) |
+| [M3-015](tasks/M3-015.md) | DRAFT | — | M3-010, M3-011, M3-014 | Add credential and account administration commands | — | [Direct proof](tasks/M3-015.md#verification) |
+| [M3-016](tasks/M3-016.md) | DRAFT | — | M3-012, M3-013, M3-014 | Add virtual-key and policy administration commands | — | [Direct proof](tasks/M3-016.md#verification) |
+| [M3-017](tasks/M3-017.md) | DRAFT | — | M3-003, M3-010, M3-011 | Supply persistent credentials to selected invocations | — | [Direct proof](tasks/M3-017.md#verification) |
+| [M3-018](tasks/M3-018.md) | DRAFT | — | M3-003, M3-012, M3-013 | Authenticate protected inference requests | — | [Direct proof](tasks/M3-018.md#verification) |
+| [M3-019](tasks/M3-019.md) | DRAFT | — | M3-011, M3-013, M3-018 | Authorize every selected model, connector and account | — | [Direct proof](tasks/M3-019.md#verification) |
+| [M3-020](tasks/M3-020.md) | DRAFT | — | M3-004, M3-005 | Load strict versioned M3 YAML | — | [Direct proof](tasks/M3-020.md#verification) |
+| [M3-021](tasks/M3-021.md) | DRAFT | — | M3-008, M3-003 | Persist request and attempt lifecycle records | — | [Direct proof](tasks/M3-021.md#verification) |
+| [M3-022](tasks/M3-022.md) | DRAFT | — | M3-003 | Define deterministic admission window arithmetic | — | [Direct proof](tasks/M3-022.md#verification) |
+| [M3-023](tasks/M3-023.md) | DRAFT | — | M3-003, M3-017 | Estimate attempt budgets through Connectors | — | [Direct proof](tasks/M3-023.md#verification) |
+| [M3-024](tasks/M3-024.md) | DRAFT | — | M3-019, M3-021, M3-022, M3-023 | Atomically admit requests and reserve attempt tokens | — | [Direct proof](tasks/M3-024.md#verification) |
+| [M3-025](tasks/M3-025.md) | DRAFT | — | M3-021, M3-024 | Persist dispatch intent before upstream execution | — | [Direct proof](tasks/M3-025.md#verification) |
+| [M3-026](tasks/M3-026.md) | DRAFT | — | M3-024, M3-025 | Reconcile terminal usage and reservations once | — | [Direct proof](tasks/M3-026.md#verification) |
+| [M3-027](tasks/M3-027.md) | DRAFT | — | M3-017, M3-019, M3-025, M3-026 | Wire admission and durable accounting into dispatch | — | [Direct proof](tasks/M3-027.md#verification) |
+| [M3-028](tasks/M3-028.md) | DRAFT | — | M3-027 | Handle accounting storage failures without replay | — | [Direct proof](tasks/M3-028.md#verification) |
+| [M3-029](tasks/M3-029.md) | DRAFT | — | M3-026, M3-028 | Recover interrupted attempts and limit charges | — | [Direct proof](tasks/M3-029.md#verification) |
+| [M3-030](tasks/M3-030.md) | DRAFT | — | M3-015, M3-016, M3-018, M3-020, M3-029 | Compose protected M3 startup and shutdown | — | [Direct proof](tasks/M3-030.md#verification) |
+| [M3-031](tasks/M3-031.md) | DRAFT | — | M3-014, M3-021, M3-026 | Expose durable usage through the local CLI | — | [Direct proof](tasks/M3-031.md#verification) |
+| [M3-032](tasks/M3-032.md) | DRAFT | — | M3-030, M3-031 | Prove abrupt-restart accounting end to end | — | [Direct proof](tasks/M3-032.md#verification) |
+| [M3-033](tasks/M3-033.md) | DRAFT | — | M3-001, M3-003, M3-017 | Specify the provider-neutral authentication runtime binding | — | [Direct proof](tasks/M3-033.md#verification) |
+| [M3-034](tasks/M3-034.md) | DRAFT | — | M3-006, M3-009, M3-033 | Persist protected authentication sessions | — | [Direct proof](tasks/M3-034.md#verification) |
+| [M3-035](tasks/M3-035.md) | DRAFT | — | M3-011, M3-017, M3-033, M3-034 | Coordinate authentication and serialize account refresh | — | [Direct proof](tasks/M3-035.md#verification) |
+| [M3-036](tasks/M3-036.md) | DRAFT | — | M3-014, M3-035 | Exercise authentication through CLI with a scripted Connector | — | [Direct proof](tasks/M3-036.md#verification) |
+| [M3-037](tasks/M3-037.md) | DRAFT | — | M3-004, M3-019, M3-020 | Select ordered authorized fallback candidates | — | [Direct proof](tasks/M3-037.md#verification) |
+| [M3-038](tasks/M3-038.md) | DRAFT | — | M3-037 | Implement the bounded safe-retry decision | — | [Direct proof](tasks/M3-038.md#verification) |
+| [M3-039](tasks/M3-039.md) | DRAFT | — | M3-028, M3-030, M3-037, M3-038 | Execute bounded fallback with durable attempt accounting | — | [Direct proof](tasks/M3-039.md#verification) |
+| [M3-040](tasks/M3-040.md) | DRAFT | — | M3-026, M3-039 | Prove fallback charging and finalization under races | — | [Direct proof](tasks/M3-040.md#verification) |
+| [M3-041](tasks/M3-041.md) | DRAFT | — | M3-037, M3-039 | Prove stateful requests cannot cross fallback scopes | — | [Direct proof](tasks/M3-041.md#verification) |
+| [M3-042](tasks/M3-042.md) | DRAFT | — | M3-016, M3-030 | Prove access revocation and concurrent admission end to end | — | [Direct proof](tasks/M3-042.md#verification) |
+| [M3-043](tasks/M3-043.md) | DRAFT | — | M3-028, M3-032, M3-040, M3-042 | Verify cancellation and failure with durable accounting | — | [Direct proof](tasks/M3-043.md#verification) |
+| [M3-044](tasks/M3-044.md) | DRAFT | — | M3-036, M3-039, M3-041, M3-043 | Run protected native regressions and enforce boundaries | — | [Direct proof](tasks/M3-044.md#verification) |
+| [M3-045](tasks/M3-045.md) | DRAFT | — | M3-031, M3-032, M3-036, M3-040, M3-041, M3-042, M3-044 | Document runnable M3 setup and recovery operations | — | [Direct proof](tasks/M3-045.md#verification) |
+| [M3-046](tasks/M3-046.md) | DRAFT | — | M3-045 | Audit every M3 gate and prepare the M4 handoff | — | [Direct proof](tasks/M3-046.md#verification) |
+

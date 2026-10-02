@@ -10,9 +10,13 @@ The running gateway accepts legacy single-target and strict M2 topology JSON on 
 
 ## Immediate Focus
 
-Plan the first M3 storage slice against the existing `InvocationServices`, runtime-selected account/credential references, `AttemptResult` and nullable `UsageReport`. Define SQLite persistence/migrations, encrypted credential storage and master-key handling, idempotent attempt/usage writes and interrupted-attempt recovery. Keep database transactions out of network operations; prepare concrete worker cards only after these boundaries and checks are resolved. This is one planning action, not M3 implementation readiness or a speculative task chain.
+Execute the design-only [M3-001](tasks/M3-001.md), the sole READY row in the [46-card M3 plan](TASKS.md#m3--access-accounts-and-accounting). It fixes storage/schema ownership, acknowledged dispatch/terminal persistence, conservative crash recovery and master-key handling against the existing `InvocationServices`, `AttemptResult` and nullable `UsageReport`. Do not implement a dependency chain in one session or use the optional `TryRecord` observation sink as the durable ledger.
 
-[ROADMAP.md](ROADMAP.md#m3--access-accounts-and-accounting) owns M3 outcomes. SQLite, durable credentials/usage, virtual keys, admission limits, reservations/reconciliation, OAuth persistence/refresh and safe automatic fallback remain unimplemented. New protocol translation and IPC remain later milestones; the [M3 YAML schema](CONFIGURATION.md#proposed-yaml) is still draft.
+The plan starts from the M2 merge `f33a507` on `dev-m3`. After M3-001 is verified, the Planner refines the driver spike, access/accounting binding and configuration/retry binding from actual results before promoting their DRAFT cards. All remaining M3 cards stay DRAFT until prerequisites are DONE and package/check names are concrete. [ROADMAP](ROADMAP.md#m3--access-accounts-and-accounting) owns milestone outcomes; TASKS owns readiness and dependencies.
+
+SQLite, persistent accounts/credentials/usage, virtual keys, RPM/TPM reservations/reconciliation, recovery, protected YAML startup and bounded fallback are planned, not implemented. The [YAML example](CONFIGURATION.md#proposed-yaml) remains draft pending M3-004. OAuth runtime sessions/serialization use scripted validation in M3; real provider flows remain M5.1. Stateful cross-target affinity, protocol translation and IPC remain outside M3.
+
+Use the existing project agents, atomic cards, Context7, gopls and file/shell/Go checks. [The M3 tooling gate](TOOLING.md#m3-tooling-gate) recommends an optional local SQLite CLI; no new MCP/plugin is required. The old machine-local tool inventory has not been reverified here.
 
 ## Evidence Limits and Open Inputs
 
