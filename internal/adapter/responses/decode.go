@@ -26,6 +26,28 @@ func unsupported(message string) *core.GatewayError {
 	return &core.GatewayError{Code: "unsupported_feature", Category: core.CategoryUnsupportedFeature, Message: message}
 }
 
+// BearerToken extracts exactly one syntactically valid northbound bearer token.
+func BearerToken(r *http.Request) (string, bool) {
+	if r == nil || len(r.Header.Values("Authorization")) != 1 {
+		return "", false
+	}
+	value := r.Header.Get("Authorization")
+	if strings.ContainsAny(value, "\r\n") {
+		return "", false
+	}
+	parts := strings.Fields(value)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return "", false
+	}
+	for i := 0; i < len(parts[1]); i++ {
+		c := parts[1][i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-._~+/=", rune(c))) {
+			return "", false
+		}
+	}
+	return parts[1], true
+}
+
 // ValidateRequestLimits checks the selected route against the original HTTP
 // headers and the admitted opaque body size, without decoding the body again.
 func ValidateRequestLimits(r *http.Request, bodyBytes, maxBodyBytes, maxHeaderBytes int64) *core.GatewayError {

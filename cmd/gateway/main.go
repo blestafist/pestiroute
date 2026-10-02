@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -44,6 +45,8 @@ type config struct {
 	Components            []topologyComponent `json:"components,omitempty"`
 	Routes                []topologyRoute     `json:"routes,omitempty"`
 	Credentials           map[string]secret   `json:"-"`
+	keyStore              core.KeyStore
+	logger                *slog.Logger
 }
 
 type topologyComponent struct {
@@ -81,6 +84,8 @@ func (secret) GoString() string { return "[REDACTED]" }
 func (c config) String() string {
 	c.credential = ""
 	c.Credentials = nil
+	c.keyStore = nil
+	c.logger = nil
 	type view config
 	return fmt.Sprintf("%+v", view(c))
 }
@@ -502,6 +507,10 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		}
 		persistentDB, persistentKey = db, key
 	}
+	keyStore := c.keyStore
+	if keyStore == nil && persistentDB != nil {
+		keyStore = sqliteVirtualKeyStore{keys: sqlite.NewVirtualKeys(persistentDB)}
+	}
 	versions := map[core.ComponentKind]core.APIVersion{
 		core.ComponentAdapter: {Major: 1}, core.ComponentConnector: {Major: 1},
 	}
@@ -624,9 +633,9 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	}
 	var services interface {
 		ForAttempt(core.AttemptScope) core.InvocationServices
-	} = core.NewEnvironmentServices(credentials, transports, nil)
+	} = core.NewEnvironmentServices(credentials, transports, c.logger)
 	if persistentDB != nil {
-		services = core.NewPersistentServices(sqliteAccountReader{accounts: sqlite.NewAccounts(persistentDB)}, sqliteCredentialReader{credentials: sqlite.NewCredentials(persistentDB), key: persistentKey}, persistentRefs, transports, nil)
+		services = core.NewPersistentServices(sqliteAccountReader{accounts: sqlite.NewAccounts(persistentDB)}, sqliteCredentialReader{credentials: sqlite.NewCredentials(persistentDB), key: persistentKey}, persistentRefs, transports, c.logger)
 	}
 	if legacy {
 		services = fixedLegacyServices{account: c.UpstreamCredentialEnv, credential: []byte(c.credential), transport: transports[c.UpstreamCredentialEnv]}
@@ -650,6 +659,24 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			return
 		}
 		protocolAdapter := firstAdapter(protocolAdapters)
+		if keyStore != nil {
+			token, ok := adapter.BearerToken(r)
+			if !ok {
+				_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, &core.GatewayError{Code: "invalid_api_key", Category: core.CategoryUnauthenticated, Message: "Invalid API key"}, core.ExecutionResponse{})
+				return
+			}
+			principal, err := keyStore.Verify(r.Context(), token)
+			token = ""
+			if err != nil {
+				gatewayErr := &core.GatewayError{Code: "invalid_api_key", Category: core.CategoryUnauthenticated, Message: "Invalid API key"}
+				if !errors.Is(err, sqlite.ErrInvalidVirtualKey) && !errors.Is(err, sqlite.ErrVirtualKeyNotFound) && !errors.Is(err, sqlite.ErrVirtualKeyDisabled) && !errors.Is(err, sqlite.ErrVirtualKeyRevoked) {
+					gatewayErr = &core.GatewayError{Code: "authentication_unavailable", Category: core.CategoryUnavailable, Message: "Authentication unavailable"}
+				}
+				_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
+				return
+			}
+			r = r.WithContext(core.WithTrustedPrincipal(r.Context(), principal))
+		}
 		req, gatewayErr := protocolAdapter.Decode(r.Context(), core.ClientRequest{Transport: r})
 		if gatewayErr != nil {
 			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
@@ -671,6 +698,16 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, resp)
 	})
 	return mux, closeComponents, nil
+}
+
+type sqliteVirtualKeyStore struct{ keys *sqlite.VirtualKeys }
+
+func (s sqliteVirtualKeyStore) Verify(ctx context.Context, token string) (core.TrustedPrincipal, error) {
+	principal, err := s.keys.Verify(ctx, token)
+	if err != nil {
+		return core.TrustedPrincipal{}, err
+	}
+	return core.TrustedPrincipal{KeyID: principal.KeyID, PolicyID: principal.PolicyID, KeyRevision: principal.KeyRevision, PolicyRevision: principal.PolicyRevision}, nil
 }
 
 // configuredCredentialRefs projects connector credential record IDs onto the

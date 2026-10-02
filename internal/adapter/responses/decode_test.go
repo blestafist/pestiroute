@@ -3,11 +3,44 @@ package responses
 import (
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
+
+func TestBearerToken(t *testing.T) {
+	for _, tc := range []struct {
+		name, header string
+		want         string
+	}{
+		{name: "bearer", header: "Bearer prv_abc-._~+/=", want: "prv_abc-._~+/="},
+		{name: "case insensitive scheme", header: "bEaReR token", want: "token"},
+		{name: "missing", header: ""},
+		{name: "non bearer", header: "Basic token"},
+		{name: "empty", header: "Bearer "},
+		{name: "extra field", header: "Bearer token extra"},
+		{name: "invalid token byte", header: "Bearer token,other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", nil)
+			if tc.header != "" {
+				r.Header.Set("Authorization", tc.header)
+			}
+			got, ok := BearerToken(r)
+			if (tc.want != "") != ok || got != tc.want {
+				t.Fatalf("BearerToken() = (%q, %t), want (%q, %t)", got, ok, tc.want, tc.want != "")
+			}
+		})
+	}
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.Header.Add("Authorization", "Bearer first")
+	r.Header.Add("Authorization", "Bearer second")
+	if token, ok := BearerToken(r); ok {
+		t.Fatalf("duplicate Authorization accepted: %q", token)
+	}
+}
 
 const base = `{"model":"gpt-5.4-mini"}`
 
