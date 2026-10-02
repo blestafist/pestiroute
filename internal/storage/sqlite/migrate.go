@@ -75,6 +75,63 @@ var schemaMigrations = []migration{{
 		`CREATE INDEX idx_virtual_keys_digest ON virtual_keys(digest)`,
 		`CREATE INDEX idx_virtual_keys_policy ON virtual_keys(policy_id, policy_revision)`,
 	},
+}, {
+	version: 4,
+	statements: []string{
+		`CREATE TABLE requests (
+			id TEXT PRIMARY KEY,
+			virtual_key_id TEXT REFERENCES virtual_keys(id) ON DELETE SET NULL,
+			key_revision INTEGER NOT NULL CHECK (key_revision >= 1),
+			policy_id TEXT NOT NULL,
+			policy_revision INTEGER NOT NULL,
+			accepted_at INTEGER NOT NULL,
+			protocol TEXT NOT NULL,
+			model TEXT NOT NULL,
+			route_id TEXT NOT NULL,
+			state TEXT NOT NULL CHECK (state IN ('admitted', 'succeeded', 'failed', 'cancelled', 'interrupted')),
+			finished_at INTEGER,
+			FOREIGN KEY (policy_id, policy_revision) REFERENCES key_policies(id, revision) ON DELETE RESTRICT
+		)`,
+		`CREATE TABLE attempts (
+			id TEXT PRIMARY KEY,
+			request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE RESTRICT,
+			ordinal INTEGER NOT NULL CHECK (ordinal >= 1),
+			account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+			connector TEXT NOT NULL,
+			route_id TEXT NOT NULL,
+			budget_policy TEXT NOT NULL,
+			estimate_tokens INTEGER NOT NULL CHECK (estimate_tokens >= 0),
+			estimate_method TEXT NOT NULL,
+			state TEXT NOT NULL CHECK (state IN ('reserved', 'intent', 'succeeded', 'failed', 'cancelled', 'interrupted')),
+			committed INTEGER NOT NULL DEFAULT 0 CHECK (committed IN (0, 1)),
+			error_category TEXT,
+			error_reason TEXT,
+			dispatched_at INTEGER,
+			finished_at INTEGER,
+			UNIQUE (request_id, ordinal)
+		)`,
+		`CREATE TABLE usage_records (
+			attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE RESTRICT,
+			input_tokens INTEGER CHECK (input_tokens >= 0),
+			output_tokens INTEGER CHECK (output_tokens >= 0),
+			reasoning_tokens INTEGER CHECK (reasoning_tokens >= 0),
+			cached_tokens INTEGER CHECK (cached_tokens >= 0),
+			source TEXT NOT NULL,
+			completeness TEXT NOT NULL,
+			recorded_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE reservations (
+			attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE RESTRICT,
+			estimated_tokens INTEGER NOT NULL CHECK (estimated_tokens >= 0),
+			actual_tokens INTEGER CHECK (actual_tokens >= 0),
+			effective_charge INTEGER CHECK (effective_charge >= 0),
+			state TEXT NOT NULL CHECK (state IN ('held', 'settled', 'released', 'conservative')),
+			reconciled_at INTEGER
+		)`,
+		`CREATE INDEX idx_requests_key_accepted ON requests(virtual_key_id, accepted_at)`,
+		`CREATE INDEX idx_attempts_request ON attempts(request_id)`,
+		`CREATE INDEX idx_reservations_state_reconciled ON reservations(state, reconciled_at)`,
+	},
 }}
 
 // Migrate applies every pending schema migration atomically.

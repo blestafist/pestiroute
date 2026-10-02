@@ -21,8 +21,8 @@ func TestMigrateFreshAndIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT version, applied_at FROM schema_migrations ORDER BY version DESC LIMIT 1`).Scan(&version, &applied); err != nil {
 		t.Fatal(err)
 	}
-	if version != 3 {
-		t.Fatalf("version = %d, want 3", version)
+	if version != 4 {
+		t.Fatalf("version = %d, want 4", version)
 	}
 	if timestamp, err := time.Parse(time.RFC3339Nano, applied); err != nil || timestamp.Location() != time.UTC {
 		t.Fatalf("applied_at = %q, err = %v; want UTC RFC3339 timestamp", applied, err)
@@ -41,29 +41,29 @@ func TestMigrateFreshAndIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table'`).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
-	if count != 3 || after != before {
+	if count != 4 || after != before {
 		t.Fatalf("repeat migration changed journal/schema: entries=%d tables=%d (before %d)", count, after, before)
 	}
 }
 
 func TestMigrateFailedStepRollsBack(t *testing.T) {
 	db := openTestDB(t, filepath.Join(t.TempDir(), "rollback.db"))
-	if err := migrate(context.Background(), db, schemaMigrations[:2]); err != nil {
+	if err := migrate(context.Background(), db, schemaMigrations[:3]); err != nil {
 		t.Fatal(err)
 	}
-	migrations := append(append([]migration(nil), schemaMigrations[:2]...), migration{
-		version: 3,
+	migrations := append(append([]migration(nil), schemaMigrations[:3]...), migration{
+		version: 4,
 		statements: []string{
 			`CREATE TABLE should_rollback (id INTEGER PRIMARY KEY)`,
 			`THIS IS NOT SQL`,
 		},
 	})
-	if err := migrate(context.Background(), db, migrations); err == nil || !strings.Contains(err.Error(), "migration 3") {
-		t.Fatalf("migrate error = %v, want migration 3 failure", err)
+	if err := migrate(context.Background(), db, migrations); err == nil || !strings.Contains(err.Error(), "migration 4") {
+		t.Fatalf("migrate error = %v, want migration 4 failure", err)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 2 {
-		t.Fatalf("journal entries = %d, err = %v, want 2", count, err)
+	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 3 {
+		t.Fatalf("journal entries = %d, err = %v, want 3", count, err)
 	}
 	var exists int
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'should_rollback'`).Scan(&exists); err != nil || exists != 0 {
@@ -85,8 +85,8 @@ func TestSchemaAccountsAndCredentials(t *testing.T) {
 	}
 	db = openTestDB(t, path)
 	var version int
-	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 3 {
-		t.Fatalf("schema version = %d, err = %v; want 3", version, err)
+	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
+		t.Fatalf("schema version = %d, err = %v; want 4", version, err)
 	}
 	if err := Migrate(context.Background(), db); err != nil {
 		t.Fatalf("idempotent Migrate: %v", err)
@@ -223,8 +223,8 @@ func TestSchemaPoliciesAndVirtualKeys(t *testing.T) {
 		t.Fatalf("idempotent Migrate: %v", err)
 	}
 	var version int
-	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 3 {
-		t.Fatalf("schema version = %d, err = %v; want 3", version, err)
+	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
+		t.Fatalf("schema version = %d, err = %v; want 4", version, err)
 	}
 
 	policy := `INSERT INTO key_policies(id, revision, models, connectors, rpm, tpm, created_at) VALUES (?, ?, '[]', '[]', 0, 0, 1000)`
@@ -337,6 +337,130 @@ func TestSchemaPoliciesAndVirtualKeys(t *testing.T) {
 	}
 }
 
+func TestSchemaRequestsAttemptsUsageAndReservations(t *testing.T) {
+	db := openTestDB(t, filepath.Join(t.TempDir(), "ledger.db"))
+	if err := migrate(context.Background(), db, schemaMigrations[:3]); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(context.Background(), db); err != nil {
+		t.Fatalf("apply migration 4 to version 3 database: %v", err)
+	}
+	var version int
+	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
+		t.Fatalf("schema version = %d, err=%v; want 4", version, err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO accounts(id, connector, created_at, updated_at) VALUES ('a', 'c', 1000, 1000)`,
+		`INSERT INTO key_policies(id, revision, models, connectors, rpm, tpm, created_at) VALUES ('p', 1, '[]', '[]', 10, 100, 1000)`,
+		`INSERT INTO virtual_keys(id, key_id, digest, policy_id, policy_revision, created_at) VALUES ('v', 'public', 'digest', 'p', 1, 1000)`,
+		`INSERT INTO requests(id, virtual_key_id, key_revision, policy_id, policy_revision, accepted_at, protocol, model, route_id, state) VALUES ('r', 'v', 1, 'p', 1, 1234567890123, 'responses', 'm', 'route', 'admitted')`,
+		`INSERT INTO attempts(id, request_id, ordinal, account_id, connector, route_id, budget_policy, estimate_tokens, estimate_method, state) VALUES ('at', 'r', 1, 'a', 'c', 'route', 'fixed', 0, 'known', 'reserved')`,
+		`INSERT INTO usage_records(attempt_id, input_tokens, output_tokens, reasoning_tokens, cached_tokens, source, completeness, recorded_at) VALUES ('at', NULL, 0, NULL, 0, 'unknown', 'partial', 1234567890123)`,
+		`INSERT INTO reservations(attempt_id, estimated_tokens, actual_tokens, effective_charge, state, reconciled_at) VALUES ('at', 0, NULL, NULL, 'held', NULL)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for ordinal, id := range []string{"negative-usage", "negative-actual", "negative-charge", "invalid-reservation"} {
+		if _, err := db.Exec(`INSERT INTO attempts(id, request_id, ordinal, connector, route_id, budget_policy, estimate_tokens, estimate_method, state) VALUES (?, 'r', ?, 'c', 'route', 'fixed', 0, 'known', 'reserved')`, id, ordinal+2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var input, output, reasoning, cached, estimate, actual, charge sql.NullInt64
+	if err := db.QueryRow(`SELECT input_tokens, output_tokens, reasoning_tokens, cached_tokens FROM usage_records WHERE attempt_id='at'`).Scan(&input, &output, &reasoning, &cached); err != nil {
+		t.Fatal(err)
+	}
+	if input.Valid || !output.Valid || output.Int64 != 0 || reasoning.Valid || !cached.Valid || cached.Int64 != 0 {
+		t.Fatalf("nullable usage = input %v output %v reasoning %v cached %v; want NULL, zero, NULL, zero", input, output, reasoning, cached)
+	}
+	if err := db.QueryRow(`SELECT estimated_tokens, actual_tokens, effective_charge FROM reservations WHERE attempt_id='at'`).Scan(&estimate, &actual, &charge); err != nil {
+		t.Fatal(err)
+	}
+	if !estimate.Valid || estimate.Int64 != 0 || actual.Valid || charge.Valid {
+		t.Fatalf("reservation counters = %v %v %v; want zero, NULL, NULL", estimate, actual, charge)
+	}
+
+	for _, test := range []struct {
+		name, statement, category string
+	}{
+		{"duplicate request primary key", `INSERT INTO requests(id, virtual_key_id, key_revision, policy_id, policy_revision, accepted_at, protocol, model, route_id, state) VALUES ('r', NULL, 1, 'p', 1, 1, 'responses', 'm', 'route', 'admitted')`, "UNIQUE constraint failed"},
+		{"nonpositive key revision", `INSERT INTO requests(id, key_revision, policy_id, policy_revision, accepted_at, protocol, model, route_id, state) VALUES ('bad-revision', 0, 'p', 1, 1, 'responses', 'm', 'route', 'admitted')`, "CHECK constraint failed"},
+		{"invalid request state", `INSERT INTO requests(id, key_revision, policy_id, policy_revision, accepted_at, protocol, model, route_id, state) VALUES ('bad-state', 1, 'p', 1, 1, 'responses', 'm', 'route', 'unknown')`, "CHECK constraint failed"},
+		{"missing composite policy revision", `INSERT INTO requests(id, key_revision, policy_id, policy_revision, accepted_at, protocol, model, route_id, state) VALUES ('orphan-policy', 1, 'p', 2, 1, 'responses', 'm', 'route', 'admitted')`, "FOREIGN KEY constraint failed"},
+		{"nonpositive attempt ordinal", `INSERT INTO attempts(id, request_id, ordinal, connector, route_id, budget_policy, estimate_tokens, estimate_method, state) VALUES ('bad-ordinal', 'r', 0, 'c', 'route', 'b', 0, 'm', 'reserved')`, "CHECK constraint failed"},
+		{"negative estimate", `INSERT INTO attempts(id, request_id, ordinal, connector, route_id, budget_policy, estimate_tokens, estimate_method, state) VALUES ('bad-estimate', 'r', 7, 'c', 'route', 'b', -1, 'm', 'reserved')`, "CHECK constraint failed"},
+		{"invalid attempt state", `INSERT INTO attempts(id, request_id, ordinal, connector, route_id, budget_policy, estimate_tokens, estimate_method, state) VALUES ('invalid-attempt-state', 'r', 6, 'c', 'route', 'b', 0, 'm', 'unknown')`, "CHECK constraint failed"},
+		{"invalid committed flag", `INSERT INTO attempts(id, request_id, ordinal, connector, route_id, budget_policy, estimate_tokens, estimate_method, state, committed) VALUES ('bad-commit', 'r', 7, 'c', 'route', 'b', 0, 'm', 'reserved', 2)`, "CHECK constraint failed"},
+		{"duplicate attempt ordinal", `INSERT INTO attempts(id, request_id, ordinal, connector, route_id, budget_policy, estimate_tokens, estimate_method, state) VALUES ('duplicate-ordinal', 'r', 1, 'c', 'route', 'b', 0, 'm', 'reserved')`, "UNIQUE constraint failed"},
+		{"duplicate attempt primary key", `INSERT INTO attempts(id, request_id, ordinal, connector, route_id, budget_policy, estimate_tokens, estimate_method, state) VALUES ('at', 'r', 7, 'c', 'route', 'b', 0, 'm', 'reserved')`, "UNIQUE constraint failed"},
+		{"duplicate usage primary key", `INSERT INTO usage_records(attempt_id, input_tokens, output_tokens, reasoning_tokens, cached_tokens, source, completeness, recorded_at) VALUES ('at', 0, 0, 0, 0, 'x', 'x', 1)`, "UNIQUE constraint failed"},
+		{"negative usage count", `INSERT INTO usage_records(attempt_id, input_tokens, output_tokens, reasoning_tokens, cached_tokens, source, completeness, recorded_at) VALUES ('negative-usage', -1, 0, 0, 0, 'x', 'x', 1)`, "CHECK constraint failed"},
+		{"invalid reservation state", `INSERT INTO reservations(attempt_id, estimated_tokens, state) VALUES ('invalid-reservation', 0, 'invalid')`, "CHECK constraint failed"},
+		{"negative actual usage", `INSERT INTO reservations(attempt_id, estimated_tokens, actual_tokens, state) VALUES ('negative-actual', 0, -1, 'held')`, "CHECK constraint failed"},
+		{"negative effective charge", `INSERT INTO reservations(attempt_id, estimated_tokens, effective_charge, state) VALUES ('negative-charge', 0, -1, 'held')`, "CHECK constraint failed"},
+		{"orphan reservation attempt", `INSERT INTO reservations(attempt_id, estimated_tokens, state) VALUES ('missing', 0, 'held')`, "FOREIGN KEY constraint failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := db.Exec(test.statement); err == nil || !strings.Contains(err.Error(), test.category) {
+				t.Fatalf("error = %v; want %q", err, test.category)
+			}
+		})
+	}
+	if _, err := db.Exec(`DELETE FROM accounts WHERE id='a'`); err != nil {
+		t.Fatalf("delete account should preserve attempt history: %v", err)
+	}
+	var account sql.NullString
+	if err := db.QueryRow(`SELECT account_id FROM attempts WHERE id='at'`).Scan(&account); err != nil || account.Valid {
+		t.Fatalf("attempt account after deletion = %v, err=%v; want NULL", account, err)
+	}
+	if _, err := db.Exec(`DELETE FROM virtual_keys WHERE id='v'`); err != nil {
+		t.Fatalf("delete virtual key should retain request history: %v", err)
+	}
+	var key sql.NullString
+	if err := db.QueryRow(`SELECT virtual_key_id FROM requests WHERE id='r'`).Scan(&key); err != nil || key.Valid {
+		t.Fatalf("request key after deletion = %v, err=%v; want NULL", key, err)
+	}
+	if _, err := db.Exec(`DELETE FROM attempts WHERE id='at'`); err == nil {
+		t.Fatal("attempt with usage/reservation history deleted despite RESTRICT")
+	}
+	if _, err := db.Exec(`DELETE FROM key_policies WHERE id='p' AND revision=1`); err == nil {
+		t.Fatal("policy referenced by request deleted despite RESTRICT")
+	}
+	for _, table := range []string{"requests", "attempts", "usage_records", "reservations"} {
+		rows, err := db.Query(`SELECT name, type FROM pragma_table_info(?)`, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var name, typ string
+			if err := rows.Scan(&name, &typ); err != nil {
+				_ = rows.Close()
+				t.Fatal(err)
+			}
+			if strings.Contains(name, "payload") || strings.Contains(name, "body") || name == "provider_error" || name == "error_body" {
+				t.Errorf("forbidden diagnostic/payload column %s.%s", table, name)
+			}
+			if strings.HasSuffix(name, "_at") && typ != "INTEGER" {
+				t.Errorf("%s.%s type=%q, want INTEGER milliseconds", table, name, typ)
+			}
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, index := range []string{"idx_requests_key_accepted", "idx_attempts_request", "idx_reservations_state_reconciled"} {
+		var found int
+		if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='index' AND name=?`, index).Scan(&found); err != nil || found != 1 {
+			t.Errorf("index %s found=%d err=%v", index, found, err)
+		}
+	}
+	var violations int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_foreign_key_check`).Scan(&violations); err != nil || violations != 0 {
+		t.Fatalf("foreign key violations=%d err=%v", violations, err)
+	}
+}
+
 func quoteIdentifier(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
 func TestMigrateRejectsFutureSchemaWithoutModification(t *testing.T) {
@@ -382,7 +506,7 @@ func TestMigrateCancellationRollsBackAndReleasesConnection(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- migrate(ctx, db, append(append([]migration(nil), schemaMigrations...), migration{
-			version: 4, statements: []string{`CREATE TABLE cancelled_migration (id INTEGER)`},
+			version: 5, statements: []string{`CREATE TABLE cancelled_migration (id INTEGER)`},
 		}))
 	}()
 	select {
@@ -403,7 +527,7 @@ func TestMigrateCancellationRollsBackAndReleasesConnection(t *testing.T) {
 		t.Fatalf("database unusable after cancelled migration: %v", err)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 3 {
+	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 4 {
 		t.Fatalf("journal entries after cancellation = %d, err = %v", count, err)
 	}
 	ctx, cancel = context.WithCancel(context.Background())
@@ -432,8 +556,8 @@ func TestMigrateConcurrentHandlesSerialize(t *testing.T) {
 		}
 	}
 	var count int
-	if err := db1.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 3 {
-		t.Fatalf("concurrent migration journal entries = %d, err = %v; want 3", count, err)
+	if err := db1.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 4 {
+		t.Fatalf("concurrent migration journal entries = %d, err = %v; want 4", count, err)
 	}
 }
 
@@ -455,7 +579,7 @@ func TestMigrateReadsFutureVersionAfterWaitingForWriteLock(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- migrate(ctx, db2, append(append([]migration(nil), schemaMigrations...), migration{
-			version: 4, statements: []string{`CREATE TABLE must_not_apply (id INTEGER)`},
+			version: 5, statements: []string{`CREATE TABLE must_not_apply (id INTEGER)`},
 		}))
 	}()
 	select {
