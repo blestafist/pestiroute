@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -516,6 +517,364 @@ func TestAdminCredentialCreateUpdateAndSecretIsolation(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestAdminPolicyLifecycleCASAndValidation(t *testing.T) {
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	run := func(args ...string) (string, error) { return runAdminTest(t, dbPath, keyPath, nil, args...) }
+	created, err := run("policy", "create", "--id", "restricted", "--models", "m-a,m-b", "--connectors", "conn-a", "--rpm", "12", "--tpm", "900")
+	if err != nil || !strings.Contains(created, "revision=1") || !strings.Contains(created, `models=["m-a","m-b"]`) {
+		t.Fatalf("create=%q err=%v", created, err)
+	}
+	if _, err := run("policy", "create", "--id", "invalid", "--models", "m-a,,m-b"); err == nil {
+		t.Fatal("empty allowlist item accepted")
+	}
+	if got, err := run("policy", "list", "--enabled=true"); err != nil || strings.Count(got, "id=restricted") != 1 || strings.Contains(got, "id=invalid") {
+		t.Fatalf("list=%q err=%v", got, err)
+	}
+	updated, err := run("policy", "update", "restricted", "--expected-revision", "1", "--rpm", "14", "--disabled")
+	if err != nil || !strings.Contains(updated, "revision=2 enabled=false") || !strings.Contains(updated, "models=[\"m-a\",\"m-b\"]") {
+		t.Fatalf("update=%q err=%v", updated, err)
+	}
+	if old, err := run("policy", "get", "restricted", "--revision", "1"); err != nil || !strings.Contains(old, "revision=1 enabled=true") || !strings.Contains(old, "rpm=12") {
+		t.Fatalf("history=%q err=%v", old, err)
+	}
+	if _, err := run("policy", "update", "restricted", "--expected-revision", "1", "--rpm", "20"); err == nil || !strings.Contains(err.Error(), "revision mismatch") {
+		t.Fatalf("stale update: %v", err)
+	}
+	latest, err := run("policy", "get", "restricted")
+	if err != nil || !strings.Contains(latest, "revision=2") || !strings.Contains(latest, "rpm=14") {
+		t.Fatalf("stale update mutated state: %q err=%v", latest, err)
+	}
+}
+
+func TestAdminKeyLifecycleOneTimeSecretAndPermanentRevocation(t *testing.T) {
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	run := func(args ...string) (string, error) { return runAdminTest(t, dbPath, keyPath, nil, args...) }
+	if _, err := run("policy", "create", "--id", "p1", "--models", "model", "--connectors", "connector"); err != nil {
+		t.Fatal(err)
+	}
+	walReader, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer walReader.Close()
+	walConn, err := walReader.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer walConn.Close()
+	if _, err := walConn.ExecContext(context.Background(), `BEGIN`); err != nil {
+		t.Fatal(err)
+	}
+	defer walConn.ExecContext(context.Background(), `ROLLBACK`)
+	var beforeKeys int
+	if err := walConn.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM virtual_keys`).Scan(&beforeKeys); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err = runAdmin(adminEnvironment{ctx: context.Background(), args: []string{"--db", dbPath, "--master-key", keyPath, "key", "create", "--policy", "p1"}, stdout: &stdout, stderr: &stderr})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	output := stdout.String()
+	fields := strings.Fields(output)
+	if len(fields) == 0 || !strings.HasPrefix(fields[0], "secret=prv_") || strings.Count(output, "prv_") != 1 || stderr.Len() != 0 {
+		t.Fatalf("create stdout=%q stderr=%q", output, stderr.String())
+	}
+	secret := strings.TrimPrefix(fields[0], "secret=")
+	walInfo, err := os.Stat(dbPath + "-wal")
+	if err != nil || walInfo.Size() == 0 {
+		t.Fatalf("expected live WAL during secret inspection: info=%v err=%v", walInfo, err)
+	}
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		data, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatalf("read SQLite artifact %s: %v", path, err)
+		}
+		if bytes.Contains(data, []byte(secret)) {
+			t.Fatalf("raw key secret found in SQLite artifact %s", path)
+		}
+	}
+	var id, keyID string
+	for _, field := range fields[1:] {
+		name, value, ok := strings.Cut(field, "=")
+		if ok && name == "id" {
+			id = value
+		}
+		if ok && name == "key_id" {
+			keyID = value
+		}
+	}
+	if id == "" || keyID == "" {
+		t.Fatalf("missing safe metadata: %q", output)
+	}
+	for _, op := range [][]string{{"key", "get", id}, {"key", "get", keyID}, {"key", "list", "--policy", "p1"}, {"key", "update-policy", id, "--policy", "p1", "--expected-revision", "1"}, {"key", "revoke", id}, {"key", "get", id}} {
+		got, err := run(op...)
+		if err != nil {
+			t.Fatalf("%v: %v", op, err)
+		}
+		if strings.Contains(got, secret) || strings.Contains(got, "prv_") {
+			t.Fatalf("secret leaked in %v: %q", op, got)
+		}
+	}
+	if _, err := run("key", "update-policy", id, "--policy", "p1", "--expected-revision", "3"); err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("revoked key updated: %v", err)
+	}
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	k, err := sqlite.NewVirtualKeys(db).Get(context.Background(), id)
+	if err != nil || !k.Revoked || k.Revision != 3 || k.RevokedAt == nil {
+		t.Fatalf("revoked state=%+v err=%v", k, err)
+	}
+	if k.Digest == secret {
+		t.Fatal("raw secret persisted as digest")
+	}
+	if _, err := sqlite.NewVirtualKeys(db).Verify(context.Background(), secret); !errors.Is(err, sqlite.ErrVirtualKeyRevoked) {
+		t.Fatalf("revoked secret verified: %v", err)
+	}
+}
+
+func TestAdminKeyPolicyMalformedAndConcurrentCASNoPartialWrites(t *testing.T) {
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	run := func(args ...string) error { _, err := runAdminTest(t, dbPath, keyPath, nil, args...); return err }
+	if err := run("policy", "create", "--id", "base"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run("key", "create", "--policy", "missing"); err == nil || !strings.Contains(err.Error(), "policy not found") {
+		t.Fatalf("missing policy create: %v", err)
+	}
+	if err := run("policy", "create", "--id", "bad", "--rpm", "-1"); err == nil {
+		t.Fatal("negative policy limit accepted")
+	}
+	const workers = 8
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	success := 0
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e := run("policy", "update", "base", "--expected-revision", "1", "--rpm", "1")
+			mu.Lock()
+			if e == nil {
+				success++
+			}
+			mu.Unlock()
+			errs <- e
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	mismatches := 0
+	for e := range errs {
+		if errors.Is(e, sqlite.ErrKeyPolicyRevisionMismatch) || e != nil && strings.Contains(e.Error(), "revision mismatch") {
+			mismatches++
+		} else if e != nil {
+			t.Errorf("unexpected update error: %v", e)
+		}
+	}
+	if success != 1 || mismatches != workers-1 {
+		t.Fatalf("success=%d mismatches=%d", success, mismatches)
+	}
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM key_policies WHERE id='base'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("policy revisions=%d, want 2", count)
+	}
+}
+
+func TestAdminKeyExplicitPolicyRevisionAndFailureNoWrites(t *testing.T) {
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	run := func(args ...string) (string, error) { return runAdminTest(t, dbPath, keyPath, nil, args...) }
+	for _, args := range [][]string{
+		{"policy", "create", "--id", "source"},
+		{"policy", "create", "--id", "target"},
+	} {
+		if _, err := run(args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := run("policy", "update", "target", "--expected-revision", "1", "--rpm", "4"); err != nil {
+		t.Fatal(err)
+	}
+	created, err := run("key", "create", "--policy", "source", "--policy-revision", "1")
+	if err != nil {
+		t.Fatalf("explicit valid key policy revision: %v", err)
+	}
+	createdKey := parseAdminKeyFields(t, created)
+	if createdKey.PolicyID != "source" || createdKey.PolicyRevision != "1" {
+		t.Fatalf("wrong explicit key policy reference: %q", created)
+	}
+	if _, err := run("key", "update-policy", createdKey.ID, "--policy", "target", "--policy-revision", "1", "--expected-revision", "1"); err != nil {
+		t.Fatalf("explicit historical policy revision update: %v", err)
+	}
+	before := adminVirtualKeySnapshot(t, dbPath, createdKey.ID)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"stale revision", []string{"key", "update-policy", createdKey.ID, "--policy", "source", "--expected-revision", "1"}, "revision mismatch"},
+		{"missing policy", []string{"key", "update-policy", createdKey.ID, "--policy", "missing", "--expected-revision", "2"}, "policy not found"},
+		{"missing explicit policy revision", []string{"key", "update-policy", createdKey.ID, "--policy", "source", "--policy-revision", "99", "--expected-revision", "2"}, "policy not found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, stderr, err := runAdminChannels(dbPath, keyPath, tc.args...)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("classified failure: stdout=%q stderr=%q err=%v", out, stderr, err)
+			}
+			if out != "" || stderr != "" {
+				t.Fatalf("failed update wrote output: stdout=%q stderr=%q", out, stderr)
+			}
+			if after := adminVirtualKeySnapshot(t, dbPath, createdKey.ID); !reflect.DeepEqual(after, before) {
+				t.Fatalf("failed update mutated key: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"missing policy", []string{"key", "create", "--policy", "missing"}, "policy not found"},
+		{"missing explicit policy revision", []string{"key", "create", "--policy", "source", "--policy-revision", "99"}, "policy not found"},
+	} {
+		t.Run("create "+tc.name, func(t *testing.T) {
+			countBefore := adminVirtualKeyCount(t, dbPath)
+			out, stderr, err := runAdminChannels(dbPath, keyPath, tc.args...)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("classified failure: stdout=%q stderr=%q err=%v", out, stderr, err)
+			}
+			if out != "" || stderr != "" {
+				t.Fatalf("failed create wrote output: stdout=%q stderr=%q", out, stderr)
+			}
+			if countAfter := adminVirtualKeyCount(t, dbPath); countAfter != countBefore {
+				t.Fatalf("failed create changed key count: before=%d after=%d", countBefore, countAfter)
+			}
+		})
+	}
+}
+
+func TestAdminKeyListFiltersAndPolicyRevisionNotFound(t *testing.T) {
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	run := func(args ...string) (string, error) { return runAdminTest(t, dbPath, keyPath, nil, args...) }
+	if _, err := run("policy", "create", "--id", "p"); err != nil {
+		t.Fatal(err)
+	}
+	if out, stderr, err := runAdminChannels(dbPath, keyPath, "policy", "get", "p", "--revision", "99"); err == nil || !strings.Contains(err.Error(), "policy not found") || out != "" || stderr != "" {
+		t.Fatalf("missing policy revision: stdout=%q stderr=%q err=%v", out, stderr, err)
+	}
+	first, err := run("key", "create", "--policy", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := run("key", "create", "--policy", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k1, k2 := parseAdminKeyFields(t, first), parseAdminKeyFields(t, second)
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewVirtualKeys(db).SetEnabled(context.Background(), k2.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewVirtualKeys(db).Revoke(context.Background(), k1.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args      []string
+		want, not string
+	}{
+		{[]string{"key", "list", "--policy", "p", "--enabled=true"}, k1.ID, k2.ID},
+		{[]string{"key", "list", "--policy", "p", "--enabled=false"}, k2.ID, k1.ID},
+		{[]string{"key", "list", "--policy", "p", "--revoked=true"}, k1.ID, k2.ID},
+		{[]string{"key", "list", "--policy", "p", "--revoked=false"}, k2.ID, k1.ID},
+	} {
+		got, err := run(tc.args...)
+		if err != nil || len(strings.Split(strings.TrimSpace(got), "\n")) != 1 || !strings.Contains(got, "id="+tc.want) || strings.Contains(got, "id="+tc.not) {
+			t.Errorf("%v: got=%q err=%v", tc.args, got, err)
+		}
+	}
+}
+
+type adminKeyFields struct{ ID, KeyID, PolicyID, PolicyRevision string }
+
+func parseAdminKeyFields(t *testing.T, output string) adminKeyFields {
+	t.Helper()
+	fields := strings.Fields(output)
+	var parsed adminKeyFields
+	for _, field := range fields {
+		name, value, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		switch name {
+		case "id":
+			parsed.ID = value
+		case "key_id":
+			parsed.KeyID = value
+		case "policy_id":
+			parsed.PolicyID = value
+		case "policy_revision":
+			parsed.PolicyRevision = value
+		}
+	}
+	if parsed.ID == "" || parsed.KeyID == "" {
+		t.Fatalf("missing key metadata: %q", output)
+	}
+	return parsed
+}
+
+func adminVirtualKeySnapshot(t *testing.T, dbPath, id string) sqlite.VirtualKey {
+	t.Helper()
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	key, err := sqlite.NewVirtualKeys(db).Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+func adminVirtualKeyCount(t *testing.T, dbPath string) int {
+	t.Helper()
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM virtual_keys`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func runAdminChannels(dbPath, keyPath string, args ...string) (string, string, error) {
+	var stdout, stderr bytes.Buffer
+	full := append([]string{"--db", dbPath, "--master-key", keyPath}, args...)
+	err := runAdmin(adminEnvironment{ctx: context.Background(), args: full, stdout: &stdout, stderr: &stderr})
+	return stdout.String(), stderr.String(), err
 }
 
 func assertAdminCredential(t *testing.T, dbPath, keyPath, id string, revision int64, want string) {

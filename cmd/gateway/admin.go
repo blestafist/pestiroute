@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,7 +16,7 @@ import (
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
-const adminUsage = "usage: gateway admin [--db PATH] [--master-key PATH] <migrate|status|account|credential> ...\n"
+const adminUsage = "usage: gateway admin [--db PATH] [--master-key PATH] <migrate|status|account|credential|policy|key> ...\n"
 const maxAdminSecret = 64 << 10
 
 type adminEnvironment struct {
@@ -60,7 +62,7 @@ func runAdmin(env adminEnvironment) error {
 		_, _ = io.WriteString(env.stdout, adminUsage)
 		return nil
 	}
-	if args[0] != "migrate" && args[0] != "status" && args[0] != "account" && args[0] != "credential" {
+	if args[0] != "migrate" && args[0] != "status" && args[0] != "account" && args[0] != "credential" && args[0] != "policy" && args[0] != "key" {
 		_, _ = io.WriteString(env.stderr, adminUsage)
 		return errors.New("admin: unknown subcommand")
 	}
@@ -87,13 +89,16 @@ func runAdmin(env adminEnvironment) error {
 		_, _ = fmt.Fprintln(env.stdout, "schema is current")
 		return nil
 	}
-	if args[0] == "account" || args[0] == "credential" {
+	if args[0] == "account" || args[0] == "credential" || args[0] == "policy" || args[0] == "key" {
 		version, err := sqlite.SchemaVersion(env.ctx, db)
 		if err != nil {
 			return errors.New("admin: unsupported or unreadable schema")
 		}
 		if version != sqlite.CurrentSchemaVersion() {
 			return errors.New("admin: schema is not fully migrated; run admin migrate")
+		}
+		if args[0] == "policy" || args[0] == "key" {
+			return runKeyPolicyAdmin(env, db, args[0], args[1:])
 		}
 		return runAccountCredentialAdmin(env, db, key, args[0], args[1:])
 	}
@@ -253,6 +258,339 @@ func runAccountCredentialAdmin(env adminEnvironment, db *sql.DB, key secure.Mast
 		}
 	}
 	return nil
+}
+
+func runKeyPolicyAdmin(env adminEnvironment, db *sql.DB, entity string, args []string) error {
+	if len(args) == 0 || isHelp(args[0]) {
+		_, _ = io.WriteString(env.stdout, adminUsage)
+		return nil
+	}
+	policies, keys := sqlite.NewKeyPolicies(db), sqlite.NewVirtualKeys(db)
+	switch entity {
+	case "policy":
+		switch args[0] {
+		case "create":
+			fs := adminFlags("policy create")
+			id := fs.String("id", "", "policy ID")
+			models, connectors := fs.String("models", "", "comma-separated exact model IDs"), fs.String("connectors", "", "comma-separated connector IDs")
+			rpm, tpm := fs.Int64("rpm", 0, "requests per minute"), fs.Int64("tpm", 0, "tokens per minute")
+			if err := parseAdminFlags(fs, args[1:]); err != nil {
+				return err
+			}
+			if fs.NArg() != 0 {
+				return errors.New("admin: policy create accepts no positional arguments")
+			}
+			modelList, err := parseAdminCSV(*models)
+			if err != nil {
+				return err
+			}
+			connectorList, err := parseAdminCSV(*connectors)
+			if err != nil {
+				return err
+			}
+			policy, err := policies.Create(env.ctx, sqlite.CreateKeyPolicyParams{ID: *id, Enabled: true, Models: modelList, Connectors: connectorList, RPM: *rpm, TPM: *tpm})
+			if errors.Is(err, sqlite.ErrInvalidKeyPolicy) {
+				return errors.New("admin: invalid key policy")
+			}
+			if err != nil {
+				return errors.New("admin: cannot create key policy (duplicate or invalid metadata)")
+			}
+			printAdminPolicy(env.stdout, policy)
+		case "get":
+			if len(args) < 2 || args[1] == "" {
+				return errors.New("admin: policy get requires an ID")
+			}
+			fs := adminFlags("policy get")
+			revision := fs.Int64("revision", 0, "policy revision")
+			if err := parseAdminFlags(fs, args[2:]); err != nil {
+				return err
+			}
+			if fs.NArg() != 0 || *revision < 0 {
+				return errors.New("admin: invalid policy get arguments")
+			}
+			var p sqlite.KeyPolicy
+			var err error
+			if *revision == 0 {
+				p, err = policies.GetLatest(env.ctx, args[1])
+			} else {
+				p, err = policies.Get(env.ctx, args[1], *revision)
+			}
+			if errors.Is(err, sqlite.ErrKeyPolicyNotFound) {
+				return errors.New("admin: key policy not found")
+			}
+			if err != nil {
+				return errors.New("admin: cannot read key policy")
+			}
+			printAdminPolicy(env.stdout, p)
+		case "list":
+			fs := adminFlags("policy list")
+			enabledText := fs.String("enabled", "", "enabled filter (true or false)")
+			if err := parseAdminFlags(fs, args[1:]); err != nil {
+				return err
+			}
+			if fs.NArg() != 0 {
+				return errors.New("admin: policy list accepts no positional arguments")
+			}
+			filter := sqlite.KeyPolicyFilter{}
+			provided := false
+			fs.Visit(func(f *flag.Flag) {
+				if f.Name == "enabled" {
+					provided = true
+				}
+			})
+			if provided {
+				v, ok := parseAdminBool(*enabledText)
+				if !ok {
+					return errors.New("admin: --enabled must be true or false")
+				}
+				filter.Enabled = &v
+			}
+			list, err := policies.List(env.ctx, filter)
+			if err != nil {
+				return errors.New("admin: cannot list key policies")
+			}
+			for _, p := range list {
+				printAdminPolicy(env.stdout, p)
+			}
+		case "update":
+			if len(args) < 2 || args[1] == "" {
+				return errors.New("admin: policy update requires an ID")
+			}
+			fs := adminFlags("policy update")
+			expected := fs.Int64("expected-revision", 0, "expected policy revision")
+			models := fs.String("models", "", "comma-separated exact model IDs")
+			connectors := fs.String("connectors", "", "comma-separated connector IDs")
+			rpm := fs.Int64("rpm", 0, "requests per minute")
+			tpm := fs.Int64("tpm", 0, "tokens per minute")
+			disabled := fs.Bool("disabled", false, "disable policy")
+			if err := parseAdminFlags(fs, args[2:]); err != nil {
+				return err
+			}
+			if fs.NArg() != 0 || *expected < 1 {
+				return errors.New("admin: policy update requires --expected-revision")
+			}
+			current, err := policies.GetLatest(env.ctx, args[1])
+			if errors.Is(err, sqlite.ErrKeyPolicyNotFound) {
+				return errors.New("admin: key policy not found")
+			}
+			if err != nil {
+				return errors.New("admin: cannot read key policy")
+			}
+			modelList, connectorList := current.Models, current.Connectors
+			if wasAdminFlagSet(fs, "models") {
+				modelList, err = parseAdminCSV(*models)
+				if err != nil {
+					return err
+				}
+			}
+			if wasAdminFlagSet(fs, "connectors") {
+				connectorList, err = parseAdminCSV(*connectors)
+				if err != nil {
+					return err
+				}
+			}
+			if wasAdminFlagSet(fs, "rpm") && *rpm < 0 || wasAdminFlagSet(fs, "tpm") && *tpm < 0 {
+				return errors.New("admin: policy limits must be non-negative")
+			}
+			if wasAdminFlagSet(fs, "rpm") {
+				current.RPM = *rpm
+			}
+			if wasAdminFlagSet(fs, "tpm") {
+				current.TPM = *tpm
+			}
+			p, err := policies.Update(env.ctx, args[1], *expected, sqlite.UpdateKeyPolicyParams{Enabled: current.Enabled && !*disabled, Models: modelList, Connectors: connectorList, RPM: current.RPM, TPM: current.TPM})
+			if errors.Is(err, sqlite.ErrKeyPolicyRevisionMismatch) {
+				return errors.New("admin: key policy revision mismatch")
+			}
+			if errors.Is(err, sqlite.ErrInvalidKeyPolicy) {
+				return errors.New("admin: invalid key policy")
+			}
+			if errors.Is(err, sqlite.ErrKeyPolicyNotFound) {
+				return errors.New("admin: key policy not found")
+			}
+			if err != nil {
+				return errors.New("admin: cannot update key policy")
+			}
+			printAdminPolicy(env.stdout, p)
+		default:
+			return errors.New("admin: unknown policy command")
+		}
+	case "key":
+		switch args[0] {
+		case "create":
+			fs := adminFlags("key create")
+			policyID := fs.String("policy", "", "policy ID")
+			policyRevision := fs.Int64("policy-revision", 0, "policy revision")
+			if err := parseAdminFlags(fs, args[1:]); err != nil {
+				return err
+			}
+			if fs.NArg() != 0 || *policyID == "" || *policyRevision < 0 {
+				return errors.New("admin: key create requires a policy and valid revision")
+			}
+			var p sqlite.KeyPolicy
+			var err error
+			if *policyRevision == 0 {
+				p, err = policies.GetLatest(env.ctx, *policyID)
+			} else {
+				p, err = policies.Get(env.ctx, *policyID, *policyRevision)
+			}
+			if errors.Is(err, sqlite.ErrKeyPolicyNotFound) {
+				return errors.New("admin: key policy not found")
+			}
+			if err != nil {
+				return errors.New("admin: cannot read key policy")
+			}
+			issued, err := keys.Create(env.ctx, sqlite.CreateVirtualKeyParams{PolicyID: p.ID, PolicyRevision: p.Revision})
+			if err != nil {
+				return errors.New("admin: cannot create virtual key")
+			}
+			printAdminIssuedKey(env.stdout, issued)
+		case "get", "revoke":
+			if len(args) != 2 || args[1] == "" {
+				return fmt.Errorf("admin: key %s requires one ID", args[0])
+			}
+			var k sqlite.VirtualKey
+			var err error
+			if args[0] == "get" {
+				k, err = keys.Get(env.ctx, args[1])
+				if errors.Is(err, sqlite.ErrVirtualKeyNotFound) {
+					k, err = keys.GetByKeyID(env.ctx, args[1])
+				}
+			} else {
+				k, err = keys.Revoke(env.ctx, args[1])
+			}
+			if errors.Is(err, sqlite.ErrVirtualKeyNotFound) {
+				return errors.New("admin: virtual key not found")
+			}
+			if err != nil {
+				return errors.New("admin: cannot read or revoke virtual key")
+			}
+			printAdminVirtualKey(env.stdout, k)
+		case "list":
+			fs := adminFlags("key list")
+			policy := fs.String("policy", "", "policy ID")
+			enabledText := fs.String("enabled", "", "enabled filter")
+			revokedText := fs.String("revoked", "", "revoked filter")
+			if err := parseAdminFlags(fs, args[1:]); err != nil {
+				return err
+			}
+			if fs.NArg() != 0 {
+				return errors.New("admin: key list accepts no positional arguments")
+			}
+			filter := sqlite.VirtualKeyFilter{PolicyID: *policy}
+			for name, text := range map[string]*string{"enabled": enabledText, "revoked": revokedText} {
+				if wasAdminFlagSet(fs, name) {
+					v, ok := parseAdminBool(*text)
+					if !ok {
+						return fmt.Errorf("admin: --%s must be true or false", name)
+					}
+					if name == "enabled" {
+						filter.Enabled = &v
+					} else {
+						filter.Revoked = &v
+					}
+				}
+			}
+			list, err := keys.List(env.ctx, filter)
+			if err != nil {
+				return errors.New("admin: cannot list virtual keys")
+			}
+			for _, k := range list {
+				printAdminVirtualKey(env.stdout, k)
+			}
+		case "update-policy":
+			if len(args) < 2 || args[1] == "" {
+				return errors.New("admin: key update-policy requires an ID")
+			}
+			fs := adminFlags("key update-policy")
+			policy := fs.String("policy", "", "policy ID")
+			policyRevision := fs.Int64("policy-revision", 0, "policy revision")
+			expected := fs.Int64("expected-revision", 0, "expected key revision")
+			if err := parseAdminFlags(fs, args[2:]); err != nil {
+				return err
+			}
+			if fs.NArg() != 0 || *policy == "" || *policyRevision < 0 || *expected < 1 {
+				return errors.New("admin: key update-policy requires --policy and --expected-revision")
+			}
+			var p sqlite.KeyPolicy
+			var err error
+			if *policyRevision == 0 {
+				p, err = policies.GetLatest(env.ctx, *policy)
+			} else {
+				p, err = policies.Get(env.ctx, *policy, *policyRevision)
+			}
+			if errors.Is(err, sqlite.ErrKeyPolicyNotFound) {
+				return errors.New("admin: key policy not found")
+			}
+			if err != nil {
+				return errors.New("admin: cannot read key policy")
+			}
+			k, err := keys.UpdatePolicy(env.ctx, args[1], p.ID, p.Revision, *expected)
+			if errors.Is(err, sqlite.ErrVirtualKeyRevisionMismatch) {
+				return errors.New("admin: virtual key revision mismatch")
+			}
+			if errors.Is(err, sqlite.ErrVirtualKeyRevoked) {
+				return errors.New("admin: virtual key revoked")
+			}
+			if errors.Is(err, sqlite.ErrVirtualKeyNotFound) {
+				return errors.New("admin: virtual key not found")
+			}
+			if err != nil {
+				return errors.New("admin: cannot update virtual key policy")
+			}
+			printAdminVirtualKey(env.stdout, k)
+		default:
+			return errors.New("admin: unknown key command")
+		}
+	}
+	return nil
+}
+
+func parseAdminCSV(value string) ([]string, error) {
+	if value == "" {
+		return []string{}, nil
+	}
+	values := strings.Split(value, ",")
+	for _, v := range values {
+		if strings.TrimSpace(v) == "" {
+			return nil, errors.New("admin: list values must not be empty")
+		}
+	}
+	return values, nil
+}
+func parseAdminBool(value string) (bool, bool) {
+	if value == "true" {
+		return true, true
+	}
+	if value == "false" {
+		return false, true
+	}
+	return false, false
+}
+func wasAdminFlagSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
+}
+func printAdminPolicy(w io.Writer, p sqlite.KeyPolicy) {
+	models, _ := json.Marshal(p.Models)
+	connectors, _ := json.Marshal(p.Connectors)
+	_, _ = fmt.Fprintf(w, "id=%s revision=%d enabled=%t models=%s connectors=%s rpm=%d tpm=%d created_at=%s\n", p.ID, p.Revision, p.Enabled, models, connectors, p.RPM, p.TPM, p.CreatedAt.Format(time.RFC3339Nano))
+}
+func printAdminVirtualKey(w io.Writer, k sqlite.VirtualKey) {
+	revokedAt := ""
+	if k.RevokedAt != nil {
+		revokedAt = k.RevokedAt.Format(time.RFC3339Nano)
+	}
+	_, _ = fmt.Fprintf(w, "id=%s key_id=%s policy_id=%s policy_revision=%d revision=%d enabled=%t revoked=%t created_at=%s revoked_at=%s\n", k.ID, k.KeyID, k.PolicyID, k.PolicyRevision, k.Revision, k.Enabled, k.Revoked, k.CreatedAt.Format(time.RFC3339Nano), revokedAt)
+}
+func printAdminIssuedKey(w io.Writer, k sqlite.IssuedVirtualKey) {
+	_, _ = fmt.Fprintf(w, "secret=%s ", k.Secret)
+	printAdminVirtualKey(w, k.VirtualKey)
 }
 
 func adminFlags(name string) *flag.FlagSet {
