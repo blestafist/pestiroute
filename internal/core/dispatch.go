@@ -425,6 +425,22 @@ func (s *attemptStream) Next(ctx context.Context) (StreamFrame, error) {
 		complete := *f.Complete
 		s.pending = &complete
 		s.mu.Unlock()
+		// Complete is control metadata. Do not expose its outcome until the
+		// producer has proved there is no trailing frame or stream error.
+		_, terminalErr := s.source.Next(ctx)
+		if terminalErr != io.EOF {
+			if terminalErr == nil || (!errors.Is(terminalErr, context.Canceled) && !errors.Is(terminalErr, context.DeadlineExceeded)) {
+				terminalErr = ErrStreamContract
+			}
+			s.fail(terminalErr)
+			_ = s.Close()
+			return StreamFrame{}, terminalErr
+		}
+		if cause := s.finalizeEOF(&complete); cause != nil {
+			_ = s.Close()
+			return StreamFrame{}, cause
+		}
+		_ = s.Close()
 	case FrameBody:
 		if !s.handoff(false) {
 			return StreamFrame{}, context.Canceled

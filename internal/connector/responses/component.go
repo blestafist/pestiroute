@@ -21,19 +21,21 @@ const (
 
 // componentConfig is private non-secret connector configuration.
 type componentConfig struct {
-	Transport Config `json:"transport"`
-	Model     string `json:"model"`
-	AccountID string `json:"account_id"`
+	Transport    Config                                   `json:"transport"`
+	Model        string                                   `json:"model"`
+	AccountID    string                                   `json:"account_id"`
+	Capabilities map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
 }
 
 // Connector exposes the native Responses transport through the common component API.
 type Connector struct {
-	mu        sync.Mutex
-	transport *Transport
-	model     string
-	accountID string
-	state     core.HealthState
-	closed    bool
+	mu           sync.Mutex
+	transport    *Transport
+	model        string
+	accountID    string
+	capabilities map[core.Capability]core.CapabilityState
+	state        core.HealthState
+	closed       bool
 }
 
 var _ core.Connector = (*Connector)(nil)
@@ -69,12 +71,18 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 	if cfg.Model == "" || cfg.AccountID == "" {
 		return errors.New("Responses connector model and account_id are required")
 	}
+	for capability, state := range cfg.Capabilities {
+		if capability == "" || (state != core.Supported && state != core.Unsupported && state != core.Unknown) {
+			return errors.New("invalid Responses connector capability declaration")
+		}
+	}
 	u, err := url.Parse(cfg.Transport.Endpoint)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
 		return errors.New("Responses connector requires a valid HTTP(S) endpoint")
 	}
 	c.transport = NewTransport(cfg.Transport)
 	c.model, c.accountID = cfg.Model, cfg.AccountID
+	c.capabilities = cfg.Capabilities
 	c.state = core.HealthReady
 	return nil
 }
@@ -105,12 +113,22 @@ func (c *Connector) Capabilities(_ context.Context, scope core.CapabilityScope) 
 func (c *Connector) capabilitiesLocked(scope core.CapabilityScope) core.CapabilityResult {
 	values := map[core.Capability]core.CapabilityState{}
 	if c.state != core.HealthReady || scope.Protocol != protocol || scope.Mode != "native" ||
-		scope.Model != c.model || scope.AccountID != c.accountID || c.model != modelID || !capabilityEndpoint(c.transport.endpoint) {
+		scope.Model != c.model || scope.AccountID != c.accountID {
 		return core.CapabilityResult{Values: values}
 	}
-	values["llm.streaming"] = core.Supported
-	values["llm.tools"] = core.Supported
-	values["llm.reasoning"] = core.Supported
+	if c.model == modelID && capabilityEndpoint(c.transport.endpoint) {
+		values["llm.streaming"] = core.Supported
+		values["llm.tools"] = core.Supported
+		values["llm.reasoning"] = core.Supported
+	}
+	for capability, state := range c.capabilities {
+		// Explicit fixture declarations apply only to this configured scope.
+		// Remote declarations cannot upgrade the historical live unknowns.
+		if state == core.Supported && !fixtureEndpoint(c.transport.endpoint) && values[capability] != core.Supported {
+			continue
+		}
+		values[capability] = state
+	}
 	// Parallel tool support remains unknown for the live baseline.
 	return core.CapabilityResult{Values: values}
 }
@@ -123,6 +141,11 @@ func capabilityEndpoint(endpoint string) bool {
 	verified := u.Scheme == "https" && u.Host == "api.openai.com"
 	fixture := u.Scheme == "http" && isLoopbackHost(u.Hostname())
 	return (verified || fixture) && u.EscapedPath() == "/v1/responses"
+}
+
+func fixtureEndpoint(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	return err == nil && u.Scheme == "http" && isLoopbackHost(u.Hostname()) && strings.HasSuffix(u.EscapedPath(), "/v1/responses")
 }
 
 func isLoopbackHost(host string) bool {

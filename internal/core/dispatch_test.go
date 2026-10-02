@@ -42,6 +42,7 @@ type slowCloseAfterComplete struct {
 	closeStarted chan struct{}
 	allowClose   chan struct{}
 	closeOnce    sync.Once
+	eofStarted   chan struct{}
 }
 
 func (s *slowCloseAfterComplete) Next(context.Context) (StreamFrame, error) {
@@ -49,6 +50,9 @@ func (s *slowCloseAfterComplete) Next(context.Context) (StreamFrame, error) {
 		frame := s.frames[s.index]
 		s.index++
 		return frame, nil
+	}
+	if s.eofStarted != nil {
+		close(s.eofStarted)
 	}
 	<-s.closeStarted
 	return StreamFrame{}, io.EOF
@@ -522,16 +526,19 @@ func TestAttemptStreamWaitsForTerminalEOF(t *testing.T) {
 			if _, err := response.Stream.Next(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := response.Stream.Next(context.Background()); err != nil {
-				t.Fatal(err)
-			}
 			if len(results) != 0 {
 				t.Fatalf("published before terminal EOF: %+v", results)
 			}
-			if _, err := response.Stream.Next(context.Background()); tc.outcome == OutcomeSucceeded && err != io.EOF {
-				t.Fatalf("terminal read: %v", err)
-			} else if tc.outcome != OutcomeSucceeded && err == nil {
-				t.Fatal("trailing stream was not rejected")
+			frame, err := response.Stream.Next(context.Background())
+			if tc.outcome == OutcomeSucceeded {
+				if err != nil || frame.Type != FrameComplete {
+					t.Fatalf("validated Complete: %+v, %v", frame, err)
+				}
+				if _, err := response.Stream.Next(context.Background()); err != io.EOF {
+					t.Fatalf("terminal read: %v", err)
+				}
+			} else if !errors.Is(err, ErrStreamContract) || frame.Type != "" {
+				t.Fatalf("invalid Complete escaped terminal validation: %+v, %v", frame, err)
 			}
 			if len(results) != 1 || results[0].Outcome != tc.outcome || tc.outcome != OutcomeSucceeded && (results[0].Error == nil || results[0].Error.Code != "execution_failed") || !results[0].HasUsage || results[0].Usage.InputTokens == nil || *results[0].Usage.InputTokens != usageTokens {
 				t.Fatalf("terminal result: %+v", results)
@@ -565,14 +572,17 @@ func TestAttemptStreamCancellationWhileAwaitingEOF(t *testing.T) {
 	if gatewayErr != nil {
 		t.Fatal(gatewayErr)
 	}
-	for range 2 {
-		if _, err := response.Stream.Next(ctx); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := response.Stream.Next(ctx); err != nil {
+		t.Fatal(err)
 	}
 	finished := make(chan error, 1)
 	go func() { _, err := response.Stream.Next(ctx); finished <- err }()
 	<-entered
+	select {
+	case err := <-finished:
+		t.Fatalf("Complete escaped before the gated EOF: %v", err)
+	default:
+	}
 	cancel()
 	if err := <-finished; !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled terminal read: %v", err)
@@ -612,10 +622,8 @@ func TestAttemptStreamDeadlineWhileAwaitingEOF(t *testing.T) {
 	if gatewayErr != nil {
 		t.Fatal(gatewayErr)
 	}
-	for range 2 {
-		if _, err := response.Stream.Next(ctx); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := response.Stream.Next(ctx); err != nil {
+		t.Fatal(err)
 	}
 	finished := make(chan error, 1)
 	go func() { _, err := response.Stream.Next(ctx); finished <- err }()
@@ -637,7 +645,7 @@ func TestAttemptStreamExplicitCloseWinsPendingEOF(t *testing.T) {
 	inputTokens := int64(11)
 	p := &slowCloseAfterComplete{
 		frames:       []StreamFrame{head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded, Usage: &UsageReport{InputTokens: &inputTokens, Source: UsageProvider, Completeness: UsagePartial}}}},
-		closeStarted: make(chan struct{}), allowClose: make(chan struct{}),
+		closeStarted: make(chan struct{}), allowClose: make(chan struct{}), eofStarted: make(chan struct{}),
 	}
 	var results []AttemptResult
 	finalized := make(chan struct{}, 1)
@@ -648,16 +656,15 @@ func TestAttemptStreamExplicitCloseWinsPendingEOF(t *testing.T) {
 	if gatewayErr != nil {
 		t.Fatal(gatewayErr)
 	}
-	for range 2 {
-		if _, err := response.Stream.Next(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := response.Stream.Next(context.Background()); err != nil {
+		t.Fatal(err)
 	}
+	nextDone := make(chan error, 1)
+	go func() { _, err := response.Stream.Next(context.Background()); nextDone <- err }()
+	<-p.eofStarted // Complete is held while the producer waits for Close.
 	closeDone := make(chan struct{})
 	go func() { _ = response.Stream.Close(); close(closeDone) }()
 	<-p.closeStarted // Close has marked the attempt terminal but is held in source.Close.
-	nextDone := make(chan error, 1)
-	go func() { _, err := response.Stream.Next(context.Background()); nextDone <- err }()
 	select {
 	case <-finalized:
 	case <-time.After(time.Second):
@@ -1134,7 +1141,7 @@ func TestDispatchConcurrentRouteAccountIsolationAndObservations(t *testing.T) {
 		select {
 		case result := <-done:
 			if result.account == "account-b" && result.model == "route-b" {
-				if result.err == nil || len(result.frames) != 2 {
+				if !errors.Is(result.err, ErrStreamContract) || len(result.frames) != 1 || result.frames[0].Type != FrameHead {
 					t.Fatalf("malformed trailing frame was accepted: %+v", result)
 				}
 			} else if result.err != nil || len(result.frames) != 3 || result.frames[1].Type != FrameBody || string(result.frames[1].Body.Data) != string(result.request.Payload.Body) {

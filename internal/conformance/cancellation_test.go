@@ -151,7 +151,7 @@ func TestConformancePartialUsageSurvivesAbandonedClose(t *testing.T) {
 	if gatewayErr != nil {
 		t.Fatal(gatewayErr)
 	}
-	for i := range 3 {
+	for i := range 2 { // Head and Body; Complete is held behind the gated EOF.
 		if _, err := response.Stream.Next(context.Background()); err != nil {
 			t.Fatalf("frame %d: %v", i, err)
 		}
@@ -202,7 +202,7 @@ func TestConformanceNativeObservedUsageSurvivesClose(t *testing.T) {
 	if gatewayErr != nil {
 		t.Fatal(gatewayErr)
 	}
-	for i := range 3 { // Observe Head, body, then usage-bearing Complete before EOF.
+	for i := range 3 { // Complete now proves the producer's terminal EOF.
 		frame, err := response.Stream.Next(context.Background())
 		if err != nil || (i == 2 && frame.Type != core.FrameComplete) {
 			t.Fatalf("frame %d = %+v, %v", i, frame, err)
@@ -212,7 +212,7 @@ func TestConformanceNativeObservedUsageSurvivesClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitFinalized(t, finalized)
-	assertOneAttempt(t, attempts, true, core.OutcomeCancelled, core.CategoryCancelled)
+	assertOneAttempt(t, attempts, true, core.OutcomeSucceeded, "")
 	got := (*attempts)[0]
 	if !got.HasUsage || got.Usage.InputTokens == nil || *got.Usage.InputTokens != 9 || got.Usage.OutputTokens == nil || *got.Usage.OutputTokens != 2 || got.Usage.Source != core.UsageProvider {
 		t.Fatalf("native observed usage was not retained: %+v", got)

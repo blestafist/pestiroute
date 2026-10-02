@@ -413,9 +413,10 @@ func probes(ready *atomic.Bool) *http.ServeMux {
 }
 
 type responsesInit struct {
-	Transport connector.Config `json:"transport"`
-	Model     string           `json:"model"`
-	AccountID string           `json:"account_id"`
+	Transport    connector.Config                         `json:"transport"`
+	Model        string                                   `json:"model"`
+	AccountID    string                                   `json:"account_id"`
+	Capabilities map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
 }
 
 func handler(c config, ready *atomic.Bool) (http.Handler, func()) {
@@ -491,8 +492,10 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		connectorRoutes[route.Connector] = route
 	}
 	maxBody, maxHeader := c.MaxRequestBodyBytes, c.MaxRequestHeaderBytes
+	connectorLimits := make(map[core.InstanceID]adapterConfig)
 	for _, item := range c.Components {
 		if item.Kind == core.ComponentConnector {
+			connectorLimits[item.ID] = adapterConfig{MaxBodyBytes: item.MaxBodyBytes, MaxHeaderBytes: item.MaxHeaderBytes}
 			if item.MaxBodyBytes > maxBody {
 				maxBody = item.MaxBodyBytes
 			}
@@ -515,7 +518,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(responsesInit{Transport: connector.Config{
 				Endpoint: item.Endpoint, ConnectTimeout: connect, TLSHandshakeTimeout: tlsHandshake,
 				ResponseHeaderTimeout: responseHeader, StreamIdleTimeout: streamIdle,
-			}, Model: route.Model, AccountID: route.Account})}
+			}, Model: route.Model, AccountID: route.Account, Capabilities: route.Capabilities})}
 		}
 		if err := registry.Register(item.ID, instance, item.Kind); err != nil {
 			cleanup()
@@ -570,6 +573,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	}
 	dispatchers := make(map[string]*core.Dispatcher, len(models))
 	protocolAdapters := make(map[string]core.ProtocolAdapter, len(models))
+	routeLimits := make(map[string]adapterConfig, len(models))
 	for _, route := range c.Routes {
 		component, _, ok := registry.Admit(context.Background(), route.Adapter)
 		if !ok {
@@ -577,6 +581,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			return nil, nil, fmt.Errorf("adapter %q is unavailable", route.Adapter)
 		}
 		protocolAdapters[route.Model] = component.(core.ProtocolAdapter)
+		routeLimits[route.Model] = connectorLimits[route.Connector]
 		dispatchers[route.Model] = &core.Dispatcher{Routes: table, Services: services, AccountID: route.Account, Finalize: finalize}
 	}
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
@@ -597,6 +602,11 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			return
 		}
 		protocolAdapter = protocolAdapters[req.Model]
+		limits := routeLimits[req.Model]
+		if gatewayErr := adapter.ValidateRequestLimits(r, int64(len(req.Payload.Body)), limits.MaxBodyBytes, limits.MaxHeaderBytes); gatewayErr != nil {
+			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
+			return
+		}
 		resp, gatewayErr := dispatch.Execute(r.Context(), req)
 		_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, resp)
 	})

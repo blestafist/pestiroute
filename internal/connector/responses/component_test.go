@@ -102,6 +102,50 @@ func TestConnectorInitRejectsInvalidConfigAndUnknownEndpointCapability(t *testin
 	_ = c.Close(context.Background())
 }
 
+func TestConnectorConfiguredCapabilitiesPreserveLiveUnknowns(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint, model                  string
+		wantStreaming, wantTools, wantParallel core.CapabilityState
+	}{
+		{"live baseline", "https://api.openai.com/v1/responses", modelID, core.Supported, core.Unsupported, core.Unknown},
+		{"unverified remote", "https://example.test/v1/responses", "custom-model", core.Unknown, core.Unsupported, core.Unknown},
+		{"local fixture", "http://127.0.0.1:1/v1/responses", "custom-model", core.Supported, core.Unsupported, core.Supported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewConnector()
+			data, err := json.Marshal(componentConfig{Transport: Config{Endpoint: tc.endpoint}, Model: tc.model, AccountID: "selected", Capabilities: map[core.Capability]core.CapabilityState{
+				"llm.streaming": core.Supported, "llm.tools": core.Unsupported, "llm.tools.parallel": core.Supported,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close(context.Background())
+			scope := core.CapabilityScope{Protocol: protocol, Mode: core.ModeNative, Model: tc.model, AccountID: "selected"}
+			result := c.Capabilities(context.Background(), scope)
+			if result.State("llm.streaming") != tc.wantStreaming || result.State("llm.tools") != tc.wantTools || result.State("llm.tools.parallel") != tc.wantParallel {
+				t.Fatalf("configured capability scope: %+v", result.Values)
+			}
+			result.Values["llm.tools"] = core.Supported
+			if c.Capabilities(context.Background(), scope).State("llm.tools") != core.Unsupported {
+				t.Fatal("capability result exposed component state")
+			}
+			scope.AccountID = "other"
+			if len(c.Capabilities(context.Background(), scope).Values) != 0 {
+				t.Fatal("declaration leaked to another account")
+			}
+		})
+	}
+	for _, declaration := range []map[core.Capability]core.CapabilityState{{"": core.Supported}, {"llm.tools": "invalid"}} {
+		data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:1/v1/responses"}, Model: modelID, AccountID: "selected", Capabilities: declaration})
+		if err := NewConnector().Init(context.Background(), core.ComponentConfig{Data: data}); err == nil {
+			t.Fatal("invalid capability declaration accepted")
+		}
+	}
+}
+
 type credentialFunc func(context.Context, string) ([]byte, error)
 
 func (f credentialFunc) Get(ctx context.Context, name string) ([]byte, error) { return f(ctx, name) }
