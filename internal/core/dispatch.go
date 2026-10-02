@@ -73,7 +73,29 @@ func newID() (string, error) {
 
 func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (ExecutionResponse, *GatewayError) {
 	if err := ctx.Err(); err != nil {
-		return ExecutionResponse{}, executionError(err)
+		gatewayErr := executionError(err)
+		requestID, requestErr := newID()
+		attemptID, attemptErr := newID()
+		if requestErr == nil && attemptErr == nil {
+			mode := d.Mode
+			if mode == "" {
+				mode = "native"
+			}
+			result := AttemptResult{
+				RequestID: requestID,
+				Scope:     AttemptScope{ID: attemptID, AccountID: d.AccountID, Mode: mode},
+				StartedAt: time.Now(), EndedAt: time.Now(), Outcome: OutcomeCancelled,
+				Usage: UsageReport{Source: UsageUnknown, Completeness: UsageUnknownCompleteness},
+				Error: gatewayErr,
+			}
+			if d.Observations != nil {
+				d.Observations.TryRecord(observationFromResult(result))
+			}
+			if d.Finalize != nil {
+				d.Finalize(result)
+			}
+		}
+		return ExecutionResponse{}, gatewayErr
 	}
 	var connector Connector
 	var route RouteIdentity

@@ -34,6 +34,8 @@ type fixture struct {
 	services   func() core.InvocationServices
 	wantBody   []byte
 	callCount  func() int64
+	waitCancel func() bool
+	release    func()
 	close      func()
 }
 
@@ -818,6 +820,22 @@ func nativeCustomFixture(t *testing.T, response fakeupstream.Response) (fixture,
 			return core.NewEnvironmentServices(map[string]map[string]string{account: {"bearer": "PESTIROUTE_CONFORMANCE_TOKEN"}}, map[string]core.HTTPDoer{account: connector.HTTPDoer()}, nil).ForAttempt(core.AttemptScope{AccountID: account, Mode: "native"})
 		},
 		callCount: upstream.RequestCount,
+		waitCancel: func() bool {
+			var request fakeupstream.Request
+			select {
+			case request = <-upstream.Requests:
+			case <-time.After(2 * time.Second):
+				return false
+			}
+			for _, event := range []<-chan struct{}{request.Cancelled, request.Completed} {
+				select {
+				case <-event:
+				case <-time.After(2 * time.Second):
+					return false
+				}
+			}
+			return request.CancelCount() == 1
+		},
 		close: func() {
 			if err := connector.Close(context.Background()); err != nil {
 				t.Errorf("close connector: %v", err)
@@ -850,9 +868,13 @@ func scriptedGatedFixture(t *testing.T, gate <-chan struct{}, waiting chan<- str
 }
 
 func newScriptedCustomFixture(t *testing.T, steps []scripted.Step) fixture {
+	return newScriptedScriptsFixture(t, []scripted.Script{{ID: request, Steps: steps}})
+}
+
+func newScriptedScriptsFixture(t *testing.T, scripts []scripted.Script) fixture {
 	t.Helper()
 	scope := core.CapabilityScope{Protocol: protocol, Mode: "native", Model: model, AccountID: account}
-	connector := scripted.New(core.Descriptor{ID: "conformance.scripted.opaque", Kind: core.ComponentConnector, ImplementationVersion: "test", APIVersions: []core.APIVersion{{Major: 1}}, Protocols: []string{protocol}, Operations: []string{"execute"}, ConnectorType: "test", AuthMethods: []string{"bearer"}}, map[core.CapabilityScope]core.CapabilityResult{scope: {}}, scripted.Script{ID: request, Steps: steps})
+	connector := scripted.New(core.Descriptor{ID: "conformance.scripted.opaque", Kind: core.ComponentConnector, ImplementationVersion: "test", APIVersions: []core.APIVersion{{Major: 1}}, Protocols: []string{protocol}, Operations: []string{"execute"}, ConnectorType: "test", AuthMethods: []string{"bearer"}}, map[core.CapabilityScope]core.CapabilityResult{scope: {}}, scripts...)
 	t.Setenv("PESTIROUTE_CONFORMANCE_TOKEN", "synthetic-token")
 	return fixture{connector: connector, init: func(ctx context.Context) error { return connector.Init(ctx, core.ComponentConfig{}) }, request: core.ExecutionRequest{ID: request, Model: model, Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: append([]byte(nil), opaqueRequest...)}}, scope: core.AttemptScope{ID: "conformance-attempt", AccountID: account, Mode: "native"}, services: func() core.InvocationServices {
 		return core.NewEnvironmentServices(map[string]map[string]string{account: {"bearer": "PESTIROUTE_CONFORMANCE_TOKEN"}}, nil, nil).ForAttempt(core.AttemptScope{AccountID: account, Mode: "native"})

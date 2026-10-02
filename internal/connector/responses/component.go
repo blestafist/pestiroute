@@ -164,6 +164,12 @@ func (c *Connector) Authenticate(context.Context, core.AuthRequest, core.Invocat
 }
 
 func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
+	if err := ctx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return core.ExecutionResponse{}, gatewayError("execution_timeout", core.CategoryTimeout, "Execution timed out")
+		}
+		return core.ExecutionResponse{}, gatewayError("execution_cancelled", core.CategoryCancelled, "Execution cancelled")
+	}
 	c.mu.Lock()
 	t, ready := c.transport, c.state == core.HealthReady
 	c.mu.Unlock()

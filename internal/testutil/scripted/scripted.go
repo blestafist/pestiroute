@@ -43,6 +43,7 @@ type Connector struct {
 	closed        bool
 	closeOnce     sync.Once
 	closeCount    int
+	streamCloses  int
 }
 
 func New(descriptor core.Descriptor, capabilities map[core.CapabilityScope]core.CapabilityResult, scripts ...Script) *Connector {
@@ -199,6 +200,20 @@ func (c *Connector) CloseCount() int {
 	return c.closeCount
 }
 
+// ActiveStreamCount reports the number of streams not yet released by Close.
+func (c *Connector) ActiveStreamCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.streams)
+}
+
+// StreamCloseCount reports how many producer streams were torn down.
+func (c *Connector) StreamCloseCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.streamCloses
+}
+
 type stream struct {
 	mu    sync.Mutex
 	steps []Step
@@ -258,6 +273,7 @@ func (s *stream) Close() error {
 		close(s.done)
 		s.owner.mu.Lock()
 		delete(s.owner.streams, s)
+		s.owner.streamCloses++
 		s.owner.mu.Unlock()
 	})
 	return nil
@@ -404,8 +420,8 @@ func cloneHeaders(in map[string][]string) map[string][]string {
 	return out
 }
 
-func cancelled(err error) *core.GatewayError {
-	return &core.GatewayError{Code: "cancelled", Category: core.CategoryCancelled, Message: "Scripted execution cancelled", OriginalError: err.Error()}
+func cancelled(_ error) *core.GatewayError {
+	return &core.GatewayError{Code: "cancelled", Category: core.CategoryCancelled, Message: "Scripted execution cancelled"}
 }
 
 var _ core.Connector = (*Connector)(nil)
