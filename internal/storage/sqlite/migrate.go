@@ -45,6 +45,36 @@ var schemaMigrations = []migration{{
 		)`,
 		`CREATE INDEX idx_credentials_account_id ON credentials(account_id)`,
 	},
+}, {
+	version: 3,
+	statements: []string{
+		`CREATE TABLE key_policies (
+			id TEXT NOT NULL,
+			revision INTEGER NOT NULL CHECK (revision >= 1),
+			enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+			models TEXT NOT NULL,
+			connectors TEXT NOT NULL,
+			rpm INTEGER NOT NULL CHECK (rpm >= 0),
+			tpm INTEGER NOT NULL CHECK (tpm >= 0),
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (id, revision)
+		)`,
+		`CREATE TABLE virtual_keys (
+			id TEXT PRIMARY KEY,
+			key_id TEXT NOT NULL UNIQUE,
+			digest TEXT NOT NULL UNIQUE,
+			policy_id TEXT NOT NULL,
+			policy_revision INTEGER NOT NULL,
+			revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+			enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+			revoked INTEGER NOT NULL DEFAULT 0 CHECK (revoked IN (0, 1)),
+			created_at INTEGER NOT NULL,
+			revoked_at INTEGER,
+			FOREIGN KEY (policy_id, policy_revision) REFERENCES key_policies(id, revision) ON DELETE RESTRICT
+		)`,
+		`CREATE INDEX idx_virtual_keys_digest ON virtual_keys(digest)`,
+		`CREATE INDEX idx_virtual_keys_policy ON virtual_keys(policy_id, policy_revision)`,
+	},
 }}
 
 // Migrate applies every pending schema migration atomically.

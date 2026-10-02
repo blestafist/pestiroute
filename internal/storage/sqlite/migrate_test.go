@@ -21,8 +21,8 @@ func TestMigrateFreshAndIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT version, applied_at FROM schema_migrations ORDER BY version DESC LIMIT 1`).Scan(&version, &applied); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 {
-		t.Fatalf("version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("version = %d, want 3", version)
 	}
 	if timestamp, err := time.Parse(time.RFC3339Nano, applied); err != nil || timestamp.Location() != time.UTC {
 		t.Fatalf("applied_at = %q, err = %v; want UTC RFC3339 timestamp", applied, err)
@@ -41,26 +41,29 @@ func TestMigrateFreshAndIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table'`).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 || after != before {
+	if count != 3 || after != before {
 		t.Fatalf("repeat migration changed journal/schema: entries=%d tables=%d (before %d)", count, after, before)
 	}
 }
 
 func TestMigrateFailedStepRollsBack(t *testing.T) {
 	db := openTestDB(t, filepath.Join(t.TempDir(), "rollback.db"))
-	migrations := []migration{schemaMigrations[0], {
-		version: 2,
+	if err := migrate(context.Background(), db, schemaMigrations[:2]); err != nil {
+		t.Fatal(err)
+	}
+	migrations := append(append([]migration(nil), schemaMigrations[:2]...), migration{
+		version: 3,
 		statements: []string{
 			`CREATE TABLE should_rollback (id INTEGER PRIMARY KEY)`,
 			`THIS IS NOT SQL`,
 		},
-	}}
-	if err := migrate(context.Background(), db, migrations); err == nil || !strings.Contains(err.Error(), "migration 2") {
-		t.Fatalf("migrate error = %v, want migration 2 failure", err)
+	})
+	if err := migrate(context.Background(), db, migrations); err == nil || !strings.Contains(err.Error(), "migration 3") {
+		t.Fatalf("migrate error = %v, want migration 3 failure", err)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("journal entries = %d, err = %v, want 1", count, err)
+	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("journal entries = %d, err = %v, want 2", count, err)
 	}
 	var exists int
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'should_rollback'`).Scan(&exists); err != nil || exists != 0 {
@@ -82,8 +85,8 @@ func TestSchemaAccountsAndCredentials(t *testing.T) {
 	}
 	db = openTestDB(t, path)
 	var version int
-	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 2 {
-		t.Fatalf("schema version = %d, err = %v; want 2", version, err)
+	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 3 {
+		t.Fatalf("schema version = %d, err = %v; want 3", version, err)
 	}
 	if err := Migrate(context.Background(), db); err != nil {
 		t.Fatalf("idempotent Migrate: %v", err)
@@ -202,6 +205,138 @@ func TestSchemaAccountsAndCredentials(t *testing.T) {
 	}
 }
 
+func TestSchemaPoliciesAndVirtualKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.db")
+	db := openTestDB(t, path)
+	if err := migrate(context.Background(), db, schemaMigrations[:2]); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db = openTestDB(t, path)
+	defer db.Close()
+	if err := Migrate(context.Background(), db); err != nil {
+		t.Fatalf("idempotent Migrate: %v", err)
+	}
+	var version int
+	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 3 {
+		t.Fatalf("schema version = %d, err = %v; want 3", version, err)
+	}
+
+	policy := `INSERT INTO key_policies(id, revision, models, connectors, rpm, tpm, created_at) VALUES (?, ?, '[]', '[]', 0, 0, 1000)`
+	if _, err := db.Exec(policy, "p", 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]any{{"p", 1}, {"bad", 0}, {"bad", -1}} {
+		if _, err := db.Exec(policy, args...); err == nil {
+			t.Errorf("invalid/duplicate policy %v accepted", args)
+		}
+	}
+	for _, field := range []string{"rpm", "tpm", "enabled"} {
+		value := -1
+		if field == "enabled" {
+			value = 2
+		}
+		query := `INSERT INTO key_policies(id, revision, enabled, models, connectors, rpm, tpm, created_at) VALUES ('bad', 1, 1, '[]', '[]', 0, 0, 1000)`
+		switch field {
+		case "rpm":
+			query = `INSERT INTO key_policies(id, revision, models, connectors, rpm, tpm, created_at) VALUES ('bad', 1, '[]', '[]', -1, 0, 1000)`
+		case "tpm":
+			query = `INSERT INTO key_policies(id, revision, models, connectors, rpm, tpm, created_at) VALUES ('bad', 1, '[]', '[]', 0, -1, 1000)`
+		case "enabled":
+			query = fmt.Sprintf(`INSERT INTO key_policies(id, revision, enabled, models, connectors, rpm, tpm, created_at) VALUES ('bad', 1, %d, '[]', '[]', 0, 0, 1000)`, value)
+		}
+		if _, err := db.Exec(query); err == nil {
+			t.Errorf("invalid policy %s accepted", field)
+		}
+	}
+
+	key := `INSERT INTO virtual_keys(id, key_id, digest, policy_id, policy_revision, created_at) VALUES (?, ?, ?, ?, ?, 1000)`
+	if _, err := db.Exec(key, "v", "public", "digest", "p", 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]any{{"v", "other", "other-digest", "p", 1}, {"other", "public", "other-digest", "p", 1}, {"other", "other", "digest", "p", 1}, {"orphan", "orphan", "orphan", "missing", 1}} {
+		if _, err := db.Exec(key, args...); err == nil {
+			t.Errorf("duplicate/invalid virtual key %v accepted", args)
+		}
+	}
+	for _, query := range []string{
+		`UPDATE virtual_keys SET revision = 0 WHERE id = 'v'`,
+		`UPDATE virtual_keys SET enabled = 2 WHERE id = 'v'`,
+		`UPDATE virtual_keys SET revoked = 2 WHERE id = 'v'`,
+	} {
+		if _, err := db.Exec(query); err == nil {
+			t.Errorf("invalid virtual-key update accepted: %s", query)
+		}
+	}
+	if _, err := db.Exec(`DELETE FROM key_policies WHERE id = 'p' AND revision = 1`); err == nil {
+		t.Fatal("referenced policy deleted despite ON DELETE RESTRICT")
+	}
+	if _, err := db.Exec(`UPDATE key_policies SET enabled = 0 WHERE id = 'p' AND revision = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE virtual_keys SET enabled = 0, revoked = 1, revoked_at = 2000 WHERE id = 'v'`); err != nil {
+		t.Fatal(err)
+	}
+	var policies, keys int
+	if err := db.QueryRow(`SELECT count(*) FROM key_policies WHERE id = 'p'`).Scan(&policies); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM virtual_keys WHERE id = 'v'`).Scan(&keys); err != nil {
+		t.Fatal(err)
+	}
+	if policies != 1 || keys != 1 {
+		t.Fatalf("disabled/revoked history retained: policies=%d keys=%d", policies, keys)
+	}
+	var violations int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_foreign_key_check`).Scan(&violations); err != nil || violations != 0 {
+		t.Fatalf("foreign key violations = %d, err = %v", violations, err)
+	}
+
+	for table, expected := range map[string]map[string]bool{
+		"key_policies": {"created_at": true},
+		"virtual_keys": {"created_at": true, "revoked_at": true},
+	} {
+		rows, err := db.Query(`SELECT name, type FROM pragma_table_info(?)`, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]bool{}
+		for rows.Next() {
+			var name, typ string
+			if err := rows.Scan(&name, &typ); err != nil {
+				_ = rows.Close()
+				t.Fatal(err)
+			}
+			seen[name] = true
+			if strings.Contains(strings.ToLower(name), "secret") || strings.Contains(strings.ToLower(name), "plaintext") || name == "key" || name == "raw_key" {
+				t.Errorf("unexpected secret column %s.%s", table, name)
+			}
+			if expected[name] && typ != "INTEGER" {
+				t.Errorf("%s.%s type = %q, want INTEGER Unix milliseconds", table, name, typ)
+			}
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+		for name := range expected {
+			if !seen[name] {
+				t.Errorf("%s.%s missing", table, name)
+			}
+		}
+	}
+	for _, index := range []string{"idx_virtual_keys_digest", "idx_virtual_keys_policy"} {
+		var count int
+		if err := db.QueryRow(`SELECT count(*) FROM pragma_index_list('virtual_keys') WHERE name = ?`, index).Scan(&count); err != nil || count != 1 {
+			t.Errorf("index %s present=%d err=%v", index, count, err)
+		}
+	}
+}
+
 func quoteIdentifier(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
 func TestMigrateRejectsFutureSchemaWithoutModification(t *testing.T) {
@@ -247,7 +382,7 @@ func TestMigrateCancellationRollsBackAndReleasesConnection(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- migrate(ctx, db, append(append([]migration(nil), schemaMigrations...), migration{
-			version: 3, statements: []string{`CREATE TABLE cancelled_migration (id INTEGER)`},
+			version: 4, statements: []string{`CREATE TABLE cancelled_migration (id INTEGER)`},
 		}))
 	}()
 	select {
@@ -268,7 +403,7 @@ func TestMigrateCancellationRollsBackAndReleasesConnection(t *testing.T) {
 		t.Fatalf("database unusable after cancelled migration: %v", err)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 2 {
+	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 3 {
 		t.Fatalf("journal entries after cancellation = %d, err = %v", count, err)
 	}
 	ctx, cancel = context.WithCancel(context.Background())
@@ -297,8 +432,8 @@ func TestMigrateConcurrentHandlesSerialize(t *testing.T) {
 		}
 	}
 	var count int
-	if err := db1.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 2 {
-		t.Fatalf("concurrent migration journal entries = %d, err = %v; want 2", count, err)
+	if err := db1.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 3 {
+		t.Fatalf("concurrent migration journal entries = %d, err = %v; want 3", count, err)
 	}
 }
 
@@ -320,7 +455,7 @@ func TestMigrateReadsFutureVersionAfterWaitingForWriteLock(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- migrate(ctx, db2, append(append([]migration(nil), schemaMigrations...), migration{
-			version: 3, statements: []string{`CREATE TABLE must_not_apply (id INTEGER)`},
+			version: 4, statements: []string{`CREATE TABLE must_not_apply (id INTEGER)`},
 		}))
 	}()
 	select {
