@@ -1,8 +1,20 @@
 # Data and Configuration
 
+## Implemented M2 startup JSON
+
+The implemented gateway startup subset is strict JSON, not the proposed M3 YAML below. It is loaded once at startup; there is no YAML loader or persistent store in this M2 slice. See [the local M2 procedure](LOCAL-M2.md) for a runnable loopback example.
+
+An M2 configuration uses `listen` (inference must bind numeric loopback `127.0.0.1` or `::1`), optional positive Go-duration `shutdown_timeout` (default `5s`), and both non-empty arrays `components` and `routes`. These cannot be mixed with legacy `upstream_*`, request-limit, or timeout fields. JSON keys are exact and case-sensitive; unknown keys and any JSON `null` are rejected. The one-MiB configuration limit and complete validation are enforced at startup.
+
+Each component has `id`, `implementation` (`pestiroute.responses.native`), and `kind` (`adapter` or `connector`). IDs must be unique. Adapter components have no connector settings. Connector components additionally require an `endpoint` that is an absolute endpoint whose path ends with `/v1/responses` (HTTPS, or HTTP only for a numeric loopback IP host), `credential_env` naming a set, non-empty environment variable, positive `max_request_body_bytes` and `max_request_header_bytes`, and positive Go durations `connect_timeout`, `tls_handshake_timeout`, `response_header_timeout`, and `stream_idle_timeout`.
+
+Each route requires `protocol` (`openai.responses.v1`), `mode` (`native`), non-empty `model`, `account`, and references to a registered adapter and connector of the matching kinds. Route identities must be unique. Optional `capabilities` maps non-empty capability names to `supported`, `unsupported`, or `unknown`; declarations do not establish provider-wide support. The runtime uses the explicitly configured identity routes; no automatic fallback is configured.
+
+The old single-target JSON form remains supported: `upstream_endpoint`, `upstream_credential_env`, positive body/header limits, and all four positive connector timeouts are required together. It normalizes to the built-in Responses adapter/connector and one native `gpt-5.4-mini` route. It must not be mixed with `components` or `routes`. As with M2 topology, inference listens only on numeric loopback and endpoint rules apply. This compatibility form is not the M3 schema.
+
 ## State Separation
 
-YAML describes the desired topology: listener, connector instances, routes, and policy defaults. SQLite stores mutable state: accounts, credentials, virtual keys, auth sessions, attempts, and usage. Secrets in YAML are replaced with credential references. On startup, configuration validation must identify missing references and incompatible protocol/mode combinations before the first client request.
+The proposed M3 design uses YAML to describe the desired topology: listener, connector instances, routes, and policy defaults. SQLite would store mutable state: accounts, credentials, virtual keys, auth sessions, attempts, and usage. Secrets in YAML would be replaced with credential references. Startup validation should identify missing references and incompatible protocol/mode combinations before the first client request. These capabilities are not part of the implemented M2 startup path.
 
 Hot reload is not required for the initial MVP. Configuration is applied in full at startup; administrative operations on keys and accounts use storage and runtime services. The initial management interface is local CLI commands; a separate admin API may be added later.
 

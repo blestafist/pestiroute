@@ -44,6 +44,10 @@ Basic checks for lifecycle, errors, and cancellation are mandatory for all imple
 
 Translation has a separate feature matrix: images, hosted tools, reasoning variants, background execution, and session resume are not considered supported merely because plain text passed the test. Unknown fields are guaranteed to be preserved in native mode; for translation, documentation specifies which fields can be transferred and which require explicit rejection.
 
+## M2 local checks
+
+Run `./scripts/check.sh` for repository formatting, vet, unit/race suites and offline build. Focused M2 checks include `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -race -count=15 ./internal/conformance/...` for shared native/scripted conformance and `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -race -count=1 ./cmd/gateway/...` for strict M2 topology configuration, multi-route dispatch, legacy normalization, and gateway regressions. The [LOCAL-M2 procedure](LOCAL-M2.md) separately runs a real local gateway against deterministic Python loopback fake targets; it does not contact a provider or verify live compatibility.
+
 ## Fixtures and Traces
 
 Fixtures are grouped by connector, upstream protocol, and the version of the client/API under investigation. Stored alongside them are the scenario description, source, and expected invariants. Credentials, cookies, personal prompts, and account identifiers are removed from recordings; after sanitization, fixtures must remain valid for the tested protocol.
