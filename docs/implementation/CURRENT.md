@@ -10,9 +10,9 @@ The running gateway accepts legacy single-target and strict M2 topology JSON on 
 
 ## Immediate Focus
 
-[M3-001](tasks/M3-001.md) and [M3-002](tasks/M3-002.md) are DONE. SQLite driver `modernc.org/sqlite` v1.60.1 is validated and pinned; `internal/storage/sqlite.Open` establishes the file-backed connection pragma seam (WAL, `synchronous=FULL`, foreign keys, 500 ms busy timeout) with verified CGO-free build and offline checks.
+[M3-001](tasks/M3-001.md), [M3-002](tasks/M3-002.md), and [M3-003](tasks/M3-003.md) are DONE. SQLite driver `modernc.org/sqlite` v1.60.1 is validated and pinned; `internal/storage/sqlite.Open` establishes the file-backed connection pragma seam (WAL, `synchronous=FULL`, foreign keys, 500 ms busy timeout); M3 runtime access, admission, and durable accounting architecture is specified in `M3-RUNTIME.md` and synchronized with `M3-STORAGE.md`.
 
-The next eligible registered candidate is [M3-003](tasks/M3-003.md) (bind access, admission and durable accounting), currently DRAFT. All remaining M3 cards stay DRAFT until prerequisites are DONE and cards are promoted. Do not implement a dependency chain in one session or use the optional `TryRecord` observation sink as the durable ledger.
+The next eligible registered candidate in sequence is [M3-004](tasks/M3-004.md) (specify M3 configuration and retry admission, depends on M3-003), currently DRAFT. Additional independent candidates with satisfied prerequisites eligible for planning refinement are [M3-005](tasks/M3-005.md) (depends on M3-002), [M3-009](tasks/M3-009.md) (depends on M3-001), and [M3-022](tasks/M3-022.md) (depends on M3-003). All remaining M3 cards stay DRAFT until prerequisites are DONE and cards are promoted. Do not implement a dependency chain in one session or use the optional `TryRecord` observation sink as the durable ledger.
 
 Persistent accounts/credentials/usage, virtual keys, RPM/TPM reservations/reconciliation, recovery, protected YAML startup and bounded fallback are planned, not implemented. The [YAML example](CONFIGURATION.md#proposed-yaml) remains draft pending M3-004. OAuth runtime sessions/serialization use scripted validation in M3; real provider flows remain M5.1. Stateful cross-target affinity, protocol translation and IPC remain outside M3.
 

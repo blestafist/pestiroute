@@ -52,12 +52,17 @@ type AccountingStore interface {
 }
 ```
 
-These are semantic signatures, not existing package declarations. Initial
-`Admit` is one atomic transaction: it checks the RPM window while holding
-SQLite's write lock, then creates the request, its first attempt (ordinal 1),
-that attempt's reservation, and the accepted-request RPM record (the request's
-`accepted_at`; RPM is derived from accepted request rows). It does not increment
-RPM again on retries. A retry uses
+These are semantic signatures, not existing package declarations. The runtime
+and repository signatures in [M3-RUNTIME.md](M3-RUNTIME.md#admission-and-accounting-operations)
+use these same record arguments. Initial `Admit` is one atomic transaction: it
+rechecks the trusted key/policy revisions and enabled state, then checks RPM
+and TPM while holding SQLite's write lock. Only after obtaining that lock does
+it sample the accepted timestamp, check windows, and create the request, its
+first attempt (ordinal 1), that attempt's reservation, and the accepted-request
+RPM record (`accepted_at`; RPM is derived from accepted request rows). A failed
+check rolls back all effects. The runtime-owned admission and charging rules are specified in
+[M3-RUNTIME.md](M3-RUNTIME.md#limit-arithmetic). It does not increment RPM again
+on retries. A retry uses
 `BeginAttempt` to create the next distinct attempt and its reservation for the
 same still-open request; uniqueness of `(request_id, ordinal)` and
 `reservations.attempt_id` prevents duplicate attempts/holds. It neither creates
@@ -67,7 +72,9 @@ required before `Connector.Execute`;
 `FinalizeAttempt` atomically stores terminal attempt outcome, nullable usage,
 and reservation reconciliation, idempotently keyed by attempt ID; its terminal
 record says whether this is the final attempt so intermediate fallback attempts
-do not terminalize the request. `Recover` atomically closes stale in-flight
+do not terminalize the request. It assigns `reconciled_at` after acquiring the
+writer lock in that transaction, so the settlement-window charge is ordered
+with concurrent admissions. `Recover` atomically closes stale in-flight
 attempts, conservatively settles them, and terminalizes their still-open request
 as interrupted (or failed with `not_dispatched` reason if no intent was written).
 In the same recovery transaction, after stale attempts have been handled, it
@@ -97,13 +104,13 @@ Store neither request/response payloads nor plaintext secrets/master key.
 | `schema_migrations` | `version` primary key; applied UTC timestamp; each migration is atomic and recorded in the same transaction as its DDL/data changes. |
 | `accounts` | `id` primary key; connector instance reference, enabled/health state, created/updated UTC timestamps. Account identity is stable; disabling is not deletion. |
 | `credentials` | `id` primary key; `account_id` foreign key; encrypted envelope, format/key version, expiry, monotonically increasing `revision`, updated UTC timestamp; unique `(account_id, id)` for scoped references. Revision-checked replacement is atomic. |
-| `virtual_keys` | Internal `id` primary key and unique public identifier; unique keyed digest; policy reference, enabled/revoked state, created/revoked UTC timestamps. Store only a cryptographic digest, never the presented key. CLI create/revoke is an atomic repository mutation; revocation is monotonic and historical request references are retained. |
-| `key_policies` | `id` primary key; versioned policy values and UTC timestamps. Model/connector restrictions are exact values; policy edits do not rewrite historical rows. |
+| `virtual_keys` | Internal `id` primary key and unique public identifier; unique keyed digest; current `(policy_id, policy_revision)` reference, monotonic key `revision`, enabled/revoked state, created/revoked UTC timestamps. Store only a cryptographic digest, never the presented key. CLI create/revoke/policy reassignment is an atomic repository mutation that increments key revision; revocation is monotonic and historical request references are retained. |
+| `key_policies` | Immutable `(id, revision)` primary key with policy values and UTC timestamps. Model/connector restrictions are exact values; edits add a revision and do not rewrite historical rows. |
 | `auth_sessions` | `id` primary key; account foreign key, connector-owned flow/state labels, expiry/creation UTC timestamps, encrypted temporary state and format/key version. Expired sessions are invalid; temporary secrets are encrypted just like credentials. |
-| `requests` | `id` primary key; virtual-key reference retained with `SET NULL` on key purge (prefer revocation); indexed accepted UTC timestamp (the one RPM count), exact requested protocol/model/route identity, state `admitted` or terminal outcome, and finish timestamp. No payload/body fields. |
-| `attempts` | `id` primary key; request foreign key, ordinal unique per request, selected account reference retained with `SET NULL`, connector/route identifiers, state, commit flag, safe error category/retry disposition, dispatch/finish UTC timestamps. Initial admission creates ordinal 1 and its reservation atomically; retries use higher ordinals. No provider diagnostics or raw errors. |
+| `requests` | `id` primary key; virtual-key reference retained with `SET NULL` on key purge (prefer revocation), observed `key_revision`, and composite reference to immutable `(policy_id, policy_revision)`; indexed `accepted_at` assigned inside the serialized admission transaction (the one RPM count), exact requested protocol/model/route identity, state `admitted` or terminal outcome, and finish timestamp. No payload/body fields. |
+| `attempts` | `id` primary key; request foreign key, ordinal unique per request, selected account reference retained with `SET NULL`, connector/route identifiers, route-budget policy and estimate metadata, state, commit flag, safe error category/retry disposition, dispatch/finish UTC timestamps. Initial admission creates ordinal 1 and its reservation atomically; retries use higher ordinals. No provider diagnostics or raw errors. |
 | `usage_records` | `attempt_id` primary key and foreign key; nullable input/output/reasoning/cached token counts, source and completeness, recorded UTC timestamp. Unknown counts stay SQL `NULL`; detail counters are not summed again. One terminal usage row per attempt. |
-| `reservations` | `attempt_id` primary key and foreign key; estimated reserved tokens, nullable actual billable total, lifecycle state, reconciliation timestamp. Unique attempt association makes settlement idempotent. Every attempt has exactly one reservation; request-level RPM admission is recorded once per accepted request, separately from per-attempt token reservations. |
+| `reservations` | `attempt_id` primary key and foreign key; estimated reserved tokens, nullable provider actual billable total, effective conservative charge, lifecycle state, `reconciled_at`. Unique attempt association makes settlement idempotent. Every attempt has exactly one reservation; held reservations remain budgeted until terminal settlement/release regardless of request age. Settlement replaces the hold with that attempt's effective charge and sets `reconciled_at`; every dispatched attempt, including each fallback attempt, is charged independently. Request-level RPM admission is recorded once per accepted request. |
 
 CLI credential replacement uses compare-and-swap on `(credential_id,
 expected_revision)`: encrypt the replacement, then commit the new envelope and
@@ -149,11 +156,15 @@ a `not_dispatched` reason. Reservations progress `held → settled`,
 `held → released` for an attempt proven never dispatched, or
 `held → conservative` on an uncertain dispatch/recovery. A known estimate is
 held before execution. Unknown estimate handling is an explicit policy
-(`reject` or an operator-configured conservative value), never zero. `Admit`
-acquires the SQLite writer lock before checking the key's accepted-request
-window and inserting the request; that indexed request row is the sole RPM
-charge. A retry creates only a distinct attempt/reservation and does not
-increment RPM again.
+(`reject` or an operator-configured conservative value per route), never zero.
+`Admit` acquires the SQLite writer lock before sampling `accepted_at`, checking
+the key's accepted-request window, and inserting the request; that indexed
+request row is the sole RPM charge. It does not accept a pre-lock timestamp from
+the caller. A retry creates only a distinct attempt/reservation and does not
+increment RPM again. TPM counts held reservations regardless of request age and
+settled attempt charges in their `reconciled_at` window; dispatched fallback
+attempts are additive because each may consume upstream tokens. See
+[M3-RUNTIME.md](M3-RUNTIME.md#limit-arithmetic) for exact arithmetic.
 
 | Boundary/crash | Durable state and required behavior |
 | --- | --- |
@@ -211,6 +222,8 @@ continue retries without a durably begun attempt.
 
 ## Cross-document boundary
 
+[M3 runtime binding](M3-RUNTIME.md) specifies trusted principals, policy
+snapshots, admission arithmetic, and runtime hook semantics.
 [CONFIGURATION.md state separation and entities](CONFIGURATION.md#state-separation)
 describe the topology/state split; [usage and reconciliation](CONFIGURATION.md#limits-and-reconciliation)
 and [the v1 usage contract](CONTRACT.md#usage-and-scoped-runtime-services)
