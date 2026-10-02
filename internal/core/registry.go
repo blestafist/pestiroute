@@ -200,8 +200,9 @@ func (r *Registry) Admit(ctx context.Context, id InstanceID) (Component, Descrip
 
 // Close stops admission and closes every registered component exactly once.
 // Concurrent callers wait for the first close attempt and receive its result.
-// It waits for in-progress lifecycle calls; components must honor their contexts
-// because the registry cannot bound a component call that ignores cancellation.
+// Component Close calls are attempted concurrently so a blocked component does
+// not prevent other registered components from receiving Close. Calls still
+// own their goroutines until they honor cancellation or return.
 func (r *Registry) Close(ctx context.Context) error {
 	r.mu.Lock()
 	if r.closed {
@@ -239,27 +240,44 @@ func (r *Registry) Close(ctx context.Context) error {
 	r.mu.Unlock()
 	sort.Slice(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
 
-	var closeErrors []error
+	closeErrors := make(chan error, len(entries))
+	var closing sync.WaitGroup
 	for _, item := range entries {
-		item.entry.lifecycle.Lock()
-		item.entry.stateMu.Lock()
-		alreadyCleaned := item.entry.state == LifecycleFailed
-		item.entry.state = LifecycleUnavailable
-		item.entry.healthSeq++
-		item.entry.stateMu.Unlock()
-		if !alreadyCleaned {
-			if err := item.entry.component.Close(ctx); err != nil {
-				closeErrors = append(closeErrors, fmt.Errorf("close component %q: %w", item.id, err))
+		closing.Go(func() {
+			item.entry.lifecycle.Lock()
+			defer item.entry.lifecycle.Unlock()
+			item.entry.stateMu.Lock()
+			alreadyCleaned := item.entry.state == LifecycleFailed
+			item.entry.state = LifecycleUnavailable
+			item.entry.healthSeq++
+			item.entry.stateMu.Unlock()
+			if !alreadyCleaned {
+				if err := item.entry.component.Close(ctx); err != nil {
+					closeErrors <- fmt.Errorf("close component %q: %w", item.id, err)
+				}
 			}
-		}
-		item.entry.lifecycle.Unlock()
+		})
 	}
-	r.mu.Lock()
-	r.closeErr = errors.Join(closeErrors...)
-	close(r.closeDone)
-	err := r.closeErr
-	r.mu.Unlock()
-	return err
+	completed := make(chan struct{})
+	go func() {
+		closing.Wait()
+		close(closeErrors)
+		var errs []error
+		for err := range closeErrors {
+			errs = append(errs, err)
+		}
+		r.mu.Lock()
+		r.closeErr = errors.Join(errs...)
+		close(r.closeDone)
+		r.mu.Unlock()
+		close(completed)
+	}()
+	select {
+	case <-completed:
+		return r.closeErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (r *Registry) isClosed() bool {

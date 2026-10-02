@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	"github.com/blestafist/pestiroute/internal/core"
 	"github.com/blestafist/pestiroute/internal/testutil/fakeupstream"
 )
@@ -1601,7 +1603,7 @@ func TestConfiguredRoutesComposeFixedAndSSE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeComponents()
+	defer func() { _ = closeComponents(context.Background()) }()
 	server := httptest.NewServer(h)
 	defer server.Close()
 	for _, tc := range []struct {
@@ -1664,9 +1666,10 @@ func TestCompositionFailureDoesNotMarkReady(t *testing.T) {
 }
 
 type lifecycleStub struct {
-	kind    core.ComponentKind
-	initErr error
-	closed  int
+	kind     core.ComponentKind
+	initErr  error
+	closeErr error
+	closed   int
 }
 
 func (s *lifecycleStub) Descriptor() core.Descriptor {
@@ -1684,7 +1687,135 @@ func (*lifecycleStub) Health(context.Context) core.Health {
 func (*lifecycleStub) Capabilities(context.Context, core.CapabilityScope) core.CapabilityResult {
 	return core.CapabilityResult{}
 }
-func (s *lifecycleStub) Close(context.Context) error { s.closed++; return nil }
+func (s *lifecycleStub) Close(context.Context) error { s.closed++; return s.closeErr }
+func (*lifecycleStub) HTTPDoer() core.HTTPDoer       { return nil }
+
+func TestLifecycleMultiInstanceCloseContinuesAfterError(t *testing.T) {
+	var ready, draining atomic.Bool
+	settings := config{Components: []topologyComponent{
+		{ID: "adapter-a", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
+		{ID: "adapter-b", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
+		{ID: "connector-a", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector, Endpoint: "http://127.0.0.1:1/v1/responses", CredentialEnv: "A", MaxBodyBytes: 1024, MaxHeaderBytes: 1024, ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "1s", IdleTimeout: "1s"},
+		{ID: "connector-b", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector, Endpoint: "http://127.0.0.1:1/v1/responses", CredentialEnv: "B", MaxBodyBytes: 1024, MaxHeaderBytes: 1024, ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "1s", IdleTimeout: "1s"},
+	}, Routes: []topologyRoute{
+		{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "model-a", Account: "account-a", Adapter: "adapter-a", Connector: "connector-a"},
+		{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "model-b", Account: "account-b", Adapter: "adapter-b", Connector: "connector-b"},
+	}}
+	components := make(map[core.InstanceID]*lifecycleStub)
+	_, closeComponents, err := composeHandlerWithFactory(settings, &ready, &draining, nil, func(item topologyComponent) core.Component {
+		if item.Kind == core.ComponentAdapter {
+			return adapter.NewAdapter()
+		}
+		stub := &lifecycleStub{kind: item.Kind}
+		if item.ID == "connector-a" {
+			stub.closeErr = errors.New("synthetic close failure")
+		}
+		components[item.ID] = stub
+		return stub
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closeComponents(context.Background()); err == nil {
+		t.Fatal("expected a reported component close failure")
+	}
+	if err := closeComponents(context.Background()); err == nil {
+		t.Fatal("repeated Close lost the original failure")
+	}
+	for id, component := range components {
+		if component.closed != 1 {
+			t.Errorf("component %s closed %d times", id, component.closed)
+		}
+	}
+}
+
+func TestLifecycleShutdownFinalizesStreamOnce(t *testing.T) {
+	gate := make(chan struct{})
+	upstream := fakeupstream.New(fakeupstream.Response{Status: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\n")}, {Gate: gate, Data: []byte("event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")}}})
+	defer upstream.Close()
+	t.Setenv("TEST_UPSTREAM", "synthetic")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	configPath := t.TempDir() + "/gateway.json"
+	settings := map[string]any{
+		"listen": address, "shutdown_timeout": "200ms", "upstream_endpoint": upstream.URL + "/v1/responses",
+		"upstream_credential_env": "TEST_UPSTREAM", "max_request_body_bytes": 1024, "max_request_header_bytes": 4096,
+		"connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "1s", "stream_idle_timeout": "2s",
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	finals := make(chan core.AttemptResult, 2)
+	var finalized atomic.Int32
+	ctx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runWithFinalize(ctx, []string{"-config", configPath}, func(result core.AttemptResult) { finalized.Add(1); finals <- result })
+	}()
+	base := "http://" + address
+	deadline := time.Now().Add(time.Second)
+	for {
+		resp, probeErr := http.Get(base + "/readyz")
+		if probeErr == nil {
+			resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			cancelRun()
+			t.Fatalf("gateway did not start: %v", probeErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	response := make(chan error, 1)
+	go func() {
+		resp, err := http.Post(base+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini","stream":true}`))
+		if err == nil {
+			_, err = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+		response <- err
+	}()
+	captured := receiveRequest(t, upstream)
+	started := time.Now()
+	cancelRun()
+	waitCancelled(t, captured)
+	select {
+	case <-response:
+	case <-time.After(time.Second):
+		t.Fatal("stream request did not stop after shutdown")
+	}
+	select {
+	case result := <-finals:
+		if (result.Outcome != core.OutcomeIncomplete && result.Outcome != core.OutcomeCancelled) || result.Error == nil {
+			t.Fatalf("shutdown finalization: %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finalize the active attempt")
+	}
+	select {
+	case err := <-runDone:
+		if err == nil {
+			t.Fatal("expired drain did not report its deadline")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("gateway shutdown did not return")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("shutdown exceeded drain plus Close grace: %s", elapsed)
+	}
+	if finalized.Load() != 1 || len(finals) != 0 {
+		t.Fatalf("attempt finalized %d times, queued=%d", finalized.Load(), len(finals))
+	}
+}
 
 func TestProbes(t *testing.T) {
 	var ready atomic.Bool
@@ -1784,21 +1915,34 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build gateway: %v: %s", err, out)
 	}
-	for _, expire := range []bool{false, true} {
-		name := "drains active work"
-		if expire {
-			name = "deadline cancels active work"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		expire bool
+		stream bool
+	}{{"drains active work", false, false}, {"deadline cancels active work", true, false}, {"deadline cancels active stream", true, true}} {
+		t.Run(scenario.name, func(t *testing.T) {
 			gate := make(chan struct{})
-			upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`), HeaderGate: gate})
+			upstreamResponse := fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`), HeaderGate: gate}
+			if scenario.stream {
+				upstreamResponse.Header = http.Header{"Content-Type": {"text/event-stream"}}
+				upstreamResponse.HeaderGate = nil
+				upstreamResponse.Steps = []fakeupstream.Step{{Gate: gate, Data: []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\n")}}
+			}
+			upstream := fakeupstream.New(upstreamResponse)
 			defer upstream.Close()
 			configPath := t.TempDir() + "/gateway.json"
 			settings := map[string]any{
-				"listen": "127.0.0.1:0", "shutdown_timeout": "250ms", "upstream_endpoint": upstream.URL + "/v1/responses",
-				"upstream_credential_env": "PESTIROUTE_SHUTDOWN_CREDENTIAL", "max_request_body_bytes": 1024,
-				"max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s",
-				"response_header_timeout": "2s", "stream_idle_timeout": "2s",
+				"listen": "127.0.0.1:0", "shutdown_timeout": "250ms",
+				"components": []map[string]any{
+					{"id": "adapter-a", "implementation": "pestiroute.responses.native", "kind": "adapter"},
+					{"id": "adapter-b", "implementation": "pestiroute.responses.native", "kind": "adapter"},
+					{"id": "connector-a", "implementation": "pestiroute.responses.native", "kind": "connector", "endpoint": upstream.URL + "/v1/responses", "credential_env": "PESTIROUTE_SHUTDOWN_CREDENTIAL", "max_request_body_bytes": 1024, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "2s", "stream_idle_timeout": "2s"},
+					{"id": "connector-b", "implementation": "pestiroute.responses.native", "kind": "connector", "endpoint": upstream.URL + "/v1/responses", "credential_env": "PESTIROUTE_SHUTDOWN_CREDENTIAL_B", "max_request_body_bytes": 1024, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "2s", "stream_idle_timeout": "2s"},
+				},
+				"routes": []map[string]any{
+					{"protocol": responsesProtocol, "mode": core.ModeNative, "model": "gpt-5.4-mini", "account": "account-a", "adapter": "adapter-a", "connector": "connector-a"},
+					{"protocol": responsesProtocol, "mode": core.ModeNative, "model": "other-model", "account": "account-b", "adapter": "adapter-b", "connector": "connector-b"},
+				},
 			}
 			data, err := json.Marshal(settings)
 			if err != nil {
@@ -1808,7 +1952,7 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 				t.Fatal(err)
 			}
 			cmd := exec.Command(binary, "-config", configPath)
-			cmd.Env = append(os.Environ(), "PESTIROUTE_SHUTDOWN_CREDENTIAL=synthetic")
+			cmd.Env = append(os.Environ(), "PESTIROUTE_SHUTDOWN_CREDENTIAL=synthetic", "PESTIROUTE_SHUTDOWN_CREDENTIAL_B=synthetic-b")
 			stderr, err := cmd.StderrPipe()
 			if err != nil {
 				t.Fatal(err)
@@ -1835,7 +1979,11 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 				err    error
 			}, 1)
 			go func() {
-				resp, err := http.Post(base+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
+				body := `{"model":"gpt-5.4-mini"}`
+				if scenario.stream {
+					body = `{"model":"gpt-5.4-mini","stream":true}`
+				}
+				resp, err := http.Post(base+"/v1/responses", "application/json", strings.NewReader(body))
 				if err != nil {
 					response <- struct {
 						status int
@@ -1844,13 +1992,13 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 					}{err: err}
 					return
 				}
-				body, readErr := io.ReadAll(resp.Body)
+				responseBody, readErr := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				response <- struct {
 					status int
 					body   string
 					err    error
-				}{status: resp.StatusCode, body: string(body), err: readErr}
+				}{status: resp.StatusCode, body: string(responseBody), err: readErr}
 			}()
 			captured := receiveRequest(t, upstream)
 			shutdownStarted := time.Now()
@@ -1885,7 +2033,7 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 				}
 				t.Fatalf("shutdown admission: status=%d error=%v upstream requests=%d", status, cutoffErr, upstream.RequestCount())
 			}
-			if expire {
+			if scenario.expire {
 				select {
 				case <-captured.Cancelled:
 				case <-time.After(time.Second):
@@ -1913,8 +2061,8 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 			if elapsed := time.Since(shutdownStarted); elapsed > 1500*time.Millisecond {
 				t.Fatalf("shutdown took %s, exceeding 1.5s margin", elapsed)
 			}
-			if expire && waitErr == nil || !expire && waitErr != nil {
-				t.Fatalf("gateway exit: %v (expire=%t)", waitErr, expire)
+			if scenario.expire && waitErr == nil || !scenario.expire && waitErr != nil {
+				t.Fatalf("gateway exit: %v (expire=%t)", waitErr, scenario.expire)
 			}
 			_, _ = io.ReadAll(reader)
 		})

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -432,10 +433,10 @@ func handlerWithLifecycle(c config, ready, draining *atomic.Bool, finalize func(
 	if err != nil {
 		return mux, func() {}
 	}
-	return h, closeComponents
+	return h, func() { _ = closeComponents(context.Background()) }
 }
 
-func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult)) (http.Handler, func(), error) {
+func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult)) (http.Handler, func(context.Context) error, error) {
 	return composeHandlerWithFactory(c, ready, draining, finalize, func(item topologyComponent) core.Component {
 		if item.Kind == core.ComponentAdapter {
 			return adapter.NewAdapter()
@@ -444,7 +445,7 @@ func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.A
 	})
 }
 
-func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component) (http.Handler, func(), error) {
+func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component) (http.Handler, func(context.Context) error, error) {
 	mux := probes(ready)
 	legacy := len(c.Components) == 0 && c.UpstreamEndpoint != ""
 	if legacy {
@@ -452,7 +453,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector"}}
 	}
 	if len(c.Components) == 0 {
-		return mux, func() {}, nil
+		return mux, func(context.Context) error { return nil }, nil
 	}
 	versions := map[core.ComponentKind]core.APIVersion{
 		core.ComponentAdapter: {Major: 1}, core.ComponentConnector: {Major: 1},
@@ -461,18 +462,30 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	if err != nil {
 		return nil, nil, err
 	}
-	closeComponents := func() { _ = registry.Close(context.Background()) }
+	var closeOnce sync.Once
+	closeDone := make(chan struct{})
+	var closeErr error
+	closeComponents := func(ctx context.Context) error {
+		closeOnce.Do(func() { go func() { closeErr = registry.Close(ctx); close(closeDone) }() })
+		select {
+		case <-closeDone:
+			return closeErr
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	cleanup := func() { _ = closeComponents(context.Background()) }
 	componentConfigs := make(map[core.InstanceID]core.ComponentConfig, len(c.Components))
 	connectorRoutes := make(map[core.InstanceID]topologyRoute)
 	accountConnectors := make(map[string]core.InstanceID)
 	for _, route := range c.Routes {
 		if previous, ok := accountConnectors[route.Account]; ok && previous != route.Connector {
-			closeComponents()
+			cleanup()
 			return nil, nil, fmt.Errorf("account %q maps to multiple connectors", route.Account)
 		}
 		accountConnectors[route.Account] = route.Connector
 		if prev, ok := connectorRoutes[route.Connector]; ok && (prev.Account != route.Account || prev.Model != route.Model) {
-			closeComponents()
+			cleanup()
 			return nil, nil, fmt.Errorf("connector %q cannot serve multiple account/model scopes", route.Connector)
 		}
 		connectorRoutes[route.Connector] = route
@@ -505,7 +518,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			}, Model: route.Model, AccountID: route.Account})}
 		}
 		if err := registry.Register(item.ID, instance, item.Kind); err != nil {
-			closeComponents()
+			cleanup()
 			return nil, nil, err
 		}
 		if item.Kind == core.ComponentAdapter {
@@ -517,7 +530,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	models := make(map[string]topologyRoute)
 	for _, item := range c.Routes {
 		if previous, ok := models[item.Model]; ok && previous.Account != item.Account {
-			closeComponents()
+			cleanup()
 			return nil, nil, fmt.Errorf("model %q has ambiguous account routes", item.Model)
 		}
 		models[item.Model] = item
@@ -526,12 +539,12 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	}
 	table, err := core.NewRouteTable(routes, registry)
 	if err != nil {
-		closeComponents()
+		cleanup()
 		return nil, nil, err
 	}
 	for _, item := range c.Components {
 		if err := registry.Init(context.Background(), item.ID, componentConfigs[item.ID]); err != nil {
-			closeComponents()
+			cleanup()
 			return nil, nil, fmt.Errorf("initialize component %q: %w", item.ID, err)
 		}
 	}
@@ -539,12 +552,12 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	for _, route := range c.Routes {
 		component, _, ok := registry.Admit(context.Background(), route.Connector)
 		if !ok {
-			closeComponents()
+			cleanup()
 			return nil, nil, fmt.Errorf("connector %q is unavailable", route.Connector)
 		}
 		managed, ok := component.(interface{ HTTPDoer() core.HTTPDoer })
 		if !ok {
-			closeComponents()
+			cleanup()
 			return nil, nil, fmt.Errorf("connector %q has no scoped transport", route.Connector)
 		}
 		transports[route.Account] = managed.HTTPDoer()
@@ -560,7 +573,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	for _, route := range c.Routes {
 		component, _, ok := registry.Admit(context.Background(), route.Adapter)
 		if !ok {
-			closeComponents()
+			cleanup()
 			return nil, nil, fmt.Errorf("adapter %q is unavailable", route.Adapter)
 		}
 		protocolAdapters[route.Model] = component.(core.ProtocolAdapter)
@@ -646,19 +659,23 @@ func credentialEnv(c config, id core.InstanceID) string {
 }
 
 func run(ctx context.Context, args []string) error {
+	return runWithFinalize(ctx, args, nil)
+}
+
+func runWithFinalize(ctx context.Context, args []string, finalize func(core.AttemptResult)) error {
 	c, timeout, err := loadConfig(args)
 	if err != nil {
 		return err
 	}
 	var ready atomic.Bool
 	var draining atomic.Bool
-	h, closeTransport, err := composeHandler(c, &ready, &draining, nil)
+	h, closeTransport, err := composeHandler(c, &ready, &draining, finalize)
 	if err != nil {
 		return fmt.Errorf("initialize gateway: %w", err)
 	}
-	defer closeTransport()
 	listener, err := net.Listen("tcp", c.Listen)
 	if err != nil {
+		_ = closeTransport(context.Background())
 		return fmt.Errorf("listen %q: %w", c.Listen, err)
 	}
 	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
@@ -672,23 +689,38 @@ func run(ctx context.Context, args []string) error {
 	case err := <-done:
 		draining.Store(true)
 		ready.Store(false)
+		closeCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
 		if err != nil {
 			server.Close()
 		}
-		return fmt.Errorf("serve: %w", err)
+		if closeErr := closeTransport(closeCtx); closeErr != nil {
+			return errors.Join(wrapIf("serve", err), wrapIf("close components", closeErr))
+		}
+		return wrapIf("serve", err)
 	case <-ctx.Done():
 		draining.Store(true)
 		ready.Store(false)
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
+		// shutdown_timeout bounds drain and is reused as a separate Close grace.
+		drainCtx, cancelDrain := context.WithTimeout(context.Background(), timeout)
+		shutdownErr := server.Shutdown(drainCtx)
+		cancelDrain()
+		if shutdownErr != nil {
 			server.Close()
-			<-done
-			return fmt.Errorf("shutdown: %w", err)
 		}
 		<-done
+		closeCtx, cancelClose := context.WithTimeout(context.Background(), timeout)
+		defer cancelClose()
+		closeErr := closeTransport(closeCtx)
+		return errors.Join(wrapIf("shutdown", shutdownErr), wrapIf("close components", closeErr))
+	}
+}
+
+func wrapIf(prefix string, err error) error {
+	if err == nil {
 		return nil
 	}
+	return fmt.Errorf("%s: %w", prefix, err)
 }
 
 func main() {

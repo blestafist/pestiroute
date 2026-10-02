@@ -233,6 +233,31 @@ type gatedCloseComponent struct {
 	closeGate    chan struct{}
 }
 
+type uncooperativeCloseComponent struct {
+	*lifecycleComponent
+	closeStarted chan struct{}
+	closeRelease chan struct{}
+}
+
+type contextCloseComponent struct {
+	*lifecycleComponent
+	closeStarted chan struct{}
+}
+
+func (c *contextCloseComponent) Close(ctx context.Context) error {
+	close(c.closeStarted)
+	<-ctx.Done()
+	c.closeCalls.Add(1)
+	return ctx.Err()
+}
+
+func (c *uncooperativeCloseComponent) Close(context.Context) error {
+	close(c.closeStarted)
+	<-c.closeRelease
+	c.closeCalls.Add(1)
+	return nil
+}
+
 func (c *gatedCloseComponent) Close(ctx context.Context) error {
 	close(c.closeStarted)
 	select {
@@ -480,6 +505,86 @@ func TestRegistryCloseIsIdempotentAggregatesErrorsAndRejectsWork(t *testing.T) {
 	}
 	if health := r.Health(context.Background(), "second"); health.State != HealthUnavailable {
 		t.Fatalf("Health after Close = %q, want unavailable", health.State)
+	}
+}
+
+func TestRegistryCloseDeadlineAttemptsEveryComponent(t *testing.T) {
+	r := registryForTest(t)
+	blocked := &uncooperativeCloseComponent{lifecycleComponent: newLifecycleComponent(), closeStarted: make(chan struct{}), closeRelease: make(chan struct{})}
+	other := newLifecycleComponent()
+	for id, component := range map[InstanceID]Component{"a-blocked": blocked, "b-other": other} {
+		if err := r.Register(id, component, ComponentAdapter); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Init(context.Background(), id, ComponentConfig{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- r.Close(ctx) }()
+	select {
+	case <-blocked.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("blocked component did not receive Close")
+	}
+	deadline := time.Now().Add(time.Second)
+	for other.closeCalls.Load() != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if other.closeCalls.Load() != 1 {
+		t.Fatal("non-blocking component was stranded behind blocked Close")
+	}
+	select {
+	case err := <-closeDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Close = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close exceeded its caller deadline")
+	}
+	close(blocked.closeRelease)
+	completed := make(chan error, 1)
+	go func() { completed <- r.Close(context.Background()) }()
+	select {
+	case err := <-completed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("registry did not publish completed Close after blocked component returned")
+	}
+	if blocked.closeCalls.Load() != 1 || other.closeCalls.Load() != 1 {
+		t.Fatalf("Close counts = (%d, %d), want (1, 1)", blocked.closeCalls.Load(), other.closeCalls.Load())
+	}
+}
+
+func TestRegistryClosePassesDeadlineToComponent(t *testing.T) {
+	r := registryForTest(t)
+	component := &contextCloseComponent{lifecycleComponent: newLifecycleComponent(), closeStarted: make(chan struct{})}
+	if err := r.Register("deadline", component, ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Init(context.Background(), "deadline", ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if err := r.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close = %v, want deadline exceeded", err)
+	}
+	select {
+	case <-component.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("component did not receive Close")
+	}
+	deadline := time.Now().Add(time.Second)
+	for component.closeCalls.Load() != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if component.closeCalls.Load() != 1 {
+		t.Fatalf("component Close calls = %d, want 1", component.closeCalls.Load())
 	}
 }
 
