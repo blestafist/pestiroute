@@ -16,13 +16,14 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | Document | Owns |
 | --- | --- |
 | [Current](implementation/CURRENT.md) | Verified state, immediate focus, blockers, available commands |
-| [Tasks](implementation/TASKS.md) | Task status, owner, dependencies, scope, result, primary check |
+| [Tasks](implementation/TASKS.md) | Task status, owner, dependencies, scope, result, primary check; [bounded M2 plan](implementation/TASKS.md#m2--connector-api-and-conformance-baseline) |
 | [Task template](implementation/tasks/TEMPLATE.md) | Planner's format for bounded task cards in `implementation/tasks/` |
 | [Roadmap](implementation/ROADMAP.md) | Milestones and acceptance gates; not a task checklist |
 | [Stack](implementation/STACK.md) | Toolchain, libraries, build and operational conventions |
 | [Contract](implementation/CONTRACT.md) | Normative v1 Adapter–Core Runtime–Connector boundary, frames, capabilities, errors and lifecycle |
 | [Configuration](implementation/CONFIGURATION.md) | Target configuration schema, persistent state, access and accounting |
 | [Testing](implementation/TESTING.md) | Behavioral verification, conformance, fixtures, smoke tests |
+| [Local M2 topology check](implementation/LOCAL-M2.md) | Offline, loopback-only multi-route and legacy startup procedure |
 | [References](implementation/REFERENCES.md) | Protocol sources and connector/migration research workflow |
 | [Development tooling](implementation/TOOLING.md) | When to add OpenCode MCPs, plugins, commands, and local tools |
 

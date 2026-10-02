@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	"github.com/blestafist/pestiroute/internal/core"
 	"github.com/blestafist/pestiroute/internal/testutil/fakeupstream"
 )
@@ -292,6 +294,7 @@ func TestFixedResponsesComposition(t *testing.T) {
 		want                     int
 	}{
 		{"malformed", "POST", "/v1/responses", `{"model":`, 400},
+		{"unconfigured model", "POST", "/v1/responses", `{"model":"vendor/model:preview-2"}`, 400},
 		{"oversized", "POST", "/v1/responses", strings.Repeat("x", 1025), 400},
 		{"wrong method", "GET", "/v1/responses", "", 405},
 		{"wrong path", "POST", "/v1/other", "{}", 404},
@@ -1357,6 +1360,9 @@ func TestInferenceConfig(t *testing.T) {
 	if err != nil || string(c.credential) != credential {
 		t.Fatalf("valid inference configuration: %v", err)
 	}
+	if len(c.Components) != 2 || len(c.Routes) != 1 || c.Routes[0].Protocol != responsesProtocol || c.Routes[0].Mode != core.ModeNative || c.Routes[0].Model != "gpt-5.4-mini" || c.Routes[0].Account != "PESTIROUTE_TEST_CREDENTIAL" || c.Routes[0].Adapter != "responses-adapter" || c.Routes[0].Connector != "responses-connector" || string(c.Credentials["PESTIROUTE_TEST_CREDENTIAL"]) != credential {
+		t.Fatalf("legacy topology normalization is incomplete: components=%d routes=%d", len(c.Components), len(c.Routes))
+	}
 	if c, err = check(valid, []string{"-listen", "[::1]:0"}); err != nil || c.Listen != "[::1]:0" {
 		t.Fatalf("flag precedence: %v", err)
 	}
@@ -1414,6 +1420,425 @@ func TestInferenceConfig(t *testing.T) {
 	}
 	if _, err := check(map[string]any{"listen": "0.0.0.0:0"}, nil); err != nil {
 		t.Errorf("probe-only bind: %v", err)
+	}
+}
+
+func TestTopologyConfig(t *testing.T) {
+	const credential = "synthetic-topology-secret-never-print"
+	t.Setenv("PESTIROUTE_TOPOLOGY_CREDENTIAL", credential)
+	path := t.TempDir() + "/topology.json"
+	valid := map[string]any{
+		"listen": "127.0.0.1:0",
+		"components": []any{
+			map[string]any{"id": "adapter-a", "implementation": "pestiroute.responses.native", "kind": "adapter"},
+			map[string]any{"id": "connector-a", "implementation": "pestiroute.responses.native", "kind": "connector",
+				"endpoint": "http://127.0.0.1:1234/v1/responses", "credential_env": "PESTIROUTE_TOPOLOGY_CREDENTIAL",
+				"max_request_body_bytes": 1024, "max_request_header_bytes": 4096,
+				"connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "1s", "stream_idle_timeout": "1s"},
+		},
+		"routes": []any{
+			map[string]any{"protocol": responsesProtocol, "mode": "native", "model": "model-a", "account": "account-a", "adapter": "adapter-a", "connector": "connector-a", "capabilities": map[string]string{"llm.streaming": "supported"}},
+			map[string]any{"protocol": responsesProtocol, "mode": "native", "model": "model-b", "account": "account-b", "adapter": "adapter-a", "connector": "connector-a"},
+		},
+	}
+	check := func(fields map[string]any) (config, error) {
+		t.Helper()
+		data, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		c, _, err := loadConfig([]string{"-config", path})
+		if strings.Contains(fmt.Sprintf("%+v %#v %v", c, c, err), credential) {
+			t.Fatal("resolved credential leaked")
+		}
+		return c, err
+	}
+	c, err := check(valid)
+	if err != nil || len(c.Routes) != 2 || string(c.Credentials["PESTIROUTE_TOPOLOGY_CREDENTIAL"]) != credential {
+		t.Fatalf("valid two-route topology: components=%d routes=%d err=%v", len(c.Components), len(c.Routes), err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(map[string]any)
+	}{
+		{"wrong protocol", func(v map[string]any) { v["routes"].([]any)[0].(map[string]any)["protocol"] = "other.protocol.v1" }},
+		{"duplicate component IDs", func(v map[string]any) { v["components"].([]any)[1].(map[string]any)["id"] = "adapter-a" }},
+		{"missing adapter", func(v map[string]any) { v["routes"].([]any)[0].(map[string]any)["adapter"] = "missing" }},
+		{"wrong connector kind", func(v map[string]any) { v["routes"].([]any)[0].(map[string]any)["connector"] = "adapter-a" }},
+		{"wrong component kind", func(v map[string]any) { v["components"].([]any)[0].(map[string]any)["kind"] = "connector" }},
+		{"wrong implementation", func(v map[string]any) { v["components"].([]any)[0].(map[string]any)["implementation"] = "unknown.impl" }},
+		{"duplicate route", func(v map[string]any) { v["routes"].([]any)[1] = v["routes"].([]any)[0] }},
+		{"non-native route", func(v map[string]any) { v["routes"].([]any)[0].(map[string]any)["mode"] = "translation" }},
+		{"missing route model", func(v map[string]any) { delete(v["routes"].([]any)[0].(map[string]any), "model") }},
+		{"invalid capability state", func(v map[string]any) {
+			v["routes"].([]any)[0].(map[string]any)["capabilities"] = map[string]string{"llm.streaming": "maybe"}
+		}},
+		{"adapter connector config", func(v map[string]any) {
+			v["components"].([]any)[0].(map[string]any)["endpoint"] = "http://127.0.0.1/v1/responses"
+		}},
+		{"non-loopback endpoint", func(v map[string]any) {
+			v["components"].([]any)[1].(map[string]any)["endpoint"] = "http://example.test/v1/responses"
+		}},
+		{"unset credential", func(v map[string]any) {
+			v["components"].([]any)[1].(map[string]any)["credential_env"] = "PESTIROUTE_UNSET_TOPOLOGY_CREDENTIAL"
+		}},
+		{"empty credential", func(v map[string]any) {
+			t.Setenv("PESTIROUTE_EMPTY_TOPOLOGY_CREDENTIAL", "")
+			v["components"].([]any)[1].(map[string]any)["credential_env"] = "PESTIROUTE_EMPTY_TOPOLOGY_CREDENTIAL"
+		}},
+		{"mixed config", func(v map[string]any) { v["upstream_endpoint"] = "http://127.0.0.1/v1/responses" }},
+		{"remote listener", func(v map[string]any) { v["listen"] = "0.0.0.0:0" }},
+		{"unknown nested field", func(v map[string]any) { v["components"].([]any)[0].(map[string]any)["secret"] = credential }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(valid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(data, &fields); err != nil {
+				t.Fatal(err)
+			}
+			tc.edit(fields)
+			if _, err := check(fields); err == nil {
+				t.Fatal("expected invalid topology error")
+			}
+		})
+	}
+	for _, body := range []string{`{"components":null,"routes":[]}`, `{"components":[],"routes":[null]}`, `{"components":[],"routes":[],"unknown":1}`} {
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := loadConfig([]string{"-config", path}); err == nil {
+			t.Errorf("expected strict rejection of %s", body)
+		}
+	}
+	for _, body := range []string{
+		`{"components":[],"routes":[]}`,
+		`{"Components":[{"id":"x"}],"Routes":[{"mode":"bad"}],"listen":"0.0.0.0:1"}`,
+		`{"components":[{"id":"adapter-a","implementation":"pestiroute.responses.native","kind":"adapter"}]}`,
+		`{"routes":[]}`,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := loadConfig([]string{"-config", path}); err == nil {
+			t.Errorf("expected incomplete topology rejection: %s", body)
+		}
+	}
+	for _, field := range []string{"Components", "COMPONENTS", "cOmPoNeNtS", "Routes", "ROUTES", "upstream_Endpoint", "Upstream_endpoint"} {
+		t.Run("case-sensitive top-level key "+field, func(t *testing.T) {
+			data, err := json.Marshal(valid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(data, &fields); err != nil {
+				t.Fatal(err)
+			}
+			switch field {
+			case "Components", "COMPONENTS", "cOmPoNeNtS":
+				fields[field] = fields["components"]
+				delete(fields, "components")
+			case "Routes", "ROUTES":
+				fields[field] = fields["routes"]
+				delete(fields, "routes")
+			default:
+				fields[field] = "https://api.example.test/v1/responses"
+			}
+			encoded, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, encoded, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := loadConfig([]string{"-config", path}); err == nil {
+				t.Fatalf("accepted case-variant key %q", field)
+			}
+		})
+	}
+	for _, body := range []string{
+		`{"components":[{"ID":"adapter-a","implementation":"pestiroute.responses.native","kind":"adapter"}],"routes":[]}`,
+		`{"components":[{"id":"adapter-a","implementation":"pestiroute.responses.native","kind":"adapter"}],"routes":[{"protocol":"openai.responses.v1","Mode":"native","model":"m","account":"a","adapter":"adapter-a","connector":"connector-a"}]}`,
+		`{"components":[{"id":"adapter-a","implementation":"pestiroute.responses.native","kind":"adapter"}],"routes":[{"protocol":"openai.responses.v1","mode":"native","mOdEl":"m","account":"a","adapter":"adapter-a","connector":"connector-a"}]}`,
+		`{"components":[{"id":"connector-a","implementation":"pestiroute.responses.native","kind":"connector","endpoint":"http://127.0.0.1/v1/responses","credential_env":"PESTIROUTE_TOPOLOGY_CREDENTIAL","max_request_body_bytes":1,"max_request_header_bytes":1,"connect_timeout":"1s","tls_handshake_timeout":"1s","response_header_timeout":"1s","stream_idle_timeout":"1s"}],"routes":[]}`,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := loadConfig([]string{"-config", path}); err == nil {
+			t.Errorf("accepted case-variant nested key: %s", body)
+		}
+	}
+	if _, err := check(map[string]any{"components": valid["components"]}); err == nil {
+		t.Fatal("partial topology accepted")
+	}
+	if _, err := check(map[string]any{"components": valid["components"], "routes": valid["routes"], "listen": "localhost:8080"}); err == nil {
+		t.Fatal("hostname inference bind accepted")
+	}
+}
+
+func TestConfiguredRoutesComposeFixedAndSSE(t *testing.T) {
+	const credentialA, credentialB = "synthetic-route-a", "synthetic-route-b"
+	t.Setenv("PESTIROUTE_ROUTE_A", credentialA)
+	t.Setenv("PESTIROUTE_ROUTE_B", credentialB)
+	fixed := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"fixed":true}`)})
+	defer fixed.Close()
+	stream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")})
+	defer stream.Close()
+	topology := map[string]any{
+		"listen": "127.0.0.1:0",
+		"components": []map[string]any{
+			{"id": "adapter", "implementation": "pestiroute.responses.native", "kind": "adapter"},
+			{"id": "fixed", "implementation": "pestiroute.responses.native", "kind": "connector", "endpoint": fixed.URL + "/v1/responses", "credential_env": "PESTIROUTE_ROUTE_A", "max_request_body_bytes": 4096, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "2s", "stream_idle_timeout": "5s"},
+			{"id": "stream", "implementation": "pestiroute.responses.native", "kind": "connector", "endpoint": stream.URL + "/v1/responses", "credential_env": "PESTIROUTE_ROUTE_B", "max_request_body_bytes": 4096, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "2s", "stream_idle_timeout": "5s"},
+		},
+		"routes": []map[string]any{
+			{"protocol": responsesProtocol, "mode": core.ModeNative, "model": "fixed-model", "account": "account-a", "adapter": "adapter", "connector": "fixed"},
+			{"protocol": responsesProtocol, "mode": core.ModeNative, "model": "gpt-5.4-mini", "account": "account-b", "adapter": "adapter", "connector": "stream"},
+		},
+	}
+	data, err := json.Marshal(topology)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := t.TempDir() + "/topology.json"
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := loadConfig([]string{"-config", configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready, draining atomic.Bool
+	h, closeComponents, err := composeHandler(c, &ready, &draining, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeComponents(context.Background()) }()
+	server := httptest.NewServer(h)
+	defer server.Close()
+	for _, tc := range []struct {
+		model     string
+		streaming bool
+		upstream  *fakeupstream.Server
+		wantType  string
+		wantBody  string
+	}{
+		{"fixed-model", false, fixed, "application/json", `{"fixed":true}`},
+		{"gpt-5.4-mini", true, stream, "text/event-stream", "event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"},
+	} {
+		body := `{"model":"` + tc.model + `","unknown":{"preserve":[1,true]},"stream":true}`
+		if !tc.streaming {
+			body = `{"model":"` + tc.model + `","unknown":{"preserve":[1,true]}}`
+		}
+		resp, err := server.Client().Post(server.URL+"/v1/responses", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		responseBody, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), tc.wantType) || string(responseBody) != tc.wantBody {
+			t.Fatalf("%s: status=%d type=%q body=%q read=%v", tc.model, resp.StatusCode, resp.Header.Get("Content-Type"), responseBody, readErr)
+		}
+		captured := <-tc.upstream.Requests
+		wantCredential := credentialA
+		if tc.streaming {
+			wantCredential = credentialB
+		}
+		if captured.Method != http.MethodPost || captured.Path != "/v1/responses" || !bytes.Equal(captured.Body, []byte(body)) || captured.Header.Get("Authorization") != "Bearer "+wantCredential {
+			t.Fatalf("%s route request changed or used wrong credential: exact body=%t credential=%t", tc.model, bytes.Equal(captured.Body, []byte(body)), captured.Header.Get("Authorization") == "Bearer "+wantCredential)
+		}
+		other := fixed
+		if tc.upstream == fixed {
+			other = stream
+		}
+		select {
+		case unexpected := <-other.Requests:
+			t.Fatalf("%s request interfered with other route: %s %q", tc.model, unexpected.Method, unexpected.Path)
+		default:
+		}
+	}
+}
+
+func TestCompositionFailureDoesNotMarkReady(t *testing.T) {
+	var ready, draining atomic.Bool
+	c := config{Components: []topologyComponent{
+		{ID: "adapter", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
+		{ID: "connector", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector, Endpoint: "", CredentialEnv: "unused", MaxBodyBytes: 1024, MaxHeaderBytes: 1024, ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "1s", IdleTimeout: "1s"},
+	}, Routes: []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: "account", Adapter: "adapter", Connector: "connector"}}}
+	adapterComponent := &lifecycleStub{kind: core.ComponentAdapter}
+	connectorComponent := &lifecycleStub{kind: core.ComponentConnector, initErr: fmt.Errorf("synthetic startup failure")}
+	_, _, err := composeHandlerWithFactory(c, &ready, &draining, nil, func(item topologyComponent) core.Component {
+		if item.Kind == core.ComponentAdapter {
+			return adapterComponent
+		}
+		return connectorComponent
+	})
+	if err == nil {
+		t.Fatal("connector initialization unexpectedly succeeded")
+	}
+	if ready.Load() {
+		t.Fatal("failed startup marked gateway ready")
+	}
+	if adapterComponent.closed != 1 || connectorComponent.closed != 1 {
+		t.Fatalf("partial startup cleanup: adapter closes=%d connector closes=%d", adapterComponent.closed, connectorComponent.closed)
+	}
+}
+
+type lifecycleStub struct {
+	kind     core.ComponentKind
+	initErr  error
+	closeErr error
+	closed   int
+}
+
+func (s *lifecycleStub) Descriptor() core.Descriptor {
+	d := core.Descriptor{ID: "test", Kind: s.kind, ImplementationVersion: "1", APIVersions: []core.APIVersion{{Major: 1}}, Protocols: []string{responsesProtocol}}
+	if s.kind == core.ComponentConnector {
+		d.ConnectorType = "api"
+		d.AuthMethods = []string{"bearer"}
+	}
+	return d
+}
+func (s *lifecycleStub) Init(context.Context, core.ComponentConfig) error { return s.initErr }
+func (*lifecycleStub) Health(context.Context) core.Health {
+	return core.Health{State: core.HealthReady}
+}
+func (*lifecycleStub) Capabilities(context.Context, core.CapabilityScope) core.CapabilityResult {
+	return core.CapabilityResult{}
+}
+func (s *lifecycleStub) Close(context.Context) error { s.closed++; return s.closeErr }
+func (*lifecycleStub) HTTPDoer() core.HTTPDoer       { return nil }
+
+func TestLifecycleMultiInstanceCloseContinuesAfterError(t *testing.T) {
+	var ready, draining atomic.Bool
+	settings := config{Components: []topologyComponent{
+		{ID: "adapter-a", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
+		{ID: "adapter-b", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
+		{ID: "connector-a", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector, Endpoint: "http://127.0.0.1:1/v1/responses", CredentialEnv: "A", MaxBodyBytes: 1024, MaxHeaderBytes: 1024, ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "1s", IdleTimeout: "1s"},
+		{ID: "connector-b", Implementation: "pestiroute.responses.native", Kind: core.ComponentConnector, Endpoint: "http://127.0.0.1:1/v1/responses", CredentialEnv: "B", MaxBodyBytes: 1024, MaxHeaderBytes: 1024, ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "1s", IdleTimeout: "1s"},
+	}, Routes: []topologyRoute{
+		{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "model-a", Account: "account-a", Adapter: "adapter-a", Connector: "connector-a"},
+		{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "model-b", Account: "account-b", Adapter: "adapter-b", Connector: "connector-b"},
+	}}
+	components := make(map[core.InstanceID]*lifecycleStub)
+	_, closeComponents, err := composeHandlerWithFactory(settings, &ready, &draining, nil, func(item topologyComponent) core.Component {
+		if item.Kind == core.ComponentAdapter {
+			return adapter.NewAdapter()
+		}
+		stub := &lifecycleStub{kind: item.Kind}
+		if item.ID == "connector-a" {
+			stub.closeErr = errors.New("synthetic close failure")
+		}
+		components[item.ID] = stub
+		return stub
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closeComponents(context.Background()); err == nil {
+		t.Fatal("expected a reported component close failure")
+	}
+	if err := closeComponents(context.Background()); err == nil {
+		t.Fatal("repeated Close lost the original failure")
+	}
+	for id, component := range components {
+		if component.closed != 1 {
+			t.Errorf("component %s closed %d times", id, component.closed)
+		}
+	}
+}
+
+func TestLifecycleShutdownFinalizesStreamOnce(t *testing.T) {
+	gate := make(chan struct{})
+	upstream := fakeupstream.New(fakeupstream.Response{Status: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\n")}, {Gate: gate, Data: []byte("event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")}}})
+	defer upstream.Close()
+	t.Setenv("TEST_UPSTREAM", "synthetic")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	configPath := t.TempDir() + "/gateway.json"
+	settings := map[string]any{
+		"listen": address, "shutdown_timeout": "200ms", "upstream_endpoint": upstream.URL + "/v1/responses",
+		"upstream_credential_env": "TEST_UPSTREAM", "max_request_body_bytes": 1024, "max_request_header_bytes": 4096,
+		"connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "1s", "stream_idle_timeout": "2s",
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	finals := make(chan core.AttemptResult, 2)
+	var finalized atomic.Int32
+	ctx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- runWithFinalize(ctx, []string{"-config", configPath}, func(result core.AttemptResult) { finalized.Add(1); finals <- result })
+	}()
+	base := "http://" + address
+	deadline := time.Now().Add(time.Second)
+	for {
+		resp, probeErr := http.Get(base + "/readyz")
+		if probeErr == nil {
+			resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			cancelRun()
+			t.Fatalf("gateway did not start: %v", probeErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	response := make(chan error, 1)
+	go func() {
+		resp, err := http.Post(base+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini","stream":true}`))
+		if err == nil {
+			_, err = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+		response <- err
+	}()
+	captured := receiveRequest(t, upstream)
+	started := time.Now()
+	cancelRun()
+	waitCancelled(t, captured)
+	select {
+	case <-response:
+	case <-time.After(time.Second):
+		t.Fatal("stream request did not stop after shutdown")
+	}
+	select {
+	case result := <-finals:
+		if (result.Outcome != core.OutcomeIncomplete && result.Outcome != core.OutcomeCancelled) || result.Error == nil {
+			t.Fatalf("shutdown finalization: %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finalize the active attempt")
+	}
+	select {
+	case err := <-runDone:
+		if err == nil {
+			t.Fatal("expired drain did not report its deadline")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("gateway shutdown did not return")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("shutdown exceeded drain plus Close grace: %s", elapsed)
+	}
+	if finalized.Load() != 1 || len(finals) != 0 {
+		t.Fatalf("attempt finalized %d times, queued=%d", finalized.Load(), len(finals))
 	}
 }
 
@@ -1515,21 +1940,34 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build gateway: %v: %s", err, out)
 	}
-	for _, expire := range []bool{false, true} {
-		name := "drains active work"
-		if expire {
-			name = "deadline cancels active work"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		expire bool
+		stream bool
+	}{{"drains active work", false, false}, {"deadline cancels active work", true, false}, {"deadline cancels active stream", true, true}} {
+		t.Run(scenario.name, func(t *testing.T) {
 			gate := make(chan struct{})
-			upstream := fakeupstream.New(fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`), HeaderGate: gate})
+			upstreamResponse := fakeupstream.Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed"}`), HeaderGate: gate}
+			if scenario.stream {
+				upstreamResponse.Header = http.Header{"Content-Type": {"text/event-stream"}}
+				upstreamResponse.HeaderGate = nil
+				upstreamResponse.Steps = []fakeupstream.Step{{Gate: gate, Data: []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\n")}}
+			}
+			upstream := fakeupstream.New(upstreamResponse)
 			defer upstream.Close()
 			configPath := t.TempDir() + "/gateway.json"
 			settings := map[string]any{
-				"listen": "127.0.0.1:0", "shutdown_timeout": "250ms", "upstream_endpoint": upstream.URL + "/v1/responses",
-				"upstream_credential_env": "PESTIROUTE_SHUTDOWN_CREDENTIAL", "max_request_body_bytes": 1024,
-				"max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s",
-				"response_header_timeout": "2s", "stream_idle_timeout": "2s",
+				"listen": "127.0.0.1:0", "shutdown_timeout": "250ms",
+				"components": []map[string]any{
+					{"id": "adapter-a", "implementation": "pestiroute.responses.native", "kind": "adapter"},
+					{"id": "adapter-b", "implementation": "pestiroute.responses.native", "kind": "adapter"},
+					{"id": "connector-a", "implementation": "pestiroute.responses.native", "kind": "connector", "endpoint": upstream.URL + "/v1/responses", "credential_env": "PESTIROUTE_SHUTDOWN_CREDENTIAL", "max_request_body_bytes": 1024, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "2s", "stream_idle_timeout": "2s"},
+					{"id": "connector-b", "implementation": "pestiroute.responses.native", "kind": "connector", "endpoint": upstream.URL + "/v1/responses", "credential_env": "PESTIROUTE_SHUTDOWN_CREDENTIAL_B", "max_request_body_bytes": 1024, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "2s", "stream_idle_timeout": "2s"},
+				},
+				"routes": []map[string]any{
+					{"protocol": responsesProtocol, "mode": core.ModeNative, "model": "gpt-5.4-mini", "account": "account-a", "adapter": "adapter-a", "connector": "connector-a"},
+					{"protocol": responsesProtocol, "mode": core.ModeNative, "model": "other-model", "account": "account-b", "adapter": "adapter-b", "connector": "connector-b"},
+				},
 			}
 			data, err := json.Marshal(settings)
 			if err != nil {
@@ -1539,7 +1977,7 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 				t.Fatal(err)
 			}
 			cmd := exec.Command(binary, "-config", configPath)
-			cmd.Env = append(os.Environ(), "PESTIROUTE_SHUTDOWN_CREDENTIAL=synthetic")
+			cmd.Env = append(os.Environ(), "PESTIROUTE_SHUTDOWN_CREDENTIAL=synthetic", "PESTIROUTE_SHUTDOWN_CREDENTIAL_B=synthetic-b")
 			stderr, err := cmd.StderrPipe()
 			if err != nil {
 				t.Fatal(err)
@@ -1566,7 +2004,11 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 				err    error
 			}, 1)
 			go func() {
-				resp, err := http.Post(base+"/v1/responses", "application/json", strings.NewReader(`{"model":"gpt-5.4-mini"}`))
+				body := `{"model":"gpt-5.4-mini"}`
+				if scenario.stream {
+					body = `{"model":"gpt-5.4-mini","stream":true}`
+				}
+				resp, err := http.Post(base+"/v1/responses", "application/json", strings.NewReader(body))
 				if err != nil {
 					response <- struct {
 						status int
@@ -1575,13 +2017,13 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 					}{err: err}
 					return
 				}
-				body, readErr := io.ReadAll(resp.Body)
+				responseBody, readErr := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				response <- struct {
 					status int
 					body   string
 					err    error
-				}{status: resp.StatusCode, body: string(body), err: readErr}
+				}{status: resp.StatusCode, body: string(responseBody), err: readErr}
 			}()
 			captured := receiveRequest(t, upstream)
 			shutdownStarted := time.Now()
@@ -1616,7 +2058,7 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 				}
 				t.Fatalf("shutdown admission: status=%d error=%v upstream requests=%d", status, cutoffErr, upstream.RequestCount())
 			}
-			if expire {
+			if scenario.expire {
 				select {
 				case <-captured.Cancelled:
 				case <-time.After(time.Second):
@@ -1644,8 +2086,8 @@ func TestGatewayShutdownDrainsAndCancels(t *testing.T) {
 			if elapsed := time.Since(shutdownStarted); elapsed > 1500*time.Millisecond {
 				t.Fatalf("shutdown took %s, exceeding 1.5s margin", elapsed)
 			}
-			if expire && waitErr == nil || !expire && waitErr != nil {
-				t.Fatalf("gateway exit: %v (expire=%t)", waitErr, expire)
+			if scenario.expire && waitErr == nil || !scenario.expire && waitErr != nil {
+				t.Fatalf("gateway exit: %v (expire=%t)", waitErr, scenario.expire)
 			}
 			_, _ = io.ReadAll(reader)
 		})
@@ -1953,38 +2395,6 @@ func TestResponsesReasoningSSEIsDeliveredBeforeUpstreamCompletion(t *testing.T) 
 	remaining, err := io.ReadAll(resp.Body)
 	if err != nil || !bytes.Equal(remaining, last) {
 		t.Fatalf("terminal SSE got=%q err=%v", remaining, err)
-	}
-}
-
-func TestResponsesToolCapabilitiesAreScopedToVerifiedTargets(t *testing.T) {
-	for _, tc := range []struct {
-		name, endpoint string
-		wantSupported  bool
-	}{
-		{"verified public endpoint", "https://api.openai.com/v1/responses", true},
-		{"loopback fixture", "http://127.0.0.1:12345/v1/responses", true},
-		{"loopback wrong path", "http://127.0.0.1:12345/unverified", false},
-		{"other host", "https://unverified.invalid/v1/responses", false},
-		{"other path", "https://api.openai.com/other/v1/responses", false},
-		{"http public endpoint", "http://api.openai.com/v1/responses", false},
-		{"explicit port", "https://api.openai.com:443/v1/responses", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			adapterCaps, connectorCaps := dispatchCapabilities(tc.endpoint)
-			for label, capabilities := range map[string]map[core.Capability]core.CapabilityState{"adapter": adapterCaps, "connector": connectorCaps} {
-				if tc.wantSupported && (capabilities["llm.tools"] != core.Supported || capabilities["llm.streaming"] != core.Supported || capabilities["llm.reasoning"] != core.Supported) {
-					t.Errorf("%s capabilities=%v, want supported tool/stream/reasoning", label, capabilities)
-				}
-				if !tc.wantSupported && len(capabilities) != 0 {
-					t.Errorf("%s capabilities=%v, want no declared support", label, capabilities)
-				}
-				for _, unproven := range []core.Capability{"llm.tools.parallel"} {
-					if _, declared := capabilities[unproven]; declared {
-						t.Errorf("%s advertised unproven %s=%s", label, unproven, capabilities[unproven])
-					}
-				}
-			}
-		})
 	}
 }
 

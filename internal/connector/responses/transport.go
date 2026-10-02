@@ -14,11 +14,10 @@ import (
 	"github.com/blestafist/pestiroute/internal/core"
 )
 
-// Config contains only the runtime-selected endpoint, credential and validated
-// startup timeouts. It must not be populated from client metadata.
+// Config contains only the runtime-selected endpoint and validated startup
+// timeouts. It must not be populated from client metadata.
 type Config struct {
 	Endpoint              string
-	Credential            string
 	ConnectTimeout        time.Duration
 	TLSHandshakeTimeout   time.Duration
 	ResponseHeaderTimeout time.Duration
@@ -27,7 +26,6 @@ type Config struct {
 
 type Transport struct {
 	endpoint          string
-	credential        string
 	streamIdleTimeout time.Duration
 	client            *http.Client
 	transport         *http.Transport
@@ -46,12 +44,12 @@ func NewTransport(c Config) *Transport {
 	// connection fails; avoid the HTTP/2 no-cached-connection retry path.
 	tr.ForceAttemptHTTP2 = false
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
-	return &Transport{endpoint: c.Endpoint, credential: c.Credential, streamIdleTimeout: c.StreamIdleTimeout, transport: tr,
+	return &Transport{endpoint: c.Endpoint, streamIdleTimeout: c.StreamIdleTimeout, transport: tr,
 		client: &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // Request constructs a non-replayable POST with opaque native body bytes.
-func (t *Transport) Request(ctx context.Context, in core.ExecutionRequest) (*http.Request, error) {
+func (t *Transport) Request(ctx context.Context, in core.ExecutionRequest, credential string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, io.NopCloser(bytes.NewReader(in.Payload.Body)))
 	if err != nil {
 		return nil, err
@@ -77,15 +75,18 @@ func (t *Transport) Request(ctx context.Context, in core.ExecutionRequest) (*htt
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Authorization", "Bearer "+t.credential)
+	req.Header.Set("Authorization", "Bearer "+credential)
 	return req, nil
 }
 
 // Do performs one invocation; the caller owns the returned response body.
-func (t *Transport) Do(ctx context.Context, in core.ExecutionRequest) (*http.Response, error) {
-	req, err := t.Request(ctx, in)
+func (t *Transport) Do(ctx context.Context, in core.ExecutionRequest, credential string, doer core.HTTPDoer) (*http.Response, error) {
+	req, err := t.Request(ctx, in, credential)
 	if err != nil {
 		return nil, err
+	}
+	if doer != nil {
+		return doer.Do(req)
 	}
 	return t.client.Do(req)
 }

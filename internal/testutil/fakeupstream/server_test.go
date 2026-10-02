@@ -93,6 +93,39 @@ func TestGatedSSE(t *testing.T) {
 	}
 }
 
+func TestGateWaitingSignalPrecedesSent(t *testing.T) {
+	gate := make(chan struct{})
+	waiting := make(chan struct{}, 1)
+	sent := make(chan struct{})
+	s := New(Response{Steps: []Step{{Gate: gate, Waiting: waiting, Sent: sent, Data: []byte("data: gated\n\n")}}})
+	defer s.Close()
+	defer func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	}()
+	res, err := http.Get(s.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	receive(t, s.Requests)
+	receive(t, waiting)
+	select {
+	case <-sent:
+		t.Fatal("Sent fired before the gated step was released")
+	default:
+	}
+	close(gate)
+	receive(t, sent)
+	body, err := io.ReadAll(res.Body)
+	if err != nil || string(body) != "data: gated\n\n" {
+		t.Fatalf("gated response = %q, %v", body, err)
+	}
+}
+
 func TestDrops(t *testing.T) {
 	for _, tc := range []struct {
 		name string

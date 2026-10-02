@@ -26,6 +26,28 @@ func unsupported(message string) *core.GatewayError {
 	return &core.GatewayError{Code: "unsupported_feature", Category: core.CategoryUnsupportedFeature, Message: message}
 }
 
+// ValidateRequestLimits checks the selected route against the original HTTP
+// headers and the admitted opaque body size, without decoding the body again.
+func ValidateRequestLimits(r *http.Request, bodyBytes, maxBodyBytes, maxHeaderBytes int64) *core.GatewayError {
+	if r == nil || maxBodyBytes <= 0 || maxHeaderBytes <= 0 {
+		return invalid("Invalid request")
+	}
+	if r.ContentLength > maxBodyBytes || bodyBytes > maxBodyBytes {
+		return invalid("Request body too large")
+	}
+	var headerBytes int64
+	for name, values := range r.Header {
+		headerBytes += int64(len(name))
+		for _, value := range values {
+			headerBytes += int64(len(value))
+		}
+		if headerBytes > maxHeaderBytes {
+			return invalid("Request headers too large")
+		}
+	}
+	return nil
+}
+
 // Decode validates ingress before execution; maxBodyBytes and maxHeaderBytes
 // come from validated startup configuration. The returned body is never rewritten.
 func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.ExecutionRequest, *core.GatewayError) {
@@ -46,8 +68,8 @@ func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.Execution
 			return empty, unsupported("Unsupported content encoding")
 		}
 	}
-	if r.ContentLength > maxBodyBytes {
-		return empty, invalid("Request body too large")
+	if gatewayErr := ValidateRequestLimits(r, 0, maxBodyBytes, maxHeaderBytes); gatewayErr != nil {
+		return empty, gatewayErr
 	}
 	headers := make(map[string][]string)
 	hop := map[string]bool{"connection": true, "keep-alive": true, "proxy-connection": true, "transfer-encoding": true, "te": true, "trailer": true, "upgrade": true, "content-length": true, "content-encoding": true}
@@ -56,15 +78,7 @@ func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.Execution
 			hop[strings.ToLower(strings.TrimSpace(name))] = true
 		}
 	}
-	var headerBytes int64
 	for name, values := range r.Header {
-		headerBytes += int64(len(name))
-		for _, value := range values {
-			headerBytes += int64(len(value))
-		}
-		if headerBytes > maxHeaderBytes {
-			return empty, invalid("Request headers too large")
-		}
 		lower := strings.ToLower(name)
 		if hop[lower] || lower == "cookie" || lower == "cookie2" || lower == "set-cookie" || lower == "openai-organization" || lower == "openai-project" || strings.Contains(lower, "auth") || (lower != "idempotency-key" && strings.Contains(lower, "key")) || strings.Contains(lower, "secret") || strings.Contains(lower, "credential") || strings.Contains(lower, "token") || strings.HasPrefix(lower, "proxy-") {
 			continue
@@ -115,7 +129,7 @@ func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.Execution
 		return empty, invalid("Invalid JSON request")
 	}
 	var selected string
-	if json.Unmarshal(fields["model"], &selected) != nil || selected != model {
+	if json.Unmarshal(fields["model"], &selected) != nil || strings.TrimSpace(selected) == "" {
 		return empty, invalid("Invalid model")
 	}
 	req := core.ExecutionRequest{Model: selected, Capabilities: make(map[core.Capability]struct{}), Metadata: core.RequestMetadata{Headers: headers}, Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: body}}

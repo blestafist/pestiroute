@@ -20,7 +20,7 @@ func sseFrames(t *testing.T, response fakeupstream.Response) ([]byte, *core.Comp
 	defer up.Close()
 	tr := testTransport(up.URL + "/v1/responses")
 	defer tr.Close()
-	result, err := tr.ExecuteSSE(context.Background(), fixedRequest())
+	result, err := tr.ExecuteSSE(context.Background(), fixedRequest(), "selected", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestExecuteSSE_GatedIncrementalBodies(t *testing.T) {
 	defer up.Close()
 	tr := testTransport(up.URL + "/v1/responses")
 	defer tr.Close()
-	result, fail := tr.ExecuteSSE(context.Background(), fixedRequest())
+	result, fail := tr.ExecuteSSE(context.Background(), fixedRequest(), "selected", nil)
 	if fail != nil {
 		t.Fatal(fail)
 	}
@@ -249,7 +249,7 @@ func TestExecuteSSE_EncodedResponseRejected(t *testing.T) {
 	for _, status := range []int{200, 400} {
 		up := fakeupstream.New(fakeupstream.Response{Status: status, Header: http.Header{"Content-Encoding": {"identity", "gzip"}}, Body: []byte("private")})
 		tr := testTransport(up.URL + "/v1/responses")
-		result, err := tr.ExecuteSSE(context.Background(), fixedRequest())
+		result, err := tr.ExecuteSSE(context.Background(), fixedRequest(), "selected", nil)
 		tr.Close()
 		up.Close()
 		if result.Stream != nil || err == nil || err.Code != "unsupported_response_encoding" {
@@ -263,7 +263,7 @@ func TestExecuteSSE_EarlyCloseCancellation(t *testing.T) {
 	defer up.Close()
 	tr := testTransport(up.URL + "/v1/responses")
 	defer tr.Close()
-	result, fail := tr.ExecuteSSE(context.Background(), fixedRequest())
+	result, fail := tr.ExecuteSSE(context.Background(), fixedRequest(), "selected", nil)
 	if fail != nil {
 		t.Fatal(fail)
 	}

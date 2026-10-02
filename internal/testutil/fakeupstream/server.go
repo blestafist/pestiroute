@@ -16,15 +16,18 @@ type Request struct {
 	Header                 http.Header
 	Body                   []byte
 	Cancelled              <-chan struct{}
+	Completed              <-chan struct{}
+	CancelCount            func() int64
 }
 
 // Step is one stream write. Closing Gate permits the write; Sent closes after
 // the write has been flushed. Drop closes the connection after this step.
 type Step struct {
-	Gate <-chan struct{}
-	Sent chan<- struct{}
-	Data []byte
-	Drop bool
+	Gate    <-chan struct{}
+	Waiting chan<- struct{} // Notified when the handler reaches Gate.
+	Sent    chan<- struct{}
+	Data    []byte
+	Drop    bool
 }
 
 // Response describes a fixed response or a sequence of independently gated
@@ -53,6 +56,8 @@ func New(response Response) *Server {
 	server := &Server{}
 	requests := make(chan Request, 1)
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		completed := make(chan struct{})
+		defer close(completed)
 		server.requests.Add(1)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -60,9 +65,12 @@ func New(response Response) *Server {
 		}
 		cancelled := make(chan struct{})
 		done := make(chan struct{})
+		watcherDone := make(chan struct{})
 		var once sync.Once
-		signal := func() { once.Do(func() { close(cancelled) }) }
+		var cancelCount atomic.Int64
+		signal := func() { once.Do(func() { cancelCount.Add(1); close(cancelled) }) }
 		go func() {
+			defer close(watcherDone)
 			select {
 			case <-r.Context().Done():
 				select {
@@ -73,10 +81,13 @@ func New(response Response) *Server {
 			case <-done:
 			}
 		}()
-		defer close(done)
+		defer func() {
+			close(done)
+			<-watcherDone
+		}()
 
 		capture := Request{Method: r.Method, Path: r.URL.Path, RawQuery: r.URL.RawQuery,
-			Header: r.Header.Clone(), Body: body, Cancelled: cancelled}
+			Header: r.Header.Clone(), Body: body, Cancelled: cancelled, Completed: completed, CancelCount: cancelCount.Load}
 		select {
 		case requests <- capture:
 		case <-r.Context().Done():
@@ -115,6 +126,12 @@ func New(response Response) *Server {
 		w.(http.Flusher).Flush()
 		for _, step := range response.Steps {
 			if step.Gate != nil {
+				if step.Waiting != nil {
+					select {
+					case step.Waiting <- struct{}{}:
+					default:
+					}
+				}
 				select {
 				case <-step.Gate:
 				case <-r.Context().Done():
