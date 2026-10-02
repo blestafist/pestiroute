@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/connector/responses"
 	"github.com/blestafist/pestiroute/internal/core"
@@ -34,6 +35,288 @@ type fixture struct {
 	wantBody   []byte
 	callCount  func() int64
 	close      func()
+}
+
+var opaqueRequest = []byte("{ \"model\" : \"gpt-5.4-mini\", \"input\" : \"snowman ☃\", \"future_field\" : { \"keep\" : true } }\n")
+
+func TestConformanceOpacity(t *testing.T) {
+	want := []byte("event: response.created\ndata: {\"type\":\"response.created\",\"note\":\"☃\",\"future\":true}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"tool_call_id\":\"call_synthetic-42\"}}\n\n")
+	cut := bytes.Index(want, []byte("☃")) + 2 // Deliberately split inside the UTF-8 encoding.
+	parts := [][]byte{want[:cut], want[cut : len(want)-1], want[len(want)-1:]}
+	for _, tc := range []struct {
+		name string
+		new  func(*testing.T, [][]byte) (fixture, func() []byte)
+	}{{"native-loopback", nativeOpaqueFixture}, {"scripted", scriptedOpaqueFixture}} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx, captured := tc.new(t, parts)
+			t.Cleanup(fx.close)
+			fx.request.Payload.Body = append([]byte(nil), opaqueRequest...)
+			if err := fx.init(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			stream, gatewayErr := fx.connector.Execute(context.Background(), fx.request, fx.scope, fx.services())
+			if gatewayErr != nil {
+				t.Fatal(gatewayErr)
+			}
+			defer stream.Stream.Close()
+			body, err := readOpaqueBody(stream.Stream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := assertOpaque(body, want); err != nil {
+				t.Fatal(err)
+			}
+			if err := assertOpaque(captured(), opaqueRequest); err != nil {
+				t.Fatalf("request: %v", err)
+			}
+		})
+	}
+}
+
+func TestConformanceIncremental(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		scripted bool
+		new      func(*testing.T, <-chan struct{}, chan<- struct{}) fixture
+	}{{name: "native-loopback", new: nativeGatedFixture}, {name: "scripted", scripted: true, new: scriptedGatedFixture}} {
+		t.Run(tc.name, func(t *testing.T) {
+			gate, waiting := make(chan struct{}), make(chan struct{}, 1)
+			fx := tc.new(t, gate, waiting)
+			t.Cleanup(fx.close)
+			if err := fx.init(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := runIncrementalScenario(fx, fx.connector, gate, waiting, tc.scripted); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// runIncrementalScenario is the shared conformance assertion used for real
+// factories and deliberate connector mutations. Deadlines only bound failure;
+// success is established by the closed gate and its observable Waiting/Sent.
+func runIncrementalScenario(fx fixture, connector core.Connector, gate chan struct{}, signal <-chan struct{}, scripted bool) (retErr error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	gateClosed := false
+	closeGate := func() {
+		if !gateClosed {
+			close(gate)
+			gateClosed = true
+		}
+	}
+	defer func() { closeGate(); cancel() }()
+	result, gatewayErr := connector.Execute(ctx, fx.request, fx.scope, fx.services())
+	if gatewayErr != nil {
+		return gatewayErr
+	}
+	defer result.Stream.Close()
+	boundedNext := func() (core.StreamFrame, error) {
+		type outcome struct {
+			frame core.StreamFrame
+			err   error
+		}
+		resultCh := make(chan outcome, 1)
+		go func() { frame, err := result.Stream.Next(ctx); resultCh <- outcome{frame, err} }()
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case got := <-resultCh:
+			return got.frame, got.err
+		case <-timer.C:
+			closeGate()
+			cancel()
+			<-resultCh // Ensure a timed-out Next is unblocked and joined before returning.
+			return core.StreamFrame{}, errors.New("timed out waiting for incremental stream frame (safety bound)")
+		}
+	}
+	frame, err := boundedNext()
+	if err != nil || frame.Type != core.FrameHead {
+		return fmt.Errorf("Head = %+v, %v", frame, err)
+	}
+	frame, err = boundedNext()
+	if err != nil || frame.Type != core.FrameBody || !bytes.Equal(frame.Body.Data, incrementalFirst) {
+		return fmt.Errorf("initial Body = %+v, %v", frame, err)
+	}
+	if err := assertGateClosed(gate); err != nil {
+		return err
+	}
+	type outcome struct {
+		frame core.StreamFrame
+		err   error
+	}
+	pending := make(chan outcome, 1)
+	go func() { frame, err := result.Stream.Next(ctx); pending <- outcome{frame, err} }()
+	if scripted {
+		select {
+		case <-signal: // Scripted Next reached the terminal step, which remains gated.
+		case <-time.After(2 * time.Second):
+			closeGate()
+			cancel()
+			<-pending
+			return errors.New("timed out waiting for scripted stream gate (safety bound)")
+		}
+	}
+	closeGate()
+	if !scripted {
+		select {
+		case <-signal: // fakeupstream Sent confirms its terminal write was flushed.
+		case <-time.After(2 * time.Second):
+			cancel()
+			<-pending
+			return errors.New("timed out waiting for gated upstream write (safety bound)")
+		}
+	}
+	body := append([]byte(nil), frame.Body.Data...)
+	timer := time.NewTimer(2 * time.Second)
+	select {
+	case got := <-pending:
+		if got.err != nil {
+			return got.err
+		}
+		if got.frame.Type == core.FrameBody {
+			body = append(body, got.frame.Body.Data...)
+		}
+	case <-timer.C:
+		cancel()
+		<-pending
+		return errors.New("timed out awaiting gated Body (safety bound)")
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	for {
+		frame, err = boundedNext()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if frame.Type == core.FrameBody {
+			body = append(body, frame.Body.Data...)
+		}
+	}
+	if !bytes.Equal(body, append(append([]byte(nil), incrementalFirst...), incrementalTerminal...)) {
+		return fmt.Errorf("gated response mutated: %q", body)
+	}
+	return nil
+}
+
+var (
+	incrementalFirst    = []byte("event: response.created\ndata: {\"type\":\"response.created\",\"note\":\"☃\"}\n\n")
+	incrementalTerminal = []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+)
+
+func assertOpaque(got, want []byte) error {
+	if !bytes.Equal(got, want) {
+		return fmt.Errorf("opaque bytes differ: got %q want %q", got, want)
+	}
+	return nil
+}
+
+func assertGateClosed(gate <-chan struct{}) error {
+	select {
+	case <-gate:
+		return errors.New("incremental stream released its later step before initial delivery")
+	default:
+		return nil
+	}
+}
+
+func TestConformanceIncrementalRejectsMutatedConnectors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wrap func(core.Stream) core.Stream
+	}{{"corrupt-body", func(stream core.Stream) core.Stream { return &corruptingStream{Stream: stream} }}, {"buffer-until-eof", func(stream core.Stream) core.Stream { return &bufferingStream{Stream: stream} }}} {
+		t.Run(tc.name, func(t *testing.T) {
+			gate, waiting := make(chan struct{}), make(chan struct{}, 1)
+			fx := scriptedGatedFixture(t, gate, waiting)
+			t.Cleanup(fx.close)
+			if err := fx.init(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			mutated := streamWrappingConnector{Connector: fx.connector, wrap: tc.wrap}
+			if err := runIncrementalScenario(fx, mutated, gate, waiting, true); err == nil {
+				t.Fatal("mutated connector passed incremental conformance")
+			}
+		})
+	}
+	if err := assertOpaque([]byte("opaque"), []byte("opaqxe")); err == nil {
+		t.Fatal("byte-corrupting payload passed opacity assertion")
+	}
+}
+
+type streamWrappingConnector struct {
+	core.Connector
+	wrap func(core.Stream) core.Stream
+}
+
+func (c streamWrappingConnector) Execute(ctx context.Context, request core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
+	response, gatewayErr := c.Connector.Execute(ctx, request, scope, services)
+	if gatewayErr == nil && response.Stream != nil {
+		response.Stream = c.wrap(response.Stream)
+	}
+	return response, gatewayErr
+}
+
+type corruptingStream struct{ core.Stream }
+
+func (s *corruptingStream) Next(ctx context.Context) (core.StreamFrame, error) {
+	frame, err := s.Stream.Next(ctx)
+	if err == nil && frame.Type == core.FrameBody && len(frame.Body.Data) != 0 {
+		frame.Body.Data = append([]byte(nil), frame.Body.Data...)
+		frame.Body.Data[0] ^= 1
+	}
+	return frame, err
+}
+
+type bufferingStream struct {
+	core.Stream
+	frames []core.StreamFrame
+	index  int
+	loaded bool
+}
+
+func (s *bufferingStream) Next(ctx context.Context) (core.StreamFrame, error) {
+	if !s.loaded {
+		for {
+			frame, err := s.Stream.Next(ctx)
+			if err != nil {
+				if err == io.EOF {
+					s.loaded = true
+					break
+				}
+				return core.StreamFrame{}, err
+			}
+			s.frames = append(s.frames, frame)
+		}
+	}
+	if s.index == len(s.frames) {
+		return core.StreamFrame{}, io.EOF
+	}
+	frame := s.frames[s.index]
+	s.index++
+	return frame, nil
+}
+
+func readOpaqueBody(stream core.Stream) ([]byte, error) {
+	var body []byte
+	for {
+		frame, err := stream.Next(context.Background())
+		if err == io.EOF {
+			return body, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if frame.Type == core.FrameBody {
+			body = append(body, frame.Body.Data...)
+		}
+	}
 }
 
 type factory struct {
@@ -499,6 +782,85 @@ func nativeFixture(t *testing.T) fixture {
 			upstream.Close()
 		},
 	}
+}
+
+func nativeOpaqueFixture(t *testing.T, parts [][]byte) (fixture, func() []byte) {
+	steps := make([]fakeupstream.Step, len(parts))
+	for i, part := range parts {
+		steps[i].Data = part
+	}
+	return nativeCustomFixture(t, fakeupstream.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: steps})
+}
+
+func nativeGatedFixture(t *testing.T, gate <-chan struct{}, sent chan<- struct{}) fixture {
+	first := []byte("event: response.created\ndata: {\"type\":\"response.created\",\"note\":\"☃\"}\n\n")
+	terminal := []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+	fx, _ := nativeCustomFixture(t, fakeupstream.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: []fakeupstream.Step{{Data: first}, {Gate: gate, Sent: sent, Data: terminal}}})
+	return fx
+}
+
+func nativeCustomFixture(t *testing.T, response fakeupstream.Response) (fixture, func() []byte) {
+	t.Helper()
+	upstream := fakeupstream.New(response)
+	connector := responses.NewConnector()
+	config, err := json.Marshal(map[string]any{"transport": map[string]any{"endpoint": upstream.URL + "/v1/responses"}, "model": model, "account_id": account})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PESTIROUTE_CONFORMANCE_TOKEN", "synthetic-token")
+	var captured []byte
+	fx := fixture{
+		connector: connector,
+		init:      func(ctx context.Context) error { return connector.Init(ctx, core.ComponentConfig{Data: config}) },
+		request:   core.ExecutionRequest{ID: request, Model: model, Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: append([]byte(nil), opaqueRequest...)}},
+		scope:     core.AttemptScope{ID: "conformance-attempt", AccountID: account, Mode: "native"},
+		services: func() core.InvocationServices {
+			return core.NewEnvironmentServices(map[string]map[string]string{account: {"bearer": "PESTIROUTE_CONFORMANCE_TOKEN"}}, map[string]core.HTTPDoer{account: connector.HTTPDoer()}, nil).ForAttempt(core.AttemptScope{AccountID: account, Mode: "native"})
+		},
+		callCount: upstream.RequestCount,
+		close: func() {
+			if err := connector.Close(context.Background()); err != nil {
+				t.Errorf("close connector: %v", err)
+			}
+			upstream.Close()
+		},
+	}
+	return fx, func() []byte {
+		if captured == nil {
+			captured = (<-upstream.Requests).Body
+		}
+		return captured
+	}
+}
+
+func scriptedOpaqueFixture(t *testing.T, parts [][]byte) (fixture, func() []byte) {
+	steps := []scripted.Step{{Frame: headFrame()}}
+	for _, part := range parts {
+		steps = append(steps, scripted.Step{Frame: core.StreamFrame{Type: core.FrameBody, Body: &core.BodyFrame{Data: part}}})
+	}
+	steps = append(steps, scripted.Step{Frame: completeFrame()})
+	fx := newScriptedCustomFixture(t, steps)
+	return fx, func() []byte { return fx.connector.(*scripted.Connector).Calls()[0].Request.Payload.Body }
+}
+
+func scriptedGatedFixture(t *testing.T, gate <-chan struct{}, waiting chan<- struct{}) fixture {
+	first := []byte("event: response.created\ndata: {\"type\":\"response.created\",\"note\":\"☃\"}\n\n")
+	terminal := []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+	return newScriptedCustomFixture(t, []scripted.Step{{Frame: headFrame()}, {Frame: core.StreamFrame{Type: core.FrameBody, Body: &core.BodyFrame{Data: first}}}, {Frame: core.StreamFrame{Type: core.FrameBody, Body: &core.BodyFrame{Data: terminal}}, Gate: gate, Waiting: waiting}, {Frame: completeFrame()}})
+}
+
+func newScriptedCustomFixture(t *testing.T, steps []scripted.Step) fixture {
+	t.Helper()
+	scope := core.CapabilityScope{Protocol: protocol, Mode: "native", Model: model, AccountID: account}
+	connector := scripted.New(core.Descriptor{ID: "conformance.scripted.opaque", Kind: core.ComponentConnector, ImplementationVersion: "test", APIVersions: []core.APIVersion{{Major: 1}}, Protocols: []string{protocol}, Operations: []string{"execute"}, ConnectorType: "test", AuthMethods: []string{"bearer"}}, map[core.CapabilityScope]core.CapabilityResult{scope: {}}, scripted.Script{ID: request, Steps: steps})
+	t.Setenv("PESTIROUTE_CONFORMANCE_TOKEN", "synthetic-token")
+	return fixture{connector: connector, init: func(ctx context.Context) error { return connector.Init(ctx, core.ComponentConfig{}) }, request: core.ExecutionRequest{ID: request, Model: model, Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: append([]byte(nil), opaqueRequest...)}}, scope: core.AttemptScope{ID: "conformance-attempt", AccountID: account, Mode: "native"}, services: func() core.InvocationServices {
+		return core.NewEnvironmentServices(map[string]map[string]string{account: {"bearer": "PESTIROUTE_CONFORMANCE_TOKEN"}}, nil, nil).ForAttempt(core.AttemptScope{AccountID: account, Mode: "native"})
+	}, callCount: func() int64 { return int64(connector.CallCount()) }, close: func() {
+		if err := connector.Close(context.Background()); err != nil {
+			t.Errorf("close connector: %v", err)
+		}
+	}}
 }
 
 func scriptedFixture(t *testing.T) fixture {
