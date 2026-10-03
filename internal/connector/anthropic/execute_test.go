@@ -106,12 +106,16 @@ func TestExecuteStreamTranslateEarlyHeadAndUsage(t *testing.T) {
 	}
 }
 
-func TestExecuteRejectsBeforeDispatchAndHTTPRejection(t *testing.T) {
+func TestTranslateFunctionHistoryRejectsBeforeDispatchAndHTTPRejection(t *testing.T) {
 	calls := 0
 	services := core.InvocationServices{Credentials: credentialStub("secret"), Transport: doerFunc(func(*http.Request) (*http.Response, error) { calls++; return nil, nil })}
 	for _, body := range []string{
 		`{"model":"gpt-4.1-mini","stream":true,"input":"hello","tools":[{"type":"function","name":"bad name","parameters":{"type":"object"}}]}`,
 		`{"model":"gpt-4.1-mini","stream":true,"input":"hello","tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"missing"}}`,
+		`{"model":"gpt-4.1-mini","stream":true,"input":[{"type":"function_call_output","id":"out","call_id":"missing","output":"x"}]}`,
+		`{"model":"gpt-4.1-mini","stream":true,"input":[{"type":"function_call","id":"item","call_id":"call","name":"f","arguments":"{"}]}`,
+		`{"model":"gpt-4.1-mini","stream":true,"input":[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"},{"type":"message","role":"user","content":"interleaved"},{"type":"function_call_output","call_id":"c","output":"x"}]}`,
+		`{"model":"gpt-4.1-mini","stream":true,"input":[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"},{"type":"message","role":"user","content":"not a result"}]}`,
 	} {
 		request := core.ExecutionRequest{Model: "gpt-4.1-mini", Payload: core.RawPayload{Protocol: protocol, Body: []byte(body)}}
 		if _, err := executeConnector(t).Execute(context.Background(), request, core.AttemptScope{Mode: core.ModeTranslation, AccountID: "account-a"}, services); err == nil || err.Category != core.CategoryInvalidRequest || calls != 0 {

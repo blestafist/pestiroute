@@ -67,6 +67,70 @@ func TestTranslateHistory(t *testing.T) {
 	}
 }
 
+func TestTranslateFunctionToolHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{
+			name:  "paired calls",
+			input: `[{"type":"function_call","call_id":"call-1","name":"weather","arguments":"{\"city\":\"Paris\"}","status":"completed"},{"type":"function_call_output","call_id":"call-1","output":"sunny"},{"type":"function_call","id":"fc-item-2","call_id":"call-2","name":"clock","arguments":"{}"},{"type":"function_call_output","id":"fco-item-2","call_id":"call-2","output":"noon"}]`,
+			want:  `{"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"weather","input":{"city":"Paris"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"sunny"}]},{"role":"assistant","content":[{"type":"tool_use","id":"call-2","name":"clock","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-2","content":"noon"}]}]}`,
+		},
+		{
+			name:  "mixed text and grouped calls",
+			input: `[{"type":"message","role":"user","content":"check"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"working"}]},{"type":"function_call","id":"fc1","call_id":"c1","name":"one","arguments":"{}"},{"type":"function_call","id":"fc2","call_id":"c2","name":"two","arguments":"{}"},{"type":"function_call_output","id":"out1","call_id":"c1","output":"1"},{"type":"function_call_output","id":"out2","call_id":"c2","output":"2"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]`,
+			want:  `{"messages":[{"role":"user","content":[{"type":"text","text":"check"}]},{"role":"assistant","content":[{"type":"text","text":"working"},{"type":"tool_use","id":"c1","name":"one","input":{}},{"type":"tool_use","id":"c2","name":"two","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"1"},{"type":"tool_result","tool_use_id":"c2","content":"2"}]},{"role":"assistant","content":[{"type":"text","text":"done"}]}]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"model":"client-model","stream":true,"input":` + tc.input + `}`)
+			original := bytes.Clone(body)
+			got, gatewayErr := translateRequest(body)
+			if gatewayErr != nil {
+				t.Fatalf("translateRequest() error = %+v", gatewayErr)
+			}
+			encoded, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var actual, want any
+			if json.Unmarshal(encoded, &actual) != nil || json.Unmarshal([]byte(tc.want), &want) != nil || !reflect.DeepEqual(actual.(map[string]any)["messages"], want.(map[string]any)["messages"]) {
+				t.Fatalf("translated payload = %s, want messages from %s", encoded, tc.want)
+			}
+			if !bytes.Equal(body, original) {
+				t.Fatal("translation mutated admitted request bytes")
+			}
+		})
+	}
+}
+
+func TestTranslateFunctionToolHistoryRejectsInvalidLinks(t *testing.T) {
+	for _, tc := range []struct{ name, input string }{
+		{"orphan", `[{"type":"function_call_output","id":"out","call_id":"missing","output":"x"}]`},
+		{"output id substituted for call id", `[{"type":"function_call","id":"item","call_id":"call","name":"f","arguments":"{}"},{"type":"function_call_output","id":"out","call_id":"out","output":"x"}]`},
+		{"duplicate call", `[{"type":"function_call","id":"i1","call_id":"same","name":"f","arguments":"{}"},{"type":"function_call","id":"i2","call_id":"same","name":"f","arguments":"{}"}]`},
+		{"duplicate result", `[{"type":"function_call","id":"i","call_id":"c","name":"f","arguments":"{}"},{"type":"function_call_output","id":"o1","call_id":"c","output":"x"},{"type":"function_call_output","id":"o2","call_id":"c","output":"y"}]`},
+		{"malformed arguments", `[{"type":"function_call","id":"i","call_id":"c","name":"f","arguments":"{"}]`},
+		{"non-object arguments", `[{"type":"function_call","id":"i","call_id":"c","name":"f","arguments":"[]"}]`},
+		{"arguments duplicate key", `[{"type":"function_call","id":"i","call_id":"c","name":"f","arguments":"{\"x\":1,\"x\":2}"}]`},
+		{"missing call id", `[{"type":"function_call","id":"i","name":"f","arguments":"{}"}]`},
+		{"incomplete status", `[{"type":"function_call","call_id":"c","name":"f","arguments":"{}","status":"in_progress"}]`},
+		{"late result after user text", `[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"},{"type":"message","role":"user","content":"interleaved"},{"type":"function_call_output","call_id":"c","output":"x"}]`},
+		{"non-result user turn with outstanding call", `[{"type":"function_call","call_id":"c","name":"f","arguments":"{}"},{"type":"message","role":"user","content":"not a result"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"model":"client-model","stream":true,"input":` + tc.input + `}`)
+			original := bytes.Clone(body)
+			if _, gatewayErr := translateRequest(body); gatewayErr == nil || gatewayErr.Category != "invalid_request" || gatewayErr.Message == "" {
+				t.Fatalf("translateRequest() error = %+v, want client-safe invalid_request", gatewayErr)
+			}
+			if !bytes.Equal(body, original) {
+				t.Fatal("rejected translation mutated request bytes")
+			}
+		})
+	}
+}
+
 func TestTranslateTools(t *testing.T) {
 	body := []byte(`{"model":"client-model","stream":true,"input":"find weather","tools":[{"type":"function","name":"get_weather","description":"Look up weather","parameters":{"type":"object","properties":{"where":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false},"days":{"type":"array","items":{"type":"integer","minimum":1}}},"required":["where"],"additionalProperties":true}}]}`)
 	original := bytes.Clone(body)

@@ -27,25 +27,24 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: original bounded batch complete (18 DONE reached)
+## Immediate focus: M4-019 DONE (19 tasks completed)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
 Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-011](tasks/M4-011.md)
 are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`),
 [M4-013](tasks/M4-013.md) (`594d684`), [M4-014](tasks/M4-014.md) (`cf9d7d6`),
-[M4-015](tasks/M4-015.md) (`58cf823`), [M4-016](tasks/M4-016.md) (`e65671c`), and
-[M4-017](tasks/M4-017.md) (`4555ea4`) are committed locally on `dev-m4` ahead 6 of origin.
-With [M4-018](tasks/M4-018.md) completed, 7 continuation commits are pending final push.
+[M4-015](tasks/M4-015.md) (`58cf823`), [M4-016](tasks/M4-016.md) (`e65671c`),
+[M4-017](tasks/M4-017.md) (`4555ea4`), and [M4-018](tasks/M4-018.md) (`a65f424`)
+are committed locally on `dev-m4` ahead 7 of origin.
 
-The original quota of 18 tasks DONE across M4 is reached with no backlog expansion.
-[M4-018](tasks/M4-018.md) (Map tool choice and parallel-call controls explicitly) is
-verified and reviewed (reviewer PASS `ses_efd216163ffe64axhbPDKGKk1K`). It maps
-Responses API `tool_choice` (`auto`, `required`, `none`, named flat function) and
-`parallel_tool_calls` (`true`, `false`, omitted) to Messages `tool_choice`, preserving
-request bytes unmodified and rejecting contradictory/malformed choices before dispatch.
-No additional tasks are promoted or prepared. All 7 continuation commits remain local
-on `dev-m4` pending final push.
+[M4-019](tasks/M4-019.md) (Translate function call and result history) is verified
+and passed review (reviewer PASS `ses_efcc26dd9ffefrw9QN1lqpra0f`). It maps Responses
+input history items `function_call` and `function_call_output` to Messages assistant
+`tool_use` and user `tool_result` content blocks, preserving `call_id` linkage, argument
+JSON parsing, and rejecting orphan results, duplicate call IDs, malformed JSON, and
+invalid chronology before dispatch. 19 tasks are DONE in M4. No new tasks are promoted
+or prepared pending task commit.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

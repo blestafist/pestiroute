@@ -48,8 +48,13 @@ type textMessage struct {
 }
 
 type textBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   *string         `json:"content,omitempty"`
 }
 
 func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
@@ -164,12 +169,46 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 		return messagesRequest{}, invalidTranslation("Invalid input")
 	}
 	conversationStarted := false
+	callIDs := make(map[string]struct{})
+	pendingCallIDs := make(map[string]struct{})
+	resultIDs := make(map[string]struct{})
+	resultsStarted := false
 	for _, raw := range items {
+		var kind string
+		if json.Unmarshal(rawType(raw), &kind) != nil {
+			return messagesRequest{}, invalidTranslation("Invalid input item")
+		}
+		if kind == "function_call" || kind == "function_call_output" {
+			if kind == "function_call" && len(pendingCallIDs) > 0 && resultsStarted {
+				return messagesRequest{}, invalidTranslation("Ambiguous function history chronology")
+			}
+			item, callID, err := translateFunctionHistoryItem(raw, kind, callIDs, pendingCallIDs, resultIDs)
+			if err != nil {
+				return messagesRequest{}, invalidTranslation("Invalid function history")
+			}
+			role := "assistant"
+			if kind == "function_call_output" {
+				role = "user"
+				resultsStarted = true
+				delete(pendingCallIDs, callID)
+				if len(pendingCallIDs) == 0 {
+					resultsStarted = false
+				}
+			} else {
+				pendingCallIDs[callID] = struct{}{}
+			}
+			appendHistoryBlock(&out.Messages, role, item)
+			conversationStarted = true
+			continue
+		}
+		if len(pendingCallIDs) > 0 {
+			return messagesRequest{}, invalidTranslation("Ambiguous function history chronology")
+		}
 		item, err := object(raw, "type", "role", "content", "status", "annotations", "logprobs")
 		if err != nil {
 			return messagesRequest{}, invalidTranslation("Invalid input message")
 		}
-		var kind, role string
+		var role string
 		if json.Unmarshal(item["type"], &kind) != nil || kind != "message" ||
 			json.Unmarshal(item["role"], &role) != nil {
 			return messagesRequest{}, invalidTranslation("Invalid input message")
@@ -208,7 +247,9 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 			}
 		case "user", "assistant":
 			conversationStarted = true
-			out.Messages = append(out.Messages, textMessage{Role: role, Content: content})
+			for _, block := range content {
+				appendHistoryBlock(&out.Messages, role, block)
+			}
 		default:
 			return messagesRequest{}, invalidTranslation("Unsupported message role")
 		}
@@ -217,6 +258,87 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 		return messagesRequest{}, invalidTranslation("At least one user or assistant message is required")
 	}
 	return out, nil
+}
+
+func rawType(raw json.RawMessage) json.RawMessage {
+	var item map[string]json.RawMessage
+	if json.Unmarshal(raw, &item) != nil {
+		return nil
+	}
+	return item["type"]
+}
+
+func translateFunctionHistoryItem(raw json.RawMessage, kind string, callIDs, pendingCallIDs, resultIDs map[string]struct{}) (textBlock, string, error) {
+	if kind == "function_call" {
+		if !uniqueJSONValue(raw) {
+			return textBlock{}, "", fmt.Errorf("duplicate function call field")
+		}
+		item, err := object(raw, "type", "id", "call_id", "name", "arguments", "status")
+		if err != nil {
+			return textBlock{}, "", err
+		}
+		var id, callID, name, arguments string
+		if rawID, exists := item["id"]; exists && (json.Unmarshal(rawID, &id) != nil || id == "") {
+			return textBlock{}, "", fmt.Errorf("invalid function item id")
+		}
+		if status, exists := item["status"]; exists {
+			var value string
+			if json.Unmarshal(status, &value) != nil || value != "completed" {
+				return textBlock{}, "", fmt.Errorf("function call is not completed")
+			}
+		}
+		if json.Unmarshal(item["call_id"], &callID) != nil || callID == "" ||
+			json.Unmarshal(item["name"], &name) != nil || !validToolName(name) ||
+			json.Unmarshal(item["arguments"], &arguments) != nil || !uniqueJSONValue(json.RawMessage(arguments)) {
+			return textBlock{}, "", fmt.Errorf("invalid function call")
+		}
+		var input map[string]json.RawMessage
+		if json.Unmarshal([]byte(arguments), &input) != nil || input == nil {
+			return textBlock{}, "", fmt.Errorf("function arguments must be an object")
+		}
+		if _, exists := callIDs[callID]; exists {
+			return textBlock{}, "", fmt.Errorf("duplicate call id")
+		}
+		callIDs[callID] = struct{}{}
+		return textBlock{Type: "tool_use", ID: callID, Name: name, Input: json.RawMessage(arguments)}, callID, nil
+	}
+	if !uniqueJSONValue(raw) {
+		return textBlock{}, "", fmt.Errorf("duplicate function output field")
+	}
+	item, err := object(raw, "type", "id", "call_id", "output")
+	if err != nil {
+		return textBlock{}, "", err
+	}
+	var id, callID, output string
+	if rawID, exists := item["id"]; exists && (json.Unmarshal(rawID, &id) != nil || id == "") {
+		return textBlock{}, "", fmt.Errorf("invalid function output item id")
+	}
+	if json.Unmarshal(item["call_id"], &callID) != nil || callID == "" ||
+		json.Unmarshal(item["output"], &output) != nil {
+		return textBlock{}, "", fmt.Errorf("invalid function output")
+	}
+	if id != "" && id == callID {
+		return textBlock{}, "", fmt.Errorf("output item id is not a call id")
+	}
+	if _, exists := callIDs[callID]; !exists {
+		return textBlock{}, "", fmt.Errorf("orphan function output")
+	}
+	if _, exists := resultIDs[callID]; exists {
+		return textBlock{}, "", fmt.Errorf("duplicate function output")
+	}
+	if _, exists := pendingCallIDs[callID]; !exists {
+		return textBlock{}, "", fmt.Errorf("function output is not pending")
+	}
+	resultIDs[callID] = struct{}{}
+	return textBlock{Type: "tool_result", ToolUseID: callID, Content: &output}, callID, nil
+}
+
+func appendHistoryBlock(messages *[]textMessage, role string, block textBlock) {
+	if len(*messages) == 0 || (*messages)[len(*messages)-1].Role != role {
+		*messages = append(*messages, textMessage{Role: role})
+	}
+	last := &(*messages)[len(*messages)-1]
+	last.Content = append(last.Content, block)
 }
 
 func translateToolChoice(raw json.RawMessage, tools []messagesTool) (*messagesToolChoice, error) {
