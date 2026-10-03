@@ -237,6 +237,31 @@ func TestRouteSelectionUsesDistinctConfiguredPairs(t *testing.T) {
 	}
 }
 
+func TestRouteCandidatesPreserveDeclarationOrder(t *testing.T) {
+	r, _, _, _, _ := routeRegistryWithPairs(t)
+	routes := []Route{
+		{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: "openai.responses.v1", Mode: ModeNative, Model: "m"}, AccountID: "account-a"}, Adapter: "adapter-a", Connector: "connector-a", CandidateGroup: "route", MaxBodyBytes: 1024, MaxHeaderBytes: 1024, Requirements: []Capability{"route.required"}},
+		{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: "openai.responses.v1", Mode: ModeNative, Model: "m"}, AccountID: "account-b"}, Adapter: "adapter-b", Connector: "connector-b", CandidateGroup: "route", MaxBodyBytes: 1024, MaxHeaderBytes: 1024, Requirements: []Capability{"route.required"}},
+	}
+	table, err := NewRouteTable(routes, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ExecutionRequest{Model: "m", Payload: RawPayload{Protocol: "openai.responses.v1"}}
+	got := table.Candidates(request, ModeNative, "account-a")
+	if len(got) != 2 || got[0].Identity.AccountID != "account-a" || got[1].Identity.AccountID != "account-b" {
+		t.Fatalf("candidate order = %+v", got)
+	}
+	got[0].Identity.AccountID = "mutated"
+	got[0].Requirements[0] = "mutated"
+	if candidate := table.Candidates(request, ModeNative, "account-a"); candidate[0].Identity.AccountID != "account-a" || candidate[0].Requirements[0] != "route.required" {
+		t.Fatal("candidate result mutated route table")
+	}
+	if _, err := NewRouteTable([]Route{routes[0], routes[0]}, r); err == nil {
+		t.Fatal("duplicate target accepted")
+	}
+}
+
 func TestRouteSelectionRejectsUnavailableHealth(t *testing.T) {
 	for _, target := range []string{"adapter", "connector"} {
 		t.Run(target, func(t *testing.T) {

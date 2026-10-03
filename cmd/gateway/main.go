@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,6 +24,8 @@ import (
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	connector "github.com/blestafist/pestiroute/internal/connector/responses"
 	"github.com/blestafist/pestiroute/internal/core"
+	secure "github.com/blestafist/pestiroute/internal/crypto"
+	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
 type config struct {
@@ -35,10 +39,24 @@ type config struct {
 	TLSHandshakeTimeout   string `json:"tls_handshake_timeout"`
 	ResponseHeaderTimeout string `json:"response_header_timeout"`
 	StreamIdleTimeout     string `json:"stream_idle_timeout"`
+	DatabasePath          string `json:"database_path,omitempty"`
+	MasterKeyFile         string `json:"master_key_file,omitempty"`
 	credential            secret
 	Components            []topologyComponent `json:"components,omitempty"`
 	Routes                []topologyRoute     `json:"routes,omitempty"`
 	Credentials           map[string]secret   `json:"-"`
+	keyStore              core.KeyStore
+	policyStore           core.PolicyStore
+	accountAuthorizer     core.AccountAuthorizer
+	accounting            core.AccountingStore
+	routeBudget           core.RouteBudget
+	budgetPolicy          string
+	routeID               string
+	logger                *slog.Logger
+	protected             *protectedConfig
+	runtimeDB             *sql.DB
+	runtimeKey            secure.MasterKey
+	processLock           *sqlite.ProcessLock
 }
 
 type topologyComponent struct {
@@ -56,13 +74,20 @@ type topologyComponent struct {
 }
 
 type topologyRoute struct {
-	Protocol     string                                   `json:"protocol"`
-	Mode         string                                   `json:"mode"`
-	Model        string                                   `json:"model"`
-	Account      string                                   `json:"account"`
-	Adapter      core.InstanceID                          `json:"adapter"`
-	Connector    core.InstanceID                          `json:"connector"`
-	Capabilities map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	Protocol         string                                   `json:"protocol"`
+	Mode             string                                   `json:"mode"`
+	Model            string                                   `json:"model"`
+	Account          string                                   `json:"account"`
+	Adapter          core.InstanceID                          `json:"adapter"`
+	Connector        core.InstanceID                          `json:"connector"`
+	Capabilities     map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	Requirements     []core.Capability                        `json:"-"`
+	Budget           core.RouteBudget                         `json:"-"`
+	BudgetPolicy     string                                   `json:"-"`
+	RouteID          string                                   `json:"-"`
+	CandidateGroup   string                                   `json:"-"`
+	RetryMaxAttempts int                                      `json:"-"`
+	RetryDeadline    time.Duration                            `json:"-"`
 }
 
 // secret stays in runtime state, never in configuration output or diagnostics.
@@ -76,6 +101,14 @@ func (secret) GoString() string { return "[REDACTED]" }
 func (c config) String() string {
 	c.credential = ""
 	c.Credentials = nil
+	c.keyStore = nil
+	c.policyStore = nil
+	c.accountAuthorizer = nil
+	c.accounting = nil
+	c.runtimeDB = nil
+	c.runtimeKey = secure.MasterKey{}
+	c.processLock = nil
+	c.logger = nil
 	type view config
 	return fmt.Sprintf("%+v", view(c))
 }
@@ -85,7 +118,8 @@ func (c config) GoString() string { return c.String() }
 func loadConfig(args []string) (config, time.Duration, error) {
 	flags := flag.NewFlagSet("gateway", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	path := flags.String("config", "", "JSON configuration file")
+	path := flags.String("config", "", "configuration file")
+	format := flags.String("config-format", "json", "configuration format (json or yaml)")
 	listen := flags.String("listen", "", "listener address")
 	timeout := flags.String("shutdown-timeout", "", "graceful shutdown duration")
 	if err := flags.Parse(args); err != nil {
@@ -95,6 +129,25 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		return config{}, 0, fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
 	c := config{Listen: "127.0.0.1:8080", ShutdownTimeout: "5s"}
+	if *format != "json" && *format != "yaml" {
+		return config{}, 0, fmt.Errorf("unsupported config format %q (want json or yaml)", *format)
+	}
+	if *format == "yaml" {
+		if *path == "" {
+			return config{}, 0, errors.New("-config is required with -config-format yaml")
+		}
+		loaded, err := loadProtectedYAML(*path)
+		if err != nil {
+			return config{}, 0, err
+		}
+		c.Listen = loaded.Server.Listen
+		c.ShutdownTimeout = loaded.Server.ShutdownTimeout
+		d, _ := time.ParseDuration(c.ShutdownTimeout)
+		c.DatabasePath = loaded.Storage.Path
+		c.MasterKeyFile = loaded.Secrets.MasterKeyFile
+		c.protected = &loaded
+		return c, d, nil
+	}
 	var supplied map[string]json.RawMessage
 	if *path != "" {
 		file, err := os.Open(*path)
@@ -149,6 +202,10 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		return config{}, 0, fmt.Errorf("invalid shutdown_timeout %q: must be a positive duration", c.ShutdownTimeout)
 	}
 	fields := []string{"upstream_endpoint", "upstream_credential_env", "max_request_body_bytes", "max_request_header_bytes", "connect_timeout", "tls_handshake_timeout", "response_header_timeout", "stream_idle_timeout"}
+	persistent := c.DatabasePath != "" || c.MasterKeyFile != ""
+	if persistent && (c.DatabasePath == "" || c.MasterKeyFile == "") {
+		return config{}, 0, errors.New("database_path and master_key_file must be configured together")
+	}
 	count := 0
 	for _, field := range fields {
 		if _, ok := supplied[field]; ok {
@@ -174,6 +231,8 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		if err := validateTopology(&c); err != nil {
 			return config{}, 0, err
 		}
+	} else if persistent {
+		return config{}, 0, errors.New("persistent credentials require M2 components and routes")
 	} else if count != 0 {
 		if count != len(fields) {
 			return config{}, 0, errors.New("partial inference configuration: all upstream, limit and timeout fields are required")
@@ -208,8 +267,11 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		}
 		c.credential = secret(value)
 		c.Components = legacyComponents(c)
-		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector"}}
+		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector", Budget: c.routeBudget, BudgetPolicy: c.budgetPolicy, RouteID: c.routeID}}
 		c.Credentials = map[string]secret{c.UpstreamCredentialEnv: c.credential}
+		if persistent {
+			return config{}, 0, errors.New("persistent credentials require M2 components and routes")
+		}
 	}
 	return c, d, nil
 }
@@ -225,6 +287,7 @@ func validateJSONFieldSpellings(data []byte) error {
 		"max_request_header_bytes": true, "connect_timeout": true,
 		"tls_handshake_timeout": true, "response_header_timeout": true,
 		"stream_idle_timeout": true, "components": true, "routes": true,
+		"database_path": true, "master_key_file": true,
 	}); err != nil {
 		return err
 	}
@@ -356,14 +419,19 @@ func validateTopology(c *config) error {
 				return fmt.Errorf("component %q %s must be positive", component.ID, entry.name)
 			}
 		}
-		if strings.TrimSpace(component.CredentialEnv) == "" || strings.Contains(component.CredentialEnv, "=") {
-			return fmt.Errorf("component %q credential_env must name a non-empty environment variable", component.ID)
+		if strings.TrimSpace(component.CredentialEnv) == "" {
+			return fmt.Errorf("component %q credential reference must be non-empty", component.ID)
 		}
-		value, ok := os.LookupEnv(component.CredentialEnv)
-		if !ok || value == "" {
-			return fmt.Errorf("component %q credential_env is unset or empty", component.ID)
+		if c.DatabasePath == "" {
+			if strings.Contains(component.CredentialEnv, "=") {
+				return fmt.Errorf("component %q credential_env must name an environment variable", component.ID)
+			}
+			value, ok := os.LookupEnv(component.CredentialEnv)
+			if !ok || value == "" {
+				return fmt.Errorf("component %q credential_env is unset or empty", component.ID)
+			}
+			c.Credentials[component.CredentialEnv] = secret(value)
 		}
-		c.Credentials[component.CredentialEnv] = secret(value)
 	}
 	seen := make(map[core.RouteIdentity]struct{}, len(c.Routes))
 	for _, route := range c.Routes {
@@ -451,23 +519,69 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	legacy := len(c.Components) == 0 && c.UpstreamEndpoint != ""
 	if legacy {
 		c.Components = legacyComponents(c)
-		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector"}}
+		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector", Budget: c.routeBudget, BudgetPolicy: c.budgetPolicy, RouteID: c.routeID}}
 	}
 	if len(c.Components) == 0 {
 		return mux, func(context.Context) error { return nil }, nil
+	}
+	var persistentRefs map[string]map[string]string
+	if c.DatabasePath != "" {
+		var err error
+		persistentRefs, err = configuredCredentialRefs(c)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	persistentDB := c.runtimeDB
+	persistentKey := c.runtimeKey
+	if c.DatabasePath != "" {
+		if persistentDB == nil {
+			key, err := secure.LoadMasterKey(c.MasterKeyFile)
+			if err != nil {
+				return nil, nil, errors.New("invalid runtime master key file")
+			}
+			db, err := sqlite.Open(c.DatabasePath)
+			if err != nil {
+				return nil, nil, errors.New("cannot open runtime database")
+			}
+			version, err := sqlite.SchemaVersion(context.Background(), db)
+			if err != nil || version != sqlite.CurrentSchemaVersion() {
+				_ = db.Close()
+				return nil, nil, errors.New("runtime database is not fully migrated")
+			}
+			persistentDB, persistentKey = db, key
+		}
+	}
+	keyStore := c.keyStore
+	if keyStore == nil && persistentDB != nil {
+		keyStore = sqliteVirtualKeyStore{keys: sqlite.NewVirtualKeys(persistentDB)}
 	}
 	versions := map[core.ComponentKind]core.APIVersion{
 		core.ComponentAdapter: {Major: 1}, core.ComponentConnector: {Major: 1},
 	}
 	registry, err := core.NewRegistry(versions, nil)
 	if err != nil {
+		if persistentDB != nil {
+			_ = persistentDB.Close()
+		}
 		return nil, nil, err
 	}
 	var closeOnce sync.Once
 	closeDone := make(chan struct{})
 	var closeErr error
 	closeComponents := func(ctx context.Context) error {
-		closeOnce.Do(func() { go func() { closeErr = registry.Close(ctx); close(closeDone) }() })
+		closeOnce.Do(func() {
+			go func() {
+				closeErr = registry.Close(ctx)
+				if persistentDB != nil {
+					closeErr = errors.Join(closeErr, persistentDB.Close())
+				}
+				if c.processLock != nil {
+					closeErr = errors.Join(closeErr, c.processLock.Close())
+				}
+				close(closeDone)
+			}()
+		})
 		select {
 		case <-closeDone:
 			return closeErr
@@ -532,12 +646,11 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	credentials := make(map[string]map[string]string)
 	models := make(map[string]topologyRoute)
 	for _, item := range c.Routes {
-		if previous, ok := models[item.Model]; ok && previous.Account != item.Account {
-			cleanup()
-			return nil, nil, fmt.Errorf("model %q has ambiguous account routes", item.Model)
+		if _, ok := models[item.Model]; !ok {
+			models[item.Model] = item
 		}
-		models[item.Model] = item
-		routes = append(routes, core.Route{Identity: core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: item.Protocol, Mode: item.Mode, Model: item.Model}, AccountID: item.Account}, Adapter: item.Adapter, Connector: item.Connector})
+		limits := connectorLimits[item.Connector]
+		routes = append(routes, core.Route{Identity: core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: item.Protocol, Mode: item.Mode, Model: item.Model}, AccountID: item.Account}, Adapter: item.Adapter, Connector: item.Connector, CandidateGroup: item.CandidateGroup, MaxBodyBytes: limits.MaxBodyBytes, MaxHeaderBytes: limits.MaxHeaderBytes, Requirements: item.Requirements})
 		credentials[item.Account] = map[string]string{"bearer": credentialEnv(c, item.Connector)}
 	}
 	table, err := core.NewRouteTable(routes, registry)
@@ -567,22 +680,46 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	}
 	var services interface {
 		ForAttempt(core.AttemptScope) core.InvocationServices
-	} = core.NewEnvironmentServices(credentials, transports, nil)
+	} = core.NewEnvironmentServices(credentials, transports, c.logger)
+	accounting := c.accounting
+	policyStore := c.policyStore
+	accountAuthorizer := c.accountAuthorizer
+	if persistentDB != nil {
+		accounts := sqlite.NewAccounts(persistentDB)
+		if accounting == nil {
+			accounting = sqliteAccountingStore{ledger: sqlite.NewLedger(persistentDB)}
+		}
+		services = core.NewPersistentServices(sqliteAccountReader{accounts: accounts}, sqliteCredentialReader{credentials: sqlite.NewCredentials(persistentDB), key: persistentKey}, persistentRefs, transports, c.logger)
+		if policyStore == nil {
+			policyStore = sqlitePolicyStore{policies: sqlite.NewKeyPolicies(persistentDB)}
+		}
+		if accountAuthorizer == nil {
+			accountAuthorizer = sqliteAccountAuthorizer{accounts: accounts}
+		}
+	}
 	if legacy {
 		services = fixedLegacyServices{account: c.UpstreamCredentialEnv, credential: []byte(c.credential), transport: transports[c.UpstreamCredentialEnv]}
 	}
+	var accountingFailed atomic.Bool
 	dispatchers := make(map[string]*core.Dispatcher, len(models))
 	protocolAdapters := make(map[string]core.ProtocolAdapter, len(models))
-	routeLimits := make(map[string]adapterConfig, len(models))
 	for _, route := range c.Routes {
+		if _, exists := dispatchers[route.Model]; exists {
+			continue
+		}
 		component, _, ok := registry.Admit(context.Background(), route.Adapter)
 		if !ok {
 			cleanup()
 			return nil, nil, fmt.Errorf("adapter %q is unavailable", route.Adapter)
 		}
 		protocolAdapters[route.Model] = component.(core.ProtocolAdapter)
-		routeLimits[route.Model] = connectorLimits[route.Connector]
-		dispatchers[route.Model] = &core.Dispatcher{Routes: table, Services: services, AccountID: route.Account, Finalize: finalize}
+		dispatchers[route.Model] = &core.Dispatcher{
+			Routes: table, Services: services, Policies: policyStore, Accounts: accountAuthorizer,
+			Accounting: accounting, Budget: route.Budget, BudgetPolicy: route.BudgetPolicy,
+			RouteID: route.RouteID, AccountID: route.Account, Finalize: finalize,
+			RetryMaxAttempts: route.RetryMaxAttempts, RetryDeadline: route.RetryDeadline,
+			OnAccountingFailure: func() { accountingFailed.Store(true); ready.Store(false) },
+		}
 	}
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
 		if draining.Load() {
@@ -590,6 +727,28 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			return
 		}
 		protocolAdapter := firstAdapter(protocolAdapters)
+		if accountingFailed.Load() {
+			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, &core.GatewayError{Code: "accounting_unavailable", Category: core.CategoryUnavailable, Message: "Request accounting is unavailable"}, core.ExecutionResponse{})
+			return
+		}
+		if keyStore != nil {
+			token, ok := adapter.BearerToken(r)
+			if !ok {
+				_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, &core.GatewayError{Code: "invalid_api_key", Category: core.CategoryUnauthenticated, Message: "Invalid API key"}, core.ExecutionResponse{})
+				return
+			}
+			principal, err := keyStore.Verify(r.Context(), token)
+			token = ""
+			if err != nil {
+				gatewayErr := &core.GatewayError{Code: "invalid_api_key", Category: core.CategoryUnauthenticated, Message: "Invalid API key"}
+				if !errors.Is(err, sqlite.ErrInvalidVirtualKey) && !errors.Is(err, sqlite.ErrVirtualKeyNotFound) && !errors.Is(err, sqlite.ErrVirtualKeyDisabled) && !errors.Is(err, sqlite.ErrVirtualKeyRevoked) {
+					gatewayErr = &core.GatewayError{Code: "authentication_unavailable", Category: core.CategoryUnavailable, Message: "Authentication unavailable"}
+				}
+				_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
+				return
+			}
+			r = r.WithContext(core.WithTrustedPrincipal(r.Context(), principal))
+		}
 		req, gatewayErr := protocolAdapter.Decode(r.Context(), core.ClientRequest{Transport: r})
 		if gatewayErr != nil {
 			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
@@ -602,8 +761,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			return
 		}
 		protocolAdapter = protocolAdapters[req.Model]
-		limits := routeLimits[req.Model]
-		if gatewayErr := adapter.ValidateRequestLimits(r, int64(len(req.Payload.Body)), limits.MaxBodyBytes, limits.MaxHeaderBytes); gatewayErr != nil {
+		if gatewayErr := adapter.ValidateRequestLimits(r, int64(len(req.Payload.Body)), maxBody, maxHeader); gatewayErr != nil {
 			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
 			return
 		}
@@ -611,6 +769,66 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, resp)
 	})
 	return mux, closeComponents, nil
+}
+
+type sqliteVirtualKeyStore struct{ keys *sqlite.VirtualKeys }
+
+func (s sqliteVirtualKeyStore) Verify(ctx context.Context, token string) (core.TrustedPrincipal, error) {
+	principal, err := s.keys.Verify(ctx, token)
+	if err != nil {
+		return core.TrustedPrincipal{}, err
+	}
+	return core.TrustedPrincipal{KeyID: principal.KeyID, PolicyID: principal.PolicyID, KeyRevision: principal.KeyRevision, PolicyRevision: principal.PolicyRevision}, nil
+}
+
+type sqlitePolicyStore struct{ policies *sqlite.KeyPolicies }
+
+func (s sqlitePolicyStore) Snapshot(ctx context.Context, principal core.TrustedPrincipal) (core.PolicySnapshot, error) {
+	snapshot, err := s.policies.Snapshot(ctx, sqlite.TrustedPrincipal{
+		KeyID: principal.KeyID, PolicyID: principal.PolicyID,
+		KeyRevision: principal.KeyRevision, PolicyRevision: principal.PolicyRevision,
+	})
+	if err != nil {
+		return core.PolicySnapshot{}, err
+	}
+	return core.PolicySnapshot{
+		ID: snapshot.ID, Revision: snapshot.Revision, Enabled: snapshot.Enabled,
+		Models: snapshot.Models, Connectors: snapshot.Connectors, RPM: snapshot.RPM, TPM: snapshot.TPM,
+	}, nil
+}
+
+type sqliteAccountAuthorizer struct{ accounts *sqlite.Accounts }
+
+func (a sqliteAccountAuthorizer) AuthorizeAccount(ctx context.Context, accountID, connector string) error {
+	account, err := a.accounts.Get(ctx, accountID)
+	if err != nil || !account.Enabled || account.Connector != connector {
+		return core.ErrPermissionDenied
+	}
+	return nil
+}
+
+// configuredCredentialRefs projects connector credential record IDs onto the
+// account-only InvocationServices scope. Until the binding carries route refs,
+// one account must resolve to one persistent credential record.
+func configuredCredentialRefs(c config) (map[string]map[string]string, error) {
+	if c.DatabasePath == "" {
+		return nil, nil
+	}
+	refsByConnector := make(map[core.InstanceID]string)
+	for _, component := range c.Components {
+		if component.Kind == core.ComponentConnector {
+			refsByConnector[component.ID] = component.CredentialEnv
+		}
+	}
+	refsByAccount := make(map[string]map[string]string)
+	for _, route := range c.Routes {
+		ref := refsByConnector[route.Connector]
+		if existing := refsByAccount[route.Account]; existing != nil && existing["bearer"] != ref {
+			return nil, errors.New("persistent credential references conflict for one account")
+		}
+		refsByAccount[route.Account] = map[string]string{"bearer": ref}
+	}
+	return refsByAccount, nil
 }
 
 type fixedLegacyServices struct {
@@ -645,6 +863,36 @@ func (unavailableCredential) Get(context.Context, string) ([]byte, error) {
 	return nil, core.ErrCredentialUnavailable
 }
 
+type sqliteAccountReader struct{ accounts *sqlite.Accounts }
+
+func (r sqliteAccountReader) GetAccount(ctx context.Context, id string) (core.RuntimeAccount, error) {
+	account, err := r.accounts.Get(ctx, id)
+	if err != nil {
+		return core.RuntimeAccount{}, err
+	}
+	return core.RuntimeAccount{Enabled: account.Enabled}, nil
+}
+
+type sqliteCredentialReader struct {
+	credentials *sqlite.Credentials
+	key         secure.MasterKey
+}
+
+func (r sqliteCredentialReader) GetCredential(ctx context.Context, accountID, id string) (core.RuntimeCredential, error) {
+	credential, err := r.credentials.Get(ctx, accountID, id)
+	if err != nil {
+		return core.RuntimeCredential{}, err
+	}
+	value, err := secure.Open(r.key, secure.Envelope{
+		FormatVersion: credential.FormatVersion, KeyVersion: credential.KeyVersion,
+		Nonce: credential.Nonce, Ciphertext: credential.Ciphertext,
+	}, "credentials", credential.ID, credential.AccountID)
+	if err != nil {
+		return core.RuntimeCredential{}, err
+	}
+	return core.RuntimeCredential{Value: value, ExpiresAt: credential.ExpiresAt}, nil
+}
+
 func firstAdapter(adapters map[string]core.ProtocolAdapter) core.ProtocolAdapter {
 	for _, value := range adapters {
 		return value
@@ -673,14 +921,30 @@ func run(ctx context.Context, args []string) error {
 }
 
 func runWithFinalize(ctx context.Context, args []string, finalize func(core.AttemptResult)) error {
+	if len(args) > 0 && args[0] == "admin" {
+		return runAdmin(adminEnvironment{ctx: ctx, args: args[1:], stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr})
+	}
 	c, timeout, err := loadConfig(args)
 	if err != nil {
 		return err
+	}
+	if c.protected != nil {
+		prepared, err := prepareProtectedConfig(ctx, c)
+		if err != nil {
+			return err
+		}
+		c = prepared
 	}
 	var ready atomic.Bool
 	var draining atomic.Bool
 	h, closeTransport, err := composeHandler(c, &ready, &draining, finalize)
 	if err != nil {
+		if c.runtimeDB != nil {
+			_ = c.runtimeDB.Close()
+		}
+		if c.processLock != nil {
+			_ = c.processLock.Close()
+		}
 		return fmt.Errorf("initialize gateway: %w", err)
 	}
 	listener, err := net.Listen("tcp", c.Listen)

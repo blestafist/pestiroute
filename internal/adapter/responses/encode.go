@@ -31,6 +31,10 @@ func Encode(w http.ResponseWriter, r *http.Request, resp core.ExecutionResponse,
 		}
 		frame, err := resp.Stream.Next(r.Context())
 		if err != nil {
+			var gatewayError *core.GatewayError
+			if !committed && r.Context().Err() == nil && errors.As(err, &gatewayError) {
+				return encodeError(w, gatewayError)
+			}
 			if errors.Is(err, io.EOF) {
 				return core.ErrStreamContract
 			}

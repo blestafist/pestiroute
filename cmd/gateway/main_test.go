@@ -1324,6 +1324,124 @@ func TestConfig(t *testing.T) {
 	}
 }
 
+func TestYAMLConfig(t *testing.T) {
+	t.Setenv("PESTIROUTE_YAML_TEST_KEY", "synthetic-yaml-key")
+	path := t.TempDir() + "/gateway.yaml"
+	valid := `version: 1
+server:
+  listen: "0.0.0.0:8080"
+  max_request_bytes: 1048576
+  shutdown_timeout: 5s
+storage:
+  driver: sqlite
+  path: ./data/gateway.db
+secrets:
+  master_key_file: ./secrets/master.key
+connectors:
+  - id: upstream
+    kind: connector
+    implementation: pestiroute.responses.native
+    protocols: [openai.responses.v1]
+    settings:
+      base_url: https://backend.example/v1
+      upstream_protocol: openai.responses.v1
+      mode: native
+      credential_env: PESTIROUTE_YAML_TEST_KEY
+      max_request_body_bytes: 1048576
+      max_request_header_bytes: 16384
+      connect_timeout: 2s
+      tls_handshake_timeout: 2s
+      response_header_timeout: 5s
+      stream_idle_timeout: 30s
+routes:
+  - id: model-a
+    protocol: openai.responses.v1
+    mode: native
+    model: exact-model
+    adapter: pestiroute.responses.native
+    policy: standard
+    budget: {unknown_estimate: reject}
+    requirements: [llm.streaming]
+    targets:
+      - {connector: upstream, account: account-a}
+    retry: {max_attempts: 1}
+policies: {standard: policy-id-a}
+`
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(valid)
+	c, d, err := loadConfig([]string{"-config-format", "yaml", "-config", path})
+	if err != nil {
+		t.Fatalf("valid YAML: %v", err)
+	}
+	if c.protected == nil || c.Listen != "0.0.0.0:8080" || d != 5*time.Second || c.protected.Version != 1 || *c.protected.Routes[0].Retry.MaxAttempts != 1 || c.protected.Routes[0].Targets[0].Account != "account-a" || c.protected.Policies["standard"] != "policy-id-a" {
+		t.Fatalf("incomplete normalized config: %+v", c.protected)
+	}
+	if got := c.String(); strings.Contains(got, "synthetic-yaml-key") {
+		t.Fatal("YAML credential environment value leaked in config string")
+	}
+	if _, _, err := loadConfig([]string{"-config", path}); err == nil {
+		t.Fatal("YAML was implicitly selected by content")
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"duplicate", strings.Replace(valid, "version: 1\n", "version: 1\nversion: 1\n", 1)},
+		{"unknown root", strings.Replace(valid, "version: 1\n", "version: 1\nextra: true\n", 1)},
+		{"unknown nested", strings.Replace(valid, "  mode: native\n", "  mode: native\n      extra: true\n", 1)},
+		{"alias", strings.Replace(valid, "policies: {standard: policy-id-a}", "policies: &p {standard: policy-id-a}", 1)},
+		{"alias reference", strings.Replace(strings.Replace(valid, "master_key_file: ./secrets/master.key", "master_key_file: &key ./secrets/master.key", 1), "path: ./data/gateway.db", "path: *key", 1)},
+		{"merge", strings.Replace(valid, "policies: {standard: policy-id-a}", "policies: {<<: {standard: policy-id-a}}", 1)},
+		{"null", strings.Replace(valid, "path: ./data/gateway.db", "path: null", 1)},
+		{"multiple documents", valid + "---\nversion: 1\n"},
+		{"quoted integer", strings.Replace(valid, "version: 1", `version: "1"`, 1)},
+		{"wrong numeric type", strings.Replace(valid, "max_request_bytes: 1048576", `max_request_bytes: "1048576"`, 1)},
+		{"version", strings.Replace(valid, "version: 1", "version: 2", 1)},
+		{"unknown policy", strings.Replace(valid, "policy: standard", "policy: absent", 1)},
+		{"unknown connector", strings.Replace(valid, "connector: upstream", "connector: absent", 1)},
+		{"reject with reserve", strings.Replace(valid, "budget: {unknown_estimate: reject}", "budget: {unknown_estimate: reject, conservative_tokens: 10}", 1)},
+		{"reject with zero tokens", strings.Replace(valid, "budget: {unknown_estimate: reject}", "budget: {unknown_estimate: reject, conservative_tokens: 0}", 1)},
+		{"reserve without tokens", strings.Replace(valid, "budget: {unknown_estimate: reject}", "budget: {unknown_estimate: reserve}", 1)},
+		{"retry without deadline", strings.Replace(valid, "retry: {max_attempts: 1}", "retry: {max_attempts: 2}", 1)},
+		{"retry zero attempts", strings.Replace(valid, "retry: {max_attempts: 1}", "retry: {max_attempts: 0}", 1)},
+		{"duplicate target", strings.Replace(valid, "      - {connector: upstream, account: account-a}", "      - {connector: upstream, account: account-a}\n      - {connector: upstream, account: account-a}", 1)},
+		{"conflicting connector target", strings.Replace(valid, "      - {connector: upstream, account: account-a}", "      - {connector: upstream, account: account-a}\n      - {connector: upstream, account: account-b}", 1)},
+		{"invalid url", strings.Replace(valid, "https://backend.example/v1", "http://example.test/v1", 1)},
+		{"credential absent", strings.Replace(valid, "PESTIROUTE_YAML_TEST_KEY", "PESTIROUTE_UNSET_YAML_KEY", 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			write(tc.body)
+			if _, _, err := loadConfig([]string{"-config-format", "yaml", "-config", path}); err == nil {
+				t.Fatalf("accepted invalid YAML case %q", tc.name)
+			}
+		})
+	}
+	write(valid)
+	if err := run(context.Background(), []string{"-config-format", "yaml", "-config", path}); err == nil {
+		t.Fatal("protected startup accepted missing runtime state")
+	}
+	if err := os.WriteFile(path, []byte{0xff}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadConfig([]string{"-config-format", "yaml", "-config", path}); err == nil {
+		t.Fatal("accepted invalid UTF-8")
+	}
+	if err := os.WriteFile(path, bytes.Repeat([]byte{' '}, protectedConfigLimit+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadConfig([]string{"-config-format", "yaml", "-config", path}); err == nil {
+		t.Fatal("accepted oversized YAML")
+	}
+	if err := run(context.Background(), []string{"-config-format", "yaml", "-config", path}); err == nil {
+		t.Fatal("invalid protected configuration did not fail closed")
+	}
+}
+
 func TestInferenceConfig(t *testing.T) {
 	const credential = "synthetic-secret-never-print"
 	t.Setenv("PESTIROUTE_TEST_CREDENTIAL", credential)

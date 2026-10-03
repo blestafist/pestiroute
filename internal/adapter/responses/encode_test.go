@@ -241,3 +241,12 @@ func TestEncodeRejectsInvalidHeadOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestEncodePreHeadAccountingFailureIs503(t *testing.T) {
+	s := &encodeStream{err: &core.GatewayError{Code: "accounting_unavailable", Category: core.CategoryUnavailable, Message: "Request accounting is unavailable"}}
+	w := httptest.NewRecorder()
+	err := Encode(w, httptest.NewRequest("POST", "/v1/responses", nil), core.ExecutionResponse{Stream: s}, nil)
+	if err != nil || w.Code != 503 || !s.closed || !strings.Contains(w.Body.String(), `"code":"accounting_unavailable"`) {
+		t.Fatalf("pre-Head accounting error: status=%d body=%q closed=%t err=%v", w.Code, w.Body.String(), s.closed, err)
+	}
+}

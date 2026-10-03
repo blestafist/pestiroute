@@ -109,6 +109,51 @@ func TestCoreProductionDependencies(t *testing.T) {
 	}
 }
 
+func TestConnectorProductionBoundaries(t *testing.T) {
+	packages, err := readPackageList(runGoList(t, "-json", "../connector/..."))
+	if err != nil {
+		t.Fatalf("decode Connector package list: %v", err)
+	}
+	if len(packages) == 0 {
+		t.Fatal("go list ../connector/... returned no packages")
+	}
+	for _, pkg := range packages {
+		if !strings.HasPrefix(pkg.ImportPath, "github.com/blestafist/pestiroute/internal/connector/") {
+			t.Fatalf("go list ../connector/... escaped Connector scope: %s", pkg.ImportPath)
+		}
+		for _, path := range connectorImportViolations(pkg.Imports) {
+			t.Errorf("%s imports forbidden persistence or secret storage package %s", pkg.ImportPath, path)
+		}
+	}
+}
+
+func connectorImportViolations(imports []string) []string {
+	var violations []string
+	for _, path := range imports {
+		if strings.HasPrefix(path, "github.com/blestafist/pestiroute/internal/storage") ||
+			strings.HasPrefix(path, "github.com/blestafist/pestiroute/internal/crypto") ||
+			path == "modernc.org/sqlite" || path == "database/sql" {
+			violations = append(violations, path)
+		}
+	}
+	return violations
+}
+
+func TestConnectorBoundaryGuardRejectsForbiddenFixtures(t *testing.T) {
+	for _, path := range []string{
+		"github.com/blestafist/pestiroute/internal/storage/sqlite",
+		"github.com/blestafist/pestiroute/internal/crypto",
+		"modernc.org/sqlite",
+		"database/sql",
+	} {
+		t.Run(path, func(t *testing.T) {
+			if violations := connectorImportViolations([]string{"context", path}); len(violations) != 1 || violations[0] != path {
+				t.Fatalf("forbidden Connector import not rejected: %v", violations)
+			}
+		})
+	}
+}
+
 func TestCoreDependencyGuardRejectsForbiddenFixture(t *testing.T) {
 	fixture := []string{
 		"fmt",

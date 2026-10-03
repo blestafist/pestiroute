@@ -23,6 +23,7 @@
 | D13 | Accepted | Client Protocol Adapters own client request parsing, protocol validation, envelope creation, and client response formatting | Supports multiple northbound protocols without protocol structures or conversions in Core; provider-specific translation remains in connectors |
 | D14 | Accepted | Responses is primary for agents; Chat Completions is a compatibility protocol; both are first-class northbound interfaces | Adds client compatibility through adapters while preserving the opaque transport envelope and connector model |
 | D15 | Accepted | CONTRACT.md owns the v1 Adapter–Core Runtime–Connector boundary; semantic changes require ADR | Prevents per-provider API growth and undocumented compatibility breaks; see DEC-004 |
+| D16 | Proposed | M3 protected startup loads its master key from a permission-checked external file | Keeps key material out of SQLite and configuration/environment surfaces; see DEC-005 |
 
 ## Contract ADRs
 
@@ -63,6 +64,34 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Alternatives rejected:** Freeze Go/IPC syntax before validation; introduce six underspecified frame variants; use only a retryable boolean for replay; or keep multiple capability spellings.
 - **Compatibility:** This supersedes documentation drafts, not released plugins. Existing short capability keys must be replaced in examples; future semantic changes require an ADR and explicit versioning policy. Protocol-specific payload additions alone do not change the internal contract.
 - **Verification:** M2 conformance must cover frame lifecycle, opacity, capability eligibility, scoped services, cancellation, and retry safety; M6 must preserve the same behavior across IPC. Concrete bindings may refine representation, not silently change semantics.
+
+### DEC-005 — External Master-Key File for Protected M3 Startup
+
+- **Status:** Accepted and verified in M3; does not change the accepted v1 execution contract.
+- **Context:** M3 encrypts stored credentials and authentication temporary state. The earlier stack candidate allowed either a separate file or environment variable, but a key must not share storage/configuration or be silently replaced by a development fallback.
+- **Decision:** Protected startup reads a 32-byte key from an operator-provisioned external regular file owned by the service account with mode `0600`; reject symlinks, broader permissions, missing/wrong-length keys, and do not fall back to environment variables or M2 JSON. Ciphertext carries format/key versions and uses record-bound authenticated data. Rotation tooling is not included in M3.
+- **Alternatives:** Environment variable (more likely to leak through process diagnostics/inherited environments); key in YAML/SQLite (same compromise domain as protected data); silently generated key (would make persisted data undecryptable after restart).
+- **Consequences:** Deployment must provision and retain the matching external key version and filesystem permissions before protected startup. Losing the key makes corresponding ciphertext unavailable; M3 does not claim rotation or recovery from key loss. Development compatibility startup remains distinct and explicit.
+- **Compatibility/migration:** Applies only to new protected M3 startup; existing M2 JSON is unchanged. No v1 API/frame semantics change. Data/key format changes require versioned envelopes and a migration plan.
+- **Verification:** M3 startup tests must cover valid permissions/length, missing or invalid key, symlink/permission rejection, encrypted credential and temporary-state restart round trips, and absence of key/plaintext in SQLite and logs.
+
+### DEC-006 — Separate Request Closure from Attempt Settlement
+
+- **Status:** Accepted and verified in M3-046; runtime-owned binding only.
+- **Context:** A failed attempt must settle before fallback is evaluated. Closing the request during that settlement blocks fallback; leaving it admitted until restart makes normal usage queries incorrect.
+- **Decision:** `FinalizeAttempt` persists attempt outcome, usage and reservation settlement. Dispatch calls the separate idempotent `FinishRequest` only after execution ends, before exposing Complete or returning a terminal error. Closure rejects active attempts/holds and uses the last persisted attempt outcome. Startup recovery closes the gap if the process dies between settlement and closure.
+- **Alternatives:** Couple settlement to the runtime's retry decision with a final-attempt flag; close requests only during restart. Separate closure keeps the repository independent of retry policy and normal requests terminal while the process runs.
+- **Compatibility:** No Connector, frame, payload or v1 semantic change; one new Core-owned accounting operation, no ledger schema rewrite. Existing settled rows/charges remain authoritative.
+- **Verification:** Success is terminal before restart; failed attempts remain eligible for bounded fallback; concurrent duplicate closure is idempotent; failed closure suppresses Complete and withdraws protected readiness.
+
+### DEC-007 — Durably Claim Interactive Auth Continuations
+
+- **Status:** Accepted and verified in M3-046; runtime-owned binding only.
+- **Context:** Per-account in-memory locks cannot exclude a second CLI process or prevent replay after a process dies during an opaque provider continuation. Credential CAS prevents stale writes but cannot undo a repeated provider call.
+- **Decision:** Commit an exclusive `auth_session_invocations` claim before Authenticate. Check enabled account, expiry, credential revision and the encrypted-state nonce as an opaque version token. Advance/finish resolves the claim atomically with state persistence; startup consumes/erases sessions with leftover claims. A stale reader cannot claim an already-advanced state even if credential revision is unchanged. No SQL transaction spans provider work.
+- **Alternatives:** In-memory locking alone; consume every session before the call and lose legitimate multi-step continuation; infer replay safety from generic provider errors. The durable claim preserves acknowledged next steps and fails closed on uncertain calls.
+- **Compatibility/migration:** Additive schema v6 leaves migrations v1–v5 unchanged. Stop the gateway, back up consistently and run `admin migrate`; protected startup refuses older schemas, older binaries refuse v6. Existing unclaimed, unexpired sessions survive. No public Connector or v1 semantic change.
+- **Verification:** Independent database handles have one claim winner; stale readers cannot claim advanced state; persistence/restart cannot revive an ambiguous continuation; account disable invalidates state and rejects pending credential replacement.
 
 ## Questions Before Implementation
 

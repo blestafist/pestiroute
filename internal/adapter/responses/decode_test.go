@@ -3,11 +3,44 @@ package responses
 import (
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
+
+func TestBearerToken(t *testing.T) {
+	for _, tc := range []struct {
+		name, header string
+		want         string
+	}{
+		{name: "bearer", header: "Bearer prv_abc-._~+/=", want: "prv_abc-._~+/="},
+		{name: "case insensitive scheme", header: "bEaReR token", want: "token"},
+		{name: "missing", header: ""},
+		{name: "non bearer", header: "Basic token"},
+		{name: "empty", header: "Bearer "},
+		{name: "extra field", header: "Bearer token extra"},
+		{name: "invalid token byte", header: "Bearer token,other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", nil)
+			if tc.header != "" {
+				r.Header.Set("Authorization", tc.header)
+			}
+			got, ok := BearerToken(r)
+			if (tc.want != "") != ok || got != tc.want {
+				t.Fatalf("BearerToken() = (%q, %t), want (%q, %t)", got, ok, tc.want, tc.want != "")
+			}
+		})
+	}
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.Header.Add("Authorization", "Bearer first")
+	r.Header.Add("Authorization", "Bearer second")
+	if token, ok := BearerToken(r); ok {
+		t.Fatalf("duplicate Authorization accepted: %q", token)
+	}
+}
 
 const base = `{"model":"gpt-5.4-mini"}`
 
@@ -65,6 +98,43 @@ func TestDecodeAcceptsOpaqueModelIdentifiers(t *testing.T) {
 			got, err := Decode(request(body), int64(len(body)), 4096)
 			if err != nil || got.Model != name || string(got.Payload.Body) != body {
 				t.Fatalf("decoded model/body = %q / %q, error %v", got.Model, got.Payload.Body, err)
+			}
+		})
+	}
+}
+
+func TestDecodeMarksTrustedAffinityWithoutRewritingBody(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		known    bool
+		stateful bool
+	}{
+		{name: "stateless", body: base, known: true},
+		{name: "previous response and forged metadata", body: `{"model":"gpt-5.4-mini","previous_response_id":"resp_123","session_bound":false,"affinity_known":true}`, known: true, stateful: true},
+		{name: "null previous response reference", body: `{"model":"gpt-5.4-mini","previous_response_id":null}`, known: true},
+		{name: "conversation resource", body: `{"model":"gpt-5.4-mini","conversation":"conv_123"}`, known: true, stateful: true},
+		{name: "conversation object resource", body: `{"model":"gpt-5.4-mini","conversation":{"id":"conv_123"}}`, known: true, stateful: true},
+		{name: "null conversation reference", body: `{"model":"gpt-5.4-mini","conversation":null}`, known: true},
+		{name: "background omitted defaults to false", body: base, known: true},
+		{name: "background false", body: `{"model":"gpt-5.4-mini","background":false}`, known: true},
+		{name: "background null", body: `{"model":"gpt-5.4-mini","background":null}`, known: true},
+		{name: "background true", body: `{"model":"gpt-5.4-mini","background":true}`},
+		{name: "background invalid type", body: `{"model":"gpt-5.4-mini","background":"true"}`},
+		{name: "stored response omitted defaults to true", body: base, known: true},
+		{name: "stored response explicitly true", body: `{"model":"gpt-5.4-mini","store":true}`, known: true},
+		{name: "stored response disabled", body: `{"model":"gpt-5.4-mini","store":false}`, known: true},
+		{name: "stored response null", body: `{"model":"gpt-5.4-mini","store":null}`, known: true},
+		{name: "invalid store marker", body: `{"model":"gpt-5.4-mini","store":"yes"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Decode(request(tc.body), int64(len(tc.body)), 4096)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Metadata.AffinityKnown != tc.known || got.Metadata.SessionBound != tc.stateful ||
+				got.Metadata.IngressHeaderBytes == 0 || string(got.Payload.Body) != tc.body {
+				t.Fatalf("metadata/body = %+v / %q", got.Metadata, got.Payload.Body)
 			}
 		})
 	}

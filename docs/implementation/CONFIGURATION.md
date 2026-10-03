@@ -1,8 +1,19 @@
 # Data and Configuration
 
-## Implemented M2 startup JSON
+## Implemented startup formats
 
-The implemented gateway startup subset is strict JSON, not the proposed M3 YAML below. It is loaded once at startup; there is no YAML loader or persistent store in this M2 slice. See [the local M2 procedure](LOCAL-M2.md) for a runnable loopback example.
+Protected YAML startup is implemented; the operational walkthrough is
+[LOCAL-M3.md](LOCAL-M3.md). The schema, validation rules, retry behavior and
+startup isolation contract are in [M3-CONFIG.md](M3-CONFIG.md). M3 protected
+startup uses persistent SQLite entities and an external master-key file.
+
+Legacy single-target and strict topology JSON remain numeric-loopback
+development compatibility modes. They do not provide SQLite-backed keys,
+policies, or durable accounting; see [LOCAL-M2.md](LOCAL-M2.md).
+
+## Implemented M2 startup JSON (development compatibility)
+
+The JSON format is strict and does not configure protected M3 persistence. See [the local M2 procedure](LOCAL-M2.md) for a runnable loopback example.
 
 An M2 configuration uses `listen` (inference must bind numeric loopback `127.0.0.1` or `::1`), optional positive Go-duration `shutdown_timeout` (default `5s`), and both non-empty arrays `components` and `routes`. These cannot be mixed with legacy `upstream_*`, request-limit, or timeout fields. JSON keys are exact and case-sensitive; unknown keys and any JSON `null` are rejected. The one-MiB configuration limit and complete validation are enforced at startup.
 
@@ -18,56 +29,23 @@ The old single-target JSON form remains supported: `upstream_endpoint`, `upstrea
 
 ## State Separation
 
-The proposed M3 design uses YAML to describe the desired topology: listener, connector instances, routes, and policy defaults. SQLite would store mutable state: accounts, credentials, virtual keys, auth sessions, attempts, and usage. Secrets in YAML would be replaced with credential references. Startup validation should identify missing references and incompatible protocol/mode combinations before the first client request. These capabilities are not part of the implemented M2 startup path.
+Protected YAML describes the listener, connector instances, routes, per-route estimate budgets, and references to persistent policies. SQLite stores mutable state: accounts, encrypted credentials, virtual keys, auth sessions, policies, attempts, and usage. Secrets in YAML are replaced with references; startup validates references before serving. [M3-CONFIG](M3-CONFIG.md) owns the schema.
+
+The detailed entity keys, relations, migrations, durable accounting boundary, and crash recovery policy are specified in [M3-STORAGE.md](M3-STORAGE.md).
 
 Hot reload is not required for the initial MVP. Configuration is applied in full at startup; administrative operations on keys and accounts use storage and runtime services. The initial management interface is local CLI commands; a separate admin API may be added later.
 
 ## Proposed YAML
 
-This is the target schema for M3. Values in `settings` belong to the connector and are validated by it; Core does not interpret `base_url` or upstream protocol. Credentials and accounts from the example are pre-created through the administrative interface.
+The versioned YAML schema, route budget, retry policy, entity references, and
+startup rules are specified in [M3-CONFIG](M3-CONFIG.md). Its route policy
+reference selects the persistent key policy; the route estimate budget is
+separate configuration. Run [LOCAL-M3](LOCAL-M3.md) for migration, provisioning,
+startup, usage, recovery and backup/restore commands.
 
-```yaml
-version: 1
-
-server:
-  listen: "127.0.0.1:8080"
-  max_request_bytes: 16777216
-
-storage:
-  driver: sqlite
-  path: ./data/gateway.db
-
-secrets:
-  master_key_file: ./secrets/master.key
-
-connectors:
-  - id: primary
-    implementation: openai-compatible
-    settings:
-      base_url: https://backend.example/v1
-      upstream_protocol: openai.responses/v1
-      mode: native
-
-routes:
-  - id: default-model
-    match:
-      protocol: openai.responses/v1
-      model: model-a
-    requirements: [llm.streaming, llm.tools]
-    targets:
-      - connector: primary
-        account: primary-account
-    retry:
-      max_attempts: 1
-
-policies:
-  default:
-    rpm: 60
-    tpm: 100000
-    unknown_usage: reject
-```
-
-Model names in a native route are passed without substitution. Route requirements are explicit operator requirements, not automatic inference that every request uses tools. Limit values are provided as examples, not as recommended limits for any specific provider.
+Legacy and M2 topology JSON remain
+numeric-loopback development compatibility modes; they do not silently
+downgrade from failed protected startup. See [M3-CONFIG startup isolation](M3-CONFIG.md#startup-isolation-and-compatibility).
 
 ## Core Entities
 

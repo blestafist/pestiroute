@@ -29,9 +29,12 @@ type RawPayload struct {
 }
 
 type RequestMetadata struct {
-	Headers    map[string][]string
-	Streaming  *bool          // Nil means the client did not specify a preference.
-	Extensions map[string]any // Only explicitly declared, namespaced extensions.
+	Headers            map[string][]string
+	Streaming          *bool          // Nil means the client did not specify a preference.
+	AffinityKnown      bool           // Set only by a trusted Protocol Adapter.
+	SessionBound       bool           // Set only by a trusted Protocol Adapter.
+	IngressHeaderBytes int64          // Trusted Adapters measure original headers before filtering; zero is unknown and target header limits fail closed.
+	Extensions         map[string]any // Only explicitly declared, namespaced extensions.
 }
 
 // Opaque request and response bytes belong to their producer until handed off.

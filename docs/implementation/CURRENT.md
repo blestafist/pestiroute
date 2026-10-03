@@ -1,36 +1,74 @@
 # Current State
 
-## Verified Baseline
+## Verified baseline
 
-M0, M1 and all 34 M2 tasks are complete. [M2-034](tasks/M2-034.md) maps every milestone gate to executed evidence on source revision `0da7ffd`; its closure commit changes documentation only. Hosted CI passed on the preceding `9cadb53` revision; the final source was checked locally on Go 1.27.1.
+M0–M3 are complete. [M3-046](tasks/M3-046.md) records the final gate audit,
+review fixes and M4 handoff on source `d36a91a7e0869c286bed27e6eb525af183ad029d`.
+The closure commit updates documentation only. Local verification used pinned
+Go 1.27.1 on Linux/amd64; hosted PR CI is tracked separately in GitHub.
 
-[CONTRACT.md](CONTRACT.md) remains the accepted v1 semantic boundary. [M2-BINDING.md](M2-BINDING.md) is implemented in-process: managed components and registry lifecycle, scoped invocation services, explicit native identity routes, common Connector dispatch, validated Head/Body/Complete/EOF, and bounded in-memory attempt observations. Core has no production imports of concrete Adapters, Connectors or protocol parsers. [M1-BINDING.md](M1-BINDING.md) retains the historical startup baseline.
+[CONTRACT.md](CONTRACT.md) remains the accepted v1 semantic boundary.
+[M2-BINDING.md](M2-BINDING.md) retains managed components, scoped invocation
+services, explicit native identity routes and checked Head/Body/Complete/EOF.
+Core has no production imports of concrete Adapters, Connectors or parsers.
 
-The running gateway accepts legacy single-target and strict M2 topology JSON on numeric loopback. Selected-route body/header limits and capability restrictions are enforced before Execute. Complete is withheld until producer EOF validates; trailing frames/errors cannot expose successful completion. Execution remains one attempt per request, with no automatic fallback, model rewriting, reload or session APIs.
+Protected version-1 YAML composes SQLite-backed virtual keys/policies/accounts,
+AES-256-GCM credentials with an external permission-checked master key, atomic
+RPM/TPM admission, per-attempt reservations/usage, durable dispatch intent,
+request closure and conservative crash recovery. Persistence failures withdraw
+readiness and block new protected requests across routes. Opt-in ordered fallback
+requires explicit safe delivery before client commit, fresh candidate eligibility
+and bounded attempts/deadline; it admits RPM once and charges each attempt.
+Stateful/unknown-affinity requests require a configured singleton target.
 
-## Immediate Focus
+Schema v6 adds durable claims for interactive auth continuation to the v5 auth
+sessions. Protected startup recovers refresh markers to uncertain and consumes
+ambiguous claimed continuations before listen. Account disable atomically
+invalidates auth state. Scripted start/continue/refresh, revision CAS and
+cross-process claims are verified; live provider auth remains M5.1.
 
-Plan the first M3 storage slice against the existing `InvocationServices`, runtime-selected account/credential references, `AttemptResult` and nullable `UsageReport`. Define SQLite persistence/migrations, encrypted credential storage and master-key handling, idempotent attempt/usage writes and interrupted-attempt recovery. Keep database transactions out of network operations; prepare concrete worker cards only after these boundaries and checks are resolved. This is one planning action, not M3 implementation readiness or a speculative task chain.
+## Immediate focus: prepare the first M4 slice
 
-[ROADMAP.md](ROADMAP.md#m3--access-accounts-and-accounting) owns M3 outcomes. SQLite, durable credentials/usage, virtual keys, admission limits, reservations/reconciliation, OAuth persistence/refresh and safe automatic fallback remain unimplemented. New protocol translation and IPC remain later milestones; the [M3 YAML schema](CONFIGURATION.md#proposed-yaml) is still draft.
+Read the [M4 outcome](ROADMAP.md#m4--first-translation-connector),
+[Connector contract](CONTRACT.md#connector-contract),
+[translation decision](../project/DECISIONS.md#dec-003--why-connectors-own-provider-translation)
+and [conformance scenarios](TESTING.md). Research the official Anthropic Messages
+API and choose versioned request/stream fixtures. Then prepare one bounded READY
+card for plain text plus incremental streaming as an explicit Responses ↔ Messages
+Connector transformation. Establish supported/unsupported/unknown claims and
+negative cases before implementing tools/reasoning. No M4 cards are pre-created.
 
-## Evidence Limits and Open Inputs
+Reuse registry lifecycle, scoped services, route mode/capability eligibility,
+usage estimation and common dispatch/accounting. Keep protocol parsing,
+transformation and provider errors inside the Connector. Preserve native byte
+identity and incremental delivery; do not extend Core with provider-specific APIs.
 
-- Historical live M1 evidence is OpenCode 2.0.6 / OpenAI Responses / `gpt-5.4-mini`: tools and reasoning have scoped support; `llm.tools.parallel` remains unknown. Supplementary paired runs have clean `21d5c13` provenance; the original M1-025 revision is unknown. No new live inference was required for M2.
-- Live in-client HTTP abort/internal gateway teardown and remote provider compute cancellation remain unverified. Local request cancellation, stream teardown and exactly-once finalization are proven by deterministic fixtures.
-- Explicit numeric-loopback fixture declarations apply only to their configured scope. External endpoints retain the established M1 capability ceiling; local tests do not broaden real-account support.
-- [References](REFERENCES.md#migration-from-9router) records local 9Router/9Gateway revisions/source maps. Reproducible upstream provenance and code-reuse licenses remain unresolved before source migration; M2 migrated no external source.
+## Available checks
 
-Other unresolved design questions belong in [DECISIONS.md](../project/DECISIONS.md#questions-before-implementation). The `/next n` command is a bounded workflow, not a persistent scheduler. [TOOLING.md](TOOLING.md) records navigation tools and conditional future additions.
+`./scripts/check.sh` passes formatting, vet, unit/race tests and offline build.
+The final audit also passed uncached race-enabled conformance and gateway/Core/
+SQLite suites, ten repeated focused accounting/access/auth races, and SQLite
+checks with CGO disabled. Mandatory conformance has no skips; only two optional
+parallel-tools scenarios skip. Exact commands and evidence are in [M3-046](tasks/M3-046.md).
 
-## Available Checks
+[LOCAL-M3](LOCAL-M3.md) passes protected provisioning, inference, limits, usage,
+restart and consistent backup/restore. For an existing older M3 database: stop
+the gateway, make a consistent backup and run `admin migrate` to v6 before
+protected startup. Retain the matching external master key. Legacy/M2 JSON
+remain loopback development compatibility modes; see [LOCAL-M2](LOCAL-M2.md).
 
-`./scripts/check.sh` passes whitespace, formatting (`cmd`, `internal`), vet, unit tests, race tests and offline artifact-free build on pinned Go 1.27.1. `git diff --check` verifies patch whitespace. Documentation checks cover local links/anchors, fences and task dependencies; no persistent documentation checker has been added.
+## Evidence limits and open inputs
 
-The final audit ran `go test -race -count=1 -v ./internal/conformance/...` and ten repeated focused route-admission, terminal-stream and concurrent-dispatch race runs (exact command in [M2-034](tasks/M2-034.md#verification)). Only the two optional parallel-tools slots skip; no mandatory gate skips. The [LOCAL-M2 procedure](LOCAL-M2.md) passes offline build, multi-route/component dispatch and legacy single-target startup with synthetic loopback targets. Full gateway regressions retain M1 byte preservation, incremental delivery, header/credential isolation, cancellation and no-replay behavior.
-
-Historical live and resource-baseline procedures remain in their M1 task cards. The CI workflow runs the same shared script on pinned Go 1.27.1. Actionlint remains unrun. `gofmt -l .` reports an unrelated pre-existing file under `.refs/9Router/`; shared checks deliberately target production/test code in `cmd` and `internal`.
-
-## Update Rule
-
-Replace this snapshot when delivered capabilities, immediate focus, blockers or verified commands change. Put durable rationale in DECISIONS, task evidence in its card, and history in Git.
+- The built-in Connector is native Responses only. One configured instance has
+  one account/model scope; the auth storage adapter requires one pre-provisioned
+  credential per account. Protected YAML still requires a present non-empty
+  `credential_env`; inference uses the scoped SQLite credential.
+- Native transport failures retain unknown delivery; safe fallback is proven
+  with explicit deterministic fixtures, not a broader real-provider retry claim.
+  Translation, stateful cross-target affinity, live OAuth and IPC remain M4/M5/M6.
+- Historical live evidence remains OpenCode 2.0.6 / OpenAI Responses /
+  `gpt-5.4-mini`, with parallel tools unknown. M3 adds no live inference claim.
+  Remote provider compute cancellation remains unverified.
+- [References](REFERENCES.md#migration-from-9router) retains source maps; upstream
+  provenance and code-reuse licenses must be resolved before copying source.
+  Other unresolved design choices remain in [DECISIONS](../project/DECISIONS.md).
