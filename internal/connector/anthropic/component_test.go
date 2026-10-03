@@ -71,8 +71,8 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 	if err != nil || auth.Supported || auth.Credentials != nil {
 		t.Fatalf("interactive auth result = %+v, %v", auth, err)
 	}
-	estimate, err := c.EstimateUsage(context.Background(), core.UsageQuery{}, core.InvocationServices{})
-	if err != nil || estimate.Supported || estimate.Known || estimate.Usage != nil {
+	estimate, err := c.EstimateUsage(context.Background(), core.UsageQuery{Protocol: protocol, Mode: core.ModeTranslation, Model: "gpt-4.1-mini", AccountID: "account-a"}, core.InvocationServices{})
+	if err != nil || !estimate.Supported || estimate.Known || estimate.Usage != nil || estimate.Method != "conservative" {
 		t.Fatalf("usage estimate = %+v, %v", estimate, err)
 	}
 	_, executionErr := c.Execute(context.Background(), core.ExecutionRequest{Model: "gpt-4.1-mini", Payload: core.RawPayload{Protocol: protocol}}, core.AttemptScope{Mode: core.ModeTranslation, AccountID: "account-a"}, core.InvocationServices{})
@@ -105,6 +105,41 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 	}
 	if err := c.Init(context.Background(), config("model", "account")); err == nil {
 		t.Fatal("Init after Close succeeded")
+	}
+}
+
+func TestEstimateUsageScopeReadinessAndPayloadImmutability(t *testing.T) {
+	c := NewConnector()
+	payload := []byte(`{"model":"client-model","stream":true,"input":"unchanged","max_output_tokens":17}`)
+	query := core.UsageQuery{Protocol: protocol, Mode: core.ModeTranslation, Model: "gpt-4.1-mini", AccountID: "account-a", Payload: core.RawPayload{Protocol: protocol, Body: payload}}
+	if _, got := c.EstimateUsage(context.Background(), query, core.InvocationServices{}); got == nil || got.Code != "connector_unavailable" {
+		t.Fatalf("unready estimate error = %+v", got)
+	}
+	if err := c.Init(context.Background(), config("gpt-4.1-mini", "account-a")); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, protocol, mode, model, account, want string
+	}{
+		{"protocol", "other", core.ModeTranslation, "gpt-4.1-mini", "account-a", "unsupported_protocol"},
+		{"mode", protocol, core.ModeNative, "gpt-4.1-mini", "account-a", "unsupported_mode"},
+		{"model", protocol, core.ModeTranslation, "other", "account-a", "scope_mismatch"},
+		{"account", protocol, core.ModeTranslation, "gpt-4.1-mini", "other", "scope_mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := query
+			bad.Protocol, bad.Mode, bad.Model, bad.AccountID = tc.protocol, tc.mode, tc.model, tc.account
+			if _, got := c.EstimateUsage(context.Background(), bad, core.InvocationServices{}); got == nil || got.Code != tc.want {
+				t.Fatalf("estimate error = %+v, want %q", got, tc.want)
+			}
+		})
+	}
+	got, gatewayErr := c.EstimateUsage(context.Background(), query, core.InvocationServices{})
+	if gatewayErr != nil || !got.Supported || got.Known || got.Usage != nil || got.Method != "conservative" {
+		t.Fatalf("estimate = %+v, %v", got, gatewayErr)
+	}
+	if string(query.Payload.Body) != `{"model":"client-model","stream":true,"input":"unchanged","max_output_tokens":17}` {
+		t.Fatalf("payload changed during estimate: %s", query.Payload.Body)
 	}
 }
 

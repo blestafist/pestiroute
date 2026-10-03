@@ -98,8 +98,22 @@ func (c *Connector) Models(_ context.Context, query core.ModelQuery, _ core.Invo
 	return core.ModelsResult{Supported: true, Models: []core.ModelInfo{{ID: c.model, Capabilities: map[core.Capability]core.CapabilityState{}}}}, nil
 }
 
-func (c *Connector) EstimateUsage(context.Context, core.UsageQuery, core.InvocationServices) (core.EstimateResult, *core.GatewayError) {
-	return core.EstimateResult{Supported: false, Known: false}, nil
+func (c *Connector) EstimateUsage(_ context.Context, query core.UsageQuery, _ core.InvocationServices) (core.EstimateResult, *core.GatewayError) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state != core.HealthReady {
+		return core.EstimateResult{}, &core.GatewayError{Code: "connector_unavailable", Category: core.CategoryUnavailable, Message: "Anthropic connector is unavailable"}
+	}
+	if query.Protocol != protocol {
+		return core.EstimateResult{}, &core.GatewayError{Code: "unsupported_protocol", Category: core.CategoryUnsupportedFeature, Message: "Unsupported response protocol"}
+	}
+	if query.Mode != core.ModeTranslation {
+		return core.EstimateResult{}, &core.GatewayError{Code: "unsupported_mode", Category: core.CategoryUnsupportedFeature, Message: "Unsupported execution mode"}
+	}
+	if query.Model != c.model || query.AccountID != c.accountID {
+		return core.EstimateResult{}, &core.GatewayError{Code: "scope_mismatch", Category: core.CategoryPermissionDenied, Message: "Usage estimate scope does not match configured target"}
+	}
+	return core.EstimateResult{Supported: true, Known: false, Method: "conservative"}, nil
 }
 
 func (c *Connector) Authenticate(context.Context, core.AuthRequest, core.InvocationServices) (core.AuthResult, *core.GatewayError) {
