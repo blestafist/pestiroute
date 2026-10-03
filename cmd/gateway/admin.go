@@ -12,19 +12,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
-const adminUsage = "usage: gateway admin [--db PATH] [--master-key PATH] <migrate|status|account|credential|policy|key|usage> ...\n"
+const adminUsage = "usage: gateway admin [--db PATH] [--master-key PATH] <migrate|status|account|credential|policy|key|usage|auth> ...\n"
 const maxAdminSecret = 64 << 10
 
 type adminEnvironment struct {
-	ctx    context.Context
-	args   []string
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
+	ctx          context.Context
+	args         []string
+	stdin        io.Reader
+	stdout       io.Writer
+	stderr       io.Writer
+	authRegistry *core.Registry
+	authServices core.AuthServicesFactory
 }
 
 func runAdmin(env adminEnvironment) error {
@@ -72,7 +75,7 @@ func runAdmin(env adminEnvironment) error {
 		_, _ = io.WriteString(env.stdout, adminUsage)
 		return nil
 	}
-	if args[0] != "migrate" && args[0] != "status" && args[0] != "account" && args[0] != "credential" && args[0] != "policy" && args[0] != "key" && args[0] != "usage" {
+	if args[0] != "migrate" && args[0] != "status" && args[0] != "account" && args[0] != "credential" && args[0] != "policy" && args[0] != "key" && args[0] != "usage" && args[0] != "auth" {
 		_, _ = io.WriteString(env.stderr, adminUsage)
 		return errors.New("admin: unknown subcommand")
 	}
@@ -99,7 +102,7 @@ func runAdmin(env adminEnvironment) error {
 		_, _ = fmt.Fprintln(env.stdout, "schema is current")
 		return nil
 	}
-	if args[0] == "account" || args[0] == "credential" || args[0] == "policy" || args[0] == "key" || args[0] == "usage" {
+	if args[0] == "account" || args[0] == "credential" || args[0] == "policy" || args[0] == "key" || args[0] == "usage" || args[0] == "auth" {
 		version, err := sqlite.SchemaVersion(env.ctx, db)
 		if err != nil {
 			return errors.New("admin: unsupported or unreadable schema")
@@ -112,6 +115,9 @@ func runAdmin(env adminEnvironment) error {
 		}
 		if args[0] == "usage" {
 			return runUsageAdmin(env, db, args[1:])
+		}
+		if args[0] == "auth" {
+			return runAuthAdmin(env, db, key, args[1:])
 		}
 		return runAccountCredentialAdmin(env, db, key, args[0], args[1:])
 	}
