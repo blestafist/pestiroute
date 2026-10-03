@@ -3,8 +3,11 @@ package anthropic
 import (
 	"bytes"
 	"encoding/json"
+	"net/http/httptest"
 	"reflect"
 	"testing"
+
+	"github.com/blestafist/pestiroute/internal/adapter/responses"
 )
 
 func TestTranslateHistory(t *testing.T) {
@@ -61,6 +64,82 @@ func TestTranslateHistory(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTranslateTools(t *testing.T) {
+	body := []byte(`{"model":"client-model","stream":true,"input":"find weather","tools":[{"type":"function","name":"get_weather","description":"Look up weather","parameters":{"type":"object","properties":{"where":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false},"days":{"type":"array","items":{"type":"integer","minimum":1}}},"required":["where"],"additionalProperties":true}}]}`)
+	original := bytes.Clone(body)
+	got, gatewayErr := translateRequest(body)
+	if gatewayErr != nil {
+		t.Fatalf("translateRequest() error = %+v", gatewayErr)
+	}
+	if !bytes.Equal(body, original) {
+		t.Fatal("translation mutated admitted request bytes")
+	}
+	var wire map[string]json.RawMessage
+	encoded, err := json.Marshal(got)
+	if err != nil || json.Unmarshal(encoded, &wire) != nil {
+		t.Fatalf("marshal translated request: %v", err)
+	}
+	wantTools := `[ {"name":"get_weather","description":"Look up weather","input_schema":{"type":"object","properties":{"where":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false},"days":{"type":"array","items":{"type":"integer","minimum":1}}},"required":["where"],"additionalProperties":true}} ]`
+	var want, actual any
+	if json.Unmarshal([]byte(wantTools), &want) != nil || json.Unmarshal(wire["tools"], &actual) != nil || !reflect.DeepEqual(actual, want) {
+		t.Fatalf("translated tools = %s, want %s", wire["tools"], wantTools)
+	}
+}
+
+func TestToolSchemaRejectsUnsupportedAndMalformedDefinitions(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		tools string
+	}{
+		{"non-function", `[{"type":"web_search","name":"search"}]`},
+		{"Chat Completions nested function shape", `[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]`},
+		{"invalid name", `[{"type":"function","name":"bad name","parameters":{"type":"object"}}]`},
+		{"blank name", `[{"type":"function","name":"","parameters":{"type":"object"}}]`},
+		{"long name", `[{"type":"function","name":"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopq","parameters":{"type":"object"}}]`},
+		{"duplicate name", `[{"type":"function","name":"same","parameters":{"type":"object"}},{"type":"function","name":"same","parameters":{"type":"object"}}]`},
+		{"non-object parameters", `[{"type":"function","name":"f","parameters":[]}]`},
+		{"strict true", `[{"type":"function","name":"f","strict":true,"parameters":{"type":"object"}}]`},
+		{"strict null", `[{"type":"function","name":"f","strict":null,"parameters":{"type":"object"}}]`},
+		{"missing parameters", `[{"type":"function","name":"f"}]`},
+		{"malformed nested schema", `[{"type":"function","name":"f","parameters":{"type":"object","properties":{"x":{"type":"string","type":"integer"}}}}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"model":"client-model","stream":true,"input":"hi","tools":` + tc.tools + `}`)
+			original := bytes.Clone(body)
+			if _, gatewayErr := translateRequest(body); gatewayErr == nil || gatewayErr.Category != "invalid_request" || gatewayErr.Message == "" {
+				t.Fatalf("translateRequest() error = %+v, want client-safe invalid_request", gatewayErr)
+			}
+			if !bytes.Equal(body, original) {
+				t.Fatal("rejected translation mutated request bytes")
+			}
+		})
+	}
+}
+
+func TestTranslateToolsAcrossResponsesDecode(t *testing.T) {
+	body := []byte(`{"model":"client-model","stream":true,"input":"find weather","tools":[{"type":"function","name":"get_weather","description":"Look up weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}}]}`)
+	req := httptest.NewRequest("POST", "/v1/responses", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	decoded, err := responses.Decode(req, int64(len(body)), 4096)
+	if err != nil {
+		t.Fatalf("Responses Decode: %v", err)
+	}
+	if !bytes.Equal(decoded.Payload.Body, body) {
+		t.Fatal("adapter mutated admitted payload bytes")
+	}
+	translated, gatewayErr := translateRequest(decoded.Payload.Body)
+	if gatewayErr != nil {
+		t.Fatalf("translateRequest: %+v", gatewayErr)
+	}
+	if len(translated.Tools) != 1 || translated.Tools[0].Name != "get_weather" || translated.Tools[0].Description != "Look up weather" {
+		t.Fatalf("translated tool = %+v", translated.Tools)
+	}
+	var got, want any
+	if json.Unmarshal(translated.Tools[0].InputSchema, &got) != nil || json.Unmarshal([]byte(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}`), &want) != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("translated schema = %s, want %v", translated.Tools[0].InputSchema, want)
 	}
 }
 

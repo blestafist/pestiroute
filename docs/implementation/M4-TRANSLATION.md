@@ -65,6 +65,18 @@ must distinguish omission, explicit defaults, invalid values, unsupported
 semantics and verified mappings. Unknown fields in translation are not an excuse
 to discard meaningful semantics; unknown native fields still survive unchanged.
 
+M4-017's tool-definition profile accepts only the Responses API flat function
+shape (`type:"function"`, `name`, optional `description`, object `parameters`,
+optional `strict:false`); Chat Completions' nested `function` object is rejected.
+It maps schemas opaquely to Messages `input_schema`. Nested
+JSON-schema keywords, including `required` and `additionalProperties`, are
+preserved; malformed JSON/object structure and duplicate keys fail closed.
+`strict:true` is rejected because this profile does not promise strict-schema
+enforcement. This does not claim that Anthropic validates or enforces every
+forwarded schema keyword. Hosted/non-function tools and extra definition fields
+remain unsupported. Tool choice, call/result history, and streamed call handling
+remain M4-018/019/020 respectively; plain-text output handling is unchanged.
+
 Specify model identity/explicit rewrite, `stream`, output budget, `instructions`,
 string/item `input`, roles, `store`, `previous_response_id`, `conversation`,
 `background`, include requests, structured output and generation controls. Only

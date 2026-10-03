@@ -20,7 +20,14 @@ type messagesRequest struct {
 	MaxTokens   int               `json:"max_tokens"`
 	Temperature *json.Number      `json:"temperature,omitempty"`
 	System      []systemTextBlock `json:"system,omitempty"`
+	Tools       []messagesTool    `json:"tools,omitempty"`
 	Messages    []textMessage     `json:"messages"`
+}
+
+type messagesTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 type systemTextBlock struct {
@@ -45,7 +52,7 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 	}
 	for name := range fields {
 		switch name {
-		case "model", "input", "instructions", "stream", "max_output_tokens", "temperature", "store", "include":
+		case "model", "input", "instructions", "stream", "max_output_tokens", "temperature", "store", "include", "tools":
 		default:
 			return messagesRequest{}, invalidTranslation("Unsupported request field")
 		}
@@ -89,6 +96,13 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 		if json.Unmarshal(raw, &include) != nil || include == nil || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
 			return messagesRequest{}, invalidTranslation("Unsupported include value")
 		}
+	}
+	if raw, ok := fields["tools"]; ok {
+		tools, err := translateTools(raw)
+		if err != nil {
+			return messagesRequest{}, invalidTranslation("Invalid tools")
+		}
+		out.Tools = tools
 	}
 	if raw, ok := fields["instructions"]; ok {
 		var instructions string
@@ -167,6 +181,127 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 		return messagesRequest{}, invalidTranslation("At least one user or assistant message is required")
 	}
 	return out, nil
+}
+
+func translateTools(raw json.RawMessage) ([]messagesTool, error) {
+	var tools []json.RawMessage
+	if json.Unmarshal(raw, &tools) != nil || tools == nil {
+		return nil, fmt.Errorf("expected tools array")
+	}
+	seen := make(map[string]struct{}, len(tools))
+	out := make([]messagesTool, 0, len(tools))
+	for _, rawTool := range tools {
+		if !uniqueJSONValue(rawTool) {
+			return nil, fmt.Errorf("duplicate tool field")
+		}
+		tool, err := object(rawTool, "type", "name", "description", "parameters", "strict")
+		if err != nil {
+			return nil, err
+		}
+		var kind string
+		if json.Unmarshal(tool["type"], &kind) != nil || kind != "function" {
+			return nil, fmt.Errorf("unsupported tool type")
+		}
+		var name string
+		if json.Unmarshal(tool["name"], &name) != nil || !validToolName(name) {
+			return nil, fmt.Errorf("invalid tool name")
+		}
+		if _, exists := seen[name]; exists {
+			return nil, fmt.Errorf("duplicate tool name")
+		}
+		seen[name] = struct{}{}
+		if strict, exists := tool["strict"]; exists {
+			var value bool
+			if json.Unmarshal(strict, &value) != nil || string(strict) == "null" || value {
+				return nil, fmt.Errorf("strict schemas are unsupported")
+			}
+		}
+		var description string
+		if rawDescription, exists := tool["description"]; exists {
+			if json.Unmarshal(rawDescription, &description) != nil || string(rawDescription) == "null" {
+				return nil, fmt.Errorf("invalid tool description")
+			}
+		}
+		parameters := tool["parameters"]
+		if !validSchemaObject(parameters) {
+			return nil, fmt.Errorf("parameters must be a valid schema object")
+		}
+		out = append(out, messagesTool{Name: name, Description: description, InputSchema: bytes.Clone(parameters)})
+	}
+	return out, nil
+}
+
+func validToolName(name string) bool {
+	if len(name) == 0 || len(name) > 64 {
+		return false
+	}
+	for _, char := range name {
+		if !('a' <= char && char <= 'z') && !('A' <= char && char <= 'Z') &&
+			!('0' <= char && char <= '9') && char != '_' && char != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func validSchemaObject(raw json.RawMessage) bool {
+	var schema map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &schema) != nil || schema == nil {
+		return false
+	}
+	return uniqueJSONValue(raw)
+}
+
+// uniqueJSONValue rejects duplicate object keys recursively without interpreting
+// schema keywords, so valid schema semantics remain opaque and unchanged.
+func uniqueJSONValue(raw json.RawMessage) bool {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var parse func() bool
+	parse = func() bool {
+		token, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		delim, ok := token.(json.Delim)
+		if !ok {
+			return true
+		}
+		switch delim {
+		case '{':
+			seen := make(map[string]struct{})
+			for decoder.More() {
+				key, err := decoder.Token()
+				if err != nil {
+					return false
+				}
+				name, ok := key.(string)
+				if !ok {
+					return false
+				}
+				if _, exists := seen[name]; exists || !parse() {
+					return false
+				}
+				seen[name] = struct{}{}
+			}
+			end, err := decoder.Token()
+			return err == nil && end == json.Delim('}')
+		case '[':
+			for decoder.More() {
+				if !parse() {
+					return false
+				}
+			}
+			end, err := decoder.Token()
+			return err == nil && end == json.Delim(']')
+		default:
+			return false
+		}
+	}
+	if !parse() {
+		return false
+	}
+	return decoder.Decode(new(any)) == io.EOF
 }
 
 func jsonNumber(raw json.RawMessage) (json.Number, bool) {
