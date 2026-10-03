@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +40,10 @@ func newTranslationLifecycleFixture(t *testing.T, backend http.Handler, injected
 }
 
 func newTranslationLifecycleFixtureWithConnSetup(t *testing.T, backend http.Handler, setupConn func(net.Conn), injected ...core.HTTPDoer) *translationLifecycleFixture {
+	return newTranslationLifecycleFixtureConfigured(t, backend, setupConn, nil, injected...)
+}
+
+func newTranslationLifecycleFixtureConfigured(t *testing.T, backend http.Handler, setupConn func(net.Conn), configure func(context.Context, *sql.DB, secure.MasterKey, *protectedConfig) error, injected ...core.HTTPDoer) *translationLifecycleFixture {
 	t.Helper()
 	_, dbPath, keyPath := protectedFixture(t)
 	upstream := httptest.NewServer(backend)
@@ -75,9 +81,6 @@ func newTranslationLifecycleFixtureWithConnSetup(t *testing.T, backend http.Hand
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
 	backendURL, err := url.Parse(upstream.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +89,14 @@ func newTranslationLifecycleFixtureWithConnSetup(t *testing.T, backend http.Hand
 	p.Connectors[0].Settings.BaseURL = upstream.URL + "/v1"
 	p.Connectors = append(p.Connectors, protectedConnector{ID: "anthropic", Kind: "connector", Implementation: "pestiroute.anthropic.messages", Settings: nativeSettings{Model: "client-model", AccountID: account.ID, CredentialID: "anthro-key"}})
 	p.Routes = append(p.Routes, protectedRoute{ID: "translation-route", Protocol: responsesProtocol, Mode: "translation", Model: "client-model", Adapter: "pestiroute.responses.native", Policy: "standard", Budget: routeBudget{UnknownEstimate: "reserve", ConservativeTokens: ptrInt64(4096)}, Targets: []routeTarget{{Connector: "anthropic", Account: account.ID}}})
+	if configure != nil {
+		if err := configure(ctx, db, key, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
 	prepared, err := prepareProtectedConfig(ctx, config{protected: p, DatabasePath: dbPath, MasterKeyFile: keyPath})
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +185,205 @@ func TestTranslationPreHeadCancellationDurableRows(t *testing.T) {
 		t.Fatal("pre-Head client request did not return")
 	}
 	f.assertCancelledOnce(t)
+}
+
+func TestTranslationFallbackHTTPRejectionsDoNotSwitchAccounts(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var first, second atomic.Int32
+			doer := anthropicDoerFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Header.Get("X-Api-Key") == "synthetic-anthropic-key" {
+					first.Add(1)
+				} else {
+					second.Add(1)
+				}
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":"private provider detail"}`)), Request: req}, nil
+			})
+			f := newTranslationFallbackFixture(t, doer)
+			req, err := f.request(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := f.gateway.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if first.Load() != 1 || second.Load() != 0 {
+				t.Fatalf("upstream account calls = %d/%d, want 1/0", first.Load(), second.Load())
+			}
+			wantStatus := status
+			if status >= 500 {
+				wantStatus = http.StatusServiceUnavailable
+			}
+			if resp.StatusCode != wantStatus || strings.Contains(string(body), "private provider detail") {
+				t.Fatalf("HTTP %d body=%s; want sanitized status %d", resp.StatusCode, body, wantStatus)
+			}
+			select {
+			case result := <-f.finalized:
+				if result.Outcome != core.OutcomeFailed {
+					t.Fatalf("attempt outcome = %q, want failed", result.Outcome)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("translated attempt did not finalize")
+			}
+			if got := f.accounting.snapshot(); got.admit != 1 || got.intent != 1 || got.finalize != 1 {
+				t.Fatalf("accounting calls = %+v, want one admitted/finalized attempt", got)
+			}
+			rows, err := sqlite.NewLedger(f.prepared.runtimeDB).QueryRequests(context.Background(), sqlite.RequestFilter{Limit: 2})
+			if err != nil || len(rows) != 1 || len(rows[0].Attempts) != 1 {
+				t.Fatalf("durable attempts = %+v, err=%v; want exactly one", rows, err)
+			}
+		})
+	}
+}
+
+func newTranslationFallbackFixture(t *testing.T, doer core.HTTPDoer) *translationLifecycleFixture {
+	t.Helper()
+	return newTranslationLifecycleFixtureConfigured(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil, func(ctx context.Context, db *sql.DB, key secure.MasterKey, p *protectedConfig) error {
+		const accountID, credentialID = "anthropic-account-b", "anthro-key-b"
+		if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: "anthropic-b", Enabled: true}); err != nil {
+			return err
+		}
+		envelope, err := secure.Seal(key, 2, "test-v1", "credentials", credentialID, accountID, []byte("synthetic-anthropic-key-b"))
+		if err != nil {
+			return err
+		}
+		if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: credentialID, AccountID: accountID, FormatVersion: envelope.FormatVersion, KeyVersion: envelope.KeyVersion, Nonce: envelope.Nonce, Ciphertext: envelope.Ciphertext}); err != nil {
+			return err
+		}
+		p.Connectors = append(p.Connectors, protectedConnector{ID: "anthropic-b", Kind: "connector", Implementation: "pestiroute.anthropic.messages", Settings: nativeSettings{Model: "client-model", AccountID: accountID, CredentialID: credentialID}})
+		p.Routes[1].Targets = append(p.Routes[1].Targets, routeTarget{Connector: "anthropic-b", Account: accountID})
+		policy, err := sqlite.NewKeyPolicies(db).GetLatest(ctx, "policy-id-a")
+		if err != nil {
+			return err
+		}
+		if _, err := sqlite.NewKeyPolicies(db).Update(ctx, policy.ID, policy.Revision, sqlite.UpdateKeyPolicyParams{Enabled: true, Models: policy.Models, Connectors: append(policy.Connectors, "anthropic-b"), RPM: 20, TPM: 100000}); err != nil {
+			return err
+		}
+		attempts := 2
+		p.Routes[1].Retry = &retryConfig{MaxAttempts: &attempts, Deadline: "5s"}
+		return nil
+	}, doer)
+}
+
+func TestTranslationFallbackCommittedStreamFailureDoesNotSwitchAccounts(t *testing.T) {
+	var first, second atomic.Int32
+	doer := anthropicDoerFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("X-Api-Key") == "synthetic-anthropic-key" {
+			first.Add(1)
+		} else {
+			second.Add(1)
+		}
+		body := "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1}}}\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"private provider detail\"}}\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+	})
+	f := newTranslationFallbackFixture(t, doer)
+	req, err := f.request(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := f.gateway.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if first.Load() != 1 || second.Load() != 0 {
+		t.Fatalf("upstream account calls = %d/%d, want 1/0", first.Load(), second.Load())
+	}
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("response.failed")) || strings.Contains(string(body), "private provider detail") {
+		t.Fatalf("HTTP %d body=%s; want sanitized committed failure", resp.StatusCode, body)
+	}
+	select {
+	case result := <-f.finalized:
+		if result.Outcome != core.OutcomeFailed {
+			t.Fatalf("attempt outcome = %q, want failed", result.Outcome)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("committed translated attempt did not finalize")
+	}
+	if got := f.accounting.snapshot(); got.admit != 1 || got.intent != 1 || got.finalize != 1 {
+		t.Fatalf("accounting calls = %+v, want one admitted/finalized attempt", got)
+	}
+}
+
+func TestTranslationFallbackLocalAndAmbiguousFailuresDoNotSwitchAccounts(t *testing.T) {
+	t.Run("local validation", func(t *testing.T) {
+		var calls atomic.Int32
+		doer := anthropicDoerFunc(func(*http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return nil, errors.New("unexpected upstream call")
+		})
+		f := newTranslationFallbackFixture(t, doer)
+		req, err := f.request(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		invalid := `{"model":"client-model","input":[{"type":"message","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"hi"}]}]}`
+		req.Body = io.NopCloser(strings.NewReader(invalid))
+		req.ContentLength = int64(len(invalid))
+		resp, err := f.gateway.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || calls.Load() != 0 {
+			t.Fatalf("HTTP %d upstream calls=%d, want local 400 and no dispatch", resp.StatusCode, calls.Load())
+		}
+	})
+	t.Run("ambiguous transport failure", func(t *testing.T) {
+		var first, second atomic.Int32
+		doer := anthropicDoerFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Header.Get("X-Api-Key") == "synthetic-anthropic-key" {
+				first.Add(1)
+			} else {
+				second.Add(1)
+			}
+			return nil, errors.New("synthetic transport failure")
+		})
+		f := newTranslationFallbackFixture(t, doer)
+		req, err := f.request(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := f.gateway.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable || first.Load() != 1 || second.Load() != 0 {
+			t.Fatalf("HTTP %d upstream account calls=%d/%d, want unavailable and 1/0", resp.StatusCode, first.Load(), second.Load())
+		}
+	})
+}
+
+func TestTranslationFallbackStatefulRequestFailsClosedAcrossAccounts(t *testing.T) {
+	var calls atomic.Int32
+	doer := anthropicDoerFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("unexpected upstream call")
+	})
+	f := newTranslationFallbackFixture(t, doer)
+	req, err := f.request(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateful := `{"model":"client-model","previous_response_id":"resp-1","input":"hello","stream":true}`
+	req.Body = io.NopCloser(strings.NewReader(stateful))
+	req.ContentLength = int64(len(stateful))
+	resp, err := f.gateway.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || !bytes.Contains(body, []byte(`"code":"unsupported_target"`)) || calls.Load() != 0 {
+		t.Fatalf("HTTP %d upstream calls=%d body=%s; want pre-dispatch affinity rejection", resp.StatusCode, calls.Load(), body)
+	}
 }
 
 func (f *translationLifecycleFixture) request(ctx context.Context) (*http.Request, error) {

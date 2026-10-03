@@ -27,23 +27,21 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-026 DONE (awaiting verified commit; batch 8/19 DONE)
+## Immediate focus: M4-027 DONE (awaiting verified commit; batch 9/19 DONE)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. All 25 predecessor tasks ([M4-001](tasks/M4-001.md)
-through [M4-025](tasks/M4-025.md)) are committed and pushed to `origin/dev-m4` (`a6f5924`).
-The user manually amended M4-025 to `a6f5924` including all six files (tracked `cmd/gateway/translation_lifecycle_test.go`)
-and verified clean tests across all 7 batch commits (M4-019 through M4-025: `8076e38`,
-`f82975a`, `77913d2`, `3a0cf49`, `cc42aed`, `11d8471`, `a6f5924`).
+Anthropic Messages translation. All 26 predecessor tasks ([M4-001](tasks/M4-001.md)
+through [M4-026](tasks/M4-026.md)) are committed (`9b5464c`). Batch progress:
+9 of 19 objective DONE (total 27 DONE).
 
-[M4-026](tasks/M4-026.md) (Prove bounded reconstruction, backpressure and shutdown)
-acceptance is reviewed and closed DONE (reviewer PASS `ses_efc3d7c3bffeEfHGms1iVnT6D7`).
-Real TCP backpressure, emitter `budgetHit` over-cap failure, and gateway shutdown drain/cancellation
-pass all race checks. Batch progress: 8 of 19 objective DONE; up to 11 additional newly
-DONE tasks remain in the sequential backlog. Per policy, no next card is prepared or promoted
-until the M4-026 commit is cleanly created and verified.
-26 tasks are DONE in the registry; implementation is preserved.
+[M4-027](tasks/M4-027.md) (Prove real-Connector retry and account-affinity boundaries)
+acceptance is reviewed and closed DONE (reviewer PASS `ses_efc141043ffeWPSBYuiLEJbk2U`).
+The real Anthropic Connector under multi-candidate fallback keeps HTTP 429/500, ambiguous
+transport failure, local validation, and committed SSE errors on the primary account without
+cycling or account switching; stateful `previous_response_id` requests fail closed before dispatch.
+27 tasks are DONE in the registry; implementation is preserved. Per policy, no next card
+is prepared or promoted until the M4-027 commit is cleanly created and verified.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
