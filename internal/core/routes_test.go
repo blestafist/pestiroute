@@ -88,7 +88,7 @@ func TestRouteTableValidation(t *testing.T) {
 		{"empty mode", func() Route { x := good; x.Identity.Mode = ""; return x }()},
 		{"empty model", func() Route { x := good; x.Identity.Model = ""; return x }()},
 		{"empty account", func() Route { x := good; x.Identity.AccountID = ""; return x }()},
-		{"translation", func() Route { x := good; x.Identity.Mode = "translation"; return x }()},
+		{"unsupported mode", func() Route { x := good; x.Identity.Mode = "translate"; return x }()},
 		{"unknown adapter", func() Route { x := good; x.Adapter = "missing"; return x }()},
 		{"wrong adapter kind", func() Route { x := good; x.Adapter = "connector"; return x }()},
 		{"wrong protocol", func() Route { x := good; x.Identity.Protocol = "other"; return x }()},
@@ -154,7 +154,7 @@ func TestRouteSelectionExactTrustedIdentityAndFailClosed(t *testing.T) {
 		t.Fatal("payload protocol mismatch selected a route")
 	}
 	request.Payload.Protocol = "openai.responses.v1"
-	if _, err := table.Select(context.Background(), request, SelectionContext{Mode: "translation", AccountID: "a"}); err == nil {
+	if _, err := table.Select(context.Background(), request, SelectionContext{Mode: "translate", AccountID: "a"}); err == nil {
 		t.Fatal("unsupported mode selected route")
 	}
 	request.Model = "missing"

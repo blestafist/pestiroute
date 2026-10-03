@@ -7,6 +7,11 @@ import (
 )
 
 const ModeNative = "native"
+const ModeTranslation = "translation"
+
+func validExecutionMode(mode string) bool {
+	return mode == ModeNative || mode == ModeTranslation
+}
 
 type RouteLookupKey struct {
 	Protocol string
@@ -57,7 +62,7 @@ func NewRouteTable(routes []Route, registry *Registry) (*RouteTable, error) {
 		if id.Protocol == "" || id.Mode == "" || id.Model == "" || id.AccountID == "" {
 			return nil, fmt.Errorf("route protocol, mode, model, and account are required")
 		}
-		if id.Mode != ModeNative {
+		if !validExecutionMode(id.Mode) {
 			return nil, fmt.Errorf("route mode %q is unsupported", id.Mode)
 		}
 		if route.Adapter == "" || route.Connector == "" {
@@ -108,8 +113,8 @@ func (t *RouteTable) Select(ctx context.Context, request ExecutionRequest, selec
 	if t == nil || t.registry == nil {
 		return RouteSelection{}, fmt.Errorf("route table is unavailable")
 	}
-	if selection.Mode != ModeNative || selection.AccountID == "" {
-		return RouteSelection{}, fmt.Errorf("trusted native mode and selected account are required")
+	if !validExecutionMode(selection.Mode) || selection.AccountID == "" {
+		return RouteSelection{}, fmt.Errorf("trusted supported mode and selected account are required")
 	}
 	key := RouteLookupKey{Protocol: request.Payload.Protocol, Mode: selection.Mode, Model: request.Model}
 	for _, route := range t.routes[key] {
@@ -123,7 +128,7 @@ func (t *RouteTable) Select(ctx context.Context, request ExecutionRequest, selec
 // Candidates returns configured targets for the exact decoded route, in declaration order.
 // The returned set is immutable topology; callers must still authorize each target.
 func (t *RouteTable) Candidates(request ExecutionRequest, mode, accountID string) []Route {
-	if t == nil || mode != ModeNative {
+	if t == nil || !validExecutionMode(mode) {
 		return nil
 	}
 	routes := t.routes[RouteLookupKey{Protocol: request.Payload.Protocol, Mode: mode, Model: request.Model}]

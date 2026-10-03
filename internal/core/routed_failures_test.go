@@ -209,6 +209,71 @@ func TestRoutedFailures(t *testing.T) {
 	}
 }
 
+func TestRouteSelectionTranslationPreservesOpaqueRequest(t *testing.T) {
+	ctx := context.Background()
+	scope := core.CapabilityScope{Protocol: routedFailureProtocol, Mode: core.ModeTranslation, Model: "client-model", AccountID: "selected-account"}
+	caps := map[core.CapabilityScope]core.CapabilityResult{scope: {Values: map[core.Capability]core.CapabilityState{}}}
+	registry, err := core.NewRegistry(map[core.ComponentKind]core.APIVersion{
+		core.ComponentAdapter: {Major: 1}, core.ComponentConnector: {Major: 1},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = registry.Close(context.Background()) })
+	adapterDescriptor := routedDescriptor(core.ComponentAdapter)
+	adapterDescriptor.ID = "translation.adapter"
+	if err := registry.Register("adapter", &routedAdapter{descriptor: adapterDescriptor, caps: caps}, core.ComponentAdapter); err != nil {
+		t.Fatal(err)
+	}
+	connector := scripted.New(routedScriptDescriptor("translation.scripted"), caps, scripted.Script{Steps: []scripted.Step{
+		{Frame: core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: routedFailureProtocol}}},
+		{Frame: core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: core.OutcomeSucceeded}}},
+	}})
+	if err := registry.Register("translation-connector", connector, core.ComponentConnector); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []core.InstanceID{"adapter", "translation-connector"} {
+		if err := registry.Init(ctx, id, core.ComponentConfig{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	route := core.Route{Identity: core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{
+		Protocol: routedFailureProtocol, Mode: core.ModeTranslation, Model: scope.Model,
+	}, AccountID: scope.AccountID}, Adapter: "adapter", Connector: "translation-connector"}
+	table, err := core.NewRouteTable([]core.Route{route}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := core.ExecutionRequest{ID: "translation-request", Model: scope.Model, Payload: core.RawPayload{
+		Protocol: routedFailureProtocol, Body: []byte{0, 0xff, '{', 'x', '}'},
+	}, Metadata: core.RequestMetadata{Extensions: map[string]any{"account": "forged-account", "mode": core.ModeNative}}}
+	original := append([]byte(nil), request.Payload.Body...)
+	dispatcher := &core.Dispatcher{Routes: table, Services: routedServices{}, Mode: core.ModeTranslation, AccountID: scope.AccountID}
+	response, gatewayErr := dispatcher.Execute(ctx, request)
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	for {
+		_, err := response.Stream.Next(ctx)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := connector.Calls()
+	if len(calls) != 1 || calls[0].Scope.Mode != core.ModeTranslation || calls[0].Scope.AccountID != scope.AccountID || string(calls[0].Request.Payload.Body) != string(original) {
+		t.Fatalf("scripted translation call did not preserve selected scope/request: %+v", calls)
+	}
+	if _, err := table.Select(ctx, request, core.SelectionContext{Mode: core.ModeNative, AccountID: scope.AccountID}); err == nil {
+		t.Fatal("native mode selected translation route")
+	}
+	if _, err := table.Select(ctx, request, core.SelectionContext{Mode: core.ModeTranslation}); err == nil {
+		t.Fatal("missing trusted account selected translation route")
+	}
+}
+
 func routedScriptDescriptor(id string) core.Descriptor {
 	descriptor := routedDescriptor(core.ComponentConnector)
 	descriptor.ID = id

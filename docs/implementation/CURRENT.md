@@ -27,15 +27,14 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: commit M4-002 and prepare next eligible task
+## Immediate focus: commit M4-003
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. [M4-001](tasks/M4-001.md) and [M4-002](tasks/M4-002.md)
-are DONE. Versioned plain-text positive/negative fixtures, backend Anthropic
-SSE stream failure scripts, provenance table and `fakeupstream` assertions are
-verified under `internal/connector/anthropic/`. Next task promotion is held
-pending verification of the scoped M4-002 closure commit.
+Anthropic Messages translation. [M4-001](tasks/M4-001.md), [M4-002](tasks/M4-002.md),
+and [M4-003](tasks/M4-003.md) are DONE. Generic translation routes, candidate
+lookup, and dispatch attempt scopes are verified in Core without provider imports
+or payload mutation. Commit M4-003 closure before promoting the next task.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
