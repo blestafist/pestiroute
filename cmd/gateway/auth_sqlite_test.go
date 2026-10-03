@@ -148,6 +148,7 @@ func TestSQLiteVirtualKeyStoreProtectedHandler(t *testing.T) {
 	spy := &principalSpyConnector{}
 	cfg := config{
 		Listen: "127.0.0.1:0", keyStore: sqliteVirtualKeyStore{keys: keys}, policyStore: sqlitePolicyStore{policies: policies},
+		accounting:        sqliteAccountingStore{ledger: sqlite.NewLedger(db)},
 		accountAuthorizer: accountAuthorizer, logger: slog.New(slog.NewTextHandler(&logOutput, nil)),
 		Components: []topologyComponent{
 			{ID: "adapter", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter},
@@ -155,7 +156,7 @@ func TestSQLiteVirtualKeyStoreProtectedHandler(t *testing.T) {
 				Endpoint: "http://127.0.0.1:9999/v1/responses", CredentialEnv: "M3018_PROVIDER_CREDENTIAL", MaxBodyBytes: 4096, MaxHeaderBytes: 4096,
 				ConnectTimeout: "1s", TLSTimeout: "1s", HeaderTimeout: "1s", IdleTimeout: "1s"},
 		},
-		Routes: []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: "account", Adapter: "adapter", Connector: "connector"}},
+		Routes: []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: "account", Adapter: "adapter", Connector: "connector", Budget: core.RouteBudget{UnknownEstimate: core.UnknownEstimateReserve, ConservativeTokens: 100}, BudgetPolicy: "reserve", RouteID: "auth-sqlite-route"}},
 	}
 	ready, draining := &atomic.Bool{}, &atomic.Bool{}
 	handler, closeComponents, err := composeHandlerWithFactory(cfg, ready, draining, nil, func(item topologyComponent) core.Component {
@@ -169,7 +170,7 @@ func TestSQLiteVirtualKeyStoreProtectedHandler(t *testing.T) {
 	}
 	defer func() { _ = closeComponents(context.Background()) }()
 
-	principalWant := core.TrustedPrincipal{KeyID: valid.KeyID, PolicyID: policy.ID, KeyRevision: valid.Revision, PolicyRevision: policy.Revision}
+	principalWant := core.TrustedPrincipal{KeyID: valid.ID, PolicyID: policy.ID, KeyRevision: valid.Revision, PolicyRevision: policy.Revision}
 	post := func(headers ...string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5.4-mini"}`))
 		r.Header.Set("Content-Type", "application/json")
@@ -189,6 +190,19 @@ func TestSQLiteVirtualKeyStoreProtectedHandler(t *testing.T) {
 	}
 	if seen[0].credential != providerSecret || seen[0].metadataAuth || seen[0].body != `{"model":"gpt-5.4-mini"}` {
 		t.Fatalf("services credential/metadata authorization/body = %q/%t/%q", seen[0].credential, seen[0].metadataAuth, seen[0].body)
+	}
+	var attemptID string
+	if err := db.QueryRowContext(ctx, `SELECT a.id FROM attempts a JOIN requests q ON q.id=a.request_id WHERE q.virtual_key_id=?`, valid.ID).Scan(&attemptID); err != nil {
+		t.Fatalf("read dispatched attempt: %v", err)
+	}
+	ledger := sqlite.NewLedger(db)
+	attempt, err := ledger.GetAttempt(ctx, attemptID)
+	if err != nil || attempt.State != "failed" || attempt.DispatchedAt == nil {
+		t.Fatalf("durable attempt = %+v, %v", attempt, err)
+	}
+	reservation, err := ledger.GetReservation(ctx, attemptID)
+	if err != nil || reservation.State != "conservative" || reservation.EffectiveCharge != 100 {
+		t.Fatalf("durable reservation = %+v, %v", reservation, err)
 	}
 	logs := logOutput.String()
 	if strings.Contains(logs, valid.Secret) || strings.Contains(logs, providerSecret) || !strings.Contains(logs, "[REDACTED]") {

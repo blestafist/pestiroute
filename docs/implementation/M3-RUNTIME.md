@@ -66,6 +66,11 @@ means its short transaction committed and SQLite acknowledged it under the
 configured durability policy. No transaction encloses estimation, Execute, or
 stream consumption.
 
+RPM or TPM exhaustion maps to the v1 `rate_limited` gateway error. Only a
+distinct typed limit rejection may map to this category; stale authorization,
+ledger identity conflicts, and storage failures must not be classified as a
+limit rejection.
+
 ```go
 type AccountingStore interface {
     Admit(context.Context, RequestRecord, AttemptRecord, ReservationRecord) error

@@ -50,11 +50,15 @@ type AttemptResult struct {
 // Dispatcher uses the route registry when configured and retains the fixed
 // target/account fields for the legacy M1 path. Finalize records each attempt.
 type Dispatcher struct {
-	Target   Target
-	Routes   *RouteTable
-	Policies PolicyStore
-	Accounts AccountAuthorizer
-	Services interface {
+	Target       Target
+	Routes       *RouteTable
+	Policies     PolicyStore
+	Accounts     AccountAuthorizer
+	Accounting   AccountingStore
+	Budget       RouteBudget
+	BudgetPolicy string
+	RouteID      string
+	Services     interface {
 		ForAttempt(AttemptScope) InvocationServices
 	}
 	AccountID    string
@@ -102,6 +106,9 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	var connector Connector
 	var route RouteIdentity
 	var adapterID, connectorID InstanceID
+	var authorization CandidateAuthorization
+	_, principalPresent := TrustedPrincipalFromContext(ctx)
+	protected := principalPresent || d.Policies != nil
 	legacy := d.Routes == nil
 	if legacy {
 		if in.Model != m1Model {
@@ -130,9 +137,6 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 		}
 		scope := CapabilityScope{Protocol: in.Payload.Protocol, Mode: mode, Model: in.Model, AccountID: d.AccountID}
-		_, principalPresent := TrustedPrincipalFromContext(ctx)
-		protected := principalPresent || d.Policies != nil
-		var authorization CandidateAuthorization
 		if protected {
 			authorization, err = LoadCandidateAuthorization(ctx, d.Policies)
 			if err != nil {
@@ -176,27 +180,99 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	in.ID = requestID
 	scope := AttemptScope{ID: attemptID, AccountID: d.AccountID, Mode: "native"}
 	result := AttemptResult{RequestID: requestID, Scope: scope, Route: route, Adapter: adapterID, Connector: connectorID, Outcome: OutcomeIncomplete, Usage: UsageReport{Source: UsageUnknown, Completeness: UsageUnknownCompleteness}, StartedAt: time.Now()}
+	var gatewayErr *GatewayError
+	var accountingEstimate ResolvedEstimate
+	if protected {
+		if legacy || d.Accounting == nil || d.BudgetPolicy == "" || d.RouteID == "" {
+			return ExecutionResponse{}, &GatewayError{Code: "accounting_unavailable", Category: CategoryUnavailable, Message: "Request accounting is unavailable"}
+		}
+		principal, _ := authorization.AccountingIdentity()
+		accountingEstimate, gatewayErr = ResolveEstimate(ctx, connector, UsageQuery{
+			Protocol: in.Payload.Protocol, Mode: scope.Mode, Model: in.Model,
+			AccountID: scope.AccountID, Payload: in.Payload,
+		}, d.Services.ForAttempt(scope), d.Budget)
+		if gatewayErr != nil {
+			return ExecutionResponse{}, gatewayErr
+		}
+		if accountingEstimate.Method == "" {
+			accountingEstimate.Method = "conservative"
+		}
+		admission := AccountingAdmission{
+			RequestID: requestID, AttemptID: attemptID, KeyID: principal.KeyID, PolicyID: principal.PolicyID,
+			KeyRevision: principal.KeyRevision, PolicyRevision: principal.PolicyRevision,
+			Protocol: route.Protocol, Model: route.Model, RouteID: d.RouteID,
+			AccountID: d.AccountID, Connector: string(connectorID),
+			EstimateTokens: accountingEstimate.Tokens, EstimateMethod: accountingEstimate.Method,
+			BudgetPolicy: d.BudgetPolicy,
+		}
+		if err := d.Accounting.Admit(ctx, admission); err != nil {
+			if errors.Is(err, ErrAdmissionLimit) {
+				return ExecutionResponse{}, &GatewayError{Code: "rate_limit_exceeded", Category: CategoryRateLimited, Retryable: true, Message: "Request rate limit exceeded"}
+			}
+			return ExecutionResponse{}, accountingUnavailableError(err)
+		}
+	}
 	observe := func(r AttemptResult) {
 		if d.Observations != nil {
 			d.Observations.TryRecord(observationFromResult(r))
 		}
+	}
+	persist := func(r AttemptResult) error {
+		if protected {
+			if err := d.Accounting.FinalizeAttempt(context.WithoutCancel(ctx), accountingTerminal(r)); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	finish := func(r AttemptResult) {
 		if d.Finalize != nil {
 			d.Finalize(r)
 		}
 	}
-	finishBeforeStream := func(r AttemptResult) {
+	finishBeforeStream := func(r AttemptResult) *GatewayError {
 		r.EndedAt = time.Now()
 		observe(r)
+		if err := persist(r); err != nil {
+			return accountingUnavailableError(err)
+		}
 		finish(r)
+		return nil
 	}
 	var response ExecutionResponse
-	var gatewayErr *GatewayError
-	if legacy {
-		response, gatewayErr = d.Target.Execute(ctx, in, scope)
+	invoke := func() {
+		if legacy {
+			response, gatewayErr = d.Target.Execute(ctx, in, scope)
+		} else {
+			response, gatewayErr = connector.Execute(ctx, in, scope, d.Services.ForAttempt(scope))
+		}
+	}
+	execute := func() error {
+		invoke()
+		if gatewayErr != nil {
+			return gatewayErr
+		}
+		return nil
+	}
+	if protected {
+		if err := ExecuteAfterDispatchIntent(ctx, d.Accounting, attemptID, time.Now(), execute); err != nil {
+			if gatewayErr == nil {
+				gatewayErr = executionError(err)
+			}
+			if response.Stream != nil {
+				_ = response.Stream.Close()
+			}
+			result.Outcome, result.Error = OutcomeFailed, gatewayErr
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || gatewayErr.Category == CategoryCancelled {
+				result.Outcome = OutcomeCancelled
+			}
+			if accountingErr := finishBeforeStream(result); accountingErr != nil {
+				return ExecutionResponse{}, accountingErr
+			}
+			return ExecutionResponse{}, gatewayErr
+		}
 	} else {
-		response, gatewayErr = connector.Execute(ctx, in, scope, d.Services.ForAttempt(scope))
+		invoke()
 	}
 	if gatewayErr != nil {
 		if response.Stream != nil {
@@ -207,17 +283,21 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 			result.Outcome = OutcomeCancelled
 		}
 		result.Error = gatewayErr
-		finishBeforeStream(result)
+		if persistErr := finishBeforeStream(result); persistErr != nil {
+			return ExecutionResponse{}, persistErr
+		}
 		return ExecutionResponse{}, gatewayErr
 	}
 	if response.Stream == nil {
 		gatewayErr = executionError(ErrStreamContract)
 		result.Outcome = OutcomeFailed
 		result.Error = gatewayErr
-		finishBeforeStream(result)
+		if persistErr := finishBeforeStream(result); persistErr != nil {
+			return ExecutionResponse{}, persistErr
+		}
 		return ExecutionResponse{}, gatewayErr
 	}
-	s := &attemptStream{source: NewCheckedStream(response.Stream, in.Payload.Protocol), ctx: ctx, result: result, observe: observe, finish: finish}
+	s := &attemptStream{source: NewCheckedStream(response.Stream, in.Payload.Protocol), ctx: ctx, result: result, observe: observe, finish: finish, persist: persist}
 	s.stopMu.Lock()
 	s.stop = context.AfterFunc(ctx, func() { s.Close() })
 	s.stopMu.Unlock()
@@ -244,12 +324,38 @@ func authorizationError(err error) *GatewayError {
 	return &GatewayError{Code: "permission_denied", Category: CategoryPermissionDenied, Message: "Permission denied"}
 }
 
+func accountingUnavailableError(error) *GatewayError {
+	return &GatewayError{Code: "accounting_unavailable", Category: CategoryUnavailable, Message: "Request accounting is unavailable"}
+}
+
+func accountingTerminal(result AttemptResult) AccountingTerminal {
+	state := string(result.Outcome)
+	if result.Outcome == OutcomeIncomplete {
+		state = "interrupted"
+	}
+	usage := result.Usage
+	if !result.HasUsage {
+		usage = UsageReport{Source: UsageUnknown, Completeness: UsageUnknownCompleteness}
+	}
+	terminal := AccountingTerminal{
+		AttemptID: result.Scope.ID, Outcome: Outcome(state), Committed: result.Committed,
+		Usage: usage, EndedAt: result.EndedAt,
+	}
+	if result.Error != nil {
+		category := result.Error.Category
+		reason := result.Error.Code
+		terminal.Category, terminal.Reason = category, reason
+	}
+	return terminal
+}
+
 type attemptStream struct {
 	source     Stream
 	ctx        context.Context
 	result     AttemptResult
 	observe    func(AttemptResult)
 	finish     func(AttemptResult)
+	persist    func(AttemptResult) error
 	stopMu     sync.Mutex
 	stop       func() bool
 	mu         sync.Mutex // Serializes Head handoff and terminal observation.
@@ -257,9 +363,11 @@ type attemptStream struct {
 	closing    bool
 	closeCause error
 	published  chan struct{}
+	persisted  chan struct{}
 	commit     bool
 	pending    *CompleteFrame
 	closed     sync.Once
+	finishErr  error
 }
 
 func (s *attemptStream) finalize(outcome Outcome, usage *UsageReport, err *GatewayError, preHeadGateway bool) bool {
@@ -281,6 +389,7 @@ func (s *attemptStream) finalize(outcome Outcome, usage *UsageReport, err *Gatew
 func (s *attemptStream) reserveLocked(outcome Outcome, usage *UsageReport, err *GatewayError, preHeadGateway bool) (AttemptResult, chan struct{}) {
 	s.done = true
 	s.published = make(chan struct{})
+	s.persisted = make(chan struct{})
 	r := s.result
 	r.Committed = s.commit
 	if preHeadGateway && !s.commit {
@@ -301,6 +410,13 @@ func (s *attemptStream) publish(r AttemptResult, published chan struct{}) {
 		s.observe(r)
 	}
 	close(published)
+	if s.persist != nil {
+		err := s.persist(r)
+		s.mu.Lock()
+		s.finishErr = err
+		s.mu.Unlock()
+	}
+	close(s.persisted)
 	if s.finish != nil {
 		s.finish(r)
 	}
@@ -310,12 +426,15 @@ func (s *attemptStream) publish(r AttemptResult, published chan struct{}) {
 func (s *attemptStream) finalizeEOF(pending *CompleteFrame) error {
 	s.mu.Lock()
 	if s.done {
-		published, cause := s.published, s.closeCause
+		persisted, cause := s.persisted, s.closeCause
 		s.mu.Unlock()
-		if published != nil {
-			<-published
+		if persisted != nil {
+			<-persisted
 		}
-		return cause
+		if cause != nil {
+			return cause
+		}
+		return s.finishErr
 	}
 	outcome, usage, gatewayErr := pending.Outcome, pending.Usage, pending.Error
 	if s.closing {
@@ -327,12 +446,15 @@ func (s *attemptStream) finalizeEOF(pending *CompleteFrame) error {
 		r, published := s.reserveLocked(outcome, usage, gatewayErr, false)
 		s.mu.Unlock()
 		s.publish(r, published)
-		return cause
+		if cause != nil {
+			return cause
+		}
+		return s.finishErr
 	}
 	r, published := s.reserveLocked(outcome, usage, gatewayErr, false)
 	s.mu.Unlock()
 	s.publish(r, published)
-	return nil
+	return s.finishErr
 }
 
 func (s *attemptStream) handoff(head bool) bool {

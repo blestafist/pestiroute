@@ -87,7 +87,7 @@ func TestAdmissionTPMRollbackAndIdempotentRetry(t *testing.T) {
 		t.Fatalf("accepted request = %#v, %v", got, err)
 	}
 	q2, a2, r2 := admissionRecords(key, policy, "rejected", "rejected-attempt", 5)
-	if err := ledger.Admit(ctx, q2, a2, r2); !errors.Is(err, ErrLedgerConflict) {
+	if err := ledger.Admit(ctx, q2, a2, r2); !errors.Is(err, ErrLedgerConflict) || !errors.Is(err, ErrAdmissionLimit) {
 		t.Fatalf("TPM rejection = %v", err)
 	}
 	var requests, attempts, reservations int
@@ -162,8 +162,8 @@ func TestAdmissionRechecksTargetRouteAndAccount(t *testing.T) {
 			ledger, ctx, key, policy := admissionFixture(t, 2, 20)
 			q, a, r := admissionRecords(key, policy, "request", "attempt", 5)
 			tc.mutate(&q, &a)
-			if err := ledger.Admit(ctx, q, a, r); !errors.Is(err, ErrLedgerConflict) {
-				t.Fatalf("invalid target admitted: %v", err)
+			if err := ledger.Admit(ctx, q, a, r); !errors.Is(err, ErrLedgerConflict) || errors.Is(err, ErrAdmissionLimit) {
+				t.Fatalf("invalid target classification = %v", err)
 			}
 			var requests, attempts int
 			if err := ledger.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM requests`).Scan(&requests); err != nil {
@@ -261,7 +261,7 @@ func TestAdmissionTimestampWindowsRejectFutureAndRespectCutoff(t *testing.T) {
 			t.Fatalf("cutoff should be excluded: %v", err)
 		}
 		q, a, r = admissionRecords(key, policy, "last-slot-used", "last-slot-attempt", 1)
-		if err := ledger.Admit(ctx, q, a, r); !errors.Is(err, ErrLedgerConflict) {
+		if err := ledger.Admit(ctx, q, a, r); !errors.Is(err, ErrLedgerConflict) || !errors.Is(err, ErrAdmissionLimit) {
 			t.Fatalf("window count missed cutoff+1 row: %v", err)
 		}
 	})

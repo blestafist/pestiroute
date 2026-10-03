@@ -13,6 +13,7 @@ import (
 var (
 	ErrLedgerNotFound = errors.New("ledger record not found")
 	ErrLedgerConflict = errors.New("ledger record conflict")
+	ErrAdmissionLimit = errors.New("admission limit exceeded")
 )
 
 type RequestRecord struct {
@@ -147,7 +148,7 @@ func (r *Ledger) Admit(ctx context.Context, request RequestRecord, attempt Attem
 		return fmt.Errorf("count admission RPM: %w", err)
 	}
 	if policy.RPM <= 0 || rpmUsed >= policy.RPM {
-		return fmt.Errorf("admit request RPM exhausted: %w", ErrLedgerConflict)
+		return admissionLimitError("admit request RPM exhausted")
 	}
 	if err := conn.QueryRowContext(ctx, `SELECT COALESCE(SUM(estimated_tokens),0) FROM reservations r JOIN attempts a ON a.id=r.attempt_id JOIN requests q ON q.id=a.request_id WHERE q.virtual_key_id=? AND r.state='held'`, request.VirtualKeyID).Scan(&held); err != nil {
 		return fmt.Errorf("sum held reservations: %w", err)
@@ -156,7 +157,7 @@ func (r *Ledger) Admit(ctx context.Context, request RequestRecord, attempt Attem
 		return fmt.Errorf("sum settled reservations: %w", err)
 	}
 	if !withinTPM(held, settled, reservation.EstimatedTokens, policy.TPM) {
-		return fmt.Errorf("admit request TPM exhausted: %w", ErrLedgerConflict)
+		return admissionLimitError("admit request TPM exhausted")
 	}
 	request.AcceptedAt = fromUnixMillis(now)
 	if err := insertAdmittedRecords(ctx, conn, request, attempt, reservation); err != nil {
@@ -258,7 +259,7 @@ func (r *Ledger) BeginAttempt(ctx context.Context, attempt AttemptRecord, reserv
 		return fmt.Errorf("sum settled reservations: %w", err)
 	}
 	if !withinTPM(held, settled, reservation.EstimatedTokens, tpm) {
-		return fmt.Errorf("begin attempt TPM exhausted: %w", ErrLedgerConflict)
+		return admissionLimitError("begin attempt TPM exhausted")
 	}
 	if err := insertAttemptReservation(ctx, conn, attempt, reservation); err != nil {
 		return err
@@ -268,6 +269,10 @@ func (r *Ledger) BeginAttempt(ctx context.Context, attempt AttemptRecord, reserv
 	}
 	committed = true
 	return nil
+}
+
+func admissionLimitError(reason string) error {
+	return fmt.Errorf("%s: %w: %w", reason, ErrLedgerConflict, ErrAdmissionLimit)
 }
 
 func validateReservedAttempt(v AttemptRecord) error {

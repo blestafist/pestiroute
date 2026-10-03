@@ -48,6 +48,10 @@ type config struct {
 	keyStore              core.KeyStore
 	policyStore           core.PolicyStore
 	accountAuthorizer     core.AccountAuthorizer
+	accounting            core.AccountingStore
+	routeBudget           core.RouteBudget
+	budgetPolicy          string
+	routeID               string
 	logger                *slog.Logger
 	protected             *protectedConfig
 }
@@ -74,6 +78,9 @@ type topologyRoute struct {
 	Adapter      core.InstanceID                          `json:"adapter"`
 	Connector    core.InstanceID                          `json:"connector"`
 	Capabilities map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	Budget       core.RouteBudget                         `json:"-"`
+	BudgetPolicy string                                   `json:"-"`
+	RouteID      string                                   `json:"-"`
 }
 
 // secret stays in runtime state, never in configuration output or diagnostics.
@@ -90,6 +97,7 @@ func (c config) String() string {
 	c.keyStore = nil
 	c.policyStore = nil
 	c.accountAuthorizer = nil
+	c.accounting = nil
 	c.logger = nil
 	type view config
 	return fmt.Sprintf("%+v", view(c))
@@ -249,7 +257,7 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		}
 		c.credential = secret(value)
 		c.Components = legacyComponents(c)
-		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector"}}
+		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector", Budget: c.routeBudget, BudgetPolicy: c.budgetPolicy, RouteID: c.routeID}}
 		c.Credentials = map[string]secret{c.UpstreamCredentialEnv: c.credential}
 		if persistent {
 			return config{}, 0, errors.New("persistent credentials require M2 components and routes")
@@ -501,7 +509,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	legacy := len(c.Components) == 0 && c.UpstreamEndpoint != ""
 	if legacy {
 		c.Components = legacyComponents(c)
-		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector"}}
+		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector", Budget: c.routeBudget, BudgetPolicy: c.budgetPolicy, RouteID: c.routeID}}
 	}
 	if len(c.Components) == 0 {
 		return mux, func(context.Context) error { return nil }, nil
@@ -659,10 +667,12 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	var services interface {
 		ForAttempt(core.AttemptScope) core.InvocationServices
 	} = core.NewEnvironmentServices(credentials, transports, c.logger)
+	accounting := c.accounting
 	policyStore := c.policyStore
 	accountAuthorizer := c.accountAuthorizer
 	if persistentDB != nil {
 		accounts := sqlite.NewAccounts(persistentDB)
+		accounting = sqliteAccountingStore{ledger: sqlite.NewLedger(persistentDB)}
 		services = core.NewPersistentServices(sqliteAccountReader{accounts: accounts}, sqliteCredentialReader{credentials: sqlite.NewCredentials(persistentDB), key: persistentKey}, persistentRefs, transports, c.logger)
 		if policyStore == nil {
 			policyStore = sqlitePolicyStore{policies: sqlite.NewKeyPolicies(persistentDB)}
@@ -685,7 +695,11 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		}
 		protocolAdapters[route.Model] = component.(core.ProtocolAdapter)
 		routeLimits[route.Model] = connectorLimits[route.Connector]
-		dispatchers[route.Model] = &core.Dispatcher{Routes: table, Services: services, Policies: policyStore, Accounts: accountAuthorizer, AccountID: route.Account, Finalize: finalize}
+		dispatchers[route.Model] = &core.Dispatcher{
+			Routes: table, Services: services, Policies: policyStore, Accounts: accountAuthorizer,
+			Accounting: accounting, Budget: route.Budget, BudgetPolicy: route.BudgetPolicy,
+			RouteID: route.RouteID, AccountID: route.Account, Finalize: finalize,
+		}
 	}
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
 		if draining.Load() {

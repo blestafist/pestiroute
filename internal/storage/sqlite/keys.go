@@ -174,7 +174,7 @@ func (r *VirtualKeys) Verify(ctx context.Context, presentedKey string) (TrustedP
 	if !k.Enabled {
 		return TrustedPrincipal{}, ErrVirtualKeyDisabled
 	}
-	return TrustedPrincipal{KeyID: k.KeyID, PolicyID: k.PolicyID, KeyRevision: k.Revision, PolicyRevision: k.PolicyRevision}, nil
+	return TrustedPrincipal{KeyID: k.ID, PolicyID: k.PolicyID, KeyRevision: k.Revision, PolicyRevision: k.PolicyRevision}, nil
 }
 
 func (r *VirtualKeys) Revoke(ctx context.Context, id string) (VirtualKey, error) {

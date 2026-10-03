@@ -40,6 +40,10 @@ type CandidateAuthorization struct {
 	policy    PolicySnapshot
 }
 
+func (a CandidateAuthorization) AccountingIdentity() (TrustedPrincipal, PolicySnapshot) {
+	return a.principal, a.policy.clone()
+}
+
 func LoadCandidateAuthorization(ctx context.Context, store PolicyStore) (CandidateAuthorization, error) {
 	principal, ok := TrustedPrincipalFromContext(ctx)
 	if !ok || principal.KeyID == "" || principal.PolicyID == "" || principal.KeyRevision < 1 || principal.PolicyRevision < 1 || store == nil {

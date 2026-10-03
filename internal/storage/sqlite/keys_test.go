@@ -61,7 +61,7 @@ func TestVirtualKeyLifecycleAndRestart(t *testing.T) {
 		t.Fatalf("safe metadata list = %#v, %v", listed, err)
 	}
 	principal, err := repo.Verify(ctx, issued.Secret)
-	if err != nil || principal != (TrustedPrincipal{KeyID: issued.KeyID, PolicyID: "policy-a", KeyRevision: 1, PolicyRevision: 1}) {
+	if err != nil || principal != (TrustedPrincipal{KeyID: issued.ID, PolicyID: "policy-a", KeyRevision: 1, PolicyRevision: 1}) {
 		t.Fatalf("Verify = %#v, %v", principal, err)
 	}
 	for _, invalid := range []string{"", "malformed", "prv_0000000000000000000000000000000000000000000"} {

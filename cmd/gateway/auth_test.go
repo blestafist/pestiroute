@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
@@ -34,6 +35,14 @@ func (testAccountAuthorizer) AuthorizeAccount(_ context.Context, account, connec
 		return nil
 	}
 	return core.ErrPermissionDenied
+}
+
+type testAccountingStore struct{}
+
+func (testAccountingStore) Admit(context.Context, core.AccountingAdmission) error         { return nil }
+func (testAccountingStore) RecordDispatchIntent(context.Context, string, time.Time) error { return nil }
+func (testAccountingStore) FinalizeAttempt(context.Context, core.AccountingTerminal) error {
+	return nil
 }
 
 func (s *testKeyStore) Verify(_ context.Context, token string) (core.TrustedPrincipal, error) {
@@ -67,7 +76,8 @@ func TestProtectedAuthAndCredentialSeparation(t *testing.T) {
 	h, closeHandler := handler(config{UpstreamEndpoint: upstream.URL + "/v1/responses", UpstreamCredentialEnv: "AUTH_TEST_PROVIDER",
 		credential: secret(provider), MaxRequestBodyBytes: 4096, MaxRequestHeaderBytes: 4096, ConnectTimeout: "1s",
 		TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s", keyStore: store,
-		policyStore: policyStore, accountAuthorizer: testAccountAuthorizer{}}, ready)
+		policyStore: policyStore, accountAuthorizer: testAccountAuthorizer{}, accounting: testAccountingStore{},
+		routeBudget: core.RouteBudget{UnknownEstimate: core.UnknownEstimateReserve, ConservativeTokens: 100}, budgetPolicy: "reserve", routeID: "auth-test-route"}, ready)
 	defer closeHandler()
 	server := httptest.NewServer(h)
 	defer server.Close()
