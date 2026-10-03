@@ -572,6 +572,9 @@ func (g postAdmitCrashGate) Admit(ctx context.Context, in core.AccountingAdmissi
 	_, _ = fmt.Fprintf(os.Stdout, "ADMITTED %s %s\n", in.RequestID, in.AttemptID)
 	select {}
 }
+func (g postAdmitCrashGate) BeginAttempt(ctx context.Context, in core.AccountingAdmission) error {
+	return g.store.BeginAttempt(ctx, in)
+}
 
 func (g postAdmitCrashGate) RecordDispatchIntent(ctx context.Context, attemptID string, at time.Time) error {
 	return g.store.RecordDispatchIntent(ctx, attemptID, at)

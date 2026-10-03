@@ -21,6 +21,7 @@ func (e AccountingStorageFailure) Unwrap() error { return e.Err }
 // acknowledge each operation only after its durable transaction commits.
 type AccountingStore interface {
 	Admit(context.Context, AccountingAdmission) error
+	BeginAttempt(context.Context, AccountingAdmission) error
 	RecordDispatchIntent(context.Context, string, time.Time) error
 	FinalizeAttempt(context.Context, AccountingTerminal) error
 }

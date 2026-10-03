@@ -160,12 +160,18 @@ func TestProtectedMultiTargetAffinityGateAndOrdinaryRequest(t *testing.T) {
 	second.Settings.CredentialEnv = "PROTECTED_TEST_CREDENTIAL_B"
 	c.protected.Connectors = append(c.protected.Connectors, second)
 	c.protected.Routes[0].Targets = append(c.protected.Routes[0].Targets, routeTarget{Connector: second.ID, Account: "account-b"})
+	attempts := 2
+	c.protected.Routes[0].Retry = &retryConfig{MaxAttempts: &attempts, Deadline: "750ms"}
 	prepared, err := prepareProtectedConfig(ctx, c)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(prepared.Routes) != 2 || prepared.Routes[0].CandidateGroup == "" || prepared.Routes[0].CandidateGroup != prepared.Routes[1].CandidateGroup {
 		t.Fatalf("protected target group not normalized: %+v", prepared.Routes)
+	}
+	if prepared.Routes[0].RetryMaxAttempts != attempts || prepared.Routes[1].RetryMaxAttempts != attempts ||
+		prepared.Routes[0].RetryDeadline != 750*time.Millisecond || prepared.Routes[1].RetryDeadline != 750*time.Millisecond {
+		t.Fatalf("protected retry policy was not carried to runtime routes: %+v", prepared.Routes)
 	}
 	var ready, draining atomic.Bool
 	handler, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)

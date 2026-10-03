@@ -26,6 +26,16 @@ func (s sqliteAccountingStore) Admit(ctx context.Context, in core.AccountingAdmi
 	return accountingStoreError(ctx, coreAdmissionError(err))
 }
 
+func (s sqliteAccountingStore) BeginAttempt(ctx context.Context, in core.AccountingAdmission) error {
+	attempt := sqlite.AttemptRecord{
+		ID: in.AttemptID, RequestID: in.RequestID, AccountID: in.AccountID,
+		Connector: in.Connector, RouteID: in.RouteID, BudgetPolicy: in.BudgetPolicy,
+		EstimateTokens: in.EstimateTokens, EstimateMethod: in.EstimateMethod, State: "reserved",
+	}
+	err := s.ledger.BeginAttempt(ctx, attempt, sqlite.ReservationRecord{AttemptID: in.AttemptID, EstimatedTokens: in.EstimateTokens})
+	return accountingStoreError(ctx, coreAdmissionError(err))
+}
+
 func coreAdmissionError(err error) error {
 	if errors.Is(err, sqlite.ErrAdmissionLimit) {
 		return core.ErrAdmissionLimit

@@ -74,18 +74,20 @@ type topologyComponent struct {
 }
 
 type topologyRoute struct {
-	Protocol       string                                   `json:"protocol"`
-	Mode           string                                   `json:"mode"`
-	Model          string                                   `json:"model"`
-	Account        string                                   `json:"account"`
-	Adapter        core.InstanceID                          `json:"adapter"`
-	Connector      core.InstanceID                          `json:"connector"`
-	Capabilities   map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
-	Requirements   []core.Capability                        `json:"-"`
-	Budget         core.RouteBudget                         `json:"-"`
-	BudgetPolicy   string                                   `json:"-"`
-	RouteID        string                                   `json:"-"`
-	CandidateGroup string                                   `json:"-"`
+	Protocol         string                                   `json:"protocol"`
+	Mode             string                                   `json:"mode"`
+	Model            string                                   `json:"model"`
+	Account          string                                   `json:"account"`
+	Adapter          core.InstanceID                          `json:"adapter"`
+	Connector        core.InstanceID                          `json:"connector"`
+	Capabilities     map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	Requirements     []core.Capability                        `json:"-"`
+	Budget           core.RouteBudget                         `json:"-"`
+	BudgetPolicy     string                                   `json:"-"`
+	RouteID          string                                   `json:"-"`
+	CandidateGroup   string                                   `json:"-"`
+	RetryMaxAttempts int                                      `json:"-"`
+	RetryDeadline    time.Duration                            `json:"-"`
 }
 
 // secret stays in runtime state, never in configuration output or diagnostics.
@@ -714,6 +716,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			Routes: table, Services: services, Policies: policyStore, Accounts: accountAuthorizer,
 			Accounting: accounting, Budget: route.Budget, BudgetPolicy: route.BudgetPolicy,
 			RouteID: route.RouteID, AccountID: route.Account, Finalize: finalize,
+			RetryMaxAttempts: route.RetryMaxAttempts, RetryDeadline: route.RetryDeadline,
 		}
 	}
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {

@@ -40,6 +40,7 @@ func (testAccountAuthorizer) AuthorizeAccount(_ context.Context, account, connec
 type testAccountingStore struct{}
 
 func (testAccountingStore) Admit(context.Context, core.AccountingAdmission) error         { return nil }
+func (testAccountingStore) BeginAttempt(context.Context, core.AccountingAdmission) error  { return nil }
 func (testAccountingStore) RecordDispatchIntent(context.Context, string, time.Time) error { return nil }
 func (testAccountingStore) FinalizeAttempt(context.Context, core.AccountingTerminal) error {
 	return nil

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
@@ -75,6 +76,19 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 	adapterAdded := false
 	routes := make([]topologyRoute, 0, len(p.Routes))
 	for _, route := range p.Routes {
+		maxAttempts := 1
+		var retryDeadline time.Duration
+		if route.Retry != nil {
+			if route.Retry.MaxAttempts != nil {
+				maxAttempts = *route.Retry.MaxAttempts
+			}
+			if route.Retry.Deadline != "" {
+				retryDeadline, err = time.ParseDuration(route.Retry.Deadline)
+				if err != nil {
+					return fail(db.Close, fmt.Errorf("route %q has an invalid retry deadline", route.ID))
+				}
+			}
+		}
 		if !adapterAdded {
 			components = append(components, topologyComponent{ID: "responses-adapter", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter})
 			adapterAdded = true
@@ -94,7 +108,8 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 				}
 			}
 			routes = append(routes, topologyRoute{Protocol: route.Protocol, Mode: core.ModeNative, Model: route.Model, Account: target.Account,
-				Adapter: "responses-adapter", Connector: core.InstanceID(target.Connector), Budget: budget, BudgetPolicy: route.Budget.UnknownEstimate, RouteID: route.ID, CandidateGroup: route.ID, Requirements: requirements})
+				Adapter: "responses-adapter", Connector: core.InstanceID(target.Connector), Budget: budget, BudgetPolicy: route.Budget.UnknownEstimate, RouteID: route.ID, CandidateGroup: route.ID, Requirements: requirements,
+				RetryMaxAttempts: maxAttempts, RetryDeadline: retryDeadline})
 		}
 	}
 	c.DatabasePath, c.MasterKeyFile = p.Storage.Path, p.Secrets.MasterKeyFile

@@ -58,6 +58,7 @@ type AttemptResult struct {
 // target/account fields for the legacy M1 path. Finalize records each attempt.
 type Dispatcher struct {
 	accountingDegraded atomic.Bool
+	degradationLatch   *atomic.Bool
 	Target             Target
 	Routes             *RouteTable
 	Policies           PolicyStore
@@ -65,6 +66,8 @@ type Dispatcher struct {
 	Accounting         AccountingStore
 	Budget             RouteBudget
 	BudgetPolicy       string
+	RetryMaxAttempts   int
+	RetryDeadline      time.Duration
 	RouteID            string
 	Services           interface {
 		ForAttempt(AttemptScope) InvocationServices
@@ -77,6 +80,20 @@ type Dispatcher struct {
 	Observations AttemptObservationSink
 }
 
+func (d *Dispatcher) degraded() bool {
+	if d.degradationLatch != nil {
+		return d.degradationLatch.Load()
+	}
+	return d.accountingDegraded.Load()
+}
+
+func (d *Dispatcher) markDegraded() {
+	d.accountingDegraded.Store(true)
+	if d.degradationLatch != nil {
+		d.degradationLatch.Store(true)
+	}
+}
+
 func newID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -85,9 +102,9 @@ func newID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (ExecutionResponse, *GatewayError) {
+func (d *Dispatcher) executeAttempt(ctx context.Context, in ExecutionRequest) (ExecutionResponse, *GatewayError) {
 	if err := ctx.Err(); err != nil {
-		gatewayErr := executionError(err)
+		gatewayErr := executionError(contextError(ctx))
 		requestID, requestErr := newID()
 		attemptID, attemptErr := newID()
 		if requestErr == nil && attemptErr == nil {
@@ -117,7 +134,7 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	var authorization CandidateAuthorization
 	_, principalPresent := TrustedPrincipalFromContext(ctx)
 	protected := principalPresent || d.Policies != nil
-	if protected && d.accountingDegraded.Load() {
+	if protected && d.degraded() {
 		return ExecutionResponse{}, accountingUnavailableError(nil)
 	}
 	legacy := d.Routes == nil
@@ -193,9 +210,14 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		}
 		route, adapterID, connectorID = selection.Route.Identity, selection.Route.Adapter, selection.Route.Connector
 	}
-	requestID, err := newID()
-	if err != nil {
-		return ExecutionResponse{}, executionError(err)
+	state, statePresent := ctx.Value(dispatchStateKey{}).(dispatchState)
+	requestID := state.requestID
+	if !statePresent || requestID == "" {
+		var err error
+		requestID, err = newID()
+		if err != nil {
+			return ExecutionResponse{}, executionError(err)
+		}
 	}
 	attemptID, err := newID()
 	if err != nil {
@@ -229,15 +251,22 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 			EstimateTokens: accountingEstimate.Tokens, EstimateMethod: accountingEstimate.Method,
 			BudgetPolicy: d.BudgetPolicy,
 		}
-		if err := d.Accounting.Admit(ctx, admission); err != nil {
+		admit := d.Accounting.Admit
+		if state.ordinal > 0 {
+			admit = d.Accounting.BeginAttempt
+		}
+		if statePresent && state.ordinal == 0 && state.deadline != nil {
+			state.deadline.start()
+		}
+		if err := admit(ctx, admission); err != nil {
 			if errors.Is(err, ErrAdmissionLimit) {
 				return ExecutionResponse{}, &GatewayError{Code: "rate_limit_exceeded", Category: CategoryRateLimited, Retryable: true, Message: "Request rate limit exceeded"}
 			}
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return ExecutionResponse{}, executionError(err)
+				return ExecutionResponse{}, executionError(contextError(ctx))
 			}
 			if isAccountingStorageFailure(err) {
-				d.accountingDegraded.Store(true)
+				d.markDegraded()
 			}
 			return ExecutionResponse{}, accountingUnavailableError(err)
 		}
@@ -251,7 +280,7 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		if protected {
 			if err := d.Accounting.FinalizeAttempt(context.WithoutCancel(ctx), accountingTerminal(r)); err != nil {
 				if isAccountingStorageFailure(err) {
-					d.accountingDegraded.Store(true)
+					d.markDegraded()
 				}
 				return accountingUnavailableError(err)
 			}
@@ -272,6 +301,14 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		finish(r)
 		return nil
 	}
+	if statePresent && state.deadline != nil && state.deadline.isExpired() {
+		gatewayErr = executionError(context.DeadlineExceeded)
+		result.Outcome, result.Error = OutcomeCancelled, gatewayErr
+		if persistErr := finishBeforeStream(result); persistErr != nil {
+			return ExecutionResponse{}, persistErr
+		}
+		return ExecutionResponse{}, gatewayErr
+	}
 	var response ExecutionResponse
 	invoke := func() {
 		if legacy {
@@ -289,12 +326,15 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	}
 	if protected {
 		if err := ExecuteAfterDispatchIntent(ctx, d.Accounting, attemptID, time.Now(), execute); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				gatewayErr = executionError(contextError(ctx))
+			}
 			if gatewayErr == nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					gatewayErr = executionError(err)
 				} else {
 					if isAccountingStorageFailure(err) {
-						d.accountingDegraded.Store(true)
+						d.markDegraded()
 					}
 					gatewayErr = accountingUnavailableError(err)
 				}
@@ -315,6 +355,9 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		invoke()
 	}
 	if gatewayErr != nil {
+		if err := ctx.Err(); err != nil {
+			gatewayErr = executionError(contextError(ctx))
+		}
 		if response.Stream != nil {
 			response.Stream.Close()
 		}
@@ -337,7 +380,8 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		}
 		return ExecutionResponse{}, gatewayErr
 	}
-	s := &attemptStream{source: NewCheckedStream(response.Stream, in.Payload.Protocol), ctx: ctx, result: result, observe: observe, finish: finish, persist: persist}
+	s := &attemptStream{source: NewCheckedStream(response.Stream, in.Payload.Protocol), ctx: ctx, result: result, observe: observe, finish: finish, persist: persist,
+		allowRejectedHeadRetry: d.RetryMaxAttempts > 1, deferHeadCommit: d.RetryMaxAttempts > 1}
 	s.stopMu.Lock()
 	s.stop = context.AfterFunc(ctx, func() { s.Close() })
 	s.stopMu.Unlock()
@@ -480,24 +524,26 @@ func accountingTerminal(result AttemptResult) AccountingTerminal {
 }
 
 type attemptStream struct {
-	source     Stream
-	ctx        context.Context
-	result     AttemptResult
-	observe    func(AttemptResult)
-	finish     func(AttemptResult)
-	persist    func(AttemptResult) error
-	stopMu     sync.Mutex
-	stop       func() bool
-	mu         sync.Mutex // Serializes Head handoff and terminal observation.
-	done       bool
-	closing    bool
-	closeCause error
-	published  chan struct{}
-	persisted  chan struct{}
-	commit     bool
-	pending    *CompleteFrame
-	closed     sync.Once
-	finishErr  error
+	source                 Stream
+	ctx                    context.Context
+	result                 AttemptResult
+	observe                func(AttemptResult)
+	finish                 func(AttemptResult)
+	persist                func(AttemptResult) error
+	stopMu                 sync.Mutex
+	stop                   func() bool
+	mu                     sync.Mutex // Serializes Head handoff and terminal observation.
+	done                   bool
+	closing                bool
+	closeCause             error
+	published              chan struct{}
+	persisted              chan struct{}
+	commit                 bool
+	pending                *CompleteFrame
+	closed                 sync.Once
+	finishErr              error
+	allowRejectedHeadRetry bool
+	deferHeadCommit        bool
 }
 
 func (s *attemptStream) finalize(outcome Outcome, usage *UsageReport, err *GatewayError, preHeadGateway bool) bool {
@@ -601,7 +647,7 @@ func (s *attemptStream) handoff(head bool) bool {
 
 func (s *attemptStream) Close() error {
 	var err error
-	cause := s.ctx.Err()
+	cause := contextError(s.ctx)
 	if cause == nil {
 		cause = context.Canceled
 	}
@@ -658,12 +704,21 @@ func (s *attemptStream) fail(err error) {
 	s.finalize(outcome, usage, gatewayErr, preHeadGateway)
 }
 
+func (s *attemptStream) finalizationError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.finishErr
+}
+
 func (s *attemptStream) Next(ctx context.Context) (StreamFrame, error) {
 	if err := s.ctx.Err(); err != nil {
 		s.Close()
-		return StreamFrame{}, err
+		return StreamFrame{}, contextError(s.ctx)
 	}
 	f, err := s.source.Next(ctx)
+	if err != nil && s.ctx.Err() != nil {
+		err = contextError(s.ctx)
+	}
 	if err != nil {
 		if err == io.EOF {
 			s.mu.Lock()
@@ -672,6 +727,9 @@ func (s *attemptStream) Next(ctx context.Context) (StreamFrame, error) {
 			if pending == nil {
 				s.fail(ErrStreamContract)
 				s.Close()
+				if persistErr := s.finalizationError(); persistErr != nil {
+					return StreamFrame{}, persistErr
+				}
 				return StreamFrame{}, ErrStreamContract
 			}
 			if cause := s.finalizeEOF(pending); cause != nil {
@@ -685,16 +743,30 @@ func (s *attemptStream) Next(ctx context.Context) (StreamFrame, error) {
 			if pending != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				s.fail(ErrStreamContract)
 				_ = s.Close()
+				if persistErr := s.finalizationError(); persistErr != nil {
+					return StreamFrame{}, persistErr
+				}
 				return StreamFrame{}, ErrStreamContract
 			}
 			s.fail(err)
 		}
 		s.Close()
+		if persistErr := s.finalizationError(); persistErr != nil {
+			return StreamFrame{}, persistErr
+		}
 		return StreamFrame{}, err
 	}
 	switch f.Type {
 	case FrameHead:
-		if !s.handoff(true) {
+		if f.Head.Error != nil && s.allowRejectedHeadRetry {
+			s.fail(f.Head.Error)
+			_ = s.Close()
+			if persistErr := s.finalizationError(); persistErr != nil {
+				return StreamFrame{}, persistErr
+			}
+			return StreamFrame{}, f.Head.Error
+		}
+		if !s.deferHeadCommit && !s.handoff(true) {
 			return StreamFrame{}, context.Canceled
 		}
 	case FrameComplete:
