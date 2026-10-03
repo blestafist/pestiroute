@@ -644,6 +644,117 @@ func (r *Ledger) FinalizeAttempt(ctx context.Context, terminal TerminalAttempt) 
 	return nil
 }
 
+// RecoverySummary reports the stable request and attempt state counts after a
+// recovery pass. Repeated calls on an unchanged database return the same value.
+type RecoverySummary struct {
+	RequestsAdmitted, RequestsSucceeded, RequestsFailed, RequestsCancelled, RequestsInterrupted                 int64
+	AttemptsReserved, AttemptsIntent, AttemptsSucceeded, AttemptsFailed, AttemptsCancelled, AttemptsInterrupted int64
+}
+
+// Recover settles every stale attempt and closes orphaned admitted requests in
+// one writer transaction. It never resumes execution or contacts a Connector.
+func (r *Ledger) Recover(ctx context.Context) (RecoverySummary, error) {
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return RecoverySummary{}, fmt.Errorf("acquire recovery connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return RecoverySummary{}, fmt.Errorf("begin recovery: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	now := millis(r.now())
+	rows, err := conn.QueryContext(ctx, `SELECT a.id,a.request_id,a.state,a.estimate_tokens
+		FROM attempts a JOIN requests q ON q.id=a.request_id
+		WHERE q.state='admitted' AND a.state IN ('reserved','intent') ORDER BY a.request_id,a.ordinal`)
+	if err != nil {
+		return RecoverySummary{}, fmt.Errorf("select stale attempts: %w", err)
+	}
+	type staleAttempt struct {
+		id, requestID, state string
+		estimate             int64
+	}
+	var stale []staleAttempt
+	for rows.Next() {
+		var a staleAttempt
+		if err := rows.Scan(&a.id, &a.requestID, &a.state, &a.estimate); err != nil {
+			_ = rows.Close()
+			return RecoverySummary{}, fmt.Errorf("read stale attempt: %w", err)
+		}
+		stale = append(stale, a)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return RecoverySummary{}, fmt.Errorf("read stale attempts: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return RecoverySummary{}, fmt.Errorf("close stale attempts: %w", err)
+	}
+	for _, a := range stale {
+		state, reason, reservationState, charge, source, completeness := "interrupted", "interrupted", "conservative", a.estimate, "unknown", "unknown"
+		if a.state == "reserved" {
+			state, reason, reservationState, charge = "failed", "not_dispatched", "released", 0
+		}
+		result, err := conn.ExecContext(ctx, `UPDATE attempts SET state=?,error_reason=?,finished_at=? WHERE id=? AND state IN ('reserved','intent')`, state, reason, now, a.id)
+		if err != nil {
+			return RecoverySummary{}, fmt.Errorf("recover attempt %q: %w", a.id, err)
+		}
+		if n, err := result.RowsAffected(); err != nil || n != 1 {
+			return RecoverySummary{}, fmt.Errorf("recover attempt %q: unexpected affected rows %d: %w", a.id, n, errors.Join(err, ErrLedgerConflict))
+		}
+		if a.state == "intent" {
+			if _, err := conn.ExecContext(ctx, `INSERT INTO usage_records (attempt_id,input_tokens,output_tokens,reasoning_tokens,cached_tokens,source,completeness,recorded_at) VALUES (?,NULL,NULL,NULL,NULL,?,?,?)`, a.id, source, completeness, now); err != nil {
+				return RecoverySummary{}, fmt.Errorf("record unknown recovery usage: %w", err)
+			}
+		}
+		result, err = conn.ExecContext(ctx, `UPDATE reservations SET state=?,actual_tokens=NULL,effective_charge=?,reconciled_at=? WHERE attempt_id=? AND state='held'`, reservationState, charge, now, a.id)
+		if err != nil {
+			return RecoverySummary{}, fmt.Errorf("recover reservation %q: %w", a.id, err)
+		}
+		if n, err := result.RowsAffected(); err != nil || n != 1 {
+			return RecoverySummary{}, fmt.Errorf("recover reservation %q: unexpected affected rows %d: %w", a.id, n, errors.Join(err, ErrLedgerConflict))
+		}
+		result, err = conn.ExecContext(ctx, `UPDATE requests SET state=?,finished_at=? WHERE id=? AND state='admitted'`, state, now, a.requestID)
+		if err != nil {
+			return RecoverySummary{}, fmt.Errorf("recover request %q: %w", a.requestID, err)
+		}
+		if n, err := result.RowsAffected(); err != nil || n != 1 {
+			return RecoverySummary{}, fmt.Errorf("recover request %q: unexpected affected rows %d: %w", a.requestID, n, errors.Join(err, ErrLedgerConflict))
+		}
+	}
+	// A finalized non-final attempt can outlive its request if the process dies
+	// before beginning the next attempt. Close the request from its latest row.
+	if _, err := conn.ExecContext(ctx, `UPDATE requests AS q SET
+		state=(SELECT a.state FROM attempts a WHERE a.request_id=q.id ORDER BY a.ordinal DESC LIMIT 1),
+		finished_at=COALESCE((SELECT a.finished_at FROM attempts a WHERE a.request_id=q.id ORDER BY a.ordinal DESC LIMIT 1),?)
+		WHERE q.state='admitted' AND EXISTS (SELECT 1 FROM attempts a WHERE a.request_id=q.id)
+		AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.request_id=q.id AND a.state IN ('reserved','intent'))`, now); err != nil {
+		return RecoverySummary{}, fmt.Errorf("terminalize recovered requests: %w", err)
+	}
+	var summary RecoverySummary
+	for _, item := range []struct {
+		table, state string
+		dest         *int64
+	}{
+		{"requests", "admitted", &summary.RequestsAdmitted}, {"requests", "succeeded", &summary.RequestsSucceeded}, {"requests", "failed", &summary.RequestsFailed}, {"requests", "cancelled", &summary.RequestsCancelled}, {"requests", "interrupted", &summary.RequestsInterrupted},
+		{"attempts", "reserved", &summary.AttemptsReserved}, {"attempts", "intent", &summary.AttemptsIntent}, {"attempts", "succeeded", &summary.AttemptsSucceeded}, {"attempts", "failed", &summary.AttemptsFailed}, {"attempts", "cancelled", &summary.AttemptsCancelled}, {"attempts", "interrupted", &summary.AttemptsInterrupted},
+	} {
+		if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+item.table+` WHERE state=?`, item.state).Scan(item.dest); err != nil {
+			return RecoverySummary{}, fmt.Errorf("summarize recovery state: %w", err)
+		}
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return RecoverySummary{}, fmt.Errorf("commit recovery: %w", err)
+	}
+	committed = true
+	return summary, nil
+}
+
 type settlementResult struct {
 	state  string
 	actual *int64
