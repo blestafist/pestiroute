@@ -33,6 +33,7 @@ type translationLifecycleFixture struct {
 	secret     string
 	finalized  chan core.AttemptResult
 	accounting *accountingCallCounters
+	ready      *atomic.Bool
 }
 
 func newTranslationLifecycleFixture(t *testing.T, backend http.Handler, injected ...core.HTTPDoer) *translationLifecycleFixture {
@@ -44,6 +45,10 @@ func newTranslationLifecycleFixtureWithConnSetup(t *testing.T, backend http.Hand
 }
 
 func newTranslationLifecycleFixtureConfigured(t *testing.T, backend http.Handler, setupConn func(net.Conn), configure func(context.Context, *sql.DB, secure.MasterKey, *protectedConfig) error, injected ...core.HTTPDoer) *translationLifecycleFixture {
+	return newTranslationLifecycleFixtureConfiguredWithFactory(t, backend, setupConn, configure, nil, injected...)
+}
+
+func newTranslationLifecycleFixtureConfiguredWithFactory(t *testing.T, backend http.Handler, setupConn func(net.Conn), configure func(context.Context, *sql.DB, secure.MasterKey, *protectedConfig) error, factory func(topologyComponent, core.HTTPDoer) core.Component, injected ...core.HTTPDoer) *translationLifecycleFixture {
 	t.Helper()
 	_, dbPath, keyPath := protectedFixture(t)
 	upstream := httptest.NewServer(backend)
@@ -77,10 +82,6 @@ func newTranslationLifecycleFixtureConfigured(t *testing.T, backend http.Handler
 	if err != nil {
 		t.Fatal(err)
 	}
-	issued, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
-	if err != nil {
-		t.Fatal(err)
-	}
 	backendURL, err := url.Parse(upstream.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +94,14 @@ func newTranslationLifecycleFixtureConfigured(t *testing.T, backend http.Handler
 		if err := configure(ctx, db, key, p); err != nil {
 			t.Fatal(err)
 		}
+	}
+	policy, err = sqlite.NewKeyPolicies(db).GetLatest(ctx, policy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -116,6 +125,11 @@ func newTranslationLifecycleFixtureConfigured(t *testing.T, backend http.Handler
 		doer = injected[0]
 	}
 	h, closeComponents, err := composeHandlerWithFactory(prepared, &ready, &draining, func(result core.AttemptResult) { finalized <- result }, func(item topologyComponent) core.Component {
+		if factory != nil {
+			if component := factory(item, doer); component != nil {
+				return component
+			}
+		}
 		if item.Kind == core.ComponentAdapter {
 			return adapter.NewAdapter()
 		}
@@ -146,7 +160,7 @@ func newTranslationLifecycleFixtureConfigured(t *testing.T, backend http.Handler
 		}
 	}
 	gateway.Start()
-	return &translationLifecycleFixture{gateway: gateway, prepared: prepared, secret: issued.Secret, finalized: finalized, accounting: accounting}
+	return &translationLifecycleFixture{gateway: gateway, prepared: prepared, secret: issued.Secret, finalized: finalized, accounting: accounting, ready: &ready}
 }
 
 func TestTranslationPreHeadCancellationDurableRows(t *testing.T) {
@@ -240,8 +254,12 @@ func TestTranslationFallbackHTTPRejectionsDoNotSwitchAccounts(t *testing.T) {
 }
 
 func newTranslationFallbackFixture(t *testing.T, doer core.HTTPDoer) *translationLifecycleFixture {
+	return newTranslationFallbackFixtureWithFactory(t, doer, nil)
+}
+
+func newTranslationFallbackFixtureWithFactory(t *testing.T, doer core.HTTPDoer, factory func(topologyComponent, core.HTTPDoer) core.Component) *translationLifecycleFixture {
 	t.Helper()
-	return newTranslationLifecycleFixtureConfigured(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil, func(ctx context.Context, db *sql.DB, key secure.MasterKey, p *protectedConfig) error {
+	return newTranslationLifecycleFixtureConfiguredWithFactory(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil, func(ctx context.Context, db *sql.DB, key secure.MasterKey, p *protectedConfig) error {
 		const accountID, credentialID = "anthropic-account-b", "anthro-key-b"
 		if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: "anthropic-b", Enabled: true}); err != nil {
 			return err
@@ -265,7 +283,7 @@ func newTranslationFallbackFixture(t *testing.T, doer core.HTTPDoer) *translatio
 		attempts := 2
 		p.Routes[1].Retry = &retryConfig{MaxAttempts: &attempts, Deadline: "5s"}
 		return nil
-	}, doer)
+	}, factory, doer)
 }
 
 func TestTranslationFallbackCommittedStreamFailureDoesNotSwitchAccounts(t *testing.T) {

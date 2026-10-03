@@ -27,21 +27,23 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-027 DONE (awaiting verified commit; batch 9/19 DONE)
+## Immediate focus: M4-028 DONE (awaiting verified commit; batch 10/19 DONE)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. All 26 predecessor tasks ([M4-001](tasks/M4-001.md)
-through [M4-026](tasks/M4-026.md)) are committed (`9b5464c`). Batch progress:
-9 of 19 objective DONE (total 27 DONE).
+Anthropic Messages translation. All 27 predecessor tasks ([M4-001](tasks/M4-001.md)
+through [M4-027](tasks/M4-027.md)) are committed (`90bec04`). Batch progress:
+10 of 19 objective DONE (total 28 DONE; 9 remaining).
 
-[M4-027](tasks/M4-027.md) (Prove real-Connector retry and account-affinity boundaries)
-acceptance is reviewed and closed DONE (reviewer PASS `ses_efc141043ffeWPSBYuiLEJbk2U`).
-The real Anthropic Connector under multi-candidate fallback keeps HTTP 429/500, ambiguous
-transport failure, local validation, and committed SSE errors on the primary account without
-cycling or account switching; stateful `previous_response_id` requests fail closed before dispatch.
-27 tasks are DONE in the registry; implementation is preserved. Per policy, no next card
-is prepared or promoted until the M4-027 commit is cleanly created and verified.
+[M4-028](tasks/M4-028.md) (Verify durable translated admission and settlement)
+acceptance is reviewed and closed DONE (reviewer PASS `ses_efbde6020ffemmNCtAu26qIZ7K`).
+Precise opaque Body vs Complete semantics: streamed Body bytes flow incrementally under
+bounded backpressure; terminal persistence failure suppresses Core's internal Complete
+control frame and durable ledger success, leaves attempt intent uncommitted in SQLite,
+drops readiness to 503, and blocks subsequent requests across all routes without buffering
+or recalling wire bytes. 28 tasks are DONE in the registry; implementation is preserved.
+Per policy, no next card is prepared or promoted until the M4-028 commit is cleanly created
+and verified.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
