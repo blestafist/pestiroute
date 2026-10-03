@@ -12,6 +12,8 @@ import (
 	"github.com/blestafist/pestiroute/internal/core"
 )
 
+const backendModel = "claude-opus-5-5"
+
 type messagesRequest struct {
 	Model       string            `json:"model"`
 	Stream      bool              `json:"stream"`
@@ -52,6 +54,9 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 	if json.Unmarshal(fields["model"], &out.Model) != nil || out.Model == "" || string(fields["model"]) == "null" {
 		return messagesRequest{}, invalidTranslation("Invalid model")
 	}
+	// The client model is validated against the configured route in Execute;
+	// Anthropic receives only the explicitly bound backend model.
+	out.Model = backendModel
 	if raw, ok := fields["stream"]; !ok || string(raw) != "true" {
 		return messagesRequest{}, invalidTranslation("Streaming is required")
 	}

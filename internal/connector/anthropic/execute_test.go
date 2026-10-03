@@ -38,7 +38,7 @@ func TestExecuteStreamTranslateEarlyHeadAndUsage(t *testing.T) {
 				t.Errorf("credential missing")
 			}
 			var body map[string]any
-			if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body["model"] != "gpt-4.1-mini" {
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body["model"] != backendModel {
 				t.Errorf("translated request=%v err=%v", body, err)
 			}
 			go func() {

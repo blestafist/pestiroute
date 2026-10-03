@@ -27,22 +27,23 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: commit verified M4-015 protected translated and native composition
+## Immediate focus: commit verified M4-016 plain-text vertical slice
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
 Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-011](tasks/M4-011.md)
 are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`),
-[M4-013](tasks/M4-013.md) (`594d684`), and [M4-014](tasks/M4-014.md) (`cf9d7d6`) are
-committed locally on `dev-m4` ahead 3 of origin.
+[M4-013](tasks/M4-013.md) (`594d684`), [M4-014](tasks/M4-014.md) (`cf9d7d6`), and
+[M4-015](tasks/M4-015.md) (`58cf823`) are committed locally on `dev-m4` ahead 4 of origin.
 
-15 tasks are newly DONE across M4 (18 total cap, at most 3 additional newly DONE tasks in this
-continuation phase), with no backlog expansion. [M4-015](tasks/M4-015.md) is verified and reviewed
-(reviewer PASS `ses_efd52db19ffeogXw0SJBgjayjY`). It delivers Anthropic connector composition at
-the gateway composition root with explicit non-secret `credential_id` binding to SQLite
-`(account_id, credential_id)`, concurrent protected native and translated routes sharing admission,
-accounting, and lifecycle, fail-closed handling for missing, blank, or misbound credentials, and
-fail-closed rejection of ambiguous route/model groups. Scoped commit is pending.
+16 tasks are newly DONE across M4 (18 total cap, at most 2 additional newly DONE tasks in this
+continuation phase), with no backlog expansion. [M4-016](tasks/M4-016.md) is verified and reviewed
+(reviewer PASS `ses_efd3932bcffeAiXvvKN0hfxbbY`). It delivers a real-socket client → Responses Adapter →
+Core → Anthropic fixture regression with early delta gated before upstream finish, minimal connector
+explicit model mapping to fixed backend `claude-opus-5-5` while keeping Core opaque, client route
+model validation, pre-dispatch rejection of unsupported fields, exact-byte preservation for native
+routes, and protected credential/scope isolation. Scoped commit is pending; no configurable backend
+mapping is claimed.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

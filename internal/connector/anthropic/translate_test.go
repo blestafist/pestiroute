@@ -19,7 +19,7 @@ func TestTranslateHistory(t *testing.T) {
 			name: "fixture with developer prefix",
 			body: positive,
 			want: messagesRequest{
-				Model: "gpt-4.1-mini", Stream: true, MaxTokens: 20, Temperature: numberPointer("0"),
+				Model: backendModel, Stream: true, MaxTokens: 20, Temperature: numberPointer("0"),
 				System:   []systemTextBlock{{Type: "text", Text: "You are concise."}},
 				Messages: []textMessage{{Role: "user", Content: []textBlock{{Type: "text", Text: "Say hello."}}}},
 			},
@@ -28,7 +28,7 @@ func TestTranslateHistory(t *testing.T) {
 			name: "alternating unicode history",
 			body: conversation,
 			want: messagesRequest{
-				Model: "client-model", Stream: true, MaxTokens: 4096,
+				Model: backendModel, Stream: true, MaxTokens: 4096,
 				System: []systemTextBlock{{Type: "text", Text: "Top level 🐛"}, {Type: "text", Text: "Dev one"}, {Type: "text", Text: "Dev two 🐞"}},
 				Messages: []textMessage{
 					{Role: "user", Content: []textBlock{{Type: "text", Text: "你好"}, {Type: "text", Text: "second"}}},
@@ -40,7 +40,7 @@ func TestTranslateHistory(t *testing.T) {
 		{
 			name: "string input",
 			body: []byte(`{"model":"client-model","stream":true,"input":"single turn"}`),
-			want: messagesRequest{Model: "client-model", Stream: true, MaxTokens: 4096, Messages: []textMessage{{Role: "user", Content: []textBlock{{Type: "text", Text: "single turn"}}}}},
+			want: messagesRequest{Model: backendModel, Stream: true, MaxTokens: 4096, Messages: []textMessage{{Role: "user", Content: []textBlock{{Type: "text", Text: "single turn"}}}}},
 		},
 	}
 	for _, tc := range cases {
