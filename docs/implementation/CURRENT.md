@@ -27,18 +27,20 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: push verified M4-001..011 batch to upstream
+## Immediate focus: commit verified M4-012 Responses emitter lifecycle
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
 Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-011](tasks/M4-011.md)
-are verified and committed locally across 11 clean commits.
+are verified, reviewed, committed, and confirmed pushed live to `origin/dev-m4`
+(commit `8ec7660`, parent `31cdea4`).
 
-[M4-011](tasks/M4-011.md) implementation is fully verified and reviewed (121 package
-race tests, `./scripts/check.sh`, `git diff --check`, reviewer PASS `ses_efdb0bb6bffe6k2RXhMlf0qko2`).
-Commit repair is complete across the full 10-file scope including `sse.go` and `sse_test.go`.
-Batch delivery of the 11 commits to upstream is pending push. No new task promotion or dispatch
-until batch push is completed.
+[M4-012](tasks/M4-012.md) implementation is fully verified and reviewed (126 package
+race tests, `./scripts/check.sh`, `git diff --check`, reviewer PASS `ses_efd906185ffeCq1e00ukEHpCIX`).
+It delivers the Connector-private Responses SSE event encoder and lifecycle state machine
+for plain text. Scoped commit is pending before next task preparation. Execution remains
+bounded to at most 7 additional newly DONE tasks in this continuation session (18 total across
+M4), with no backlog expansion.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

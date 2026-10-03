@@ -1,0 +1,177 @@
+package anthropic
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"unicode/utf8"
+)
+
+const maxRetainedText = 1 << 20
+
+var errResponsesLifecycle = errors.New("invalid Responses emitter lifecycle")
+
+type responsesEmitter struct {
+	responseID string
+	itemID     string
+	text       []byte
+	started    bool
+	closed     bool
+}
+
+func newResponsesEmitter() (*responsesEmitter, error) {
+	responseID, err := newResponseID("resp_")
+	if err != nil {
+		return nil, err
+	}
+	itemID, err := newResponseID("msg_")
+	if err != nil {
+		return nil, err
+	}
+	return &responsesEmitter{responseID: responseID, itemID: itemID}, nil
+}
+
+func newResponseID(prefix string) (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("generate Responses ID: %w", err)
+	}
+	return prefix + hex.EncodeToString(id[:]), nil
+}
+
+func (e *responsesEmitter) Start() ([][]byte, error) {
+	if e.started || e.closed {
+		return nil, errResponsesLifecycle
+	}
+	e.started = true
+	return [][]byte{
+		responseEvent("response.created", responseLifecycleEvent{Response: responseEnvelope{ID: e.responseID, Object: "response", Status: "in_progress", Output: []responseItem{}}}),
+		responseEvent("response.in_progress", responseLifecycleEvent{Response: responseEnvelope{ID: e.responseID, Object: "response", Status: "in_progress", Output: []responseItem{}}}),
+		responseEvent("response.output_item.added", responseItemEvent{OutputIndex: 0, Item: responseItem{ID: e.itemID, Type: "message", Role: "assistant", Status: "in_progress", Content: []responsePart{}}}),
+		responseEvent("response.content_part.added", responsePartEvent{OutputIndex: 0, ItemID: e.itemID, Part: responsePart{Type: "output_text", Text: "", Annotations: []any{}, Logprobs: []any{}}}),
+	}, nil
+}
+
+func (e *responsesEmitter) Delta(text string) ([]byte, error) {
+	if !e.started || e.closed {
+		return nil, errResponsesLifecycle
+	}
+	if !utf8.ValidString(text) {
+		e.closed = true
+		e.text = nil
+		return nil, errors.New("Responses delta is not valid UTF-8")
+	}
+	if len(text) > maxRetainedText-len(e.text) {
+		e.closed = true
+		e.text = nil
+		return nil, errors.New("Responses retained text exceeds 1 MiB")
+	}
+	e.text = append(e.text, text...)
+	return responseEvent("response.output_text.delta", responseDelta{OutputIndex: 0, ItemID: e.itemID, Delta: text}), nil
+}
+
+func (e *responsesEmitter) Finish(stopReason string, inputTokens, outputTokens int) ([][]byte, error) {
+	if !e.started || e.closed || inputTokens < 0 || outputTokens < 0 {
+		return nil, errResponsesLifecycle
+	}
+	var terminal, status, reason string
+	switch stopReason {
+	case "end_turn", "stop_sequence":
+		terminal, status = "response.completed", "completed"
+	case "max_tokens":
+		terminal, status, reason = "response.incomplete", "incomplete", "max_output_tokens"
+	default:
+		return nil, fmt.Errorf("unsupported Anthropic stop reason %q", stopReason)
+	}
+	e.closed = true
+	text := string(e.text)
+	part := responsePart{Type: "output_text", Text: text, Annotations: []any{}, Logprobs: []any{}}
+	item := responseItem{ID: e.itemID, Type: "message", Role: "assistant", Status: "completed", Content: []responsePart{part}}
+	frames := [][]byte{
+		responseEvent("response.output_text.done", responseDone{OutputIndex: 0, ItemID: e.itemID, Text: text}),
+		responseEvent("response.content_part.done", responsePartEvent{OutputIndex: 0, ItemID: e.itemID, Part: part}),
+		responseEvent("response.output_item.done", responseItemEvent{OutputIndex: 0, Item: item}),
+	}
+	response := responseEnvelope{ID: e.responseID, Object: "response", Status: status, Output: []responseItem{item}, Usage: &responseUsage{InputTokens: inputTokens, OutputTokens: outputTokens, TotalTokens: inputTokens + outputTokens}}
+	if reason != "" {
+		response.IncompleteDetails = &responseIncompleteDetails{Reason: reason}
+	}
+	frames = append(frames, responseEvent(terminal, responseLifecycleEvent{Response: response}))
+	return frames, nil
+}
+
+type responseLifecycleEvent struct {
+	Response responseEnvelope `json:"response"`
+}
+
+type responseEnvelope struct {
+	ID                string                     `json:"id"`
+	Object            string                     `json:"object"`
+	Status            string                     `json:"status"`
+	Output            []responseItem             `json:"output"`
+	Usage             *responseUsage             `json:"usage,omitempty"`
+	IncompleteDetails *responseIncompleteDetails `json:"incomplete_details,omitempty"`
+}
+
+type responseUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+type responseIncompleteDetails struct {
+	Reason string `json:"reason"`
+}
+
+type responseItem struct {
+	ID      string         `json:"id"`
+	Type    string         `json:"type"`
+	Role    string         `json:"role,omitempty"`
+	Status  string         `json:"status,omitempty"`
+	Content []responsePart `json:"content"`
+}
+
+type responsePart struct {
+	Type        string `json:"type"`
+	Text        string `json:"text"`
+	Annotations []any  `json:"annotations"`
+	Logprobs    []any  `json:"logprobs"`
+}
+
+type responseDelta struct {
+	OutputIndex int    `json:"output_index"`
+	ItemID      string `json:"item_id"`
+	Delta       string `json:"delta"`
+}
+
+type responseDone struct {
+	OutputIndex int    `json:"output_index"`
+	ItemID      string `json:"item_id"`
+	Text        string `json:"text"`
+}
+
+type responseItemEvent struct {
+	OutputIndex int          `json:"output_index"`
+	Item        responseItem `json:"item"`
+}
+
+type responsePartEvent struct {
+	OutputIndex int          `json:"output_index"`
+	ItemID      string       `json:"item_id"`
+	Part        responsePart `json:"part"`
+}
+
+func responseEvent(name string, payload any) []byte {
+	data, _ := json.Marshal(payload)
+	typeField, _ := json.Marshal(name)
+	data = append(append([]byte(`{"type":`), typeField...), append([]byte(","), data[1:]...)...)
+	frame := make([]byte, 0, len(name)+len(data)+16)
+	frame = append(frame, "event: "...)
+	frame = append(frame, name...)
+	frame = append(frame, "\ndata: "...)
+	frame = append(frame, data...)
+	frame = append(frame, '\n', '\n')
+	return frame
+}
