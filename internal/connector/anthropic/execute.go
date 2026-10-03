@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -11,24 +12,25 @@ import (
 )
 
 type messagesStream struct {
-	mu       sync.Mutex
-	body     io.ReadCloser
-	reader   *messagesSSEReader
-	cancel   context.CancelFunc
-	ctx      context.Context
-	phase    uint8
-	pending  [][]byte
-	terminal *core.StreamFrame
-	emitter  *responsesEmitter
-	started  bool
-	block    bool
-	tool     bool
-	stopped  bool
-	stop     string
-	input    int
-	output   int
-	closed   bool
-	close    sync.Once
+	mu         sync.Mutex
+	body       io.ReadCloser
+	reader     *messagesSSEReader
+	cancel     context.CancelFunc
+	ctx        context.Context
+	phase      uint8
+	pending    [][]byte
+	terminal   *core.StreamFrame
+	emitter    *responsesEmitter
+	started    bool
+	block      bool
+	tool       bool
+	blockIndex int
+	nextIndex  int
+	stop       string
+	input      int
+	output     int
+	closed     bool
+	close      sync.Once
 }
 
 func newMessagesStream(ctx context.Context, cancel context.CancelFunc, body io.ReadCloser) core.Stream {
@@ -155,7 +157,7 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 				Name string `json:"name"`
 			} `json:"content_block"`
 		}
-		if !s.started || s.block || s.stopped || json.Unmarshal(event.data, &v) != nil || v.Index != 0 {
+		if !s.started || s.block || s.stop != "" || json.Unmarshal(event.data, &v) != nil || v.Index != s.nextIndex || v.Index >= 64 {
 			return errors.New("invalid Anthropic content block start")
 		}
 		switch v.Block.Type {
@@ -168,7 +170,7 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 		case "tool_use":
 			frame, err := s.emitter.StartTool(v.Block.ID, v.Block.Name)
 			if err != nil {
-				return errors.New("invalid Anthropic tool_use block")
+				return fmt.Errorf("invalid Anthropic tool_use block: %w", err)
 			}
 			s.tool = true
 			s.pending = append(s.pending, frame)
@@ -176,6 +178,7 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 			return errors.New("unsupported Anthropic content block type")
 		}
 		s.block = true
+		s.blockIndex = v.Index
 	case "content_block_delta":
 		var v struct {
 			Index int `json:"index"`
@@ -185,7 +188,7 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 				PartialJSON *string `json:"partial_json"`
 			} `json:"delta"`
 		}
-		if !s.block || s.stopped || json.Unmarshal(event.data, &v) != nil || v.Index != 0 {
+		if !s.block || json.Unmarshal(event.data, &v) != nil || v.Index != s.blockIndex {
 			return errors.New("invalid Anthropic content block delta")
 		}
 		var frame []byte
@@ -205,7 +208,7 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 		var v struct {
 			Index int `json:"index"`
 		}
-		if !s.block || s.stopped || json.Unmarshal(event.data, &v) != nil || v.Index != 0 {
+		if !s.block || json.Unmarshal(event.data, &v) != nil || v.Index != s.blockIndex {
 			return errors.New("invalid Anthropic content block stop")
 		}
 		if s.tool {
@@ -216,7 +219,7 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 			s.pending = append(s.pending, frames...)
 		}
 		s.block = false
-		s.stopped = true
+		s.nextIndex++
 	case "message_delta":
 		var v struct {
 			Delta struct {
@@ -226,12 +229,12 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 				Output *int `json:"output_tokens"`
 			} `json:"usage"`
 		}
-		if !s.started || !s.stopped || s.stop != "" || json.Unmarshal(event.data, &v) != nil || v.Usage.Output == nil || *v.Usage.Output < 0 || v.Delta.StopReason == nil {
+		if !s.started || s.block || s.nextIndex == 0 || s.stop != "" || json.Unmarshal(event.data, &v) != nil || v.Usage.Output == nil || *v.Usage.Output < 0 || v.Delta.StopReason == nil {
 			return errors.New("invalid Anthropic message_delta")
 		}
 		s.stop, s.output = *v.Delta.StopReason, *v.Usage.Output
 	case "message_stop":
-		if !s.started || !s.stopped || s.block || s.stop == "" || s.phase != 1 {
+		if !s.started || s.nextIndex == 0 || s.block || s.stop == "" || s.phase != 1 {
 			return errors.New("invalid Anthropic message_stop")
 		}
 		frames, err := s.emitter.Finish(s.stop, s.input, s.output)

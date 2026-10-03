@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -174,6 +175,105 @@ func TestExecuteToolStreamLifecycle(t *testing.T) {
 	}
 }
 
+func TestExecuteTwoToolStreamAndParallelControls(t *testing.T) {
+	streamBody := strings.Join([]string{
+		`event: message_start`, `data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}`, ``,
+		`event: content_block_start`, `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_one","name":"one"}}`, ``,
+		`event: content_block_delta`, `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"n\":1}"}}`, ``,
+		`event: content_block_stop`, `data: {"type":"content_block_stop","index":0}`, ``,
+		`event: content_block_start`, `data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_two","name":"two"}}`, ``,
+		`event: content_block_delta`, `data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"n\":2}"}}`, ``,
+		`event: content_block_stop`, `data: {"type":"content_block_stop","index":1}`, ``,
+		`event: message_delta`, `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}`, ``,
+		`event: message_stop`, `data: {"type":"message_stop"}`, ``,
+	}, "\n") + "\n"
+	for _, parallel := range []bool{false, true} {
+		t.Run(map[bool]string{false: "parallel_false", true: "parallel_true"}[parallel], func(t *testing.T) {
+			requestBody := `{"model":"gpt-4.1-mini","stream":true,"input":"hello","tools":[{"type":"function","name":"one","parameters":{"type":"object"}},{"type":"function","name":"two","parameters":{"type":"object"}}],"tool_choice":"auto","parallel_tool_calls":` + strconv.FormatBool(parallel) + `}`
+			c := executeConnector(t)
+			resp, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Model: "gpt-4.1-mini", Payload: core.RawPayload{Protocol: protocol, Body: []byte(requestBody)}}, core.AttemptScope{Mode: core.ModeTranslation, AccountID: "account-a"}, core.InvocationServices{
+				Credentials: credentialStub("secret"),
+				Transport: doerFunc(func(req *http.Request) (*http.Response, error) {
+					var wire struct {
+						ToolChoice struct {
+							Disable *bool `json:"disable_parallel_tool_use"`
+						} `json:"tool_choice"`
+					}
+					if err := json.NewDecoder(req.Body).Decode(&wire); err != nil {
+						t.Errorf("decode translated request: %v", err)
+					} else if parallel && wire.ToolChoice.Disable != nil || !parallel && (wire.ToolChoice.Disable == nil || !*wire.ToolChoice.Disable) {
+						t.Errorf("parallel=%t wire choice=%+v", parallel, wire.ToolChoice)
+					}
+					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(streamBody))}, nil
+				}),
+			})
+			if gatewayErr != nil {
+				t.Fatal(gatewayErr)
+			}
+			defer resp.Stream.Close()
+			if frame, err := resp.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+				t.Fatalf("Head=%+v err=%v", frame, err)
+			}
+			var addedIDs []string
+			var output []any
+			var eventNames []string
+			activeIndex := -1
+			activeID := ""
+			activeArgs := ""
+			for {
+				frame, err := resp.Stream.Next(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if frame.Type == core.FrameComplete {
+					break
+				}
+				name, payload := decodeResponseFrame(t, frame.Body.Data)
+				eventNames = append(eventNames, name)
+				switch name {
+				case "response.output_item.added":
+					item := payload["item"].(map[string]any)
+					addedIDs = append(addedIDs, item["id"].(string))
+					if payload["output_index"] != float64(len(addedIDs)-1) || item["call_id"] != []string{"call_one", "call_two"}[len(addedIDs)-1] {
+						t.Fatalf("added item=%#v", payload)
+					}
+					activeIndex, activeID = len(addedIDs)-1, addedIDs[len(addedIDs)-1]
+					activeArgs = ""
+				case "response.function_call_arguments.delta":
+					if payload["output_index"] != float64(activeIndex) || payload["item_id"] != activeID {
+						t.Fatalf("call event=%s payload=%#v", name, payload)
+					}
+					activeArgs += payload["delta"].(string)
+				case "response.function_call_arguments.done":
+					if payload["output_index"] != float64(activeIndex) || payload["item_id"] != activeID || payload["arguments"] != activeArgs {
+						t.Fatalf("arguments closure=%#v delta=%q", payload, activeArgs)
+					}
+				case "response.output_item.done":
+					item := payload["item"].(map[string]any)
+					if payload["output_index"] != float64(activeIndex) || item["id"] != activeID || item["arguments"] != activeArgs {
+						t.Fatalf("item closure=%#v", payload)
+					}
+				case "response.completed":
+					response := payload["response"].(map[string]any)
+					output = response["output"].([]any)
+				}
+			}
+			if len(addedIDs) != 2 || addedIDs[0] == addedIDs[1] || !strings.HasPrefix(addedIDs[0], "fc_") || !strings.HasPrefix(addedIDs[1], "fc_") || len(output) != 2 {
+				t.Fatalf("IDs=%v output=%#v", addedIDs, output)
+			}
+			for i, want := range []struct{ call, args string }{{"call_one", `{"n":1}`}, {"call_two", `{"n":2}`}} {
+				item := output[i].(map[string]any)
+				if item["id"] != addedIDs[i] || item["call_id"] != want.call || item["arguments"] != want.args || item["status"] != "completed" {
+					t.Fatalf("snapshot item %d=%#v", i, item)
+				}
+			}
+			if strings.Join(eventNames, ",") != "response.created,response.in_progress,response.output_item.added,response.function_call_arguments.delta,response.function_call_arguments.done,response.output_item.done,response.output_item.added,response.function_call_arguments.delta,response.function_call_arguments.done,response.output_item.done,response.completed" {
+				t.Fatalf("event order=%v", eventNames)
+			}
+		})
+	}
+}
+
 func TestToolStreamRejectsUnknownDeltaAndOverflow(t *testing.T) {
 	e, _ := newResponsesEmitter()
 	_, _ = e.StartResponse()
@@ -207,6 +307,42 @@ func TestToolStreamRejectsUnknownDeltaAndOverflow(t *testing.T) {
 		if err := invalid.consume(messagesSSEEvent{typeName: "content_block_start", data: []byte(tc.data)}); err == nil {
 			t.Fatalf("malformed or duplicate block identity accepted: %s", tc.data)
 		}
+	}
+}
+
+func TestToolStreamRejectsDuplicateIDsAndOutOfOrderBlocks(t *testing.T) {
+	e, _ := newResponsesEmitter()
+	_, _ = e.StartResponse()
+	_, _ = e.StartTool("call_same", "first")
+	if _, err := e.FinishTool(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.StartTool("call_same", "second"); err == nil {
+		t.Fatal("duplicate call ID accepted")
+	}
+	stream := &messagesStream{started: true, emitter: func() *responsesEmitter { x, _ := newResponsesEmitter(); _, _ = x.StartResponse(); return x }()}
+	if err := stream.consume(messagesSSEEvent{typeName: "content_block_start", data: []byte(`{"index":0,"content_block":{"type":"tool_use","id":"call_1","name":"one"}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.consume(messagesSSEEvent{typeName: "content_block_stop", data: []byte(`{"index":0}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.consume(messagesSSEEvent{typeName: "content_block_start", data: []byte(`{"index":2,"content_block":{"type":"tool_use","id":"call_2","name":"two"}}`)}); err == nil {
+		t.Fatal("out-of-order block index accepted")
+	}
+
+	bounded, _ := newResponsesEmitter()
+	_, _ = bounded.StartResponse()
+	_, _ = bounded.StartTool("call_a", "a")
+	if _, err := bounded.ToolDelta(strings.Repeat("x", maxRetainedText-1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bounded.FinishTool(); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = bounded.StartTool("call_b", "b")
+	if _, err := bounded.ToolDelta("xx"); err == nil {
+		t.Fatal("aggregate arguments over 1 MiB accepted")
 	}
 }
 

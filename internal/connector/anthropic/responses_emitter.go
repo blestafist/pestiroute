@@ -14,17 +14,21 @@ const maxRetainedText = 1 << 20
 var errResponsesLifecycle = errors.New("invalid Responses emitter lifecycle")
 
 type responsesEmitter struct {
-	responseID string
-	itemID     string
-	text       []byte
-	arguments  []byte
-	callID     string
-	name       string
-	itemType   string
-	started    bool
-	itemAdded  bool
-	itemDone   bool
-	closed     bool
+	responseID  string
+	itemID      string
+	text        []byte
+	arguments   []byte
+	callID      string
+	name        string
+	itemType    string
+	output      []responseItem
+	callIDs     map[string]struct{}
+	retained    int
+	outputIndex int
+	started     bool
+	itemAdded   bool
+	itemDone    bool
+	closed      bool
 }
 
 func newResponsesEmitter() (*responsesEmitter, error) {
@@ -82,16 +86,25 @@ func (e *responsesEmitter) StartText() ([][]byte, error) {
 }
 
 func (e *responsesEmitter) StartTool(callID, name string) ([]byte, error) {
-	if !e.started || e.closed || e.itemAdded || callID == "" || name == "" {
+	if !e.started || e.closed || (e.itemAdded && !e.itemDone) || callID == "" || name == "" {
 		return nil, errResponsesLifecycle
+	}
+	if e.callIDs == nil {
+		e.callIDs = make(map[string]struct{})
+	}
+	if _, exists := e.callIDs[callID]; exists {
+		return nil, errors.New("duplicate Anthropic tool call ID")
 	}
 	itemID, err := newResponseID("fc_")
 	if err != nil {
 		return nil, err
 	}
-	e.itemID, e.callID, e.name, e.itemType, e.itemAdded = itemID, callID, name, "function_call", true
+	e.itemID, e.callID, e.name, e.itemType, e.itemAdded, e.itemDone = itemID, callID, name, "function_call", true, false
+	e.outputIndex = len(e.output)
+	e.arguments = nil
+	e.callIDs[callID] = struct{}{}
 	empty := ""
-	return responseEvent("response.output_item.added", responseItemEvent{OutputIndex: 0, Item: responseItem{ID: itemID, Type: "function_call", CallID: callID, Name: name, Arguments: &empty, Status: "in_progress"}}), nil
+	return responseEvent("response.output_item.added", responseItemEvent{OutputIndex: e.outputIndex, Item: responseItem{ID: itemID, Type: "function_call", CallID: callID, Name: name, Arguments: &empty, Status: "in_progress"}}), nil
 }
 
 func (e *responsesEmitter) ToolDelta(delta string) ([]byte, error) {
@@ -102,12 +115,13 @@ func (e *responsesEmitter) ToolDelta(delta string) ([]byte, error) {
 		e.closed, e.arguments = true, nil
 		return nil, errors.New("tool arguments delta is not valid UTF-8")
 	}
-	if len(delta) > maxRetainedText-len(e.arguments) {
+	if len(delta) > maxRetainedText-e.retained {
 		e.closed, e.arguments = true, nil
 		return nil, errors.New("tool arguments exceed 1 MiB")
 	}
 	e.arguments = append(e.arguments, delta...)
-	return responseEvent("response.function_call_arguments.delta", responseDelta{OutputIndex: 0, ItemID: e.itemID, Delta: delta}), nil
+	e.retained += len(delta)
+	return responseEvent("response.function_call_arguments.delta", responseDelta{OutputIndex: e.outputIndex, ItemID: e.itemID, Delta: delta}), nil
 }
 
 func (e *responsesEmitter) FinishTool() ([][]byte, error) {
@@ -117,9 +131,10 @@ func (e *responsesEmitter) FinishTool() ([][]byte, error) {
 	e.itemDone = true
 	arguments := string(e.arguments)
 	item := responseItem{ID: e.itemID, Type: "function_call", CallID: e.callID, Name: e.name, Arguments: &arguments, Status: "completed"}
+	e.output = append(e.output, item)
 	return [][]byte{
-		responseEvent("response.function_call_arguments.done", responseFunctionArgumentsDone{ItemID: e.itemID, OutputIndex: 0, Arguments: arguments}),
-		responseEvent("response.output_item.done", responseItemEvent{OutputIndex: 0, Item: item}),
+		responseEvent("response.function_call_arguments.done", responseFunctionArgumentsDone{ItemID: e.itemID, OutputIndex: e.outputIndex, Arguments: arguments}),
+		responseEvent("response.output_item.done", responseItemEvent{OutputIndex: e.outputIndex, Item: item}),
 	}, nil
 }
 
@@ -132,12 +147,13 @@ func (e *responsesEmitter) Delta(text string) ([]byte, error) {
 		e.text = nil
 		return nil, errors.New("Responses delta is not valid UTF-8")
 	}
-	if len(text) > maxRetainedText-len(e.text) {
+	if len(text) > maxRetainedText-e.retained {
 		e.closed = true
 		e.text = nil
 		return nil, errors.New("Responses retained text exceeds 1 MiB")
 	}
 	e.text = append(e.text, text...)
+	e.retained += len(text)
 	return responseEvent("response.output_text.delta", responseDelta{OutputIndex: 0, ItemID: e.itemID, Delta: text}), nil
 }
 
@@ -155,13 +171,11 @@ func (e *responsesEmitter) Finish(stopReason string, inputTokens, outputTokens i
 		return nil, fmt.Errorf("unsupported Anthropic stop reason %q", stopReason)
 	}
 	if e.itemType == "function_call" {
-		if stopReason != "tool_use" || !e.itemDone {
+		if stopReason != "tool_use" || !e.itemDone || len(e.output) == 0 {
 			e.closed = true
 			return nil, errors.New("incomplete tool call stream")
 		}
-		arguments := string(e.arguments)
-		item := responseItem{ID: e.itemID, Type: "function_call", CallID: e.callID, Name: e.name, Arguments: &arguments, Status: "completed"}
-		response := responseEnvelope{ID: e.responseID, Object: "response", Status: status, Output: []responseItem{item}, Usage: &responseUsage{InputTokens: inputTokens, OutputTokens: outputTokens, TotalTokens: inputTokens + outputTokens}}
+		response := responseEnvelope{ID: e.responseID, Object: "response", Status: status, Output: append([]responseItem(nil), e.output...), Usage: &responseUsage{InputTokens: inputTokens, OutputTokens: outputTokens, TotalTokens: inputTokens + outputTokens}}
 		e.closed = true
 		return [][]byte{responseEvent(terminal, responseLifecycleEvent{Response: response})}, nil
 	}
