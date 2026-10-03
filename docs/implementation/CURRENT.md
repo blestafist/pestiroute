@@ -27,21 +27,25 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: prepare the first M4 slice
+## Immediate focus: execute M4-001
 
-Read the [M4 outcome](ROADMAP.md#m4--first-translation-connector),
-[Connector contract](CONTRACT.md#connector-contract),
-[translation decision](../project/DECISIONS.md#dec-003--why-connectors-own-provider-translation)
-and [conformance scenarios](TESTING.md). Research the official Anthropic Messages
-API and choose versioned request/stream fixtures. Then prepare one bounded READY
-card for plain text plus incremental streaming as an explicit Responses ↔ Messages
-Connector transformation. Establish supported/unsupported/unknown claims and
-negative cases before implementing tools/reasoning. No M4 cards are pre-created.
+The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
+[38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
+Anthropic Messages translation. Only [M4-001](tasks/M4-001.md) is initially READY:
+fix the plain-text streaming binding and exact source/client/model/API baseline.
+The [planning brief](M4-TRANSLATION.md) records inspected seams and decision gates;
+it does not claim implementation or accepted new contract semantics.
 
-Reuse registry lifecycle, scoped services, route mode/capability eligibility,
-usage estimation and common dispatch/accounting. Keep protocol parsing,
-transformation and provider errors inside the Connector. Preserve native byte
-identity and incremental delivery; do not extend Core with provider-specific APIs.
+Assign one READY card per worker. Refresh dependent DRAFTs against actual results
+before promotion; do not implement their dependencies in one session. Local
+fixtures and existing M3 services support development without real credentials.
+Live capture is a separate later gate. [Tooling](TOOLING.md#m4-tooling-gate) retains
+Context7, gopls and existing shell/Git checks without a new MCP installation.
+
+Roadmap order remains unchanged: Anthropic in M4, Codex in M5.1. Reuse registry,
+scoped services, authorization/admission/accounting and dispatch. Enable generic
+translation mode where current code is native-only; keep request transformation,
+provider SSE/errors and token normalization inside the new Connector.
 
 ## Available checks
 

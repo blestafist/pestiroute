@@ -245,3 +245,58 @@ This table maps outcomes, not test results. M3-046 may close the milestone only 
 | [M3-044](tasks/M3-044.md) | DONE | OpenCode subagent (M3-044 worker) / reviewer (ses_eff180e96ffejieByGlyHVB3J3) | M3-036, M3-039, M3-041, M3-043 | Run protected native regressions and enforce boundaries | Core standard-library and Connector persistence boundaries guarded with negative fixtures; protected/legacy native regressions and streaming/backpressure/cancellation pass | `go test -race -v -count=1 ./internal/core -run 'Test(Core.*|Connector.*Boundaries)'`, `./scripts/check.sh`, `git diff --check` |
 | [M3-045](tasks/M3-045.md) | DONE | GPT-6 Luna (M3-045 worker) / reviewer (ses_eff01cb37ffeTZRT6pWPY4czMQ) | M3-031, M3-032, M3-036, M3-040, M3-041, M3-042, M3-044 | Document runnable M3 setup and recovery operations | Local protected operations guide (LOCAL-M3), YAML startup, SQLite backup/restore, honest native retry constraints, and deterministic fallback proof verified end to end | [Direct proof](tasks/M3-045.md#verification), `./scripts/check.sh`, `git diff --check` |
 | [M3-046](tasks/M3-046.md) | DONE | Codex (final review and handoff) | M3-045 | Audit every M3 gate and prepare the M4 handoff | All M3 gates verified; request closure, readiness, candidate selection and auth recovery/claims fixed; schema v6 and M4 handoff recorded | Shared checks, uncached conformance, repeated race gates, LOCAL-M3 and docs/DAG audit; [evidence](tasks/M3-046.md#completion-evidence) |
+
+## M4 — First Translation Connector
+
+These 38 bounded cards implement the original [M4 outcome](ROADMAP.md#m4--first-translation-connector):
+explicit Responses ↔ Anthropic Messages translation. Roadmap order is unchanged;
+Codex remains M5.1. The [planning brief](M4-TRANSLATION.md) maps the merged M3
+baseline to the work and links official protocol sources.
+
+**Assign one READY card per worker session, never the milestone or a dependency
+chain.** Only M4-001 is initially READY. All other cards remain DRAFT until the
+Planner reviews actual prerequisite results, resolves relevant decisions and
+records concrete package/test commands. Dependencies are not additional scope.
+Expected new package/file names are candidates, not claims of existing code.
+No account login is needed for local development; M4-036 is a separate live gate.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M4-001](tasks/M4-001.md) | READY | — | M3-046 | Fix the plain-text translation binding and source baseline | — | [Direct proof](tasks/M4-001.md#verification) |
+| [M4-002](tasks/M4-002.md) | DRAFT | — | M4-001 | Add versioned plain-text and failure fixtures | — | [Direct proof](tasks/M4-002.md#verification) |
+| [M4-003](tasks/M4-003.md) | DRAFT | — | M4-001 | Enable explicit translation mode in generic routing | — | [Direct proof](tasks/M4-003.md#verification) |
+| [M4-004](tasks/M4-004.md) | DRAFT | — | M4-001, M4-003 | Declare Responses format support for translation routes | — | [Direct proof](tasks/M4-004.md#verification) |
+| [M4-005](tasks/M4-005.md) | DRAFT | — | M4-001, M4-002 | Add the managed Anthropic Connector lifecycle | — | [Direct proof](tasks/M4-005.md#verification) |
+| [M4-006](tasks/M4-006.md) | DRAFT | — | M4-005 | Build selected-account HTTP requests and credentials | — | [Direct proof](tasks/M4-006.md#verification) |
+| [M4-007](tasks/M4-007.md) | DRAFT | — | M4-001, M4-002 | Translate plain-text Responses history without reordering | — | [Direct proof](tasks/M4-007.md#verification) |
+| [M4-008](tasks/M4-008.md) | DRAFT | — | M4-007 | Enforce generation controls and unsupported-field policy | — | [Direct proof](tasks/M4-008.md#verification) |
+| [M4-009](tasks/M4-009.md) | DRAFT | — | M4-005, M4-007, M4-008 | Bind translation usage estimates to existing admission budgets | — | [Direct proof](tasks/M4-009.md#verification) |
+| [M4-010](tasks/M4-010.md) | DRAFT | — | M4-002, M4-006 | Classify bounded HTTP rejections before Head | — | [Direct proof](tasks/M4-010.md#verification) |
+| [M4-011](tasks/M4-011.md) | DRAFT | — | M4-002 | Parse bounded Messages SSE events across byte splits | — | [Direct proof](tasks/M4-011.md#verification) |
+| [M4-012](tasks/M4-012.md) | DRAFT | — | M4-001, M4-002 | Emit the minimal Responses event and identity lifecycle | — | [Direct proof](tasks/M4-012.md#verification) |
+| [M4-013](tasks/M4-013.md) | DRAFT | — | M4-006, M4-008, M4-010, M4-011, M4-012 | Stream translated text through Execute | — | [Direct proof](tasks/M4-013.md#verification) |
+| [M4-014](tasks/M4-014.md) | DRAFT | — | M4-001, M4-003, M4-005 | Add strict YAML translation settings and routes | — | [Direct proof](tasks/M4-014.md#verification) |
+| [M4-015](tasks/M4-015.md) | DRAFT | — | M4-004, M4-009, M4-013, M4-014 | Compose protected translated and native routes | — | [Direct proof](tasks/M4-015.md#verification) |
+| [M4-016](tasks/M4-016.md) | DRAFT | — | M4-015 | Verify the first plain-text vertical slice | — | [Direct proof](tasks/M4-016.md#verification) |
+| [M4-017](tasks/M4-017.md) | DRAFT | — | M4-007, M4-016 | Translate ordinary function definitions and schema guarantees | — | [Direct proof](tasks/M4-017.md#verification) |
+| [M4-018](tasks/M4-018.md) | DRAFT | — | M4-017 | Map tool choice and parallel-call controls explicitly | — | [Direct proof](tasks/M4-018.md#verification) |
+| [M4-019](tasks/M4-019.md) | DRAFT | — | M4-017 | Translate function call and result history | — | [Direct proof](tasks/M4-019.md#verification) |
+| [M4-020](tasks/M4-020.md) | DRAFT | — | M4-011, M4-012, M4-017, M4-019 | Translate streamed function calls and arguments | — | [Direct proof](tasks/M4-020.md#verification) |
+| [M4-021](tasks/M4-021.md) | DRAFT | — | M4-018, M4-020 | Verify two distinct tool calls in one streamed response | — | [Direct proof](tasks/M4-021.md#verification) |
+| [M4-022](tasks/M4-022.md) | DRAFT | — | M4-019, M4-020, M4-021 | Verify at least two complete client-owned tool rounds | — | [Direct proof](tasks/M4-022.md#verification) |
+| [M4-023](tasks/M4-023.md) | DRAFT | — | M4-002, M4-013 | Normalize cumulative usage and cache components | — | [Direct proof](tasks/M4-023.md#verification) |
+| [M4-024](tasks/M4-024.md) | DRAFT | — | M4-010, M4-013, M4-023 | Translate stop reasons and committed stream failures truthfully | — | [Direct proof](tasks/M4-024.md#verification) |
+| [M4-025](tasks/M4-025.md) | DRAFT | — | M4-016, M4-024 | Prove cancellation and timeout cleanup under races | — | [Direct proof](tasks/M4-025.md#verification) |
+| [M4-026](tasks/M4-026.md) | DRAFT | — | M4-016, M4-020, M4-025 | Prove bounded reconstruction, backpressure and shutdown | — | [Direct proof](tasks/M4-026.md#verification) |
+| [M4-027](tasks/M4-027.md) | DRAFT | — | M4-016, M4-024 | Prove real-Connector retry and account-affinity boundaries | — | [Direct proof](tasks/M4-027.md#verification) |
+| [M4-028](tasks/M4-028.md) | DRAFT | — | M4-009, M4-022, M4-023, M4-024, M4-025, M4-027 | Verify durable translated admission and settlement | — | [Direct proof](tasks/M4-028.md#verification) |
+| [M4-029](tasks/M4-029.md) | DRAFT | — | M4-016, M4-022 | Decide reversible reasoning support for the selected profile | — | [Direct proof](tasks/M4-029.md#verification) |
+| [M4-030](tasks/M4-030.md) | DRAFT | — | M4-029, M4-008, M4-019 | Implement the accepted reasoning input and replay policy | — | [Direct proof](tasks/M4-030.md#verification) |
+| [M4-031](tasks/M4-031.md) | DRAFT | — | M4-020, M4-023, M4-027, M4-029, M4-030 | Verify reasoning stream and tool-round behavior | — | [Direct proof](tasks/M4-031.md#verification) |
+| [M4-032](tasks/M4-032.md) | DRAFT | — | M4-021, M4-022, M4-028, M4-031 | Publish the evidence-backed compatibility matrix | — | [Direct proof](tasks/M4-032.md#verification) |
+| [M4-033](tasks/M4-033.md) | DRAFT | — | M4-026, M4-027, M4-028, M4-031, M4-032 | Run translation conformance and native boundary regressions | — | [Direct proof](tasks/M4-033.md#verification) |
+| [M4-034](tasks/M4-034.md) | DRAFT | — | M4-015, M4-028, M4-032, M4-033 | Document and verify runnable local M4 operations | — | [Direct proof](tasks/M4-034.md#verification) |
+| [M4-035](tasks/M4-035.md) | DRAFT | — | M4-022, M4-031, M4-032, M4-034 | Prepare bounded direct-versus-gateway smoke capture | — | [Direct proof](tasks/M4-035.md#verification) |
+| [M4-036](tasks/M4-036.md) | DRAFT | — | M4-035 | Capture versioned real-provider smoke evidence | — | [Direct proof](tasks/M4-036.md#verification) |
+| [M4-037](tasks/M4-037.md) | DRAFT | — | M4-036, M4-032 | Compare live evidence and narrow production claims | — | [Direct proof](tasks/M4-037.md#verification) |
+| [M4-038](tasks/M4-038.md) | DRAFT | — | M4-033, M4-034, M4-037 | Audit M4 acceptance and hand off to M5.1 | — | [Direct proof](tasks/M4-038.md#verification) |
