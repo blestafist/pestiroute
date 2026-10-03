@@ -3,10 +3,12 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -742,6 +744,104 @@ func TestExecuteCloseInterruptsBlockedRead(t *testing.T) {
 		t.Fatal("Close did not interrupt blocked upstream read")
 	}
 	_ = writer.Close()
+}
+
+func TestExecuteTimeoutInterruptsBlockedRead(t *testing.T) {
+	c := executeConnector(t)
+	reader, writer := io.Pipe()
+	readStarted := make(chan struct{})
+	resp, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Model: "gpt-4.1-mini", Payload: core.RawPayload{Protocol: protocol, Body: []byte(executeBody)}}, core.AttemptScope{Mode: core.ModeTranslation, AccountID: "account-a"}, core.InvocationServices{
+		Credentials: credentialStub("secret"),
+		Transport: doerFunc(func(*http.Request) (*http.Response, error) {
+			go func() { _, _ = io.WriteString(writer, "data: {\"type\":\"ping\"}\n\n"); close(readStarted) }()
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: reader}, nil
+		}),
+	})
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	if _, err := resp.Stream.Next(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := resp.Stream.Next(ctx); done <- err }()
+	select {
+	case <-readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("upstream read did not start")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("timed out Next error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("deadline did not interrupt upstream read")
+	}
+	if _, err := resp.Stream.Next(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next after timeout = %v, want canceled", err)
+	}
+	_ = writer.Close()
+}
+
+func TestExecuteCloseWinsBlockedTerminalRace(t *testing.T) {
+	for range 50 {
+		ctx, cancel := context.WithCancel(context.Background())
+		reader := &terminalRaceReader{started: make(chan struct{}), closed: make(chan struct{})}
+		emitter, err := newResponsesEmitter()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream := &messagesStream{ctx: ctx, cancel: cancel, body: reader, reader: newMessagesSSEReader(reader), phase: 1, started: true, nextIndex: 1, stop: "end_turn", emitter: emitter}
+		done := make(chan error, 1)
+		go func() {
+			frame, err := stream.Next(context.Background())
+			if err == nil && frame.Type == core.FrameComplete && frame.Complete.Outcome == core.OutcomeSucceeded {
+				done <- errors.New("close raced to a late success")
+			} else {
+				done <- err
+			}
+		}()
+		select {
+		case <-reader.started:
+		case <-time.After(time.Second):
+			t.Fatal("upstream read did not start")
+		}
+		if err := stream.Close(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("blocked Next returned no cancellation error")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Close did not interrupt terminal race")
+		}
+	}
+}
+
+type terminalRaceReader struct {
+	started chan struct{}
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func (r *terminalRaceReader) Read(p []byte) (int, error) {
+	select {
+	case <-r.started:
+	default:
+		close(r.started)
+	}
+	<-r.closed
+	return copy(p, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"), io.EOF
+}
+
+func (r *terminalRaceReader) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
 }
 
 type closeReader struct {

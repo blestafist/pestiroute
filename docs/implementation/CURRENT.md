@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-024 DONE (24 tasks completed)
+## Immediate focus: M4-025 DONE (commit unverified/incomplete; handoff BLOCKED)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
@@ -38,15 +38,18 @@ are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`)
 [M4-017](tasks/M4-017.md) (`4555ea4`), [M4-018](tasks/M4-018.md) (`a65f424`),
 [M4-019](tasks/M4-019.md) (`8076e38`), [M4-020](tasks/M4-020.md) (`f82975a`),
 [M4-021](tasks/M4-021.md) (`77913d2`), [M4-022](tasks/M4-022.md) (`3a0cf49`),
-and [M4-023](tasks/M4-023.md) (`cc42aed`) are committed locally on `dev-m4` ahead of origin.
+[M4-023](tasks/M4-023.md) (`cc42aed`), and [M4-024](tasks/M4-024.md) (`11d8471`) are verified commits on `dev-m4` ahead of origin.
 
-[M4-024](tasks/M4-024.md) (Translate stop reasons and committed stream failures truthfully)
-is verified and closed DONE (reviewer PASS `ses_efc80715effeSq7ip34QTiCrH3`). Anthropic stop
-reasons map truthfully to succeeded/incomplete/failed Core outcomes; max_tokens and premature
-EOF produce incomplete outcomes with output_truncated and incomplete_response, in-stream errors
-fail with sanitized classification, committed stream failures emit response.failed or
-response.incomplete without retry, and repeated stops/post-terminal events are rejected idempotently.
-24 tasks are DONE in M4. No new tasks are promoted or prepared pending task commit.
+[M4-025](tasks/M4-025.md) (Prove cancellation and timeout cleanup under races) acceptance
+is reviewed and closed DONE (reviewer PASS `ses_efc70615dffeLSfaFJlbVX03W7`). However,
+the scoped commit `0b2157e` is incomplete: only 5 files were committed and the required,
+reviewed test `cmd/gateway/translation_lifecycle_test.go` remains untracked in the working tree.
+Subsequent git-worker verification misidentified the task. In the current batch of 7 DONE tasks
+(M4-019 through M4-025), only the first 6 commits (M4-019 through M4-024) are fully verified;
+task 7 commit delivery cannot be claimed. Stop boundary reached: no next task is authorized
+or prepared until `0b2157e` is amended to include `cmd/gateway/translation_lifecycle_test.go`
+and cleanly verified.
+25 tasks are DONE in the registry; implementation is preserved.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

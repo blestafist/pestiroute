@@ -94,6 +94,10 @@ func (s *messagesStream) Next(ctx context.Context) (core.StreamFrame, error) {
 			_ = s.Close()
 			return core.StreamFrame{}, ctx.Err()
 		}
+		if s.ctx.Err() != nil {
+			_ = s.Close()
+			return core.StreamFrame{}, context.Canceled
+		}
 		if err != nil {
 			if s.ctx.Err() != nil || ctx.Err() != nil {
 				_ = s.Close()
