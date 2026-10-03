@@ -4,13 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 )
 
-func TestLedgerIntentLifecycleIdempotencyNullableUsageAndReopen(t *testing.T) {
+func TestLedgerQuerySummaryPaginationAndLifecycle(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.db")
 	db, err := Open(path)
 	if err != nil {
@@ -118,6 +119,9 @@ func TestLedgerIntentLifecycleIdempotencyNullableUsageAndReopen(t *testing.T) {
 	if err := repo.CreateAttempt(ctx, second); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO reservations (attempt_id,estimated_tokens,state) VALUES (?,?,'held')`, second.ID, second.EstimateTokens); err != nil {
+		t.Fatal(err)
+	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	if err := repo.RecordDispatchIntent(cancelled, second.ID, now); err == nil {
@@ -175,9 +179,86 @@ func TestLedgerIntentLifecycleIdempotencyNullableUsageAndReopen(t *testing.T) {
 	if err := repo.FinalizeAttempt(ctx, TerminalAttempt{AttemptID: third.ID, State: "failed", ErrorCategory: &category, ErrorReason: &reason, Usage: secondUsage, FinishedAt: finished}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE requests SET state='admitted',finished_at=NULL WHERE id=?`, request.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending := AttemptRecord{ID: "attempt-pending", RequestID: request.ID, Ordinal: 4, AccountID: account.ID, Connector: "connector", RouteID: "route", BudgetPolicy: "known", EstimateTokens: 20, EstimateMethod: "fixture", State: "reserved"}
+	if err := repo.CreateAttempt(ctx, pending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO reservations (attempt_id,estimated_tokens,state) VALUES (?,?,'held')`, pending.ID, pending.EstimateTokens); err != nil {
+		t.Fatal(err)
+	}
 	stored, err := repo.GetAttempt(ctx, third.ID)
 	if err != nil || stored.ErrorCategory == nil || *stored.ErrorCategory != category || stored.ErrorReason == nil || *stored.ErrorReason != reason {
 		t.Fatalf("terminal sanitized error metadata = %#v, %v", stored, err)
+	}
+	since, until := now.Add(-time.Second), now.Add(time.Second)
+	requests, err := repo.QueryRequests(ctx, RequestFilter{VirtualKeyID: issued.ID, AccountID: account.ID, Model: request.Model, RouteID: request.RouteID, State: "admitted", Since: &since, Until: &until, Limit: 1})
+	if err != nil || len(requests) != 1 || requests[0].Request.ID != request.ID || len(requests[0].Attempts) != 4 {
+		t.Fatalf("filtered paginated requests = %#v err=%v", requests, err)
+	}
+	attempts, err := repo.QueryAttempts(ctx, AttemptFilter{RequestID: request.ID, AccountID: account.ID, Connector: "connector", State: "failed", Since: &finished, Until: &finished, Limit: 2})
+	if err != nil || len(attempts) != 1 || attempts[0].Attempt.Ordinal != 3 || attempts[0].Attempt.ErrorReason == nil || *attempts[0].Attempt.ErrorReason != reason || attempts[0].Usage == nil || attempts[0].Usage.InputTokens != nil {
+		t.Fatalf("filtered paginated attempts = %#v, %v", attempts, err)
+	}
+	attempts, err = repo.QueryAttempts(ctx, AttemptFilter{RequestID: request.ID, Since: &now, Until: &now, Limit: 2, Offset: 1})
+	if err != nil || len(attempts) != 2 || attempts[0].Attempt.Ordinal != 4 || attempts[1].Attempt.Ordinal != 2 {
+		t.Fatalf("timestamp/offset attempt page = %#v, %v", attempts, err)
+	}
+	repeated, err := repo.QueryAttempts(ctx, AttemptFilter{RequestID: request.ID, Since: &now, Until: &now, Limit: 2, Offset: 1})
+	if err != nil || len(repeated) != 2 || repeated[0].Attempt.ID != attempts[0].Attempt.ID || repeated[1].Attempt.ID != attempts[1].Attempt.ID {
+		t.Fatalf("repeated offset page = %#v, %v", repeated, err)
+	}
+	summary, err := repo.QueryUsageSummary(ctx, issued.ID, account.ID, &since, &until)
+	if err != nil || summary.Requests != 1 || summary.Attempts != 4 || summary.InputTokens != nil || summary.OutputTokens != nil || summary.EstimatedTokens != 80 || summary.EffectiveCharge != 20 {
+		t.Fatalf("usage summary = %#v, err=%v", summary, err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE usage_records SET input_tokens=9223372036854775807 WHERE attempt_id=?`, attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE usage_records SET input_tokens=1 WHERE attempt_id=?`, third.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.QueryUsageSummary(ctx, issued.ID, account.ID, &since, &until); err == nil {
+		t.Fatal("overflowing input token aggregate unexpectedly succeeded")
+	}
+	if _, err := repo.QueryRequests(ctx, RequestFilter{Limit: 501}); err == nil {
+		t.Fatal("oversized request page accepted")
+	}
+	if _, err := NewVirtualKeys(db).Revoke(ctx, issued.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAccounts(db).SetEnabled(ctx, account.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	history, err := repo.QueryRequests(ctx, RequestFilter{VirtualKeyID: issued.ID})
+	if err != nil || len(history) != 1 || history[0].Request.ID != request.ID || len(history[0].Attempts) != 4 {
+		t.Fatalf("revoked-key/disabled-account history = %#v, %v", history, err)
+	}
+	if err := NewAccounts(db).Delete(ctx, account.ID); err != nil {
+		t.Fatal(err)
+	}
+	history, err = repo.QueryRequests(ctx, RequestFilter{VirtualKeyID: issued.ID})
+	if err != nil || len(history) != 1 || len(history[0].Attempts) != 4 || history[0].Attempts[0].Attempt.AccountID != "" {
+		t.Fatalf("deleted-account history = %#v, %v", history, err)
+	}
+	for ordinal := int64(5); ordinal <= 504; ordinal++ {
+		id := fmt.Sprintf("pending-%03d", ordinal)
+		if _, err := db.ExecContext(ctx, `INSERT INTO attempts (id,request_id,ordinal,connector,route_id,budget_policy,estimate_tokens,estimate_method,state,committed) VALUES (?,?,?,?,?,?,0,?,'reserved',0)`, id, request.ID, ordinal, "connector", "route", "known", "fixture"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO reservations (attempt_id,estimated_tokens,state) VALUES (?,0,'held')`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	history, err = repo.QueryRequests(ctx, RequestFilter{VirtualKeyID: issued.ID, Limit: 1})
+	count := 0
+	if len(history) == 1 {
+		count = len(history[0].Attempts)
+	}
+	if err != nil || len(history) != 1 || count != 504 {
+		t.Fatalf("paged child attempt enumeration count=%d err=%v", count, err)
 	}
 }
 

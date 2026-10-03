@@ -16,7 +16,7 @@ import (
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
-const adminUsage = "usage: gateway admin [--db PATH] [--master-key PATH] <migrate|status|account|credential|policy|key> ...\n"
+const adminUsage = "usage: gateway admin [--db PATH] [--master-key PATH] <migrate|status|account|credential|policy|key|usage> ...\n"
 const maxAdminSecret = 64 << 10
 
 type adminEnvironment struct {
@@ -41,6 +41,11 @@ func runAdmin(env adminEnvironment) error {
 		_, _ = io.WriteString(env.stdout, adminUsage)
 		return nil
 	}
+	if env.args[0] == "usage" {
+		if handled, err := adminUsageHelpOrInvalid(env); handled {
+			return err
+		}
+	}
 	if len(env.args) == 2 && isHelp(env.args[1]) && (env.args[0] == "migrate" || env.args[0] == "status") {
 		_, _ = fmt.Fprintf(env.stdout, "%s  %s: no additional arguments\n", adminUsage, env.args[0])
 		return nil
@@ -54,6 +59,11 @@ func runAdmin(env adminEnvironment) error {
 		return errors.New("admin: invalid arguments")
 	}
 	args := flags.Args()
+	if len(args) > 0 && args[0] == "usage" {
+		if handled, err := adminUsageHelpOrInvalid(adminEnvironment{ctx: env.ctx, args: args, stdin: env.stdin, stdout: env.stdout, stderr: env.stderr}); handled {
+			return err
+		}
+	}
 	if len(args) == 2 && isHelp(args[1]) && (args[0] == "migrate" || args[0] == "status") {
 		_, _ = fmt.Fprintf(env.stdout, "%s  %s: no additional arguments\n", adminUsage, args[0])
 		return nil
@@ -62,7 +72,7 @@ func runAdmin(env adminEnvironment) error {
 		_, _ = io.WriteString(env.stdout, adminUsage)
 		return nil
 	}
-	if args[0] != "migrate" && args[0] != "status" && args[0] != "account" && args[0] != "credential" && args[0] != "policy" && args[0] != "key" {
+	if args[0] != "migrate" && args[0] != "status" && args[0] != "account" && args[0] != "credential" && args[0] != "policy" && args[0] != "key" && args[0] != "usage" {
 		_, _ = io.WriteString(env.stderr, adminUsage)
 		return errors.New("admin: unknown subcommand")
 	}
@@ -89,7 +99,7 @@ func runAdmin(env adminEnvironment) error {
 		_, _ = fmt.Fprintln(env.stdout, "schema is current")
 		return nil
 	}
-	if args[0] == "account" || args[0] == "credential" || args[0] == "policy" || args[0] == "key" {
+	if args[0] == "account" || args[0] == "credential" || args[0] == "policy" || args[0] == "key" || args[0] == "usage" {
 		version, err := sqlite.SchemaVersion(env.ctx, db)
 		if err != nil {
 			return errors.New("admin: unsupported or unreadable schema")
@@ -99,6 +109,9 @@ func runAdmin(env adminEnvironment) error {
 		}
 		if args[0] == "policy" || args[0] == "key" {
 			return runKeyPolicyAdmin(env, db, args[0], args[1:])
+		}
+		if args[0] == "usage" {
+			return runUsageAdmin(env, db, args[1:])
 		}
 		return runAccountCredentialAdmin(env, db, key, args[0], args[1:])
 	}
