@@ -25,7 +25,7 @@ SHA-256 (checked by `TestFixtureIntegrityAndMalformedInput`):
 | `request-late-developer.json` | `12da7d7eaaa8cdb81d599b55fb5c07f92a6bb86270f036cd622f00e0abad6ba4` |
 | `request-positive.json` | `b95f7ba46ac4cbea9edd2d77d609a2017edd6a147beebe4c8c695f894f4a6ca0` |
 | `request-system-history.json` | `b196feb3741a61e07929b358f4491beb1f6316c0d9e94dcf0c99d617579088d2` |
-| `stream-error.sse` | `fbc04c78244f4afc84beee038ef470028fdaf51e3298d3abe50eff34a6beab10` |
-| `stream-max-tokens.sse` | `14016a73b3f28d0d138bf7992a6443f70d01a0d24ad852a046abb52e9a3785d2` |
-| `stream-normal.sse` | `c3fa33b2e9803ee4277c79a5f330bf56e48e3788d12439c6b56d329288b3fdb1` |
+| `stream-error.sse` | `35837c5537d85715b2a00b4d021bd58bbc77c2eb616aedc216d607bc74286f26` |
+| `stream-max-tokens.sse` | `4576b3ba65bff19fa109d28601d5684a28f4079d133d3d045ac74b85f4c9bb3a` |
+| `stream-normal.sse` | `89a8bf56a7f10b795c33ad01840083554c8bc4c50aa6b24412c873d550ec5284` |
 | `stream-premature-eof.sse` | `34a13b99657c51e9fb0a36bb9da840432cde47f8368125782abbf82b89a3f1bb` |

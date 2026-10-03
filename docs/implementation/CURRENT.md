@@ -27,26 +27,18 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: commit M4-010
+## Immediate focus: push verified M4-001..011 batch to upstream
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-009](tasks/M4-009.md)
-are committed cleanly (`7ef9d43`, `08c0e9d`, `7bad970`, `e1fbcba`, `ccbf2d3`, `dd81eed`, `a044b54`, `a2f4b6d`, `3deda74`),
-and [M4-010](tasks/M4-010.md) is DONE.
-Generic translation routes, candidate lookup, dispatch attempt scopes, Responses Adapter
-translation format capabilities, managed Anthropic Connector lifecycle, scoped Messages
-HTTP request construction with `x-api-key` resolution from `CredentialAccess`, header
-sanitization, non-replayable transport, plain-text Responses history translation into
-Anthropic `system`/`messages`, top-level generation controls / unsupported-field policy
-enforcement with fail-closed duplicate rejection and rational range validation, scoped
-Anthropic `EstimateUsage` with honest unknown conservative estimates bound to Core
-`RouteBudget` (with conservative tokens route floor enforcement retained in [M4-014](tasks/M4-014.md)
-config binding), and pre-Head HTTP rejection classification with bounded 64 KiB reads,
-sanitized error mapping, explicit unknown retry disposition, bounded Retry-After parsing, and
-Responses Adapter error compatibility in `internal/connector/anthropic` (with upstream
-response-to-stream integration deferred to [M4-013](tasks/M4-013.md)) are verified. Commit
-M4-010 closure before promoting the next task.
+Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-011](tasks/M4-011.md)
+are verified and committed locally across 11 clean commits.
+
+[M4-011](tasks/M4-011.md) implementation is fully verified and reviewed (121 package
+race tests, `./scripts/check.sh`, `git diff --check`, reviewer PASS `ses_efdb0bb6bffe6k2RXhMlf0qko2`).
+Commit repair is complete across the full 10-file scope including `sse.go` and `sse_test.go`.
+Batch delivery of the 11 commits to upstream is pending push. No new task promotion or dispatch
+until batch push is completed.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

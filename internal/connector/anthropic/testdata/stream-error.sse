@@ -1,2 +1,4 @@
 event: error
 data: {"type":"error","error":{"type":"api_error","message":"Synthetic documentation error."}}
+
+: end-of-stream
