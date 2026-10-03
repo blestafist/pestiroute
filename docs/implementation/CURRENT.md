@@ -27,15 +27,15 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: prepare M4-002
+## Immediate focus: commit M4-002 and prepare next eligible task
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. [M4-001](tasks/M4-001.md) is DONE: the plain-text
-streaming binding, OpenCode 2.0.6 shape/options, request policy, lifecycle and
-fixture/source baseline are established in [M4-BINDING.md](M4-BINDING.md).
-The [planning brief](M4-TRANSLATION.md) records inspected seams and decision gates;
-it does not claim implementation or accepted new contract semantics.
+Anthropic Messages translation. [M4-001](tasks/M4-001.md) and [M4-002](tasks/M4-002.md)
+are DONE. Versioned plain-text positive/negative fixtures, backend Anthropic
+SSE stream failure scripts, provenance table and `fakeupstream` assertions are
+verified under `internal/connector/anthropic/`. Next task promotion is held
+pending verification of the scoped M4-002 closure commit.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
