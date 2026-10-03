@@ -32,7 +32,7 @@ func TestAdapterDescriptorLifecycleAndCapabilities(t *testing.T) {
 	if err := a.Encode(context.Background(), clientResponse(), nil, core.ExecutionResponse{}); err == nil {
 		t.Fatal("Encode accepted before Init")
 	}
-	scope := core.CapabilityScope{Protocol: protocol, Mode: "native", Model: model, AccountID: "account-a"}
+	scope := core.CapabilityScope{Protocol: protocol, Mode: core.ModeNative, Model: model, AccountID: "account-a"}
 	if got := a.Capabilities(context.Background(), scope); len(got.Values) != 0 {
 		t.Fatalf("uninitialized capabilities: %+v", got)
 	}
@@ -45,8 +45,21 @@ func TestAdapterDescriptorLifecycleAndCapabilities(t *testing.T) {
 			t.Errorf("%s: %s", capability, got.State(capability))
 		}
 	}
-	if a.Capabilities(context.Background(), core.CapabilityScope{Protocol: protocol, Mode: "translation", Model: model}).State("llm.tools") != core.Unknown {
-		t.Fatalf("overbroad declarations: %+v", got)
+	translationScope := core.CapabilityScope{Protocol: protocol, Mode: core.ModeTranslation, Model: model}
+	translation := a.Capabilities(context.Background(), translationScope)
+	for _, capability := range []core.Capability{"llm.streaming", "llm.tools", "llm.tools.parallel", "llm.reasoning", "llm.structured_output", "llm.vision", "llm.audio"} {
+		if translation.State(capability) != core.Supported {
+			t.Errorf("translation %s: %s", capability, translation.State(capability))
+		}
+	}
+	for _, invalidScope := range []core.CapabilityScope{
+		{Protocol: protocol, Mode: core.ModeTranslation},
+		{Protocol: "other", Mode: core.ModeTranslation, Model: model},
+		{Protocol: protocol, Mode: "invalid", Model: model},
+	} {
+		if result := a.Capabilities(context.Background(), invalidScope); len(result.Values) != 0 {
+			t.Errorf("invalid scope declared capabilities: %+v", result)
+		}
 	}
 	if _, err := a.Decode(context.Background(), core.ClientRequest{Transport: request(base)}); err != nil {
 		t.Fatalf("Decode after Init: %v", err)

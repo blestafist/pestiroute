@@ -88,7 +88,7 @@ func (a *Adapter) Capabilities(_ context.Context, scope core.CapabilityScope) co
 	ready := a.state == core.HealthReady && !a.closed
 	a.mu.Unlock()
 	values := make(map[core.Capability]core.CapabilityState)
-	if ready && scope.Protocol == protocol && scope.Mode == "native" && scope.Model != "" {
+	if ready && scope.Protocol == protocol && (scope.Mode == core.ModeNative || scope.Mode == core.ModeTranslation) && scope.Model != "" {
 		for _, capability := range []core.Capability{
 			"llm.streaming", "llm.tools", "llm.tools.parallel", "llm.reasoning", "llm.structured_output", "llm.vision", "llm.audio",
 		} {
