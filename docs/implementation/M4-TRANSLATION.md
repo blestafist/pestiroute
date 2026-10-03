@@ -25,7 +25,9 @@ API key. The gateway forwards function calls/results and never executes tools.
 The initial candidate transport is direct Anthropic HTTP/SSE with an API key,
 one configured account/model per instance, and client-supplied full history.
 M4-001 fixes the exact model, API version, client baseline and first-slice policy
-from sources. No live compatibility has been established by this plan.
+from sources in the [M4-001 binding](M4-BINDING.md). No live compatibility has
+been established by this plan; later task cards use that binding for the accepted
+plain-text baseline and retain their own feature-specific decision gates.
 
 Codex/Claude Code OAuth, Bedrock/Vertex, a northbound Messages or Chat adapter,
 WebSocket, response resource storage, background jobs, sessions, compaction,

@@ -27,12 +27,13 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: execute M4-001
+## Immediate focus: prepare M4-002
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. Only [M4-001](tasks/M4-001.md) is initially READY:
-fix the plain-text streaming binding and exact source/client/model/API baseline.
+Anthropic Messages translation. [M4-001](tasks/M4-001.md) is DONE: the plain-text
+streaming binding, OpenCode 2.0.6 shape/options, request policy, lifecycle and
+fixture/source baseline are established in [M4-BINDING.md](M4-BINDING.md).
 The [planning brief](M4-TRANSLATION.md) records inspected seams and decision gates;
 it does not claim implementation or accepted new contract semantics.
 

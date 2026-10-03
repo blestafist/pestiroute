@@ -262,7 +262,7 @@ No account login is needed for local development; M4-036 is a separate live gate
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M4-001](tasks/M4-001.md) | READY | — | M3-046 | Fix the plain-text translation binding and source baseline | — | [Direct proof](tasks/M4-001.md#verification) |
+| [M4-001](tasks/M4-001.md) | DONE | GPT-6 Luna (M4-001 worker) | M3-046 | Fix the plain-text translation binding and source baseline | Pinned OpenCode shape/options, request policy, lifecycle and history chronology (including developer-only rejection) bound; affected cards synchronized | OpenCode source/contract review, Markdown links/anchors, `git diff --check`; [evidence](tasks/M4-001.md#completion-evidence) |
 | [M4-002](tasks/M4-002.md) | DRAFT | — | M4-001 | Add versioned plain-text and failure fixtures | — | [Direct proof](tasks/M4-002.md#verification) |
 | [M4-003](tasks/M4-003.md) | DRAFT | — | M4-001 | Enable explicit translation mode in generic routing | — | [Direct proof](tasks/M4-003.md#verification) |
 | [M4-004](tasks/M4-004.md) | DRAFT | — | M4-001, M4-003 | Declare Responses format support for translation routes | — | [Direct proof](tasks/M4-004.md#verification) |

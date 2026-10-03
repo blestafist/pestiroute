@@ -26,8 +26,9 @@ OpenAI-compatible does not mean full support for the Responses API. For each ups
 
 The [M4 planning brief](M4-TRANSLATION.md#source-selection) links official Messages
 create/stream/tool/thinking/cache/error documentation and the Responses streaming
-reference inspected on 2026-10-03. M4-001 selects the exact direct API/model/client
-profile; M4-002 records versioned fixture provenance and reuse attribution.
+reference inspected on 2026-10-03. [M4-001 binding](M4-BINDING.md) selects the
+direct API/model/client profile; M4-002 records versioned fixture provenance and
+reuse attribution.
 These mutable source pages do not establish PestiRoute live compatibility.
 Codex subscription research belongs to M5.1 and must not supply Anthropic auth,
 request fields, stream events or usage semantics by analogy.
