@@ -1,15 +1,24 @@
 package anthropic
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math/big"
+	"strconv"
+	"strings"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
 
 type messagesRequest struct {
-	System   []systemTextBlock `json:"system,omitempty"`
-	Messages []textMessage     `json:"messages"`
+	Model       string            `json:"model"`
+	Stream      bool              `json:"stream"`
+	MaxTokens   int               `json:"max_tokens"`
+	Temperature *json.Number      `json:"temperature,omitempty"`
+	System      []systemTextBlock `json:"system,omitempty"`
+	Messages    []textMessage     `json:"messages"`
 }
 
 type systemTextBlock struct {
@@ -28,11 +37,54 @@ type textBlock struct {
 }
 
 func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil || fields == nil {
+	fields, err := topLevelFields(body)
+	if err != nil {
 		return messagesRequest{}, invalidTranslation("Invalid request body")
 	}
+	for name := range fields {
+		switch name {
+		case "model", "input", "instructions", "stream", "max_output_tokens", "temperature", "store", "include":
+		default:
+			return messagesRequest{}, invalidTranslation("Unsupported request field")
+		}
+	}
 	var out messagesRequest
+	if json.Unmarshal(fields["model"], &out.Model) != nil || out.Model == "" || string(fields["model"]) == "null" {
+		return messagesRequest{}, invalidTranslation("Invalid model")
+	}
+	if raw, ok := fields["stream"]; !ok || string(raw) != "true" {
+		return messagesRequest{}, invalidTranslation("Streaming is required")
+	}
+	out.Stream = true
+	out.MaxTokens = 4096
+	if raw, ok := fields["max_output_tokens"]; ok {
+		number, ok := jsonNumber(raw)
+		value, valid := exactRational(number)
+		if !ok || !valid {
+			return messagesRequest{}, invalidTranslation("Invalid max_output_tokens")
+		}
+		if !value.IsInt() || value.Sign() <= 0 || value.Cmp(big.NewRat(4096, 1)) > 0 {
+			return messagesRequest{}, invalidTranslation("Invalid max_output_tokens")
+		}
+		out.MaxTokens = int(value.Num().Int64())
+	}
+	if raw, ok := fields["temperature"]; ok {
+		number, ok := jsonNumber(raw)
+		value, valid := exactRational(number)
+		if !ok || !valid || value.Sign() < 0 || value.Cmp(big.NewRat(1, 1)) > 0 {
+			return messagesRequest{}, invalidTranslation("Invalid temperature")
+		}
+		out.Temperature = &number
+	}
+	if raw, ok := fields["store"]; ok && string(raw) != "false" {
+		return messagesRequest{}, invalidTranslation("Unsupported store value")
+	}
+	if raw, ok := fields["include"]; ok {
+		var include []string
+		if json.Unmarshal(raw, &include) != nil || include == nil || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+			return messagesRequest{}, invalidTranslation("Unsupported include value")
+		}
+	}
 	if raw, ok := fields["instructions"]; ok {
 		var instructions string
 		if json.Unmarshal(raw, &instructions) != nil || instructions == "" || string(raw) == "null" {
@@ -110,6 +162,65 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 		return messagesRequest{}, invalidTranslation("At least one user or assistant message is required")
 	}
 	return out, nil
+}
+
+func jsonNumber(raw json.RawMessage) (json.Number, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if decoder.Decode(&value) != nil {
+		return "", false
+	}
+	number, ok := value.(json.Number)
+	return number, ok
+}
+
+func exactRational(number json.Number) (*big.Rat, bool) {
+	text := number.String()
+	if index := strings.IndexAny(text, "eE"); index >= 0 {
+		exponent, err := strconv.ParseInt(text[index+1:], 10, 32)
+		if err != nil || exponent < -4096 || exponent > 4096 {
+			return nil, false
+		}
+	}
+	value, ok := new(big.Rat).SetString(text)
+	return value, ok
+}
+
+// topLevelFields rejects duplicate top-level names while leaving nested object
+// parsing behavior unchanged.
+func topLevelFields(body []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, fmt.Errorf("expected request object")
+	}
+	fields := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		name, ok := token.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid request field")
+		}
+		if _, exists := fields[name]; exists {
+			return nil, fmt.Errorf("duplicate request field")
+		}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return nil, err
+		}
+		fields[name] = raw
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return nil, fmt.Errorf("invalid request object")
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("trailing request data")
+	}
+	return fields, nil
 }
 
 func translateContent(raw json.RawMessage, role string) ([]textBlock, error) {

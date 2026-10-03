@@ -27,19 +27,20 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: commit M4-007
+## Immediate focus: commit M4-008
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-006](tasks/M4-006.md)
-are committed cleanly (`7ef9d43`, `08c0e9d`, `7bad970`, `e1fbcba`, `ccbf2d3`, `dd81eed`), and
-[M4-007](tasks/M4-007.md) is DONE.
+Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-007](tasks/M4-007.md)
+are committed cleanly (`7ef9d43`, `08c0e9d`, `7bad970`, `e1fbcba`, `ccbf2d3`, `dd81eed`, `a044b54`), and
+[M4-008](tasks/M4-008.md) is DONE.
 Generic translation routes, candidate lookup, dispatch attempt scopes, Responses Adapter
 translation format capabilities, managed Anthropic Connector lifecycle, scoped Messages
 HTTP request construction with `x-api-key` resolution from `CredentialAccess`, header
-sanitization, non-replayable transport, and plain-text Responses history translation into
-Anthropic `system`/`messages` with byte immutability and chronology rejection in
-`internal/connector/anthropic` are verified. Commit M4-007 closure before promoting the next task.
+sanitization, non-replayable transport, plain-text Responses history translation into
+Anthropic `system`/`messages`, and top-level generation controls / unsupported-field
+policy enforcement with fail-closed duplicate rejection and rational range validation in
+`internal/connector/anthropic` are verified. Commit M4-008 closure before promoting the next task.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
