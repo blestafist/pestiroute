@@ -109,9 +109,14 @@ func TestExecuteStreamTranslateEarlyHeadAndUsage(t *testing.T) {
 func TestExecuteRejectsBeforeDispatchAndHTTPRejection(t *testing.T) {
 	calls := 0
 	services := core.InvocationServices{Credentials: credentialStub("secret"), Transport: doerFunc(func(*http.Request) (*http.Response, error) { calls++; return nil, nil })}
-	request := core.ExecutionRequest{Model: "gpt-4.1-mini", Payload: core.RawPayload{Protocol: protocol, Body: []byte(`{"model":"gpt-4.1-mini","stream":true,"input":"hello","tools":[{"type":"function","name":"bad name","parameters":{"type":"object"}}]}`)}}
-	if _, err := executeConnector(t).Execute(context.Background(), request, core.AttemptScope{Mode: core.ModeTranslation, AccountID: "account-a"}, services); err == nil || err.Category != core.CategoryInvalidRequest || calls != 0 {
-		t.Fatalf("local rejection=%+v dispatches=%d", err, calls)
+	for _, body := range []string{
+		`{"model":"gpt-4.1-mini","stream":true,"input":"hello","tools":[{"type":"function","name":"bad name","parameters":{"type":"object"}}]}`,
+		`{"model":"gpt-4.1-mini","stream":true,"input":"hello","tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"missing"}}`,
+	} {
+		request := core.ExecutionRequest{Model: "gpt-4.1-mini", Payload: core.RawPayload{Protocol: protocol, Body: []byte(body)}}
+		if _, err := executeConnector(t).Execute(context.Background(), request, core.AttemptScope{Mode: core.ModeTranslation, AccountID: "account-a"}, services); err == nil || err.Category != core.CategoryInvalidRequest || calls != 0 {
+			t.Fatalf("local rejection=%+v dispatches=%d", err, calls)
+		}
 	}
 	c := executeConnector(t)
 	closed := false

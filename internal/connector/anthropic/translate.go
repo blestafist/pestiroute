@@ -15,13 +15,20 @@ import (
 const backendModel = "claude-opus-5-5"
 
 type messagesRequest struct {
-	Model       string            `json:"model"`
-	Stream      bool              `json:"stream"`
-	MaxTokens   int               `json:"max_tokens"`
-	Temperature *json.Number      `json:"temperature,omitempty"`
-	System      []systemTextBlock `json:"system,omitempty"`
-	Tools       []messagesTool    `json:"tools,omitempty"`
-	Messages    []textMessage     `json:"messages"`
+	Model       string              `json:"model"`
+	Stream      bool                `json:"stream"`
+	MaxTokens   int                 `json:"max_tokens"`
+	Temperature *json.Number        `json:"temperature,omitempty"`
+	System      []systemTextBlock   `json:"system,omitempty"`
+	Tools       []messagesTool      `json:"tools,omitempty"`
+	ToolChoice  *messagesToolChoice `json:"tool_choice,omitempty"`
+	Messages    []textMessage       `json:"messages"`
+}
+
+type messagesToolChoice struct {
+	Type                   string `json:"type"`
+	Name                   string `json:"name,omitempty"`
+	DisableParallelToolUse bool   `json:"disable_parallel_tool_use,omitempty"`
 }
 
 type messagesTool struct {
@@ -52,7 +59,7 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 	}
 	for name := range fields {
 		switch name {
-		case "model", "input", "instructions", "stream", "max_output_tokens", "temperature", "store", "include", "tools":
+		case "model", "input", "instructions", "stream", "max_output_tokens", "temperature", "store", "include", "tools", "tool_choice", "parallel_tool_calls":
 		default:
 			return messagesRequest{}, invalidTranslation("Unsupported request field")
 		}
@@ -103,6 +110,35 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 			return messagesRequest{}, invalidTranslation("Invalid tools")
 		}
 		out.Tools = tools
+	}
+	parallelDisabled := false
+	if raw, ok := fields["parallel_tool_calls"]; ok {
+		if string(raw) == "false" {
+			parallelDisabled = true
+		} else if string(raw) != "true" {
+			return messagesRequest{}, invalidTranslation("Invalid parallel_tool_calls")
+		}
+	}
+	toolChoiceNone := false
+	if raw, ok := fields["tool_choice"]; ok {
+		choice, err := translateToolChoice(raw, out.Tools)
+		if err != nil {
+			return messagesRequest{}, invalidTranslation("Invalid tool_choice")
+		}
+		if choice != nil {
+			choice.DisableParallelToolUse = parallelDisabled
+			out.ToolChoice = choice
+			if choice.Type == "none" {
+				toolChoiceNone = true
+				out.Tools = nil
+				out.ToolChoice = nil
+			}
+		}
+	} else if parallelDisabled && len(out.Tools) > 0 {
+		out.ToolChoice = &messagesToolChoice{Type: "auto", DisableParallelToolUse: true}
+	}
+	if parallelDisabled && len(out.Tools) == 0 && !toolChoiceNone {
+		return messagesRequest{}, invalidTranslation("parallel_tool_calls requires tools")
 	}
 	if raw, ok := fields["instructions"]; ok {
 		var instructions string
@@ -181,6 +217,40 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 		return messagesRequest{}, invalidTranslation("At least one user or assistant message is required")
 	}
 	return out, nil
+}
+
+func translateToolChoice(raw json.RawMessage, tools []messagesTool) (*messagesToolChoice, error) {
+	if len(tools) == 0 || !uniqueJSONValue(raw) {
+		return nil, fmt.Errorf("tool choice requires valid tools")
+	}
+	var value string
+	if json.Unmarshal(raw, &value) == nil {
+		switch value {
+		case "auto":
+			return &messagesToolChoice{Type: "auto"}, nil
+		case "required":
+			return &messagesToolChoice{Type: "any"}, nil
+		case "none":
+			return &messagesToolChoice{Type: "none"}, nil
+		default:
+			return nil, fmt.Errorf("unknown tool choice")
+		}
+	}
+	fields, err := object(raw, "type", "name")
+	if err != nil {
+		return nil, err
+	}
+	var kind, name string
+	if json.Unmarshal(fields["type"], &kind) != nil || kind != "function" ||
+		json.Unmarshal(fields["name"], &name) != nil || !validToolName(name) {
+		return nil, fmt.Errorf("invalid named tool choice")
+	}
+	for _, tool := range tools {
+		if tool.Name == name {
+			return &messagesToolChoice{Type: "tool", Name: name}, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown tool name")
 }
 
 func translateTools(raw json.RawMessage) ([]messagesTool, error) {

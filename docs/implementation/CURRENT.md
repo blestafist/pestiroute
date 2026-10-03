@@ -27,25 +27,25 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: commit verified M4-017 flat function translation slice
+## Immediate focus: original bounded batch complete (18 DONE reached)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
 Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-011](tasks/M4-011.md)
 are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`),
 [M4-013](tasks/M4-013.md) (`594d684`), [M4-014](tasks/M4-014.md) (`cf9d7d6`),
-[M4-015](tasks/M4-015.md) (`58cf823`), and [M4-016](tasks/M4-016.md) (`e65671c`) are
-committed locally on `dev-m4` ahead 5 of origin.
+[M4-015](tasks/M4-015.md) (`58cf823`), [M4-016](tasks/M4-016.md) (`e65671c`), and
+[M4-017](tasks/M4-017.md) (`4555ea4`) are committed locally on `dev-m4` ahead 6 of origin.
+With [M4-018](tasks/M4-018.md) completed, 7 continuation commits are pending final push.
 
-17 tasks are DONE across M4 (18 total cap, at most 1 additional newly DONE task in this
-continuation phase), with no backlog expansion. [M4-017](tasks/M4-017.md) is verified and
-reviewed (reviewer PASS `ses_efd2f8026ffewiqvM26E59jV4M`). It delivers Responses API flat
-function definitions mapping to Messages `tools` (`name`, optional `description`, `input_schema`),
-preserves nested JSON schema keywords, `required`, and `additionalProperties` without mutating
-admitted request bytes, and rejects the Chat Completions nested `function` shape, invalid names,
-non-object parameters, duplicate tool names, and unsupported `strict: true` before dispatch.
-Tool definitions only; no `llm.tools` capability is advertised by the Anthropic connector yet,
-and tool choice / tool calls remain for later tasks. Scoped commit is pending.
+The original quota of 18 tasks DONE across M4 is reached with no backlog expansion.
+[M4-018](tasks/M4-018.md) (Map tool choice and parallel-call controls explicitly) is
+verified and reviewed (reviewer PASS `ses_efd216163ffe64axhbPDKGKk1K`). It maps
+Responses API `tool_choice` (`auto`, `required`, `none`, named flat function) and
+`parallel_tool_calls` (`true`, `false`, omitted) to Messages `tool_choice`, preserving
+request bytes unmodified and rejecting contradictory/malformed choices before dispatch.
+No additional tasks are promoted or prepared. All 7 continuation commits remain local
+on `dev-m4` pending final push.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

@@ -74,8 +74,11 @@ preserved; malformed JSON/object structure and duplicate keys fail closed.
 `strict:true` is rejected because this profile does not promise strict-schema
 enforcement. This does not claim that Anthropic validates or enforces every
 forwarded schema keyword. Hosted/non-function tools and extra definition fields
-remain unsupported. Tool choice, call/result history, and streamed call handling
-remain M4-018/019/020 respectively; plain-text output handling is unchanged.
+remain unsupported. M4-018 maps `auto`, `required`, `none`, and declared named
+  choices plus the parallel-use boolean explicitly; unsupported choices fail
+  locally. M4-019/020 own call/result history and streamed call handling
+  respectively. The gateway forwards tool calls/results and never executes tools;
+  plain-text output handling is unchanged by request-control mapping.
 
 Specify model identity/explicit rewrite, `stream`, output budget, `instructions`,
 string/item `input`, roles, `store`, `previous_response_id`, `conversation`,

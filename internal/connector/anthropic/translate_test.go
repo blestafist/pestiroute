@@ -89,6 +89,68 @@ func TestTranslateTools(t *testing.T) {
 	}
 }
 
+func TestTranslateToolChoiceAndParallelControls(t *testing.T) {
+	tools := `"tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}]`
+	for _, tc := range []struct {
+		name, choice, parallel, want string
+	}{
+		{"auto", `"tool_choice":"auto"`, "", `"tools":[{"name":"weather","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"}`},
+		{"required", `"tool_choice":"required"`, "", `"tools":[{"name":"weather","input_schema":{"type":"object"}}],"tool_choice":{"type":"any"}`},
+		{"named", `"tool_choice":{"type":"function","name":"weather"}`, "", `"tools":[{"name":"weather","input_schema":{"type":"object"}}],"tool_choice":{"type":"tool","name":"weather"}`},
+		{"none", `"tool_choice":"none"`, "", `"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]`},
+		{"parallel enabled", `"tool_choice":"auto"`, `"parallel_tool_calls":true`, `"tools":[{"name":"weather","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"}`},
+		{"parallel omitted", `"tool_choice":"auto"`, "", `"tools":[{"name":"weather","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"}`},
+		{"parallel disabled", `"tool_choice":"auto"`, `"parallel_tool_calls":false`, `"tools":[{"name":"weather","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto","disable_parallel_tool_use":true}`},
+		{"implicit choice disables parallel", ``, `"parallel_tool_calls":false`, `"tools":[{"name":"weather","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto","disable_parallel_tool_use":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := tools
+			if tc.choice != "" {
+				fields += `,` + tc.choice
+			}
+			if tc.parallel != "" {
+				fields += `,` + tc.parallel
+			}
+			body := []byte(`{"model":"client-model","stream":true,"input":"hi",` + fields + `}`)
+			original := bytes.Clone(body)
+			got, gatewayErr := translateRequest(body)
+			if gatewayErr != nil {
+				t.Fatalf("translateRequest() = %+v", gatewayErr)
+			}
+			encoded, err := json.Marshal(got)
+			if err != nil || !bytes.Contains(encoded, []byte(tc.want)) || !bytes.Equal(body, original) {
+				t.Fatalf("wire=%s err=%v want fragment %s; input mutated=%t", encoded, err, tc.want, !bytes.Equal(body, original))
+			}
+			if tc.name == "none" && bytes.Contains(encoded, []byte(`"tools"`)) {
+				t.Fatalf("none must omit tools and tool_choice: %s", encoded)
+			}
+		})
+	}
+}
+
+func TestToolChoiceRejectsUnrepresentableForms(t *testing.T) {
+	for _, tc := range []struct{ name, fields string }{
+		{"without tools", `"tool_choice":"auto"`},
+		{"empty tools", `"tools":[],"tool_choice":"auto"`},
+		{"unknown name", `"tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"missing"}`},
+		{"nested Chat Completions shape", `"tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}],"tool_choice":{"type":"function","function":{"name":"weather"}}`},
+		{"extra choice field", `"tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"weather","extra":true}`},
+		{"unknown string", `"tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}],"tool_choice":"specific"`},
+		{"parallel string", `"parallel_tool_calls":"false"`},
+		{"parallel null", `"parallel_tool_calls":null`},
+		{"parallel number", `"parallel_tool_calls":0`},
+		{"parallel false without tools", `"parallel_tool_calls":false`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"model":"client-model","stream":true,"input":"hi",` + tc.fields + `}`)
+			original := bytes.Clone(body)
+			if _, gatewayErr := translateRequest(body); gatewayErr == nil || gatewayErr.Category != "invalid_request" || !bytes.Equal(body, original) {
+				t.Fatalf("translateRequest() error=%+v, want local invalid_request without mutation", gatewayErr)
+			}
+		})
+	}
+}
+
 func TestToolSchemaRejectsUnsupportedAndMalformedDefinitions(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
