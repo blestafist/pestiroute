@@ -75,35 +75,27 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 	adapterAdded := false
 	routes := make([]topologyRoute, 0, len(p.Routes))
 	for _, route := range p.Routes {
-		if len(route.Targets) != 1 {
-			return fail(db.Close, fmt.Errorf("route %q requires one target until bounded fallback is implemented", route.ID))
-		}
 		if !adapterAdded {
 			components = append(components, topologyComponent{ID: "responses-adapter", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter})
 			adapterAdded = true
-		}
-		target := route.Targets[0]
-		connector := components[0]
-		for _, candidate := range components {
-			if candidate.ID == core.InstanceID(target.Connector) {
-				connector = candidate
-				break
-			}
-		}
-		if p.Server.MaxRequestBytes < connector.MaxBodyBytes {
-			connector.MaxBodyBytes = p.Server.MaxRequestBytes
-			for i := range components {
-				if components[i].ID == connector.ID {
-					components[i].MaxBodyBytes = connector.MaxBodyBytes
-				}
-			}
 		}
 		budget := core.RouteBudget{UnknownEstimate: route.Budget.UnknownEstimate}
 		if route.Budget.ConservativeTokens != nil {
 			budget.ConservativeTokens = *route.Budget.ConservativeTokens
 		}
-		routes = append(routes, topologyRoute{Protocol: route.Protocol, Mode: core.ModeNative, Model: route.Model, Account: target.Account,
-			Adapter: "responses-adapter", Connector: core.InstanceID(target.Connector), Budget: budget, BudgetPolicy: route.Budget.UnknownEstimate, RouteID: route.ID})
+		requirements := make([]core.Capability, len(route.Requirements))
+		for i, capability := range route.Requirements {
+			requirements[i] = core.Capability(capability)
+		}
+		for _, target := range route.Targets {
+			for i := range components {
+				if components[i].ID == core.InstanceID(target.Connector) && p.Server.MaxRequestBytes < components[i].MaxBodyBytes {
+					components[i].MaxBodyBytes = p.Server.MaxRequestBytes
+				}
+			}
+			routes = append(routes, topologyRoute{Protocol: route.Protocol, Mode: core.ModeNative, Model: route.Model, Account: target.Account,
+				Adapter: "responses-adapter", Connector: core.InstanceID(target.Connector), Budget: budget, BudgetPolicy: route.Budget.UnknownEstimate, RouteID: route.ID, CandidateGroup: route.ID, Requirements: requirements})
+		}
 	}
 	c.DatabasePath, c.MasterKeyFile = p.Storage.Path, p.Secrets.MasterKeyFile
 	c.Listen, c.ShutdownTimeout = p.Server.Listen, p.Server.ShutdownTimeout

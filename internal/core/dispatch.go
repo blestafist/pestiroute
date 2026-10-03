@@ -14,6 +14,12 @@ import (
 const m1Protocol = "openai.responses.v1"
 const m1Model = "gpt-5.4-mini"
 
+var (
+	ErrRouteUnavailable  = errors.New("route table unavailable")
+	ErrCandidateAffinity = errors.New("candidate group requires known stateless affinity")
+	ErrCandidateLimits   = errors.New("candidate route limits require measured ingress headers")
+)
+
 // AttemptScope is runtime-owned; client metadata is never used for selection.
 type AttemptScope struct {
 	ID        string
@@ -132,17 +138,28 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		if mode == "" {
 			mode = ModeNative
 		}
+		candidates := d.Routes.Candidates(in, mode, d.AccountID)
+		if len(candidates) == 0 {
+			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
+		}
+		if len(candidates) > 1 && (in.Metadata.SessionBound || !in.Metadata.AffinityKnown) {
+			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
+		}
 		selection, err := d.Routes.Select(ctx, in, SelectionContext{Mode: mode, AccountID: d.AccountID})
 		if err != nil {
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
+		}
+		if selection.Route.MaxBodyBytes > 0 && int64(len(in.Payload.Body)) > selection.Route.MaxBodyBytes ||
+			selection.Route.MaxHeaderBytes > 0 && (in.Metadata.IngressHeaderBytes == 0 || in.Metadata.IngressHeaderBytes > selection.Route.MaxHeaderBytes) {
+			return ExecutionResponse{}, &GatewayError{Code: "invalid_request", Category: CategoryInvalidRequest, Message: "Request too large for target limits"}
 		}
 		var ok bool
 		connector, ok = selection.Connector.(Connector)
 		if !ok || d.Services == nil {
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 		}
-		scope := CapabilityScope{Protocol: in.Payload.Protocol, Mode: mode, Model: in.Model, AccountID: d.AccountID}
 		if protected {
+			var err error
 			authorization, err = LoadCandidateAuthorization(ctx, d.Policies)
 			if err != nil {
 				return ExecutionResponse{}, authorizationError(err)
@@ -151,14 +168,18 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 				return ExecutionResponse{}, authorizationError(err)
 			}
 		}
+		scope := CapabilityScope{Protocol: in.Payload.Protocol, Mode: mode, Model: in.Model, AccountID: d.AccountID}
 		candidate := EligibilityCandidate{
 			Scope: scope, Adapter: selection.Adapter.Descriptor(), Connector: selection.Connector.Descriptor(),
 			InitializedAndReady: true, AdapterCapabilityScope: scope, ConnectorCapabilityScope: scope,
 			AdapterCapabilities: selection.Adapter.Capabilities(ctx, scope), ConnectorCapabilities: selection.Connector.Capabilities(ctx, scope),
 		}
-		requirements := EligibilityRequirements{Request: make(map[Capability]struct{}, len(in.Capabilities))}
+		requirements := EligibilityRequirements{Request: make(map[Capability]struct{}, len(in.Capabilities)), Route: make(map[Capability]struct{}, len(selection.Route.Requirements))}
 		for capability := range in.Capabilities {
 			requirements.Request[capability] = struct{}{}
+		}
+		for _, capability := range selection.Route.Requirements {
+			requirements.Route[capability] = struct{}{}
 		}
 		if protected {
 			if authErr := authorization.AuthorizeEligibility(scope, candidate, requirements); authErr != nil {
@@ -167,10 +188,8 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 				}
 				return ExecutionResponse{}, &GatewayError{Code: "unsupported_capability", Category: CategoryUnsupportedFeature, Message: "Unsupported required capability"}
 			}
-		} else {
-			if candidate.Eligible(scope, requirements) != nil {
-				return ExecutionResponse{}, &GatewayError{Code: "unsupported_capability", Category: CategoryUnsupportedFeature, Message: "Unsupported required capability"}
-			}
+		} else if candidate.Eligible(scope, requirements) != nil {
+			return ExecutionResponse{}, &GatewayError{Code: "unsupported_capability", Category: CategoryUnsupportedFeature, Message: "Unsupported required capability"}
 		}
 		route, adapterID, connectorID = selection.Route.Identity, selection.Route.Adapter, selection.Route.Connector
 	}
@@ -323,6 +342,91 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	s.stop = context.AfterFunc(ctx, func() { s.Close() })
 	s.stopMu.Unlock()
 	return ExecutionResponse{Stream: s}, nil
+}
+
+// AuthorizedCandidates returns eligible route targets in configured order. It
+// performs no estimation, accounting admission, or execution; retry policy and
+// attempt creation remain owned by the later retry/fallback flow.
+func (d *Dispatcher) AuthorizedCandidates(ctx context.Context, in ExecutionRequest) ([]RouteSelection, error) {
+	if d == nil || d.Routes == nil {
+		return nil, ErrRouteUnavailable
+	}
+	mode := d.Mode
+	if mode == "" {
+		mode = ModeNative
+	}
+	routes := d.Routes.Candidates(in, mode, d.AccountID)
+	if len(routes) > 1 && (in.Metadata.SessionBound || !in.Metadata.AffinityKnown) {
+		return nil, ErrCandidateAffinity
+	}
+	_, principalPresent := TrustedPrincipalFromContext(ctx)
+	protected := principalPresent || d.Policies != nil
+	var authorization CandidateAuthorization
+	if protected {
+		var err error
+		authorization, err = LoadCandidateAuthorization(ctx, d.Policies)
+		if err != nil {
+			return nil, err
+		}
+	}
+	eligible := make([]RouteSelection, 0, len(routes))
+	for _, route := range routes {
+		if route.MaxBodyBytes > 0 && int64(len(in.Payload.Body)) > route.MaxBodyBytes {
+			continue
+		}
+		if route.MaxHeaderBytes > 0 {
+			if in.Metadata.IngressHeaderBytes == 0 {
+				return nil, ErrCandidateLimits
+			}
+			if in.Metadata.IngressHeaderBytes > route.MaxHeaderBytes {
+				continue
+			}
+		}
+		selection, err := d.Routes.Select(ctx, in, SelectionContext{Mode: mode, AccountID: route.Identity.AccountID})
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		if _, ok := selection.Connector.(Connector); !ok || d.Services == nil {
+			continue
+		}
+		if protected {
+			if err := authorization.AuthorizeTarget(ctx, in.Model, string(route.Connector), route.Identity.AccountID, d.Accounts); err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				continue
+			}
+		}
+		scope := CapabilityScope{Protocol: in.Payload.Protocol, Mode: mode, Model: in.Model, AccountID: route.Identity.AccountID}
+		requirements := EligibilityRequirements{Request: make(map[Capability]struct{}, len(in.Capabilities)), Route: make(map[Capability]struct{}, len(route.Requirements))}
+		for capability := range in.Capabilities {
+			requirements.Request[capability] = struct{}{}
+		}
+		for _, capability := range route.Requirements {
+			requirements.Route[capability] = struct{}{}
+		}
+		candidate := EligibilityCandidate{
+			Scope: scope, Adapter: selection.Adapter.Descriptor(), Connector: selection.Connector.Descriptor(),
+			InitializedAndReady: true, AdapterCapabilityScope: scope, ConnectorCapabilityScope: scope,
+			AdapterCapabilities: selection.Adapter.Capabilities(ctx, scope), ConnectorCapabilities: selection.Connector.Capabilities(ctx, scope),
+		}
+		if protected {
+			err = authorization.AuthorizeEligibility(scope, candidate, requirements)
+		} else {
+			err = candidate.Eligible(scope, requirements)
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		eligible = append(eligible, selection)
+	}
+	return eligible, nil
 }
 
 func executionError(err error) *GatewayError {

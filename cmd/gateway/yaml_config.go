@@ -291,6 +291,8 @@ func validateProtectedConfig(c protectedConfig) error {
 			return fmt.Errorf("%s.targets must be non-empty", prefix)
 		}
 		seenTargets := make(map[routeTarget]struct{}, len(route.Targets))
+		seenAccounts := make(map[string]struct{}, len(route.Targets))
+		seenConnectors := make(map[string]struct{}, len(route.Targets))
 		for j, target := range route.Targets {
 			if _, ok := connectors[target.Connector]; !ok || strings.TrimSpace(target.Account) == "" {
 				return fmt.Errorf("%s.targets[%d] has unknown connector or empty account", prefix, j)
@@ -298,7 +300,15 @@ func validateProtectedConfig(c protectedConfig) error {
 			if _, exists := seenTargets[target]; exists {
 				return fmt.Errorf("%s.targets contains duplicate connector/account target", prefix)
 			}
+			if _, exists := seenAccounts[target.Account]; exists {
+				return fmt.Errorf("%s.targets contains conflicting account target", prefix)
+			}
+			if _, exists := seenConnectors[target.Connector]; exists {
+				return fmt.Errorf("%s.targets contains conflicting connector target", prefix)
+			}
 			seenTargets[target] = struct{}{}
+			seenAccounts[target.Account] = struct{}{}
+			seenConnectors[target.Connector] = struct{}{}
 		}
 		if err := validateUniqueStrings(prefix+".requirements", route.Requirements); err != nil {
 			return err

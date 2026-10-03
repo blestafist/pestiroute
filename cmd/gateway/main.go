@@ -74,16 +74,18 @@ type topologyComponent struct {
 }
 
 type topologyRoute struct {
-	Protocol     string                                   `json:"protocol"`
-	Mode         string                                   `json:"mode"`
-	Model        string                                   `json:"model"`
-	Account      string                                   `json:"account"`
-	Adapter      core.InstanceID                          `json:"adapter"`
-	Connector    core.InstanceID                          `json:"connector"`
-	Capabilities map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
-	Budget       core.RouteBudget                         `json:"-"`
-	BudgetPolicy string                                   `json:"-"`
-	RouteID      string                                   `json:"-"`
+	Protocol       string                                   `json:"protocol"`
+	Mode           string                                   `json:"mode"`
+	Model          string                                   `json:"model"`
+	Account        string                                   `json:"account"`
+	Adapter        core.InstanceID                          `json:"adapter"`
+	Connector      core.InstanceID                          `json:"connector"`
+	Capabilities   map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	Requirements   []core.Capability                        `json:"-"`
+	Budget         core.RouteBudget                         `json:"-"`
+	BudgetPolicy   string                                   `json:"-"`
+	RouteID        string                                   `json:"-"`
+	CandidateGroup string                                   `json:"-"`
 }
 
 // secret stays in runtime state, never in configuration output or diagnostics.
@@ -642,12 +644,11 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	credentials := make(map[string]map[string]string)
 	models := make(map[string]topologyRoute)
 	for _, item := range c.Routes {
-		if previous, ok := models[item.Model]; ok && previous.Account != item.Account {
-			cleanup()
-			return nil, nil, fmt.Errorf("model %q has ambiguous account routes", item.Model)
+		if _, ok := models[item.Model]; !ok {
+			models[item.Model] = item
 		}
-		models[item.Model] = item
-		routes = append(routes, core.Route{Identity: core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: item.Protocol, Mode: item.Mode, Model: item.Model}, AccountID: item.Account}, Adapter: item.Adapter, Connector: item.Connector})
+		limits := connectorLimits[item.Connector]
+		routes = append(routes, core.Route{Identity: core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: item.Protocol, Mode: item.Mode, Model: item.Model}, AccountID: item.Account}, Adapter: item.Adapter, Connector: item.Connector, CandidateGroup: item.CandidateGroup, MaxBodyBytes: limits.MaxBodyBytes, MaxHeaderBytes: limits.MaxHeaderBytes, Requirements: item.Requirements})
 		credentials[item.Account] = map[string]string{"bearer": credentialEnv(c, item.Connector)}
 	}
 	table, err := core.NewRouteTable(routes, registry)
@@ -699,15 +700,16 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	}
 	dispatchers := make(map[string]*core.Dispatcher, len(models))
 	protocolAdapters := make(map[string]core.ProtocolAdapter, len(models))
-	routeLimits := make(map[string]adapterConfig, len(models))
 	for _, route := range c.Routes {
+		if _, exists := dispatchers[route.Model]; exists {
+			continue
+		}
 		component, _, ok := registry.Admit(context.Background(), route.Adapter)
 		if !ok {
 			cleanup()
 			return nil, nil, fmt.Errorf("adapter %q is unavailable", route.Adapter)
 		}
 		protocolAdapters[route.Model] = component.(core.ProtocolAdapter)
-		routeLimits[route.Model] = connectorLimits[route.Connector]
 		dispatchers[route.Model] = &core.Dispatcher{
 			Routes: table, Services: services, Policies: policyStore, Accounts: accountAuthorizer,
 			Accounting: accounting, Budget: route.Budget, BudgetPolicy: route.BudgetPolicy,
@@ -750,8 +752,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			return
 		}
 		protocolAdapter = protocolAdapters[req.Model]
-		limits := routeLimits[req.Model]
-		if gatewayErr := adapter.ValidateRequestLimits(r, int64(len(req.Payload.Body)), limits.MaxBodyBytes, limits.MaxHeaderBytes); gatewayErr != nil {
+		if gatewayErr := adapter.ValidateRequestLimits(r, int64(len(req.Payload.Body)), maxBody, maxHeader); gatewayErr != nil {
 			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
 			return
 		}

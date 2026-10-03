@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,6 +93,118 @@ func TestProtectedStartupValidationAndRecovery(t *testing.T) {
 	}
 	if err := c.processLock.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProtectedMultiTargetAffinityGateAndOrdinaryRequest(t *testing.T) {
+	t.Setenv("PROTECTED_TEST_CREDENTIAL", "synthetic")
+	t.Setenv("PROTECTED_TEST_CREDENTIAL_B", "synthetic-b")
+	_, dbPath, keyPath := protectedFixture(t)
+	ctx := context.Background()
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts, policies := sqlite.NewAccounts(db), sqlite.NewKeyPolicies(db)
+	if _, err := accounts.Create(ctx, sqlite.Account{ID: "account-b", Connector: "upstream-b", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := policies.GetLatest(ctx, "policy-id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err = policies.Update(ctx, policy.ID, policy.Revision, sqlite.UpdateKeyPolicyParams{
+		Enabled: true, Models: policy.Models, Connectors: []string{"upstream", "upstream-b"}, RPM: policy.RPM, TPM: policy.TPM,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := secure.Seal(key, 2, "test-v1", "credentials", "PROTECTED_TEST_CREDENTIAL_B", "account-b", []byte("synthetic-b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{
+		ID: "PROTECTED_TEST_CREDENTIAL_B", AccountID: "account-b", FormatVersion: envelope.FormatVersion,
+		KeyVersion: envelope.KeyVersion, Nonce: envelope.Nonce, Ciphertext: envelope.Ciphertext,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	issued, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var primaryCalls, secondaryCalls atomic.Int32
+	upstream := func(calls *atomic.Int32) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"status":"completed"}`)
+		}))
+	}
+	primary, secondary := upstream(&primaryCalls), upstream(&secondaryCalls)
+	defer primary.Close()
+	defer secondary.Close()
+	c := fixtureProtectedConfig(dbPath, keyPath, "127.0.0.1:0")
+	c.protected.Connectors[0].Settings.BaseURL = primary.URL + "/v1"
+	second := c.protected.Connectors[0]
+	second.ID = "upstream-b"
+	second.Settings.BaseURL = secondary.URL + "/v1"
+	second.Settings.CredentialEnv = "PROTECTED_TEST_CREDENTIAL_B"
+	c.protected.Connectors = append(c.protected.Connectors, second)
+	c.protected.Routes[0].Targets = append(c.protected.Routes[0].Targets, routeTarget{Connector: second.ID, Account: "account-b"})
+	prepared, err := prepareProtectedConfig(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.Routes) != 2 || prepared.Routes[0].CandidateGroup == "" || prepared.Routes[0].CandidateGroup != prepared.Routes[1].CandidateGroup {
+		t.Fatalf("protected target group not normalized: %+v", prepared.Routes)
+	}
+	var ready, draining atomic.Bool
+	handler, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeComponents(context.Background()) }()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	post := func(body string) (*http.Response, []byte) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+issued.Secret)
+		req.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response, data
+	}
+	response, body := post(`{"model":"model-a","previous_response_id":"resp-1","session_bound":false}`)
+	if response.StatusCode != http.StatusBadRequest || !bytes.Contains(body, []byte(`"code":"unsupported_target"`)) || primaryCalls.Load() != 0 || secondaryCalls.Load() != 0 {
+		t.Fatalf("session-bound request status=%d body=%s upstream calls=%d/%d", response.StatusCode, body, primaryCalls.Load(), secondaryCalls.Load())
+	}
+	response, body = post(`{"model":"model-a","input":"stored","store":true}`)
+	if response.StatusCode != http.StatusOK || primaryCalls.Load() != 1 || secondaryCalls.Load() != 0 {
+		t.Fatalf("store=true request status=%d body=%s upstream calls=%d/%d", response.StatusCode, body, primaryCalls.Load(), secondaryCalls.Load())
+	}
+	response, body = post(`{"model":"model-a","input":"ordinary"}`)
+	if response.StatusCode != http.StatusOK || primaryCalls.Load() != 2 || secondaryCalls.Load() != 0 {
+		t.Fatalf("ordinary stored-response request status=%d body=%s upstream calls=%d/%d", response.StatusCode, body, primaryCalls.Load(), secondaryCalls.Load())
 	}
 }
 

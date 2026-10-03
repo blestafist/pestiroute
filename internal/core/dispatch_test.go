@@ -374,6 +374,86 @@ func TestDispatchRouteRegistryEligibilityAndScopedServices(t *testing.T) {
 	}
 }
 
+func TestCandidateSelectionSkipsLimitAndCapabilityDenialsInOrder(t *testing.T) {
+	ctx := context.Background()
+	protocol, model, required, routeRequired := m1Protocol, m1Model, Capability("vendor.required"), Capability("route.required")
+	registry, err := NewRegistry(map[ComponentKind]APIVersion{ComponentAdapter: {Major: 1}, ComponentConnector: {Major: 1}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var adapters [4]*testAdapter
+	var connectors [4]*dispatchConnector
+	routes := make([]Route, 0, 4)
+	for i, account := range []string{"account-a", "account-b", "account-c", "account-d"} {
+		scope := CapabilityScope{Protocol: protocol, Mode: ModeNative, Model: model, AccountID: account}
+		adapters[i] = &testAdapter{registryComponent: registryComponent{descriptor: validDescriptor(ComponentAdapter)}, caps: map[CapabilityScope]CapabilityResult{
+			scope: {Values: map[Capability]CapabilityState{required: Supported, routeRequired: Supported}},
+		}}
+		connectorDescriptor := validDescriptor(ComponentConnector)
+		connectorDescriptor.ID = "scripted-" + account
+		capState := Supported
+		if i == 1 {
+			capState = Unsupported
+		}
+		connectors[i] = &dispatchConnector{registryComponent: registryComponent{descriptor: connectorDescriptor}, caps: map[CapabilityScope]CapabilityResult{
+			scope: {Values: map[Capability]CapabilityState{required: capState, routeRequired: Supported}},
+		}}
+		adapterID, connectorID := InstanceID("adapter-"+account), InstanceID("connector-"+account)
+		if err := registry.Register(adapterID, adapters[i], ComponentAdapter); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.Register(connectorID, connectors[i], ComponentConnector); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.Init(ctx, adapterID, ComponentConfig{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.Init(ctx, connectorID, ComponentConfig{}); err != nil {
+			t.Fatal(err)
+		}
+		bodyLimit := int64(128)
+		if i == 0 {
+			bodyLimit = 1
+		}
+		headerLimit := int64(128)
+		if i == 2 {
+			headerLimit = 1
+		}
+		routes = append(routes, Route{
+			Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: protocol, Mode: ModeNative, Model: model}, AccountID: account},
+			Adapter:  adapterID, Connector: connectorID, CandidateGroup: "group", MaxBodyBytes: bodyLimit, MaxHeaderBytes: headerLimit, Requirements: []Capability{routeRequired},
+		})
+	}
+	table, err := NewRouteTable(routes, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Dispatcher{Routes: table, AccountID: "account-a", Services: &testServices{}}
+	in := request()
+	in.Capabilities = map[Capability]struct{}{required: {}}
+	in.Metadata = RequestMetadata{AffinityKnown: true, IngressHeaderBytes: 2}
+	eligible, err := d.AuthorizedCandidates(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eligible) != 1 || eligible[0].Route.Identity.AccountID != "account-d" {
+		t.Fatalf("eligible candidates = %+v", eligible)
+	}
+	for i, connector := range connectors {
+		if len(connector.calls) != 0 {
+			t.Fatalf("candidate evaluation executed target %d", i)
+		}
+	}
+	in.Metadata.AffinityKnown = false
+	if got, err := d.AuthorizedCandidates(ctx, in); !errors.Is(err, ErrCandidateAffinity) || len(got) != 0 {
+		t.Fatalf("unknown affinity candidates = %+v, error = %v", got, err)
+	}
+	in.Metadata.AffinityKnown, in.Metadata.SessionBound = true, true
+	if got, err := d.AuthorizedCandidates(ctx, in); !errors.Is(err, ErrCandidateAffinity) || len(got) != 0 {
+		t.Fatalf("session-bound candidates = %+v, error = %v", got, err)
+	}
+}
+
 func TestDispatchEligibilityAndIdentity(t *testing.T) {
 	var calls, finals int
 	d := &Dispatcher{AccountID: "selected", Adapter: map[Capability]CapabilityState{"llm.tools": Supported, "llm.reasoning": Supported}, Connector: map[Capability]CapabilityState{"llm.tools": Supported, "llm.reasoning": Supported}}

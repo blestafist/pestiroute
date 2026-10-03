@@ -16,14 +16,18 @@ type accountingTestConnector struct {
 	order      *[]string
 	stream     Stream
 	executeErr *GatewayError
+	estimates  int
+	executions int
 }
 
 func (c *accountingTestConnector) EstimateUsage(context.Context, UsageQuery, InvocationServices) (EstimateResult, *GatewayError) {
+	c.estimates++
 	*c.order = append(*c.order, "estimate")
 	return EstimateResult{Supported: true, Known: true, Usage: &UsageReport{InputTokens: new(int64(2)), OutputTokens: new(int64(3)), Source: UsageEstimate, Completeness: UsageComplete}, Method: "fixture"}, nil
 }
 
 func (c *accountingTestConnector) Execute(_ context.Context, in ExecutionRequest, _ AttemptScope, _ InvocationServices) (ExecutionResponse, *GatewayError) {
+	c.executions++
 	*c.order = append(*c.order, "execute")
 	if c.executeErr != nil {
 		return ExecutionResponse{}, c.executeErr
@@ -151,6 +155,81 @@ func TestDispatchAccountingAdmissionIntentSettlement(t *testing.T) {
 	}
 	if store.admitted.EstimateTokens != 5 || store.admitted.EstimateMethod != "fixture" || store.finals != 1 || store.terminal.Outcome != OutcomeSucceeded || *store.terminal.Usage.InputTokens != 4 {
 		t.Fatalf("admission/terminal accounting = %+v / %+v", store.admitted, store.terminal)
+	}
+}
+
+func TestCandidateAuthorizationPrecedesEstimateAndExecute(t *testing.T) {
+	ctx := authContext()
+	var order []string
+	registry, err := NewRegistry(map[ComponentKind]APIVersion{ComponentAdapter: {Major: 1}, ComponentConnector: {Major: 1}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var routes []Route
+	connectors := make([]*accountingTestConnector, 2)
+	for i, account := range []string{"account-a", "account-b"} {
+		scope := CapabilityScope{Protocol: m1Protocol, Mode: ModeNative, Model: "model", AccountID: account}
+		adapterDescriptor := validDescriptor(ComponentAdapter)
+		adapterDescriptor.ID, adapterDescriptor.Protocols = "adapter-"+account, []string{m1Protocol}
+		connectorDescriptor := validDescriptor(ComponentConnector)
+		connectorDescriptor.ID, connectorDescriptor.Protocols = "connector-"+account, []string{m1Protocol}
+		caps := map[CapabilityScope]CapabilityResult{scope: {Values: map[Capability]CapabilityState{}}}
+		adapter := &testAdapter{registryComponent: registryComponent{descriptor: adapterDescriptor}, caps: caps}
+		connectors[i] = &accountingTestConnector{order: &order}
+		connectors[i].dispatchConnector.registryComponent.descriptor = connectorDescriptor
+		connectors[i].dispatchConnector.caps = caps
+		for id, component := range map[InstanceID]Component{InstanceID(adapterDescriptor.ID): adapter, InstanceID(connectorDescriptor.ID): connectors[i]} {
+			if err := registry.Register(id, component, component.Descriptor().Kind); err != nil {
+				t.Fatal(err)
+			}
+			if err := registry.Init(ctx, id, ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		routes = append(routes, Route{
+			Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: m1Protocol, Mode: ModeNative, Model: "model"}, AccountID: account},
+			Adapter:  InstanceID(adapterDescriptor.ID), Connector: InstanceID(connectorDescriptor.ID), CandidateGroup: "route",
+			MaxBodyBytes: 1024, MaxHeaderBytes: 1024,
+		})
+	}
+	table, err := NewRouteTable(routes, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &accountingTestStore{order: &order}
+	d := &Dispatcher{
+		Routes: table, Services: &testServices{}, Policies: &authorizationPolicyStore{snapshot: PolicySnapshot{
+			ID: "policy", Revision: 3, Enabled: true, Models: []string{"model"}, Connectors: []string{"connector-account-b"},
+		}}, Accounts: authorizationAccount{}, Accounting: store, Budget: RouteBudget{UnknownEstimate: UnknownEstimateReject},
+		BudgetPolicy: "known", RouteID: "candidate-test-route", AccountID: "account-a",
+	}
+	in := ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol, Body: []byte("opaque")}, Metadata: RequestMetadata{AffinityKnown: true, IngressHeaderBytes: 1}}
+	for _, metadata := range []RequestMetadata{
+		{AffinityKnown: false, IngressHeaderBytes: 1},
+		{AffinityKnown: true, SessionBound: true, IngressHeaderBytes: 1},
+	} {
+		in.Metadata = metadata
+		if _, gatewayErr := d.Execute(ctx, in); gatewayErr == nil || gatewayErr.Code != "unsupported_target" {
+			t.Fatalf("affinity gate error = %#v", gatewayErr)
+		}
+	}
+	in.Metadata = RequestMetadata{AffinityKnown: true}
+	if candidates, err := d.AuthorizedCandidates(ctx, in); !errors.Is(err, ErrCandidateLimits) || len(candidates) != 0 {
+		t.Fatalf("missing ingress-header measurement candidates=%+v error=%v", candidates, err)
+	}
+	if _, gatewayErr := d.Execute(ctx, in); gatewayErr == nil || gatewayErr.Code != "invalid_request" {
+		t.Fatalf("missing ingress-header measurement dispatch error=%#v", gatewayErr)
+	}
+	in.Metadata = RequestMetadata{AffinityKnown: true, IngressHeaderBytes: 1}
+	eligible, err := d.AuthorizedCandidates(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eligible) != 1 || eligible[0].Route.Identity.AccountID != "account-b" {
+		t.Fatalf("authorized candidates = %+v", eligible)
+	}
+	if len(order) != 0 || store.admits != 0 || store.intents != 0 || store.finals != 0 || connectors[0].estimates != 0 || connectors[0].executions != 0 || connectors[1].estimates != 0 || connectors[1].executions != 0 {
+		t.Fatalf("candidate selection must not estimate or execute: order=%v targets=%+v / %+v", order, connectors[0], connectors[1])
 	}
 }
 

@@ -154,7 +154,11 @@ func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.Execution
 	if json.Unmarshal(fields["model"], &selected) != nil || strings.TrimSpace(selected) == "" {
 		return empty, invalid("Invalid model")
 	}
-	req := core.ExecutionRequest{Model: selected, Capabilities: make(map[core.Capability]struct{}), Metadata: core.RequestMetadata{Headers: headers}, Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: body}}
+	affinityKnown, sessionBound := classifyAffinity(fields)
+	req := core.ExecutionRequest{Model: selected, Capabilities: make(map[core.Capability]struct{}), Metadata: core.RequestMetadata{
+		Headers: headers, AffinityKnown: affinityKnown, SessionBound: sessionBound,
+		IngressHeaderBytes: ingressHeaderBytes(r),
+	}, Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: body}}
 	if raw, ok := fields["stream"]; ok {
 		var value bool
 		if json.Unmarshal(raw, &value) != nil || string(raw) == "null" {
@@ -230,6 +234,63 @@ func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.Execution
 		}
 	}
 	return req, nil
+}
+
+// classifyAffinity consumes only recognized routing/resource references. Other
+// request fields remain opaque and cannot be used by Core for route selection.
+func classifyAffinity(fields map[string]json.RawMessage) (known, sessionBound bool) {
+	for _, field := range []string{"previous_response_id", "conversation"} {
+		if raw, ok := fields[field]; ok {
+			var id *string
+			if err := json.Unmarshal(raw, &id); err == nil {
+				if id == nil {
+					continue
+				}
+				if *id == "" {
+					return false, false
+				}
+				return true, true
+			}
+			if field == "conversation" {
+				var param struct {
+					ID string `json:"id"`
+				}
+				if json.Unmarshal(raw, &param) == nil && param.ID != "" {
+					return true, true
+				}
+			}
+			return false, false
+		}
+	}
+	if raw, ok := fields["background"]; ok {
+		var enabled *bool
+		if json.Unmarshal(raw, &enabled) != nil {
+			return false, false
+		}
+		if enabled != nil && *enabled {
+			// Background execution is not portable, but carries no proven affinity ID.
+			return false, false
+		}
+	}
+	if raw, ok := fields["store"]; ok {
+		var store *bool
+		if json.Unmarshal(raw, &store) != nil {
+			return false, false
+		}
+		// store applies to the generated response, not an inbound resource.
+	}
+	return true, false
+}
+
+func ingressHeaderBytes(r *http.Request) int64 {
+	var size int64
+	for name, values := range r.Header {
+		size += int64(len(name))
+		for _, value := range values {
+			size += int64(len(value))
+		}
+	}
+	return size
 }
 
 // uniqueJSON checks opaque subtrees too: a later duplicate key must not

@@ -103,6 +103,43 @@ func TestDecodeAcceptsOpaqueModelIdentifiers(t *testing.T) {
 	}
 }
 
+func TestDecodeMarksTrustedAffinityWithoutRewritingBody(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		known    bool
+		stateful bool
+	}{
+		{name: "stateless", body: base, known: true},
+		{name: "previous response and forged metadata", body: `{"model":"gpt-5.4-mini","previous_response_id":"resp_123","session_bound":false,"affinity_known":true}`, known: true, stateful: true},
+		{name: "null previous response reference", body: `{"model":"gpt-5.4-mini","previous_response_id":null}`, known: true},
+		{name: "conversation resource", body: `{"model":"gpt-5.4-mini","conversation":"conv_123"}`, known: true, stateful: true},
+		{name: "conversation object resource", body: `{"model":"gpt-5.4-mini","conversation":{"id":"conv_123"}}`, known: true, stateful: true},
+		{name: "null conversation reference", body: `{"model":"gpt-5.4-mini","conversation":null}`, known: true},
+		{name: "background omitted defaults to false", body: base, known: true},
+		{name: "background false", body: `{"model":"gpt-5.4-mini","background":false}`, known: true},
+		{name: "background null", body: `{"model":"gpt-5.4-mini","background":null}`, known: true},
+		{name: "background true", body: `{"model":"gpt-5.4-mini","background":true}`},
+		{name: "background invalid type", body: `{"model":"gpt-5.4-mini","background":"true"}`},
+		{name: "stored response omitted defaults to true", body: base, known: true},
+		{name: "stored response explicitly true", body: `{"model":"gpt-5.4-mini","store":true}`, known: true},
+		{name: "stored response disabled", body: `{"model":"gpt-5.4-mini","store":false}`, known: true},
+		{name: "stored response null", body: `{"model":"gpt-5.4-mini","store":null}`, known: true},
+		{name: "invalid store marker", body: `{"model":"gpt-5.4-mini","store":"yes"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Decode(request(tc.body), int64(len(tc.body)), 4096)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Metadata.AffinityKnown != tc.known || got.Metadata.SessionBound != tc.stateful ||
+				got.Metadata.IngressHeaderBytes == 0 || string(got.Payload.Body) != tc.body {
+				t.Fatalf("metadata/body = %+v / %q", got.Metadata, got.Payload.Body)
+			}
+		})
+	}
+}
+
 func TestDecodeInvalid(t *testing.T) {
 	cases := []struct {
 		name, body, header, value string

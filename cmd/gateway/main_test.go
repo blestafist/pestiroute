@@ -1410,6 +1410,7 @@ policies: {standard: policy-id-a}
 		{"retry without deadline", strings.Replace(valid, "retry: {max_attempts: 1}", "retry: {max_attempts: 2}", 1)},
 		{"retry zero attempts", strings.Replace(valid, "retry: {max_attempts: 1}", "retry: {max_attempts: 0}", 1)},
 		{"duplicate target", strings.Replace(valid, "      - {connector: upstream, account: account-a}", "      - {connector: upstream, account: account-a}\n      - {connector: upstream, account: account-a}", 1)},
+		{"conflicting connector target", strings.Replace(valid, "      - {connector: upstream, account: account-a}", "      - {connector: upstream, account: account-a}\n      - {connector: upstream, account: account-b}", 1)},
 		{"invalid url", strings.Replace(valid, "https://backend.example/v1", "http://example.test/v1", 1)},
 		{"credential absent", strings.Replace(valid, "PESTIROUTE_YAML_TEST_KEY", "PESTIROUTE_UNSET_YAML_KEY", 1)},
 	} {
