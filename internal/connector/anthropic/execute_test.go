@@ -27,6 +27,20 @@ func executeConnector(t *testing.T) *Connector {
 	return c
 }
 
+func TestExecuteRejectsReasoningBeforeTransport(t *testing.T) {
+	c := executeConnector(t)
+	_, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{
+		Model: "gpt-4.1-mini",
+		Payload: core.RawPayload{
+			Protocol: protocol,
+			Body:     []byte(`{"model":"gpt-4.1-mini","stream":true,"reasoning":{"effort":"high"},"input":"hello"}`),
+		},
+	}, core.AttemptScope{Mode: core.ModeTranslation, AccountID: "account-a"}, core.InvocationServices{})
+	if gatewayErr == nil || gatewayErr.Category != core.CategoryInvalidRequest {
+		t.Fatalf("Execute() error = %+v, want local invalid_request before credentials/transport", gatewayErr)
+	}
+}
+
 func TestExecuteStreamTranslateEarlyHeadAndUsage(t *testing.T) {
 	first := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"
 	terminal := "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"

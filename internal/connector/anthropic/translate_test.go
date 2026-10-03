@@ -379,17 +379,46 @@ func TestTranslateHistoryRejectsUnrepresentableRequests(t *testing.T) {
 func TestReasoningRequestsFailClosed(t *testing.T) {
 	base := `"model":"client-model","stream":true,"input":`
 	tests := map[string]string{
-		"effort":              `{` + base + `"hi","reasoning":{"effort":"high"}}`,
-		"summary":             `{` + base + `"hi","reasoning":{"summary":"auto"}}`,
-		"reasoning item":      `{` + base + `[{"type":"reasoning","summary":[]}]}`,
-		"reasoning text part": `{` + base + `[{"type":"message","role":"assistant","content":[{"type":"reasoning_text","text":"hidden"}]}]}`,
-		"encrypted item":      `{` + base + `[{"type":"reasoning","encrypted_content":"opaque"}]}`,
+		"effort":                    `{` + base + `"hi","reasoning":{"effort":"high"}}`,
+		"summary":                   `{` + base + `"hi","reasoning":{"summary":"auto"}}`,
+		"unknown reasoning control": `{` + base + `"hi","reasoning":{"provider_mode":"adaptive"}}`,
+		"reasoning item":            `{` + base + `[{"type":"reasoning","summary":[]}]}`,
+		"reasoning provider state":  `{` + base + `[{"type":"reasoning","provider_state":"opaque"}]}`,
+		"encrypted item":            `{` + base + `[{"type":"reasoning","encrypted_content":"opaque"}]}`,
+		"reasoning text part":       `{` + base + `[{"type":"message","role":"assistant","content":[{"type":"reasoning_text","text":"hidden"}]}]}`,
+		"thinking content part":     `{` + base + `[{"type":"message","role":"assistant","content":[{"type":"thinking","thinking":"hidden","signature":"opaque"}]}]}`,
+		"redacted content part":     `{` + base + `[{"type":"message","role":"assistant","content":[{"type":"redacted_thinking","data":"opaque"}]}]}`,
+		"synthetic signature state": `{` + base + `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi","signature":"opaque"}]}]}`,
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
-			if _, gatewayErr := translateRequest([]byte(body)); gatewayErr == nil || gatewayErr.Category != "invalid_request" {
+			request := []byte(body)
+			original := bytes.Clone(request)
+			if _, gatewayErr := translateRequest(request); gatewayErr == nil || gatewayErr.Category != "invalid_request" {
 				t.Fatalf("translateRequest() error = %+v, want local invalid_request", gatewayErr)
 			}
+			if !bytes.Equal(request, original) {
+				t.Fatal("rejected translation mutated request bytes")
+			}
 		})
+	}
+}
+
+func TestReasoningIncludeRemainsHarmless(t *testing.T) {
+	body := []byte(`{"model":"client-model","stream":true,"include":["reasoning.encrypted_content"],"input":"hello"}`)
+	original := bytes.Clone(body)
+	translated, gatewayErr := translateRequest(body)
+	if gatewayErr != nil {
+		t.Fatalf("translateRequest() error = %+v", gatewayErr)
+	}
+	if !bytes.Equal(body, original) {
+		t.Fatal("translation mutated admitted request bytes")
+	}
+	wire, err := json.Marshal(translated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(wire, []byte("reasoning")) || bytes.Contains(wire, []byte("encrypted_content")) {
+		t.Fatalf("harmless include produced reasoning state: %s", wire)
 	}
 }
