@@ -27,20 +27,20 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: commit verified M4-013 streaming translation Execute
+## Immediate focus: commit verified M4-014 strict YAML translation settings and routes
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
 Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-011](tasks/M4-011.md)
-are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) is committed
-locally on `dev-m4` (`1c308c0`).
+are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`) and
+[M4-013](tasks/M4-013.md) (`594d684`) are committed locally on `dev-m4` ahead 2 of origin.
 
-[M4-013](tasks/M4-013.md) is verified and reviewed (reviewer PASS `ses_efd817efeffeURd6zTQhPwys5t`).
-It connects Anthropic Messages streaming Execute to incremental Responses SSE Body frames,
-with pre-dispatch validation rejection, HTTP error classification before Head, early Head frame,
-gated delta delivery, truthful Complete/EOF, and Close/cancellation teardown. Scoped commit is
-pending. Execution remains bounded to at most 5 additional newly DONE tasks in this continuation
-session (13 newly DONE across M4, 18 total cap), with no backlog expansion.
+[M4-014](tasks/M4-014.md) is verified and reviewed (reviewer PASS `ses_efd74936cffeWEqi116Z8PGKi3`).
+14 tasks are newly DONE across M4 (18 total cap, at most 4 additional newly DONE tasks in this
+continuation phase), with no backlog expansion. It delivers strict Anthropic YAML connector/routes,
+enforces mandatory `conservative_tokens >= 4096` reserve floor (single and multi-target), preserves
+native/legacy compatibility, and ensures protected startup fails closed pending M4-015 composition.
+Scoped commit is pending.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

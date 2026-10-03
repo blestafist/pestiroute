@@ -75,6 +75,9 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 
 	components := make([]topologyComponent, 0, len(p.Connectors))
 	for _, item := range p.Connectors {
+		if item.Implementation != "pestiroute.responses.native" {
+			return fail(db.Close, fmt.Errorf("connector %q: translation composition is not wired", item.ID))
+		}
 		s := item.Settings
 		components = append(components, topologyComponent{ID: core.InstanceID(item.ID), Implementation: item.Implementation, Kind: core.ComponentConnector,
 			Endpoint: s.BaseURL, CredentialEnv: s.CredentialEnv, MaxBodyBytes: s.MaxRequestBodyBytes, MaxHeaderBytes: s.MaxRequestHeaderBytes,
@@ -108,13 +111,17 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 		for i, capability := range route.Requirements {
 			requirements[i] = core.Capability(capability)
 		}
+		mode := core.ModeNative
+		if route.Mode == "translation" {
+			mode = core.ModeTranslation
+		}
 		for _, target := range route.Targets {
 			for i := range components {
 				if components[i].ID == core.InstanceID(target.Connector) && p.Server.MaxRequestBytes < components[i].MaxBodyBytes {
 					components[i].MaxBodyBytes = p.Server.MaxRequestBytes
 				}
 			}
-			routes = append(routes, topologyRoute{Protocol: route.Protocol, Mode: core.ModeNative, Model: route.Model, Account: target.Account,
+			routes = append(routes, topologyRoute{Protocol: route.Protocol, Mode: mode, Model: route.Model, Account: target.Account,
 				Adapter: "responses-adapter", Connector: core.InstanceID(target.Connector), Budget: budget, BudgetPolicy: route.Budget.UnknownEstimate, RouteID: route.ID, CandidateGroup: route.ID, Requirements: requirements,
 				RetryMaxAttempts: maxAttempts, RetryDeadline: retryDeadline})
 		}
