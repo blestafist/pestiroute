@@ -54,6 +54,9 @@ type config struct {
 	routeID               string
 	logger                *slog.Logger
 	protected             *protectedConfig
+	runtimeDB             *sql.DB
+	runtimeKey            secure.MasterKey
+	processLock           *sqlite.ProcessLock
 }
 
 type topologyComponent struct {
@@ -98,6 +101,9 @@ func (c config) String() string {
 	c.policyStore = nil
 	c.accountAuthorizer = nil
 	c.accounting = nil
+	c.runtimeDB = nil
+	c.runtimeKey = secure.MasterKey{}
+	c.processLock = nil
 	c.logger = nil
 	type view config
 	return fmt.Sprintf("%+v", view(c))
@@ -522,23 +528,25 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			return nil, nil, err
 		}
 	}
-	var persistentDB *sql.DB
-	var persistentKey secure.MasterKey
+	persistentDB := c.runtimeDB
+	persistentKey := c.runtimeKey
 	if c.DatabasePath != "" {
-		key, err := secure.LoadMasterKey(c.MasterKeyFile)
-		if err != nil {
-			return nil, nil, errors.New("invalid runtime master key file")
+		if persistentDB == nil {
+			key, err := secure.LoadMasterKey(c.MasterKeyFile)
+			if err != nil {
+				return nil, nil, errors.New("invalid runtime master key file")
+			}
+			db, err := sqlite.Open(c.DatabasePath)
+			if err != nil {
+				return nil, nil, errors.New("cannot open runtime database")
+			}
+			version, err := sqlite.SchemaVersion(context.Background(), db)
+			if err != nil || version != sqlite.CurrentSchemaVersion() {
+				_ = db.Close()
+				return nil, nil, errors.New("runtime database is not fully migrated")
+			}
+			persistentDB, persistentKey = db, key
 		}
-		db, err := sqlite.Open(c.DatabasePath)
-		if err != nil {
-			return nil, nil, errors.New("cannot open runtime database")
-		}
-		version, err := sqlite.SchemaVersion(context.Background(), db)
-		if err != nil || version != sqlite.CurrentSchemaVersion() {
-			_ = db.Close()
-			return nil, nil, errors.New("runtime database is not fully migrated")
-		}
-		persistentDB, persistentKey = db, key
 	}
 	keyStore := c.keyStore
 	if keyStore == nil && persistentDB != nil {
@@ -563,6 +571,9 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 				closeErr = registry.Close(ctx)
 				if persistentDB != nil {
 					closeErr = errors.Join(closeErr, persistentDB.Close())
+				}
+				if c.processLock != nil {
+					closeErr = errors.Join(closeErr, c.processLock.Close())
 				}
 				close(closeDone)
 			}()
@@ -906,12 +917,22 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 		return err
 	}
 	if c.protected != nil {
-		return errors.New("protected YAML passed schema validation, but SQLite reference verification and protected runtime composition are not implemented (M3-030)")
+		prepared, err := prepareProtectedConfig(ctx, c)
+		if err != nil {
+			return err
+		}
+		c = prepared
 	}
 	var ready atomic.Bool
 	var draining atomic.Bool
 	h, closeTransport, err := composeHandler(c, &ready, &draining, finalize)
 	if err != nil {
+		if c.runtimeDB != nil {
+			_ = c.runtimeDB.Close()
+		}
+		if c.processLock != nil {
+			_ = c.processLock.Close()
+		}
 		return fmt.Errorf("initialize gateway: %w", err)
 	}
 	listener, err := net.Listen("tcp", c.Listen)

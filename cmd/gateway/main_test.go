@@ -1421,8 +1421,8 @@ policies: {standard: policy-id-a}
 		})
 	}
 	write(valid)
-	if err := run(context.Background(), []string{"-config-format", "yaml", "-config", path}); err == nil || !strings.Contains(err.Error(), "M3-030") {
-		t.Fatalf("protected startup did not stop at documented composition blocker: %v", err)
+	if err := run(context.Background(), []string{"-config-format", "yaml", "-config", path}); err == nil {
+		t.Fatal("protected startup accepted missing runtime state")
 	}
 	if err := os.WriteFile(path, []byte{0xff}, 0600); err != nil {
 		t.Fatal(err)
