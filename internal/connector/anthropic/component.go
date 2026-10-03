@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -29,11 +30,14 @@ type Connector struct {
 	accountID string
 	state     core.HealthState
 	closed    bool
+	transport *Transport
 }
 
 var _ core.Connector = (*Connector)(nil)
 
-func NewConnector() *Connector { return &Connector{state: core.HealthUnknown} }
+func NewConnector() *Connector {
+	return &Connector{state: core.HealthUnknown, transport: NewTransport()}
+}
 
 func (c *Connector) Descriptor() core.Descriptor {
 	return core.Descriptor{
@@ -120,7 +124,7 @@ func (c *Connector) Authenticate(context.Context, core.AuthRequest, core.Invocat
 	return core.AuthResult{Supported: false}, nil
 }
 
-func (c *Connector) Execute(_ context.Context, req core.ExecutionRequest, scope core.AttemptScope, _ core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
+func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
 	c.mu.Lock()
 	ready, model, accountID := c.state == core.HealthReady, c.model, c.accountID
 	c.mu.Unlock()
@@ -136,7 +140,32 @@ func (c *Connector) Execute(_ context.Context, req core.ExecutionRequest, scope 
 	if scope.AccountID != accountID || req.Model != model {
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "scope_mismatch", Category: core.CategoryPermissionDenied, Message: "Execution scope does not match configured target"}
 	}
-	return core.ExecutionResponse{}, &core.GatewayError{Code: "connector_execution_unavailable", Category: core.CategoryUnavailable, Message: "Anthropic connector execution is not available yet"}
+	translated, gatewayErr := translateRequest(req.Payload.Body)
+	if gatewayErr != nil {
+		return core.ExecutionResponse{}, gatewayErr
+	}
+	body, err := json.Marshal(translated)
+	if err != nil {
+		return core.ExecutionResponse{}, &core.GatewayError{Code: "translation_failed", Category: core.CategoryInternal, Message: "Request translation failed"}
+	}
+	upstreamReq := req
+	upstreamReq.Payload.Body = body
+	requestCtx, cancel := context.WithCancel(ctx)
+	resp, err := c.transport.Do(requestCtx, upstreamReq, services)
+	if err != nil {
+		cancel()
+		category, code := core.CategoryUnavailable, "upstream_request_failed"
+		if ctx.Err() != nil {
+			category, code = core.CategoryCancelled, "request_cancelled"
+		}
+		return core.ExecutionResponse{}, &core.GatewayError{Code: code, Category: category, Message: "Upstream request failed"}
+	}
+	if resp.StatusCode != 200 {
+		gatewayErr := classifyHTTPRejection(resp, time.Now())
+		cancel()
+		return core.ExecutionResponse{}, gatewayErr
+	}
+	return core.ExecutionResponse{Stream: newMessagesStream(requestCtx, cancel, resp.Body)}, nil
 }
 
 func (c *Connector) Close(context.Context) error {
@@ -144,5 +173,6 @@ func (c *Connector) Close(context.Context) error {
 	defer c.mu.Unlock()
 	c.closed = true
 	c.state = core.HealthUnavailable
+	c.transport.Close()
 	return nil
 }

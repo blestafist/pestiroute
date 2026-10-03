@@ -27,20 +27,20 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: commit verified M4-012 Responses emitter lifecycle
+## Immediate focus: commit verified M4-013 streaming translation Execute
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
 Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-011](tasks/M4-011.md)
-are verified, reviewed, committed, and confirmed pushed live to `origin/dev-m4`
-(commit `8ec7660`, parent `31cdea4`).
+are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) is committed
+locally on `dev-m4` (`1c308c0`).
 
-[M4-012](tasks/M4-012.md) implementation is fully verified and reviewed (126 package
-race tests, `./scripts/check.sh`, `git diff --check`, reviewer PASS `ses_efd906185ffeCq1e00ukEHpCIX`).
-It delivers the Connector-private Responses SSE event encoder and lifecycle state machine
-for plain text. Scoped commit is pending before next task preparation. Execution remains
-bounded to at most 7 additional newly DONE tasks in this continuation session (18 total across
-M4), with no backlog expansion.
+[M4-013](tasks/M4-013.md) is verified and reviewed (reviewer PASS `ses_efd817efeffeURd6zTQhPwys5t`).
+It connects Anthropic Messages streaming Execute to incremental Responses SSE Body frames,
+with pre-dispatch validation rejection, HTTP error classification before Head, early Head frame,
+gated delta delivery, truthful Complete/EOF, and Close/cancellation teardown. Scoped commit is
+pending. Execution remains bounded to at most 5 additional newly DONE tasks in this continuation
+session (13 newly DONE across M4, 18 total cap), with no backlog expansion.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

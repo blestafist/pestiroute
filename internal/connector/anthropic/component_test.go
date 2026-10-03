@@ -76,8 +76,8 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 		t.Fatalf("usage estimate = %+v, %v", estimate, err)
 	}
 	_, executionErr := c.Execute(context.Background(), core.ExecutionRequest{Model: "gpt-4.1-mini", Payload: core.RawPayload{Protocol: protocol}}, core.AttemptScope{Mode: core.ModeTranslation, AccountID: "account-a"}, core.InvocationServices{})
-	if executionErr == nil || executionErr.Code != "connector_execution_unavailable" {
-		t.Fatalf("pre-execution-card Execute error = %+v", executionErr)
+	if executionErr == nil || executionErr.Code != "invalid_request" {
+		t.Fatalf("invalid Execute payload error = %+v", executionErr)
 	}
 	for _, tc := range []struct {
 		name, protocol, mode, model, account, want string

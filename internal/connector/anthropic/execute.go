@@ -1,0 +1,219 @@
+package anthropic
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"sync"
+
+	"github.com/blestafist/pestiroute/internal/core"
+)
+
+type messagesStream struct {
+	mu       sync.Mutex
+	body     io.ReadCloser
+	reader   *messagesSSEReader
+	cancel   context.CancelFunc
+	ctx      context.Context
+	phase    uint8
+	pending  [][]byte
+	terminal *core.StreamFrame
+	emitter  *responsesEmitter
+	started  bool
+	block    bool
+	stopped  bool
+	stop     string
+	input    int
+	output   int
+	closed   bool
+	close    sync.Once
+}
+
+func newMessagesStream(ctx context.Context, cancel context.CancelFunc, body io.ReadCloser) core.Stream {
+	return &messagesStream{ctx: ctx, cancel: cancel, body: body, reader: newMessagesSSEReader(body)}
+}
+
+func (s *messagesStream) Close() error {
+	s.close.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
+		s.cancel()
+		_ = s.body.Close()
+	})
+	return nil
+}
+
+func (s *messagesStream) Next(ctx context.Context) (core.StreamFrame, error) {
+	if err := ctx.Err(); err != nil {
+		_ = s.Close()
+		return core.StreamFrame{}, err
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return core.StreamFrame{}, context.Canceled
+	}
+	if s.phase == 3 {
+		s.mu.Unlock()
+		return core.StreamFrame{}, io.EOF
+	}
+	if s.phase == 0 {
+		s.phase = 1
+		status := 200
+		s.mu.Unlock()
+		return core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: protocol, ContentType: "text/event-stream", HTTPStatus: &status}}, nil
+	}
+	if len(s.pending) > 0 {
+		data := s.pending[0]
+		s.pending = s.pending[1:]
+		s.mu.Unlock()
+		return bodyFrame(data), nil
+	}
+	if s.phase == 2 && len(s.pending) == 0 {
+		frame := *s.terminal
+		s.terminal = nil
+		s.phase = 3
+		s.mu.Unlock()
+		s.cancel()
+		_ = s.body.Close()
+		return frame, nil
+	}
+	s.mu.Unlock()
+	for {
+		stop := context.AfterFunc(ctx, func() { _ = s.Close() })
+		event, err := s.reader.next(s.ctx)
+		stop()
+		if ctx.Err() != nil {
+			_ = s.Close()
+			return core.StreamFrame{}, ctx.Err()
+		}
+		if err != nil {
+			_ = s.Close()
+			if err == io.EOF {
+				err = errors.New("Anthropic stream ended without message_stop")
+			}
+			return core.StreamFrame{}, err
+		}
+		if err = s.consume(event); err != nil {
+			_ = s.Close()
+			return core.StreamFrame{}, err
+		}
+		s.mu.Lock()
+		if len(s.pending) > 0 {
+			data := s.pending[0]
+			s.pending = s.pending[1:]
+			s.mu.Unlock()
+			return bodyFrame(data), nil
+		}
+		s.mu.Unlock()
+	}
+}
+
+func bodyFrame(data []byte) core.StreamFrame {
+	return core.StreamFrame{Type: core.FrameBody, Body: &core.BodyFrame{Data: data}}
+}
+
+func (s *messagesStream) consume(event messagesSSEEvent) error {
+	switch event.typeName {
+	case "ping":
+		return nil
+	case "error":
+		return errors.New("Anthropic stream reported an error")
+	case "message_start":
+		if s.started {
+			return errResponsesLifecycle
+		}
+		var v struct {
+			Message struct {
+				Usage struct {
+					Input *int `json:"input_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(event.data, &v) != nil || v.Message.Usage.Input == nil || *v.Message.Usage.Input < 0 {
+			return errors.New("invalid Anthropic message_start")
+		}
+		e, err := newResponsesEmitter()
+		if err != nil {
+			return err
+		}
+		s.emitter, s.started, s.input = e, true, *v.Message.Usage.Input
+		frames, err := e.Start()
+		if err == nil {
+			s.pending = append(s.pending, frames...)
+		}
+		return err
+	case "content_block_start":
+		var v struct {
+			Index int `json:"index"`
+			Block struct {
+				Type string `json:"type"`
+			} `json:"content_block"`
+		}
+		if !s.started || s.block || json.Unmarshal(event.data, &v) != nil || v.Index != 0 || v.Block.Type != "text" {
+			return errors.New("invalid Anthropic content block start")
+		}
+		s.block = true
+	case "content_block_delta":
+		var v struct {
+			Index int                         `json:"index"`
+			Delta struct{ Type, Text string } `json:"delta"`
+		}
+		if !s.block || s.stopped || json.Unmarshal(event.data, &v) != nil || v.Index != 0 || v.Delta.Type != "text_delta" {
+			return errors.New("invalid Anthropic text delta")
+		}
+		frame, err := s.emitter.Delta(v.Delta.Text)
+		if err == nil {
+			s.pending = append(s.pending, frame)
+		}
+		return err
+	case "content_block_stop":
+		var v struct {
+			Index int `json:"index"`
+		}
+		if !s.block || s.stopped || json.Unmarshal(event.data, &v) != nil || v.Index != 0 {
+			return errors.New("invalid Anthropic content block stop")
+		}
+		s.block = false
+		s.stopped = true
+	case "message_delta":
+		var v struct {
+			Delta struct {
+				StopReason *string `json:"stop_reason"`
+			} `json:"delta"`
+			Usage struct {
+				Output *int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if !s.started || !s.stopped || s.stop != "" || json.Unmarshal(event.data, &v) != nil || v.Usage.Output == nil || *v.Usage.Output < 0 || v.Delta.StopReason == nil {
+			return errors.New("invalid Anthropic message_delta")
+		}
+		s.stop, s.output = *v.Delta.StopReason, *v.Usage.Output
+	case "message_stop":
+		if !s.started || !s.stopped || s.stop == "" || s.phase != 1 {
+			return errors.New("invalid Anthropic message_stop")
+		}
+		frames, err := s.emitter.Finish(s.stop, s.input, s.output)
+		if err != nil {
+			return err
+		}
+		s.pending = append(s.pending, frames...)
+		outcome := core.OutcomeSucceeded
+		var terminalErr *core.GatewayError
+		if s.stop == "max_tokens" {
+			outcome = core.OutcomeIncomplete
+			terminalErr = &core.GatewayError{Code: "output_truncated", Category: core.CategoryUnavailable, Message: "Upstream output was truncated"}
+		}
+		input, output := int64(s.input), int64(s.output)
+		complete := core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: outcome, Error: terminalErr, Usage: &core.UsageReport{InputTokens: &input, OutputTokens: &output, Source: core.UsageProvider, Completeness: core.UsageComplete}}}
+		s.terminal = &complete
+		s.phase = 2
+	default:
+		return errors.New("unsupported Anthropic event")
+	}
+	return nil
+}
+
+var _ core.Stream = (*messagesStream)(nil)
