@@ -29,6 +29,7 @@ type responsesEmitter struct {
 	itemAdded   bool
 	itemDone    bool
 	closed      bool
+	budgetHit   bool
 }
 
 func newResponsesEmitter() (*responsesEmitter, error) {
@@ -116,7 +117,7 @@ func (e *responsesEmitter) ToolDelta(delta string) ([]byte, error) {
 		return nil, errors.New("tool arguments delta is not valid UTF-8")
 	}
 	if len(delta) > maxRetainedText-e.retained {
-		e.closed, e.arguments = true, nil
+		e.closed, e.budgetHit, e.arguments = true, true, nil
 		return nil, errors.New("tool arguments exceed 1 MiB")
 	}
 	e.arguments = append(e.arguments, delta...)
@@ -148,7 +149,7 @@ func (e *responsesEmitter) Delta(text string) ([]byte, error) {
 		return nil, errors.New("Responses delta is not valid UTF-8")
 	}
 	if len(text) > maxRetainedText-e.retained {
-		e.closed = true
+		e.closed, e.budgetHit = true, true
 		e.text = nil
 		return nil, errors.New("Responses retained text exceeds 1 MiB")
 	}
@@ -204,10 +205,10 @@ func (e *responsesEmitter) Finish(stopReason string, inputTokens, outputTokens, 
 }
 
 func (e *responsesEmitter) Failed(code, message string, input, output, cached *int64) ([]byte, error) {
-	if !e.started || e.closed {
+	if !e.started || (e.closed && !e.budgetHit) {
 		return nil, errResponsesLifecycle
 	}
-	e.closed = true
+	e.closed, e.budgetHit = true, false
 	response := responseEnvelope{ID: e.responseID, Object: "response", Status: "failed", Output: append([]responseItem(nil), e.output...), Usage: partialResponseUsage(input, output, cached)}
 	return responseEvent("response.failed", struct {
 		Response responseEnvelope `json:"response"`

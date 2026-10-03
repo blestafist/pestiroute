@@ -27,29 +27,23 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-025 DONE (commit unverified/incomplete; handoff BLOCKED)
+## Immediate focus: M4-026 DONE (awaiting verified commit; batch 8/19 DONE)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-011](tasks/M4-011.md)
-are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`),
-[M4-013](tasks/M4-013.md) (`594d684`), [M4-014](tasks/M4-014.md) (`cf9d7d6`),
-[M4-015](tasks/M4-015.md) (`58cf823`), [M4-016](tasks/M4-016.md) (`e65671c`),
-[M4-017](tasks/M4-017.md) (`4555ea4`), [M4-018](tasks/M4-018.md) (`a65f424`),
-[M4-019](tasks/M4-019.md) (`8076e38`), [M4-020](tasks/M4-020.md) (`f82975a`),
-[M4-021](tasks/M4-021.md) (`77913d2`), [M4-022](tasks/M4-022.md) (`3a0cf49`),
-[M4-023](tasks/M4-023.md) (`cc42aed`), and [M4-024](tasks/M4-024.md) (`11d8471`) are verified commits on `dev-m4` ahead of origin.
+Anthropic Messages translation. All 25 predecessor tasks ([M4-001](tasks/M4-001.md)
+through [M4-025](tasks/M4-025.md)) are committed and pushed to `origin/dev-m4` (`a6f5924`).
+The user manually amended M4-025 to `a6f5924` including all six files (tracked `cmd/gateway/translation_lifecycle_test.go`)
+and verified clean tests across all 7 batch commits (M4-019 through M4-025: `8076e38`,
+`f82975a`, `77913d2`, `3a0cf49`, `cc42aed`, `11d8471`, `a6f5924`).
 
-[M4-025](tasks/M4-025.md) (Prove cancellation and timeout cleanup under races) acceptance
-is reviewed and closed DONE (reviewer PASS `ses_efc70615dffeLSfaFJlbVX03W7`). However,
-the scoped commit `0b2157e` is incomplete: only 5 files were committed and the required,
-reviewed test `cmd/gateway/translation_lifecycle_test.go` remains untracked in the working tree.
-Subsequent git-worker verification misidentified the task. In the current batch of 7 DONE tasks
-(M4-019 through M4-025), only the first 6 commits (M4-019 through M4-024) are fully verified;
-task 7 commit delivery cannot be claimed. Stop boundary reached: no next task is authorized
-or prepared until `0b2157e` is amended to include `cmd/gateway/translation_lifecycle_test.go`
-and cleanly verified.
-25 tasks are DONE in the registry; implementation is preserved.
+[M4-026](tasks/M4-026.md) (Prove bounded reconstruction, backpressure and shutdown)
+acceptance is reviewed and closed DONE (reviewer PASS `ses_efc3d7c3bffeEfHGms1iVnT6D7`).
+Real TCP backpressure, emitter `budgetHit` over-cap failure, and gateway shutdown drain/cancellation
+pass all race checks. Batch progress: 8 of 19 objective DONE; up to 11 additional newly
+DONE tasks remain in the sequential backlog. Per policy, no next card is prepared or promoted
+until the M4-026 commit is cleanly created and verified.
+26 tasks are DONE in the registry; implementation is preserved.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

@@ -109,6 +109,74 @@ func TestExecuteStreamTranslateEarlyHeadAndUsage(t *testing.T) {
 	}
 }
 
+func TestExecuteBackpressureReadsOnlyOnDemand(t *testing.T) {
+	steps := []string{
+		`event: message_start` + "\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n",
+		`event: content_block_start` + "\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n",
+		`event: content_block_delta` + "\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"first\"}}\n\n",
+		`event: content_block_delta` + "\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"second\"}}\n\n",
+		`event: content_block_stop` + "\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+		`event: message_delta` + "\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
+		`event: message_stop` + "\ndata: {\"type\":\"message_stop\"}\n\n",
+	}
+	body := &steppedBody{steps: steps}
+	stream := newMessagesStream(context.Background(), func() {}, body)
+	defer stream.Close()
+	if frame, err := stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead || body.reads != 0 {
+		t.Fatalf("Head=%+v reads=%d err=%v", frame, body.reads, err)
+	}
+	for {
+		frame, err := stream.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameBody && strings.Contains(string(frame.Body.Data), `"delta":"first"`) {
+			break
+		}
+	}
+	if body.reads != 3 {
+		t.Fatalf("upstream read %d events at first delta, want 3", body.reads)
+	}
+	deltas := "first"
+	for {
+		frame, err := stream.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameBody {
+			_, payload := decodeResponseFrame(t, frame.Body.Data)
+			if delta, ok := payload["delta"].(string); ok {
+				deltas += delta
+			}
+		}
+		if frame.Type == core.FrameComplete {
+			if frame.Complete.Outcome != core.OutcomeSucceeded {
+				t.Fatalf("completion = %+v", frame.Complete)
+			}
+			break
+		}
+	}
+	if deltas != "firstsecond" || body.reads != len(steps) {
+		t.Fatalf("resumed stream deltas=%q reads=%d, want ordered deltas and %d reads", deltas, body.reads, len(steps))
+	}
+}
+
+type steppedBody struct {
+	steps []string
+	reads int
+}
+
+func (b *steppedBody) Read(p []byte) (int, error) {
+	if b.reads == len(b.steps) {
+		return 0, io.EOF
+	}
+	step := b.steps[b.reads]
+	b.reads++
+	return copy(p, step), nil
+}
+
+func (*steppedBody) Close() error { return nil }
+
 func TestExecuteToolStreamLifecycle(t *testing.T) {
 	body := strings.Join([]string{
 		`event: message_start`, `data: {"type":"message_start","message":{"usage":{"input_tokens":7,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}`, ``,

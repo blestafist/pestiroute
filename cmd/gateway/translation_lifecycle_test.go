@@ -3,11 +3,16 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +34,10 @@ type translationLifecycleFixture struct {
 }
 
 func newTranslationLifecycleFixture(t *testing.T, backend http.Handler, injected ...core.HTTPDoer) *translationLifecycleFixture {
+	return newTranslationLifecycleFixtureWithConnSetup(t, backend, nil, injected...)
+}
+
+func newTranslationLifecycleFixtureWithConnSetup(t *testing.T, backend http.Handler, setupConn func(net.Conn), injected ...core.HTTPDoer) *translationLifecycleFixture {
 	t.Helper()
 	_, dbPath, keyPath := protectedFixture(t)
 	upstream := httptest.NewServer(backend)
@@ -118,7 +127,14 @@ func newTranslationLifecycleFixture(t *testing.T, backend http.Handler, injected
 		_ = prepared.runtimeDB.Close()
 		_ = prepared.processLock.Close()
 	})
-	gateway = httptest.NewServer(h)
+	gateway = httptest.NewUnstartedServer(h)
+	if setupConn != nil {
+		gateway.Config.ConnContext = func(ctx context.Context, conn net.Conn) context.Context {
+			setupConn(conn)
+			return ctx
+		}
+	}
+	gateway.Start()
 	return &translationLifecycleFixture{gateway: gateway, prepared: prepared, secret: issued.Secret, finalized: finalized, accounting: accounting}
 }
 
@@ -340,4 +356,389 @@ func TestTranslationTimeoutCallerDeadlineCancelsAndSettlesDurably(t *testing.T) 
 		t.Fatal("translated caller deadline did not cancel upstream")
 	}
 	f.assertCancelledOnce(t)
+}
+
+func TestTranslationShutdownDrainsActiveStream(t *testing.T) {
+	continueStream := make(chan struct{})
+	started := make(chan struct{})
+	f := newTranslationLifecycleFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"early\"}}\n\n")
+		w.(http.Flusher).Flush()
+		close(started)
+		select {
+		case <-continueStream:
+			_, _ = io.WriteString(w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		case <-r.Context().Done():
+		}
+	}))
+	responseDone := make(chan error, 1)
+	go func() {
+		req, _ := f.request(context.Background())
+		resp, err := f.gateway.Client().Do(req)
+		if err == nil {
+			_, err = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+		responseDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("translated stream did not reach the backend")
+	}
+	shutdownDone := make(chan error, 1)
+	shutdownStarted := make(chan struct{})
+	f.gateway.Config.RegisterOnShutdown(func() { close(shutdownStarted) })
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		shutdownDone <- f.gateway.Config.Shutdown(ctx)
+	}()
+	select {
+	case <-shutdownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("translated gateway shutdown did not start")
+	}
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("shutdown did not drain active translated stream: %v", err)
+	default:
+	}
+	close(continueStream)
+	select {
+	case err := <-responseDone:
+		if err != nil {
+			t.Fatalf("drained translated response: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("translated response did not finish during drain")
+	}
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("translated gateway did not finish draining")
+	}
+	if got := f.accounting.snapshot(); got.admit != 1 || got.intent != 1 || got.finalize != 1 {
+		t.Fatalf("drained translated accounting = %+v", got)
+	}
+}
+
+func TestTranslationShutdownExpiryCancelsActiveStream(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	f := newTranslationLifecycleFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"early\"}}\n\n")
+		w.(http.Flusher).Flush()
+		close(started)
+		<-r.Context().Done()
+		close(cancelled)
+	}))
+	responseDone := make(chan struct{})
+	go func() {
+		defer close(responseDone)
+		req, _ := f.request(context.Background())
+		resp, err := f.gateway.Client().Do(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("translated stream did not reach the backend")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := f.gateway.Config.Shutdown(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired translated drain = %v, want deadline exceeded", err)
+	}
+	if err := f.gateway.Config.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("expired shutdown did not cancel translated upstream")
+	}
+	select {
+	case <-responseDone:
+	case <-time.After(time.Second):
+		t.Fatal("translated client remained active after forced close")
+	}
+	f.assertCancelledOnce(t)
+}
+
+func TestTranslationSlowConsumerBackpressureResumesInOrder(t *testing.T) {
+	first, second := strings.Repeat("a", 512<<10), strings.Repeat("b", 512<<10)
+	steps := []string{
+		anthropicSSE("message_start", `{"type":"message_start","message":{"usage":{"input_tokens":1}}}`),
+		anthropicSSE("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text"}}`),
+		anthropicSSE("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"`+first+`"}}`),
+		anthropicSSE("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"`+second+`"}}`),
+		anthropicSSE("content_block_stop", `{"type":"content_block_stop","index":0}`),
+		anthropicSSE("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`),
+		anthropicSSE("message_stop", `{"type":"message_stop"}`),
+	}
+	upstreamBody := newStepSSEBody(steps)
+	var upstreamCalls atomic.Int32
+	writeBufferSet := make(chan error, 1)
+	f := newTranslationLifecycleFixtureWithConnSetup(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), func(conn net.Conn) {
+		writeBufferSet <- conn.(*net.TCPConn).SetWriteBuffer(32 << 10)
+	}, anthropicDoerFunc(func(*http.Request) (*http.Response, error) {
+		upstreamCalls.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: upstreamBody}, nil
+	}))
+	body := `{"model":"client-model","stream":true,"input":"hello"}`
+	conn, err := net.Dial("tcp", f.gateway.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.(*net.TCPConn).SetReadBuffer(64 << 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(conn, "POST /v1/responses HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", f.gateway.Listener.Addr(), f.secret, len(body), body); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(conn)
+	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodPost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("translated response status = %d", response.StatusCode)
+	}
+	if err := <-writeBufferSet; err != nil {
+		t.Fatalf("limit test gateway TCP write buffer: %v", err)
+	}
+	go upstreamBody.releaseThrough(2)
+	bodyReader := bufio.NewReader(response.Body)
+	var consumed []byte
+	for {
+		event, err := readGatewaySSE(bodyReader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		consumed = append(consumed, event...)
+		if strings.Contains(string(event), "event: response.content_part.added") {
+			break
+		}
+	}
+	waitStepProgress(t, upstreamBody, 3)
+	select {
+	case <-upstreamBody.started[3]:
+		t.Fatal("gateway read the next provider event while the downstream TCP client was stalled")
+	case <-time.After(250 * time.Millisecond):
+	}
+	go upstreamBody.releaseThrough(len(steps) - 1)
+	remaining, err := io.ReadAll(bodyReader)
+	if err != nil {
+		t.Fatalf("read resumed response: %v (upstream events %d/%d)", err, upstreamBody.completed.Load(), len(steps))
+	}
+	_ = response.Body.Close()
+	consumed = append(consumed, remaining...)
+	waitStepProgress(t, upstreamBody, len(steps))
+	var deltas []string
+	for _, event := range strings.Split(string(consumed), "\n\n") {
+		if !strings.Contains(event, "event: response.output_text.delta") {
+			continue
+		}
+		for _, line := range strings.Split(event, "\n") {
+			if strings.HasPrefix(line, "data: ") {
+				var payload struct {
+					Delta string `json:"delta"`
+				}
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &payload); err != nil {
+					t.Fatal(err)
+				}
+				deltas = append(deltas, payload.Delta)
+			}
+		}
+	}
+	if len(deltas) != 2 || deltas[0] != first || deltas[1] != second {
+		t.Fatalf("resumed text deltas are not ordered/verbatim: count=%d", len(deltas))
+	}
+	if !strings.Contains(string(consumed), "event: response.completed") {
+		t.Fatal("resumed translated stream did not complete after the ordered deltas")
+	}
+	if upstreamCalls.Load() != 1 {
+		t.Fatalf("upstream calls = %d, want exactly one", upstreamCalls.Load())
+	}
+}
+
+func TestTranslationExhaustionFailsAndFinalizesOnce(t *testing.T) {
+	const chunk = 600 << 10
+	for _, kind := range []string{"text", "arguments", "blocks"} {
+		t.Run(kind, func(t *testing.T) {
+			var events []string
+			reqBody := `{"model":"client-model","stream":true,"input":"hello"}`
+			if kind == "text" {
+				events = []string{
+					anthropicSSE("message_start", `{"type":"message_start","message":{"usage":{"input_tokens":1}}}`),
+					anthropicSSE("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text"}}`),
+					anthropicSSE("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"`+strings.Repeat("x", chunk)+`"}}`),
+					anthropicSSE("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"`+strings.Repeat("y", chunk)+`"}}`),
+				}
+			} else if kind == "arguments" {
+				reqBody = `{"model":"client-model","stream":true,"input":"hello","tools":[{"type":"function","name":"f","parameters":{"type":"object"}}],"tool_choice":"auto"}`
+				events = []string{
+					anthropicSSE("message_start", `{"type":"message_start","message":{"usage":{"input_tokens":1}}}`),
+					anthropicSSE("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call-1","name":"f"}}`),
+					anthropicSSE("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"`+strings.Repeat("x", chunk)+`"}}`),
+					anthropicSSE("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"`+strings.Repeat("y", chunk)+`"}}`),
+				}
+			} else {
+				var tools strings.Builder
+				tools.WriteString(`{"model":"client-model","stream":true,"input":"hello","tools":[`)
+				for i := 0; i < 65; i++ {
+					if i > 0 {
+						tools.WriteByte(',')
+					}
+					fmt.Fprintf(&tools, `{"type":"function","name":"f%d","parameters":{"type":"object"}}`, i)
+				}
+				tools.WriteString(`],"tool_choice":"auto"}`)
+				reqBody = tools.String()
+				events = append(events, anthropicSSE("message_start", `{"type":"message_start","message":{"usage":{"input_tokens":1}}}`))
+				for i := 0; i < 65; i++ {
+					events = append(events,
+						anthropicSSE("content_block_start", fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":"tool_use","id":"call-%d","name":"f%d"}}`, i, i, i)),
+						anthropicSSE("content_block_stop", fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, i)))
+				}
+			}
+			var calls atomic.Int32
+			f := newTranslationLifecycleFixture(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), anthropicDoerFunc(func(*http.Request) (*http.Response, error) {
+				calls.Add(1)
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(strings.Join(events, "")))}, nil
+			}))
+			req, err := f.request(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Body = io.NopCloser(strings.NewReader(reqBody))
+			req.ContentLength = int64(len(reqBody))
+			response, err := f.gateway.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if err != nil {
+				t.Fatalf("read failed translation: %v", err)
+			}
+			if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "event: response.failed") || strings.Contains(string(body), "event: response.completed") || calls.Load() != 1 {
+				preview := body
+				if len(preview) > 240 {
+					preview = preview[:240]
+				}
+				t.Fatalf("exhaustion response status=%d completed=%t upstream calls=%d body-prefix=%q", response.StatusCode, strings.Contains(string(body), "event: response.completed"), calls.Load(), preview)
+			}
+			select {
+			case result := <-f.finalized:
+				if result.Outcome != core.OutcomeFailed {
+					t.Fatalf("exhaustion finalized as %q, want failed", result.Outcome)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("exhausted attempt did not finalize")
+			}
+			if got := f.accounting.snapshot(); got.admit != 1 || got.intent != 1 || got.finalize != 1 {
+				t.Fatalf("exhaustion accounting = %+v, want exactly one finalization", got)
+			}
+			requests, err := sqlite.NewLedger(f.prepared.runtimeDB).QueryRequests(context.Background(), sqlite.RequestFilter{Limit: 2})
+			if err != nil || len(requests) != 1 || len(requests[0].Attempts) != 1 || requests[0].Request.FinishedAt == nil || requests[0].Request.State == "succeeded" || requests[0].Attempts[0].Attempt.State != "failed" {
+				t.Fatalf("durable exhausted request/attempt rows = %+v, err=%v", requests, err)
+			}
+			select {
+			case extra := <-f.finalized:
+				t.Fatalf("exhausted request finalized again: %+v", extra)
+			default:
+			}
+		})
+	}
+}
+
+func anthropicSSE(event, data string) string { return "event: " + event + "\ndata: " + data + "\n\n" }
+
+type stepSSEBody struct {
+	steps     []string
+	started   []chan struct{}
+	gates     []chan struct{}
+	gateOnce  []sync.Once
+	index     int
+	offset    int
+	completed atomic.Int32
+}
+
+func newStepSSEBody(steps []string) *stepSSEBody {
+	body := &stepSSEBody{steps: steps, started: make([]chan struct{}, len(steps)), gates: make([]chan struct{}, len(steps)), gateOnce: make([]sync.Once, len(steps))}
+	for i := range steps {
+		body.started[i], body.gates[i] = make(chan struct{}), make(chan struct{})
+	}
+	return body
+}
+
+func (b *stepSSEBody) Read(p []byte) (int, error) {
+	if b.index == len(b.steps) {
+		return 0, io.EOF
+	}
+	if b.offset == 0 {
+		close(b.started[b.index])
+		<-b.gates[b.index]
+	}
+	n := copy(p, b.steps[b.index][b.offset:])
+	b.offset += n
+	if b.offset == len(b.steps[b.index]) {
+		b.offset = 0
+		b.index++
+		b.completed.Add(1)
+	}
+	return n, nil
+}
+
+func (b *stepSSEBody) releaseThrough(index int) {
+	for i := 0; i <= index && i < len(b.steps); i++ {
+		<-b.started[i]
+		b.gateOnce[i].Do(func() { close(b.gates[i]) })
+	}
+}
+
+func (b *stepSSEBody) Close() error {
+	for i := range b.steps {
+		b.gateOnce[i].Do(func() { close(b.gates[i]) })
+	}
+	return nil
+}
+
+func waitStepProgress(t *testing.T, body *stepSSEBody, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if int(body.completed.Load()) >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("upstream completed %d/%d gated SSE events", body.completed.Load(), want)
+}
+
+func readGatewaySSE(reader *bufio.Reader) ([]byte, error) {
+	var event []byte
+	for {
+		line, err := reader.ReadBytes('\n')
+		event = append(event, line...)
+		if err != nil {
+			return event, err
+		}
+		if len(line) == 1 && line[0] == '\n' {
+			return event, nil
+		}
+	}
 }
