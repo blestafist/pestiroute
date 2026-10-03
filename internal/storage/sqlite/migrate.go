@@ -132,6 +132,34 @@ var schemaMigrations = []migration{{
 		`CREATE INDEX idx_attempts_request ON attempts(request_id)`,
 		`CREATE INDEX idx_reservations_state_reconciled ON reservations(state, reconciled_at)`,
 	},
+}, {
+	version: 5,
+	statements: []string{
+		`CREATE TABLE auth_sessions (
+			id TEXT PRIMARY KEY,
+			account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+			connector TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK (kind IN ('interactive','refresh')),
+			expected_credential_revision INTEGER NOT NULL CHECK (expected_credential_revision >= 1),
+			lifecycle TEXT NOT NULL CHECK (lifecycle IN ('active','refresh_in_progress','uncertain','consumed')),
+			expires_at INTEGER,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			format_version INTEGER,
+			key_version TEXT,
+			nonce BLOB,
+			ciphertext BLOB,
+			quarantine_reason TEXT CHECK (quarantine_reason IN ('ambiguous_result','cancelled_after_call','persistence_failed','restart_in_progress')),
+			current_credential_revision INTEGER CHECK (current_credential_revision >= 1),
+			CHECK ((kind = 'interactive' AND expires_at IS NOT NULL AND
+			        ((lifecycle = 'active' AND format_version IS NOT NULL AND key_version IS NOT NULL AND nonce IS NOT NULL AND ciphertext IS NOT NULL) OR
+			         (lifecycle = 'consumed' AND format_version IS NULL AND key_version IS NULL AND nonce IS NULL AND ciphertext IS NULL))) OR
+			       (kind = 'refresh' AND lifecycle IN ('refresh_in_progress','uncertain') AND format_version IS NULL AND key_version IS NULL AND nonce IS NULL AND ciphertext IS NULL AND expires_at IS NULL))
+		)`,
+		`CREATE UNIQUE INDEX idx_auth_sessions_account_refresh_active ON auth_sessions(account_id) WHERE lifecycle IN ('refresh_in_progress','uncertain')`,
+		`CREATE INDEX idx_auth_sessions_account_id ON auth_sessions(account_id)`,
+		`CREATE INDEX idx_auth_sessions_lifecycle_expires ON auth_sessions(lifecycle, expires_at)`,
+	},
 }}
 
 // CurrentSchemaVersion is the newest schema version supported by this binary.

@@ -21,8 +21,8 @@ func TestMigrateFreshAndIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT version, applied_at FROM schema_migrations ORDER BY version DESC LIMIT 1`).Scan(&version, &applied); err != nil {
 		t.Fatal(err)
 	}
-	if version != 4 {
-		t.Fatalf("version = %d, want 4", version)
+	if version != CurrentSchemaVersion() {
+		t.Fatalf("version = %d, want %d", version, CurrentSchemaVersion())
 	}
 	if timestamp, err := time.Parse(time.RFC3339Nano, applied); err != nil || timestamp.Location() != time.UTC {
 		t.Fatalf("applied_at = %q, err = %v; want UTC RFC3339 timestamp", applied, err)
@@ -41,7 +41,7 @@ func TestMigrateFreshAndIdempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table'`).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
-	if count != 4 || after != before {
+	if count != CurrentSchemaVersion() || after != before {
 		t.Fatalf("repeat migration changed journal/schema: entries=%d tables=%d (before %d)", count, after, before)
 	}
 }
@@ -85,8 +85,8 @@ func TestSchemaAccountsAndCredentials(t *testing.T) {
 	}
 	db = openTestDB(t, path)
 	var version int
-	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
-		t.Fatalf("schema version = %d, err = %v; want 4", version, err)
+	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != CurrentSchemaVersion() {
+		t.Fatalf("schema version = %d, err = %v; want %d", version, err, CurrentSchemaVersion())
 	}
 	if err := Migrate(context.Background(), db); err != nil {
 		t.Fatalf("idempotent Migrate: %v", err)
@@ -223,8 +223,8 @@ func TestSchemaPoliciesAndVirtualKeys(t *testing.T) {
 		t.Fatalf("idempotent Migrate: %v", err)
 	}
 	var version int
-	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
-		t.Fatalf("schema version = %d, err = %v; want 4", version, err)
+	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != CurrentSchemaVersion() {
+		t.Fatalf("schema version = %d, err = %v; want %d", version, err, CurrentSchemaVersion())
 	}
 
 	policy := `INSERT INTO key_policies(id, revision, models, connectors, rpm, tpm, created_at) VALUES (?, ?, '[]', '[]', 0, 0, 1000)`
@@ -346,8 +346,8 @@ func TestSchemaRequestsAttemptsUsageAndReservations(t *testing.T) {
 		t.Fatalf("apply migration 4 to version 3 database: %v", err)
 	}
 	var version int
-	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != 4 {
-		t.Fatalf("schema version = %d, err=%v; want 4", version, err)
+	if err := db.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil || version != CurrentSchemaVersion() {
+		t.Fatalf("schema version = %d, err=%v; want %d", version, err, CurrentSchemaVersion())
 	}
 	for _, statement := range []string{
 		`INSERT INTO accounts(id, connector, created_at, updated_at) VALUES ('a', 'c', 1000, 1000)`,
@@ -506,7 +506,7 @@ func TestMigrateCancellationRollsBackAndReleasesConnection(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- migrate(ctx, db, append(append([]migration(nil), schemaMigrations...), migration{
-			version: 5, statements: []string{`CREATE TABLE cancelled_migration (id INTEGER)`},
+			version: 6, statements: []string{`CREATE TABLE cancelled_migration (id INTEGER)`},
 		}))
 	}()
 	select {
@@ -527,7 +527,7 @@ func TestMigrateCancellationRollsBackAndReleasesConnection(t *testing.T) {
 		t.Fatalf("database unusable after cancelled migration: %v", err)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 4 {
+	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != CurrentSchemaVersion() {
 		t.Fatalf("journal entries after cancellation = %d, err = %v", count, err)
 	}
 	ctx, cancel = context.WithCancel(context.Background())
@@ -556,8 +556,8 @@ func TestMigrateConcurrentHandlesSerialize(t *testing.T) {
 		}
 	}
 	var count int
-	if err := db1.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 4 {
-		t.Fatalf("concurrent migration journal entries = %d, err = %v; want 4", count, err)
+	if err := db1.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != CurrentSchemaVersion() {
+		t.Fatalf("concurrent migration journal entries = %d, err = %v; want %d", count, err, CurrentSchemaVersion())
 	}
 }
 
@@ -579,7 +579,7 @@ func TestMigrateReadsFutureVersionAfterWaitingForWriteLock(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- migrate(ctx, db2, append(append([]migration(nil), schemaMigrations...), migration{
-			version: 5, statements: []string{`CREATE TABLE must_not_apply (id INTEGER)`},
+			version: 6, statements: []string{`CREATE TABLE must_not_apply (id INTEGER)`},
 		}))
 	}()
 	select {
