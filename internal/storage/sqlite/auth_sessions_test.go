@@ -38,9 +38,6 @@ func TestAuthSessionInteractiveEncryptionExpiryAndConsume(t *testing.T) {
 	if bytes.Contains(created.Ciphertext, state) || len(created.Ciphertext) == 0 {
 		t.Fatal("session state was not encrypted")
 	}
-	if _, _, err := repo.GetInteractiveSessionDecrypted(ctx, "session", key, expiry); !errors.Is(err, ErrAuthSessionUnavailable) {
-		t.Fatalf("expiry boundary error=%v", err)
-	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +80,26 @@ func TestAuthSessionInteractiveEncryptionExpiryAndConsume(t *testing.T) {
 		} else if e != nil && !os.IsNotExist(e) {
 			t.Fatal(e)
 		}
+	}
+}
+
+func TestAuthSessionExpiredAccessConsumesEnvelope(t *testing.T) {
+	db, key, repo, _ := authSessionFixture(t, filepath.Join(t.TempDir(), "expired-auth.db"))
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := repo.CreateInteractiveSession(ctx, "expired", "account", "test", 1, now.Add(time.Second), []byte("opaque-expired-state"), key, "key-v1", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.GetInteractiveSessionDecrypted(ctx, "expired", key, now.Add(time.Second)); !errors.Is(err, ErrAuthSessionUnavailable) {
+		t.Fatalf("expired session error=%v", err)
+	}
+	var lifecycle string
+	var nonce, ciphertext any
+	if err := db.QueryRow(`SELECT lifecycle,nonce,ciphertext FROM auth_sessions WHERE id='expired'`).Scan(&lifecycle, &nonce, &ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle != "consumed" || nonce != nil || ciphertext != nil {
+		t.Fatalf("expired row lifecycle=%q nonce=%v ciphertext=%v", lifecycle, nonce, ciphertext)
 	}
 }
 
@@ -153,24 +170,32 @@ func TestAuthSessionAtomicCredentialResolutionAndStaleCAS(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE id='refresh'`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("resolved marker count=%d err=%v", count, err)
 	}
-	if err := sessions.CreateRefreshMarker(ctx, "stale", "account", "test", 1, now); err != nil {
+	if err := sessions.CreateRefreshMarker(ctx, "stale", "account", "test", 2, now); err != nil {
+		t.Fatal(err)
+	}
+	external := sealCredential(t, key, base.ID, base.AccountID, []byte("external-wins"))
+	external.Revision = 2
+	if _, err := credentials.Update(ctx, external); err != nil {
 		t.Fatal(err)
 	}
 	stale := sealCredential(t, key, base.ID, base.AccountID, []byte("must-not-write"))
-	stale.Revision = 1
+	stale.Revision = 2
 	if _, err := sessions.ResolveRefreshAndReplaceCredentials(ctx, "stale", stale, now); !errors.Is(err, ErrRevisionMismatch) {
 		t.Fatalf("stale resolution error=%v", err)
 	}
 	got, err := credentials.Get(ctx, "account", base.ID)
-	if err != nil || got.Revision != 2 {
+	if err != nil || got.Revision != 3 {
 		t.Fatalf("credential after stale CAS %#v %v", got, err)
+	}
+	if plaintext, err := credentials.GetDecrypted(ctx, "account", base.ID, key); err != nil || !bytes.Equal(plaintext, []byte("external-wins")) {
+		t.Fatalf("stale CAS changed externally updated value %q err=%v", plaintext, err)
 	}
 	var lifecycle, reason string
 	var current int64
 	if err := db.QueryRow(`SELECT lifecycle,quarantine_reason,current_credential_revision FROM auth_sessions WHERE id='stale'`).Scan(&lifecycle, &reason, &current); err != nil {
 		t.Fatal(err)
 	}
-	if lifecycle != "uncertain" || reason != "ambiguous_result" || current != 2 {
+	if lifecycle != "uncertain" || reason != "ambiguous_result" || current != 3 {
 		t.Fatalf("stale marker state %q %q %d", lifecycle, reason, current)
 	}
 }
