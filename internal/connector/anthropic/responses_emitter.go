@@ -17,7 +17,13 @@ type responsesEmitter struct {
 	responseID string
 	itemID     string
 	text       []byte
+	arguments  []byte
+	callID     string
+	name       string
+	itemType   string
 	started    bool
+	itemAdded  bool
+	itemDone   bool
 	closed     bool
 }
 
@@ -42,6 +48,18 @@ func newResponseID(prefix string) (string, error) {
 }
 
 func (e *responsesEmitter) Start() ([][]byte, error) {
+	frames, err := e.StartResponse()
+	if err != nil {
+		return nil, err
+	}
+	text, err := e.StartText()
+	if err != nil {
+		return nil, err
+	}
+	return append(frames, text...), nil
+}
+
+func (e *responsesEmitter) StartResponse() ([][]byte, error) {
 	if e.started || e.closed {
 		return nil, errResponsesLifecycle
 	}
@@ -49,13 +67,64 @@ func (e *responsesEmitter) Start() ([][]byte, error) {
 	return [][]byte{
 		responseEvent("response.created", responseLifecycleEvent{Response: responseEnvelope{ID: e.responseID, Object: "response", Status: "in_progress", Output: []responseItem{}}}),
 		responseEvent("response.in_progress", responseLifecycleEvent{Response: responseEnvelope{ID: e.responseID, Object: "response", Status: "in_progress", Output: []responseItem{}}}),
+	}, nil
+}
+
+func (e *responsesEmitter) StartText() ([][]byte, error) {
+	if !e.started || e.closed || e.itemAdded {
+		return nil, errResponsesLifecycle
+	}
+	e.itemAdded, e.itemType = true, "message"
+	return [][]byte{
 		responseEvent("response.output_item.added", responseItemEvent{OutputIndex: 0, Item: responseItem{ID: e.itemID, Type: "message", Role: "assistant", Status: "in_progress", Content: []responsePart{}}}),
 		responseEvent("response.content_part.added", responsePartEvent{OutputIndex: 0, ItemID: e.itemID, Part: responsePart{Type: "output_text", Text: "", Annotations: []any{}, Logprobs: []any{}}}),
 	}, nil
 }
 
+func (e *responsesEmitter) StartTool(callID, name string) ([]byte, error) {
+	if !e.started || e.closed || e.itemAdded || callID == "" || name == "" {
+		return nil, errResponsesLifecycle
+	}
+	itemID, err := newResponseID("fc_")
+	if err != nil {
+		return nil, err
+	}
+	e.itemID, e.callID, e.name, e.itemType, e.itemAdded = itemID, callID, name, "function_call", true
+	empty := ""
+	return responseEvent("response.output_item.added", responseItemEvent{OutputIndex: 0, Item: responseItem{ID: itemID, Type: "function_call", CallID: callID, Name: name, Arguments: &empty, Status: "in_progress"}}), nil
+}
+
+func (e *responsesEmitter) ToolDelta(delta string) ([]byte, error) {
+	if !e.started || e.closed || !e.itemAdded || e.itemType != "function_call" || e.itemDone {
+		return nil, errResponsesLifecycle
+	}
+	if !utf8.ValidString(delta) {
+		e.closed, e.arguments = true, nil
+		return nil, errors.New("tool arguments delta is not valid UTF-8")
+	}
+	if len(delta) > maxRetainedText-len(e.arguments) {
+		e.closed, e.arguments = true, nil
+		return nil, errors.New("tool arguments exceed 1 MiB")
+	}
+	e.arguments = append(e.arguments, delta...)
+	return responseEvent("response.function_call_arguments.delta", responseDelta{OutputIndex: 0, ItemID: e.itemID, Delta: delta}), nil
+}
+
+func (e *responsesEmitter) FinishTool() ([][]byte, error) {
+	if !e.started || e.closed || !e.itemAdded || e.itemType != "function_call" || e.itemDone {
+		return nil, errResponsesLifecycle
+	}
+	e.itemDone = true
+	arguments := string(e.arguments)
+	item := responseItem{ID: e.itemID, Type: "function_call", CallID: e.callID, Name: e.name, Arguments: &arguments, Status: "completed"}
+	return [][]byte{
+		responseEvent("response.function_call_arguments.done", responseFunctionArgumentsDone{ItemID: e.itemID, OutputIndex: 0, Arguments: arguments}),
+		responseEvent("response.output_item.done", responseItemEvent{OutputIndex: 0, Item: item}),
+	}, nil
+}
+
 func (e *responsesEmitter) Delta(text string) ([]byte, error) {
-	if !e.started || e.closed {
+	if !e.started || e.closed || !e.itemAdded || e.itemType != "message" {
 		return nil, errResponsesLifecycle
 	}
 	if !utf8.ValidString(text) {
@@ -73,17 +142,31 @@ func (e *responsesEmitter) Delta(text string) ([]byte, error) {
 }
 
 func (e *responsesEmitter) Finish(stopReason string, inputTokens, outputTokens int) ([][]byte, error) {
-	if !e.started || e.closed || inputTokens < 0 || outputTokens < 0 {
+	if !e.started || e.closed || !e.itemAdded || inputTokens < 0 || outputTokens < 0 {
 		return nil, errResponsesLifecycle
 	}
 	var terminal, status, reason string
 	switch stopReason {
-	case "end_turn", "stop_sequence":
+	case "end_turn", "stop_sequence", "tool_use":
 		terminal, status = "response.completed", "completed"
 	case "max_tokens":
 		terminal, status, reason = "response.incomplete", "incomplete", "max_output_tokens"
 	default:
 		return nil, fmt.Errorf("unsupported Anthropic stop reason %q", stopReason)
+	}
+	if e.itemType == "function_call" {
+		if stopReason != "tool_use" || !e.itemDone {
+			e.closed = true
+			return nil, errors.New("incomplete tool call stream")
+		}
+		arguments := string(e.arguments)
+		item := responseItem{ID: e.itemID, Type: "function_call", CallID: e.callID, Name: e.name, Arguments: &arguments, Status: "completed"}
+		response := responseEnvelope{ID: e.responseID, Object: "response", Status: status, Output: []responseItem{item}, Usage: &responseUsage{InputTokens: inputTokens, OutputTokens: outputTokens, TotalTokens: inputTokens + outputTokens}}
+		e.closed = true
+		return [][]byte{responseEvent(terminal, responseLifecycleEvent{Response: response})}, nil
+	}
+	if stopReason == "tool_use" {
+		return nil, errors.New("tool_use stop without tool call")
 	}
 	e.closed = true
 	text := string(e.text)
@@ -126,11 +209,20 @@ type responseIncompleteDetails struct {
 }
 
 type responseItem struct {
-	ID      string         `json:"id"`
-	Type    string         `json:"type"`
-	Role    string         `json:"role,omitempty"`
-	Status  string         `json:"status,omitempty"`
-	Content []responsePart `json:"content"`
+	ID        string         `json:"id"`
+	Type      string         `json:"type"`
+	Role      string         `json:"role,omitempty"`
+	Status    string         `json:"status,omitempty"`
+	Content   []responsePart `json:"content,omitempty"`
+	CallID    string         `json:"call_id,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Arguments *string        `json:"arguments,omitempty"`
+}
+
+type responseFunctionArgumentsDone struct {
+	ItemID      string `json:"item_id"`
+	OutputIndex int    `json:"output_index"`
+	Arguments   string `json:"arguments"`
 }
 
 type responsePart struct {

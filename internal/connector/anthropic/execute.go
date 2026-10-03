@@ -22,6 +22,7 @@ type messagesStream struct {
 	emitter  *responsesEmitter
 	started  bool
 	block    bool
+	tool     bool
 	stopped  bool
 	stop     string
 	input    int
@@ -140,7 +141,7 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 			return err
 		}
 		s.emitter, s.started, s.input = e, true, *v.Message.Usage.Input
-		frames, err := e.Start()
+		frames, err := e.StartResponse()
 		if err == nil {
 			s.pending = append(s.pending, frames...)
 		}
@@ -150,21 +151,52 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 			Index int `json:"index"`
 			Block struct {
 				Type string `json:"type"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
 			} `json:"content_block"`
 		}
-		if !s.started || s.block || json.Unmarshal(event.data, &v) != nil || v.Index != 0 || v.Block.Type != "text" {
+		if !s.started || s.block || s.stopped || json.Unmarshal(event.data, &v) != nil || v.Index != 0 {
 			return errors.New("invalid Anthropic content block start")
+		}
+		switch v.Block.Type {
+		case "text":
+			frames, err := s.emitter.StartText()
+			if err != nil {
+				return err
+			}
+			s.pending = append(s.pending, frames...)
+		case "tool_use":
+			frame, err := s.emitter.StartTool(v.Block.ID, v.Block.Name)
+			if err != nil {
+				return errors.New("invalid Anthropic tool_use block")
+			}
+			s.tool = true
+			s.pending = append(s.pending, frame)
+		default:
+			return errors.New("unsupported Anthropic content block type")
 		}
 		s.block = true
 	case "content_block_delta":
 		var v struct {
-			Index int                         `json:"index"`
-			Delta struct{ Type, Text string } `json:"delta"`
+			Index int `json:"index"`
+			Delta struct {
+				Type        string  `json:"type"`
+				Text        string  `json:"text"`
+				PartialJSON *string `json:"partial_json"`
+			} `json:"delta"`
 		}
-		if !s.block || s.stopped || json.Unmarshal(event.data, &v) != nil || v.Index != 0 || v.Delta.Type != "text_delta" {
-			return errors.New("invalid Anthropic text delta")
+		if !s.block || s.stopped || json.Unmarshal(event.data, &v) != nil || v.Index != 0 {
+			return errors.New("invalid Anthropic content block delta")
 		}
-		frame, err := s.emitter.Delta(v.Delta.Text)
+		var frame []byte
+		var err error
+		if s.tool && v.Delta.Type == "input_json_delta" && v.Delta.PartialJSON != nil {
+			frame, err = s.emitter.ToolDelta(*v.Delta.PartialJSON)
+		} else if !s.tool && v.Delta.Type == "text_delta" {
+			frame, err = s.emitter.Delta(v.Delta.Text)
+		} else {
+			return errors.New("unexpected Anthropic content block delta type")
+		}
 		if err == nil {
 			s.pending = append(s.pending, frame)
 		}
@@ -175,6 +207,13 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 		}
 		if !s.block || s.stopped || json.Unmarshal(event.data, &v) != nil || v.Index != 0 {
 			return errors.New("invalid Anthropic content block stop")
+		}
+		if s.tool {
+			frames, err := s.emitter.FinishTool()
+			if err != nil {
+				return err
+			}
+			s.pending = append(s.pending, frames...)
 		}
 		s.block = false
 		s.stopped = true
@@ -192,7 +231,7 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 		}
 		s.stop, s.output = *v.Delta.StopReason, *v.Usage.Output
 	case "message_stop":
-		if !s.started || !s.stopped || s.stop == "" || s.phase != 1 {
+		if !s.started || !s.stopped || s.block || s.stop == "" || s.phase != 1 {
 			return errors.New("invalid Anthropic message_stop")
 		}
 		frames, err := s.emitter.Finish(s.stop, s.input, s.output)

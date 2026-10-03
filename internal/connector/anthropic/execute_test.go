@@ -106,6 +106,110 @@ func TestExecuteStreamTranslateEarlyHeadAndUsage(t *testing.T) {
 	}
 }
 
+func TestExecuteToolStreamLifecycle(t *testing.T) {
+	body := strings.Join([]string{
+		`event: message_start`, `data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}`, ``,
+		`event: content_block_start`, `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_weather","name":"weather"}}`, ``,
+		`event: content_block_delta`, `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"Mün"}}`, ``,
+		`event: content_block_delta`, `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"chen 🌍\"}"}}`, ``,
+		`event: content_block_stop`, `data: {"type":"content_block_stop","index":0}`, ``,
+		`event: message_delta`, `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}`, ``,
+		`event: message_stop`, `data: {"type":"message_stop"}`, ``,
+	}, "\n") + "\n"
+	stream := newMessagesStream(context.Background(), func() {}, io.NopCloser(strings.NewReader(body)))
+	defer stream.Close()
+	if frame, err := stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+		t.Fatalf("Head=%+v err=%v", frame, err)
+	}
+	types := []string{}
+	deltas := ""
+	var itemID string
+	for {
+		frame, err := stream.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameComplete {
+			if frame.Complete.Outcome != core.OutcomeSucceeded || frame.Complete.Usage == nil || *frame.Complete.Usage.InputTokens != 7 || *frame.Complete.Usage.OutputTokens != 4 {
+				t.Fatalf("Complete=%+v", frame.Complete)
+			}
+			break
+		}
+		name, payload := decodeResponseFrame(t, frame.Body.Data)
+		types = append(types, name)
+		switch name {
+		case "response.output_item.added":
+			item := payload["item"].(map[string]any)
+			if item["type"] != "function_call" || item["call_id"] != "call_weather" || item["name"] != "weather" || item["id"] == stream.(*messagesStream).emitter.responseID {
+				t.Fatalf("tool item=%#v", item)
+			}
+			itemID = item["id"].(string)
+		case "response.function_call_arguments.delta":
+			if payload["item_id"] != itemID {
+				t.Fatalf("delta item=%#v", payload)
+			}
+			deltas += payload["delta"].(string)
+		case "response.function_call_arguments.done":
+			if payload["arguments"] != deltas {
+				t.Fatalf("done=%#v deltas=%q", payload, deltas)
+			}
+		case "response.output_item.done":
+			item := payload["item"].(map[string]any)
+			if item["arguments"] != deltas || item["id"] != itemID {
+				t.Fatalf("done item=%#v", item)
+			}
+		case "response.completed":
+			response := payload["response"].(map[string]any)
+			if response["status"] != "completed" || response["output"].([]any)[0].(map[string]any)["arguments"] != deltas {
+				t.Fatalf("response=%#v", response)
+			}
+		}
+	}
+	if deltas != `{"city":"München 🌍"}` {
+		t.Fatalf("arguments=%q", deltas)
+	}
+	want := "response.created,response.in_progress,response.output_item.added,response.function_call_arguments.delta,response.function_call_arguments.delta,response.function_call_arguments.done,response.output_item.done,response.completed"
+	if strings.Join(types, ",") != want {
+		t.Fatalf("events=%v", types)
+	}
+}
+
+func TestToolStreamRejectsUnknownDeltaAndOverflow(t *testing.T) {
+	e, _ := newResponsesEmitter()
+	_, _ = e.StartResponse()
+	if _, err := e.StartTool("call_x", "tool"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.ToolDelta(strings.Repeat("x", maxRetainedText+1)); err == nil {
+		t.Fatal("oversized tool arguments accepted")
+	}
+	if _, err := e.Finish("tool_use", 1, 1); err == nil {
+		t.Fatal("overflow emitted successful terminal")
+	}
+	stream := &messagesStream{started: true, block: true, tool: true, emitter: func() *responsesEmitter {
+		x, _ := newResponsesEmitter()
+		_, _ = x.StartResponse()
+		_, _ = x.StartTool("call_x", "tool")
+		return x
+	}()}
+	if err := stream.consume(messagesSSEEvent{typeName: "content_block_delta", data: []byte(`{"index":0,"delta":{"type":"unknown_delta","value":"x"}}`)}); err == nil {
+		t.Fatal("unknown delta accepted")
+	}
+	for _, tc := range []struct {
+		data  string
+		block bool
+	}{
+		{data: `{"index":1,"content_block":{"type":"tool_use","id":"call_x","name":"tool"}}`},
+		{data: `{"index":0,"content_block":{"type":"tool_use","id":"call_x","name":"tool"}}`, block: true},
+	} {
+		invalid := &messagesStream{started: true, emitter: func() *responsesEmitter { x, _ := newResponsesEmitter(); _, _ = x.StartResponse(); return x }()}
+		invalid.block = tc.block
+		if err := invalid.consume(messagesSSEEvent{typeName: "content_block_start", data: []byte(tc.data)}); err == nil {
+			t.Fatalf("malformed or duplicate block identity accepted: %s", tc.data)
+		}
+	}
+}
+
 func TestTranslateFunctionHistoryRejectsBeforeDispatchAndHTTPRejection(t *testing.T) {
 	calls := 0
 	services := core.InvocationServices{Credentials: credentialStub("secret"), Transport: doerFunc(func(*http.Request) (*http.Response, error) { calls++; return nil, nil })}
@@ -152,7 +256,7 @@ func TestExecuteEOFWithoutMessageStopIsError(t *testing.T) {
 	if _, err := resp.Stream.Next(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 2; i++ {
 		if _, err := resp.Stream.Next(context.Background()); err != nil {
 			t.Fatalf("initial lifecycle frame %d: %v", i, err)
 		}

@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-019 DONE (19 tasks completed)
+## Immediate focus: M4-020 DONE (20 tasks completed)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
@@ -35,16 +35,15 @@ Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-011](tasks
 are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`),
 [M4-013](tasks/M4-013.md) (`594d684`), [M4-014](tasks/M4-014.md) (`cf9d7d6`),
 [M4-015](tasks/M4-015.md) (`58cf823`), [M4-016](tasks/M4-016.md) (`e65671c`),
-[M4-017](tasks/M4-017.md) (`4555ea4`), and [M4-018](tasks/M4-018.md) (`a65f424`)
-are committed locally on `dev-m4` ahead 7 of origin.
+[M4-017](tasks/M4-017.md) (`4555ea4`), [M4-018](tasks/M4-018.md) (`a65f424`), and
+[M4-019](tasks/M4-019.md) (`8076e38`) are committed locally on `dev-m4` ahead of origin.
 
-[M4-019](tasks/M4-019.md) (Translate function call and result history) is verified
-and passed review (reviewer PASS `ses_efcc26dd9ffefrw9QN1lqpra0f`). It maps Responses
-input history items `function_call` and `function_call_output` to Messages assistant
-`tool_use` and user `tool_result` content blocks, preserving `call_id` linkage, argument
-JSON parsing, and rejecting orphan results, duplicate call IDs, malformed JSON, and
-invalid chronology before dispatch. 19 tasks are DONE in M4. No new tasks are promoted
-or prepared pending task commit.
+[M4-020](tasks/M4-020.md) (Translate streamed function calls and arguments) is verified
+and passed review (reviewer PASS `ses_efcaefabdffeXOkuP28SZ26LmZ`). It extends `responsesEmitter`
+and `messagesStream` to map streamed `tool_use` blocks, `input_json_delta` chunks, block
+closure, and `stop_reason: "tool_use"` into Responses function-call streaming events with
+distinct IDs, UTF-8 checks, and 1 MiB argument bounds. 20 tasks are DONE in M4.
+No new tasks are promoted or prepared pending task commit.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
