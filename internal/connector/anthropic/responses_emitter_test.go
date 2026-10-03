@@ -189,6 +189,44 @@ func TestResponsesEmitterTruncationAndBounds(t *testing.T) {
 	}
 }
 
+func TestResponsesEmitterFailureAndIncompleteAreTerminal(t *testing.T) {
+	input, output := int64(5), int64(2)
+	failed, _ := newResponsesEmitter()
+	if _, err := failed.StartResponse(); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := failed.Failed("provider_failure", "Upstream reported a failure", &input, &output, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, payload := decodeResponseFrame(t, frame)
+	response := payload["response"].(map[string]any)
+	usage := response["usage"].(map[string]any)
+	if name != "response.failed" || response["status"] != "failed" || usage["input_tokens"] != float64(5) || usage["output_tokens"] != float64(2) || usage["total_tokens"] != float64(7) {
+		t.Fatalf("failed terminal=%q payload=%#v", name, payload)
+	}
+	if _, err := failed.Failed("again", "again", nil, nil, nil); err == nil {
+		t.Fatal("duplicate failed terminal accepted")
+	}
+
+	incomplete, _ := newResponsesEmitter()
+	if _, err := incomplete.StartResponse(); err != nil {
+		t.Fatal(err)
+	}
+	frame, err = incomplete.Incomplete(&input, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, payload = decodeResponseFrame(t, frame)
+	response = payload["response"].(map[string]any)
+	if name != "response.incomplete" || response["status"] != "incomplete" || response["incomplete_details"].(map[string]any)["reason"] != "incomplete_response" {
+		t.Fatalf("incomplete terminal=%q payload=%#v", name, payload)
+	}
+	if _, err := incomplete.Incomplete(nil, nil, nil); err == nil {
+		t.Fatal("duplicate incomplete terminal accepted")
+	}
+}
+
 func decodeResponseFrame(t *testing.T, frame []byte) (string, map[string]any) {
 	t.Helper()
 	if !bytes.HasPrefix(frame, []byte("event: ")) || !bytes.HasSuffix(frame, []byte("\n\n")) {

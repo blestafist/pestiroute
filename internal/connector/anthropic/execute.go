@@ -27,6 +27,7 @@ type messagesStream struct {
 	blockIndex int
 	nextIndex  int
 	stop       string
+	failure    *core.GatewayError
 	input      *int64
 	output     *int64
 	cached     *int64
@@ -99,12 +100,16 @@ func (s *messagesStream) Next(ctx context.Context) (core.StreamFrame, error) {
 				return core.StreamFrame{}, context.Canceled
 			}
 			if err == io.EOF {
-				err = errors.New("Anthropic stream ended without message_stop")
+				return s.incomplete(), nil
 			}
-			return s.incomplete(), nil
+			return s.failed(gatewayFailure("invalid_response", core.CategoryUnavailable, "Upstream stream failed")), nil
 		}
 		if err = s.consume(event); err != nil {
-			return s.incomplete(), nil
+			failure := s.failure
+			if failure == nil {
+				failure = gatewayFailure("invalid_response", core.CategoryUnavailable, "Upstream response was invalid")
+			}
+			return s.failed(failure), nil
 		}
 		s.mu.Lock()
 		if len(s.pending) > 0 {
@@ -119,7 +124,7 @@ func (s *messagesStream) Next(ctx context.Context) (core.StreamFrame, error) {
 
 func (s *messagesStream) incomplete() core.StreamFrame {
 	s.mu.Lock()
-	s.phase = 3
+	s.phase = 2
 	s.mu.Unlock()
 	s.cancel()
 	_ = s.body.Close()
@@ -129,7 +134,42 @@ func (s *messagesStream) incomplete() core.StreamFrame {
 		Error:   &core.GatewayError{Code: "incomplete_response", Category: core.CategoryUnavailable, Message: "Upstream response was incomplete"},
 		Usage:   usage,
 	}
-	return core.StreamFrame{Type: core.FrameComplete, Complete: done}
+	s.terminal = &core.StreamFrame{Type: core.FrameComplete, Complete: done}
+	if s.emitter != nil {
+		if event, err := s.emitter.Incomplete(s.input, s.output, s.cached); err == nil {
+			s.pending = append(s.pending, event)
+		}
+	}
+	if len(s.pending) > 0 {
+		frame := bodyFrame(s.pending[0])
+		s.pending = s.pending[1:]
+		return frame
+	}
+	s.phase = 3
+	return *s.terminal
+}
+
+func (s *messagesStream) failed(failure *core.GatewayError) core.StreamFrame {
+	s.mu.Lock()
+	s.phase = 2
+	s.failure = failure
+	s.mu.Unlock()
+	if s.emitter != nil {
+		if event, err := s.emitter.Failed(failure.Code, failure.Message, s.input, s.output, s.cached); err == nil {
+			s.pending = append(s.pending, event)
+		}
+	}
+	s.cancel()
+	_ = s.body.Close()
+	done := &core.CompleteFrame{Outcome: core.OutcomeFailed, Error: failure, Usage: s.usage(core.UsagePartial)}
+	s.terminal = &core.StreamFrame{Type: core.FrameComplete, Complete: done}
+	if len(s.pending) == 0 {
+		s.phase = 3
+		return *s.terminal
+	}
+	frame := bodyFrame(s.pending[0])
+	s.pending = s.pending[1:]
+	return frame
 }
 
 func (s *messagesStream) usage(completeness core.UsageCompleteness) *core.UsageReport {
@@ -149,6 +189,7 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 	case "ping":
 		return nil
 	case "error":
+		s.failure = classifyStreamError(event.data)
 		return errors.New("Anthropic stream reported an error")
 	case "message_start":
 		if s.started {
@@ -261,7 +302,7 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 				Output *int64 `json:"output_tokens"`
 			} `json:"usage"`
 		}
-		if !s.started || s.block || s.nextIndex == 0 || json.Unmarshal(event.data, &v) != nil || invalidCount(v.Usage.Output) {
+		if !s.started || s.block || s.nextIndex == 0 || s.stop != "" || json.Unmarshal(event.data, &v) != nil || invalidCount(v.Usage.Output) {
 			return errors.New("invalid Anthropic message_delta")
 		}
 		if v.Delta.StopReason != nil {
@@ -271,6 +312,9 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 	case "message_stop":
 		if !s.started || s.nextIndex == 0 || s.block || s.stop == "" || s.phase != 1 {
 			return errors.New("invalid Anthropic message_stop")
+		}
+		if s.stop != "end_turn" && s.stop != "stop_sequence" && s.stop != "tool_use" && s.stop != "max_tokens" {
+			return errors.New("unsupported Anthropic stop reason")
 		}
 		frames, err := s.emitter.Finish(s.stop, s.input, s.output, s.cached)
 		if err != nil {
@@ -290,6 +334,33 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 		return errors.New("unsupported Anthropic event")
 	}
 	return nil
+}
+
+func classifyStreamError(data []byte) *core.GatewayError {
+	var wire struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(data, &wire)
+	if wire.Error.Type != "" {
+		wire.Type = wire.Error.Type
+	}
+	category, code, message := core.CategoryUnavailable, "provider_failure", "Upstream reported a failure"
+	switch wire.Type {
+	case "rate_limit_error":
+		category, code = core.CategoryRateLimited, "upstream_rate_limited"
+	case "overloaded_error":
+		code = "upstream_overloaded"
+	case "api_error":
+		code = "upstream_api_error"
+	}
+	return gatewayFailure(code, category, message)
+}
+
+func gatewayFailure(code string, category core.ErrorCategory, message string) *core.GatewayError {
+	return &core.GatewayError{Code: code, Category: category, Message: message}
 }
 
 func invalidCount(v *int64) bool { return v != nil && *v < 0 }

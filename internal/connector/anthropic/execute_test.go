@@ -397,9 +397,227 @@ func TestExecuteEOFWithoutMessageStopIsError(t *testing.T) {
 			t.Fatalf("initial lifecycle frame %d: %v", i, err)
 		}
 	}
-	frame, err := resp.Stream.Next(context.Background())
-	if err != nil || frame.Type != core.FrameComplete || frame.Complete.Outcome != core.OutcomeIncomplete || frame.Complete.Usage == nil || frame.Complete.Usage.Completeness != core.UsagePartial || frame.Complete.Usage.InputTokens == nil || *frame.Complete.Usage.InputTokens != 1 {
-		t.Fatalf("EOF without message_stop returned %+v, %v", frame, err)
+	var event string
+	for {
+		frame, err := resp.Stream.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameBody && strings.Contains(string(frame.Body.Data), "response.incomplete") {
+			event = "response.incomplete"
+		}
+		if frame.Type == core.FrameComplete {
+			if frame.Complete.Outcome != core.OutcomeIncomplete || frame.Complete.Error.Code != "incomplete_response" || frame.Complete.Usage == nil || frame.Complete.Usage.Completeness != core.UsagePartial || frame.Complete.Usage.InputTokens == nil || *frame.Complete.Usage.InputTokens != 1 || event == "" {
+				t.Fatalf("EOF without message_stop returned %+v, event=%q", frame, event)
+			}
+			break
+		}
+	}
+}
+
+func TestExecuteStopReasonAndStreamErrorOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name, stop string
+		outcome    core.Outcome
+		terminal   string
+	}{
+		{"end_turn", "end_turn", core.OutcomeSucceeded, "response.completed"},
+		{"stop_sequence", "stop_sequence", core.OutcomeSucceeded, "response.completed"},
+		{"tool_use", "tool_use", core.OutcomeSucceeded, "response.completed"},
+		{"max_tokens", "max_tokens", core.OutcomeIncomplete, "response.incomplete"},
+		{"unknown", "future_reason", core.OutcomeFailed, "response.failed"},
+		{"refusal", "refusal", core.OutcomeFailed, "response.failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			block := `"type":"text"`
+			if tc.stop == "tool_use" {
+				block = `"type":"tool_use","id":"call_x","name":"tool"`
+			}
+			body := "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n" +
+				"event: content_block_start\ndata: {\"index\":0,\"content_block\":{" + block + "}}\n\n" +
+				"event: content_block_stop\ndata: {\"index\":0}\n\n" +
+				"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"" + tc.stop + "\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+				"event: message_stop\ndata: {}\n\n"
+			stream := newMessagesStream(context.Background(), func() {}, io.NopCloser(strings.NewReader(body)))
+			defer stream.Close()
+			if _, err := stream.Next(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			var terminals []string
+			var incompleteReason string
+			for {
+				frame, err := stream.Next(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if frame.Type == core.FrameBody {
+					for _, name := range []string{"response.completed", "response.incomplete", "response.failed"} {
+						if strings.Contains(string(frame.Body.Data), name) {
+							terminals = append(terminals, name)
+							if name == "response.incomplete" {
+								_, payload := decodeResponseFrame(t, frame.Body.Data)
+								incompleteReason = payload["response"].(map[string]any)["incomplete_details"].(map[string]any)["reason"].(string)
+							}
+						}
+					}
+				}
+				if frame.Type == core.FrameComplete {
+					if frame.Complete.Outcome != tc.outcome || len(terminals) != 1 || terminals[0] != tc.terminal {
+						t.Fatalf("Complete=%+v terminals=%v", frame.Complete, terminals)
+					}
+					if tc.outcome != core.OutcomeSucceeded && (frame.Complete.Error == nil || strings.Contains(frame.Complete.Error.Message, tc.stop)) {
+						t.Fatalf("unsafe error: %+v", frame.Complete.Error)
+					}
+					if tc.stop == "max_tokens" && (frame.Complete.Error.Code != "output_truncated" || incompleteReason != "max_output_tokens") {
+						t.Fatalf("truncation Complete=%+v incomplete reason=%q", frame.Complete, incompleteReason)
+					}
+					break
+				}
+			}
+		})
+	}
+	t.Run("in-stream rate limit error", func(t *testing.T) {
+		body := "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n" +
+			"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"private\"}}\n\n"
+		stream := newMessagesStream(context.Background(), func() {}, io.NopCloser(strings.NewReader(body)))
+		defer stream.Close()
+		_, _ = stream.Next(context.Background())
+		var terminal string
+		for {
+			frame, err := stream.Next(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if frame.Type == core.FrameBody && strings.Contains(string(frame.Body.Data), "response.failed") {
+				terminal = "response.failed"
+			}
+			if frame.Type == core.FrameComplete {
+				if frame.Complete.Outcome != core.OutcomeFailed || frame.Complete.Error.Category != core.CategoryRateLimited || frame.Complete.Error.Code != "upstream_rate_limited" || strings.Contains(frame.Complete.Error.Message, "private") || terminal == "" {
+					t.Fatalf("Complete=%+v terminal=%q", frame.Complete, terminal)
+				}
+				break
+			}
+		}
+	})
+}
+
+func TestExecuteTerminalIsExactlyOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		outcome    core.Outcome
+	}{
+		{
+			name: "repeated stop delta is a single failure",
+			body: "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n\n" +
+				"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n" +
+				"event: content_block_stop\ndata: {\"index\":0}\n\n" +
+				"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+				"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+				"event: message_stop\ndata: {}\n\n",
+			outcome: core.OutcomeFailed,
+		},
+		{
+			name: "second stop and trailing error ignored after terminal",
+			body: "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n\n" +
+				"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n" +
+				"event: content_block_stop\ndata: {\"index\":0}\n\n" +
+				"event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+				"event: message_stop\ndata: {}\n\n" +
+				"event: message_stop\ndata: {}\n\n" +
+				"event: error\ndata: {\"error\":{\"type\":\"api_error\"}}\n\n",
+			outcome: core.OutcomeSucceeded,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := newMessagesStream(context.Background(), func() {}, io.NopCloser(strings.NewReader(tc.body)))
+			defer stream.Close()
+			if _, err := stream.Next(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			completeCount, terminalCount := 0, 0
+			var outcome core.Outcome
+			var input, output *int64
+			for {
+				frame, err := stream.Next(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if frame.Type == core.FrameBody && (strings.Contains(string(frame.Body.Data), "response.completed") || strings.Contains(string(frame.Body.Data), "response.failed")) {
+					terminalCount++
+				}
+				if frame.Type == core.FrameComplete {
+					completeCount++
+					outcome = frame.Complete.Outcome
+					input, output = frame.Complete.Usage.InputTokens, frame.Complete.Usage.OutputTokens
+					if outcome != tc.outcome {
+						t.Fatalf("outcome=%q want %q", outcome, tc.outcome)
+					}
+					break
+				}
+			}
+			if completeCount != 1 || terminalCount != 1 || input == nil || *input != 1 || output == nil || *output != 2 {
+				t.Fatalf("complete=%d terminal=%d outcome=%q usage=(%v,%v)", completeCount, terminalCount, outcome, input, output)
+			}
+			for i := 0; i < 2; i++ {
+				if _, err := stream.Next(context.Background()); err != io.EOF {
+					t.Fatalf("post-terminal Next %d: %v", i, err)
+				}
+			}
+			if err := stream.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := stream.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if completeCount != 1 || outcome != tc.outcome || *input != 1 || *output != 2 {
+				t.Fatalf("post-terminal state changed: complete=%d outcome=%q usage=(%d,%d)", completeCount, outcome, *input, *output)
+			}
+		})
+	}
+}
+
+func TestExecuteProviderErrorClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name, prefix, providerType, code string
+		category                         core.ErrorCategory
+	}{
+		{"before message_start", "", "api_error", "upstream_api_error", core.CategoryUnavailable},
+		{"overloaded", "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n", "overloaded_error", "upstream_overloaded", core.CategoryUnavailable},
+		{"api", "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n", "api_error", "upstream_api_error", core.CategoryUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := tc.prefix + "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"" + tc.providerType + "\",\"message\":\"private provider detail\"}}\n\n"
+			stream := newMessagesStream(context.Background(), func() {}, io.NopCloser(strings.NewReader(body)))
+			defer stream.Close()
+			if _, err := stream.Next(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			var terminal string
+			for {
+				frame, err := stream.Next(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if frame.Type == core.FrameBody && strings.Contains(string(frame.Body.Data), "response.failed") {
+					terminal = string(frame.Body.Data)
+				}
+				if frame.Type == core.FrameComplete {
+					if frame.Complete.Outcome != core.OutcomeFailed || frame.Complete.Error.Code != tc.code || frame.Complete.Error.Category != tc.category || strings.Contains(frame.Complete.Error.Message, "private") {
+						t.Fatalf("Complete=%+v", frame.Complete)
+					}
+					if tc.prefix != "" && (terminal == "" || strings.Contains(terminal, "private provider detail")) {
+						t.Fatalf("unsafe/missing terminal: %q", terminal)
+					}
+					if tc.prefix == "" && terminal != "" {
+						t.Fatalf("terminal emitted before response start: %q", terminal)
+					}
+					break
+				}
+			}
+			if _, err := stream.Next(context.Background()); err != io.EOF {
+				t.Fatalf("post-failure Next: %v", err)
+			}
+		})
 	}
 }
 

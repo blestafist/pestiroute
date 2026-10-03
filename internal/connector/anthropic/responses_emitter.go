@@ -203,6 +203,41 @@ func (e *responsesEmitter) Finish(stopReason string, inputTokens, outputTokens, 
 	return frames, nil
 }
 
+func (e *responsesEmitter) Failed(code, message string, input, output, cached *int64) ([]byte, error) {
+	if !e.started || e.closed {
+		return nil, errResponsesLifecycle
+	}
+	e.closed = true
+	response := responseEnvelope{ID: e.responseID, Object: "response", Status: "failed", Output: append([]responseItem(nil), e.output...), Usage: partialResponseUsage(input, output, cached)}
+	return responseEvent("response.failed", struct {
+		Response responseEnvelope `json:"response"`
+		Error    struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}{Response: response, Error: struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: code, Message: message}}), nil
+}
+
+func (e *responsesEmitter) Incomplete(input, output, cached *int64) ([]byte, error) {
+	if !e.started || e.closed {
+		return nil, errResponsesLifecycle
+	}
+	e.closed = true
+	response := responseEnvelope{ID: e.responseID, Object: "response", Status: "incomplete", Output: append([]responseItem(nil), e.output...), Usage: partialResponseUsage(input, output, cached), IncompleteDetails: &responseIncompleteDetails{Reason: "incomplete_response"}}
+	return responseEvent("response.incomplete", responseLifecycleEvent{Response: response}), nil
+}
+
+func partialResponseUsage(input, output, cached *int64) *responseUsage {
+	total, err := addCounts(input, output)
+	if err != nil {
+		total = nil
+	}
+	return responseUsageFor(input, output, total, cached)
+}
+
 type responseLifecycleEvent struct {
 	Response responseEnvelope `json:"response"`
 }

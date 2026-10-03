@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-023 DONE (23 tasks completed)
+## Immediate focus: M4-024 DONE (24 tasks completed)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
@@ -37,16 +37,16 @@ are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`)
 [M4-015](tasks/M4-015.md) (`58cf823`), [M4-016](tasks/M4-016.md) (`e65671c`),
 [M4-017](tasks/M4-017.md) (`4555ea4`), [M4-018](tasks/M4-018.md) (`a65f424`),
 [M4-019](tasks/M4-019.md) (`8076e38`), [M4-020](tasks/M4-020.md) (`f82975a`),
-[M4-021](tasks/M4-021.md) (`77913d2`), and [M4-022](tasks/M4-022.md) (`3a0cf49`)
-are committed locally on `dev-m4` ahead of origin.
+[M4-021](tasks/M4-021.md) (`77913d2`), [M4-022](tasks/M4-022.md) (`3a0cf49`),
+and [M4-023](tasks/M4-023.md) (`cc42aed`) are committed locally on `dev-m4` ahead of origin.
 
-[M4-023](tasks/M4-023.md) (Normalize cumulative usage and cache components) is verified
-and closed DONE (reviewer PASS `ses_efc8aafadffew3RjVJNQNyLywz`). It normalizes Anthropic
-cumulative output snapshots (replacing rather than accumulating), sums base and cache-read/
-creation input counts with overflow checks, preserves missing vs zero counters, emits
-cached token details in Responses completed events, and reports partial usage upon stream
-interruption without adding Core or SQLite fields.
-23 tasks are DONE in M4. No new tasks are promoted or prepared pending task commit.
+[M4-024](tasks/M4-024.md) (Translate stop reasons and committed stream failures truthfully)
+is verified and closed DONE (reviewer PASS `ses_efc80715effeSq7ip34QTiCrH3`). Anthropic stop
+reasons map truthfully to succeeded/incomplete/failed Core outcomes; max_tokens and premature
+EOF produce incomplete outcomes with output_truncated and incomplete_response, in-stream errors
+fail with sanitized classification, committed stream failures emit response.failed or
+response.incomplete without retry, and repeated stops/post-terminal events are rejected idempotently.
+24 tasks are DONE in M4. No new tasks are promoted or prepared pending task commit.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
