@@ -9,7 +9,7 @@ The proposed stack is designed for a single self-hosted process with simple depl
 | HTTP server and client | `net/http`, `http.Transport` | Managed connections, cancellation, and streaming without a large framework |
 | API routing | `http.ServeMux` | Standard library is sufficient for the initial set of endpoints |
 | JSON | `encoding/json` at API boundaries and within connectors | Core passes raw bytes without re-serializing requests |
-| Configuration | YAML via `go.yaml.in/yaml/v3` | Human-readable configuration with explicit schema and unknown key validation |
+| Configuration | YAML via `gopkg.in/yaml.v3` v3.0.1 | Human-readable configuration with explicit schema and unknown key validation |
 | Storage | SQLite via `database/sql` and `modernc.org/sqlite` v1.60.1 | File-backed integration spike passed on Linux/amd64 with Go 1.27.1 and CGO disabled; startup configures WAL, `synchronous=FULL`, foreign keys, and a 500 ms busy timeout |
 | SQL | Explicit queries and versioned SQL migrations | Small schema, transparent transactions; no need for ORM yet |
 | Logging | `log/slog` | Structured events without an additional logging framework |
@@ -18,7 +18,7 @@ The proposed stack is designed for a single self-hosted process with simple depl
 | Packaging | Go binary and container | Convenient deployment on servers or local machines |
 | External connectors | Tentatively gRPC + Protobuf over Unix socket | Versioning, streaming, and cancellation through typed transport |
 
-These are initial preferences. The SQLite driver will be validated with a small spike on migrations, concurrent writes, and supported platforms. The IPC choice is finalized only after comparing alternatives on a real streaming scenario in M6.
+HTTP, YAML and SQLite choices are implemented; SQLite is validated on Linux/amd64. Metrics, container packaging and external transport remain roadmap choices. The IPC choice is finalized after a real streaming comparison in M6.
 
 ## HTTP and Streaming
 

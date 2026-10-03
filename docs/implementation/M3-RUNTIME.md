@@ -1,12 +1,12 @@
 # M3 Access, Admission, and Accounting Runtime Binding
 
-This is a proposed concrete runtime binding for M3, not implemented behavior
-and not a change to accepted v1 semantics. [CONTRACT.md](CONTRACT.md) remains
-authoritative for opaque payloads, Connector support operations, usage reports,
-and `Head / Body / Complete / EOF`. These runtime-owned Go-shaped signatures
-are semantic proposals; SQL and SQLite types remain behind the composition-root
-repositories described in [M3-STORAGE.md](M3-STORAGE.md). No protocol or storage
-package is imported by Core.
+This describes the implemented M3 runtime binding in `internal/core`, adapted
+to SQLite by `cmd/gateway`. [CONTRACT.md](CONTRACT.md) remains authoritative for
+opaque payloads, Connector support operations, usage reports, and
+`Head / Body / Complete / EOF`. The abbreviated signatures below describe the
+runtime operations; concrete types live in Core. SQL and SQLite types remain
+behind the composition-root repositories in [M3-STORAGE.md](M3-STORAGE.md).
+No protocol or storage package is imported by Core.
 
 ## Trust and policy snapshot
 
@@ -77,7 +77,7 @@ type AccountingStore interface {
     BeginAttempt(context.Context, AttemptRecord, ReservationRecord) error
     RecordDispatchIntent(context.Context, AttemptID) error
     FinalizeAttempt(context.Context, TerminalAttempt) error
-    Recover(context.Context, time.Time) (RecoveryReport, error)
+    FinishRequest(context.Context, RequestID) error
 }
 ```
 
@@ -97,9 +97,14 @@ must be durably acknowledged before `Connector.Execute`. `FinalizeAttempt`
 atomically records terminal attempt outcome, nullable usage, and reservation
 settlement keyed by attempt ID. Repeating the same terminal result is a no-op;
 a conflicting result is an error and cannot overwrite the first settlement.
-Only a terminal attempt marked final terminalizes the request. Recovery follows
-the idempotent behavior in [M3-STORAGE.md](M3-STORAGE.md#lifecycle-and-recovery)
-and never creates/replays attempts.
+`FinishRequest` closes the admitted request with its last persisted attempt's
+outcome only when all attempts and reservations are terminal. It is idempotent
+and adds no charge. Dispatch calls it after the final attempt settles, before
+exposing Complete or returning the terminal error; intermediate failures leave
+the request open for eligible fallback. Recovery is a separate startup repository
+operation and closes any crash gap between attempt settlement and request
+closure. It follows [M3-STORAGE.md](M3-STORAGE.md#lifecycle-and-recovery) and never
+creates/replays attempts. See [DEC-006](../project/DECISIONS.md#dec-006--separate-request-closure-from-attempt-settlement).
 
 Before `Admit`, Core asks the selected Connector's existing
 `EstimateUsage` support operation with `UsageQuery` and invocation-scoped
@@ -229,10 +234,11 @@ the v1 stream lifecycle.
 
 ## Implementation boundary
 
-The current `Dispatcher.Finalize func(AttemptResult)` and optional
-`AttemptObservationSink.TryRecord` are not durable acknowledgements. Future M3
-dispatch binding must propagate `FinalizeAttempt` errors through lifecycle
-handling instead of treating the callback or telemetry ring as persistence.
+`Dispatcher.Finalize func(AttemptResult)` and optional
+`AttemptObservationSink.TryRecord` remain observations, not durable
+acknowledgements. Dispatch propagates `FinalizeAttempt` and `FinishRequest`
+errors through lifecycle handling. A persistence failure latches the protected
+gateway's admission gate and withdraws readiness across routes until restart.
 Terminal SQL acknowledgement must not be moved ahead of validated Complete and
 EOF, nor may it change the accepted stream frames or Connector signatures.
 `internal/core` continues to own runtime interfaces and policy decisions;

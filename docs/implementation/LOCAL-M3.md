@@ -164,3 +164,12 @@ external key makes credentials unusable. Never restore over a live database.
 The optional CLI documents [`.backup`](https://www.sqlite.org/backup.html)
 and [PRAGMA](https://www.sqlite.org/pragma.html); driver coverage is in
 `go test -race ./internal/storage/sqlite/...`.
+
+## Upgrading an existing M3 database
+
+This binary requires schema v6. Stop the gateway, make a consistent backup as
+above, retain the external master key, and run `gateway admin --db PATH migrate`
+before protected startup. The additive migration preserves v5 credentials and
+unclaimed auth sessions; startup consumes ambiguous claimed continuations and
+quarantines interrupted refreshes without replay. An older binary refuses the
+newer schema. Downgrade and master-key rotation are outside M3.

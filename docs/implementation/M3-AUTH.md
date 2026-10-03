@@ -30,8 +30,11 @@ operation and returns a continuing action; a finished flow needs no session.
 Continue resolves the runtime session, rejects expired/missing/consumed sessions,
 loads only its account-bound opaque state, and checks the stored credential
 revision both before the Connector call and atomically when persisting the next
-state or consuming the session. A mismatch discards returned state and fails
-closed. Expiry is runtime-owned, fixed at start, and checked before every
+state or consuming the session. Before invocation, it commits an exclusive claim
+conditioned on the loaded encrypted-state nonce and current enabled account.
+A stale reader cannot claim state advanced by another process. A mismatch
+discards returned state and fails closed. Expiry is runtime-owned, fixed at start,
+and checked before every
 continuation; an extension requires a future explicit policy, not a provider
 response.
 
@@ -56,11 +59,11 @@ unavailable and expiry is the restart-safe backstop for ordinary sessions.
 | --- | --- |
 | Unsupported, known before call | If descriptor/preflight establishes unsupported before `Authenticate` is invoked, do not create a session/refresh marker or write credentials. `Supported:false` returned by an invoked method is not proof of no exchange. |
 | Start | Call once. Persist encrypted opaque state and fixed expiry only for a successful supported result with `NextAction=continue`; otherwise create no session. |
-| Continue | Require an active, unexpired session and its exact recorded credential revision before calling. On successful supported continuation, atomically persist next opaque state or consume the session, conditioned on that same revision. A stale revision rejects the result. |
+| Continue | Require an active, unexpired session, enabled account, exact credential revision and loaded state version. Commit one durable claim before calling; competing/stale claims fail before invocation. Successful advance/finish resolves the claim atomically with the new state or consumed session. |
 | Ordinary session expiry | Reject before `Authenticate`; consume/expire and delete encrypted state. Never revive it from client input. |
 | Refresh preflight proves no call | Clear the durable refresh marker; there is no provider exchange to recover. This is limited to runtime facts proving invocation never began, not a Connector error/result. |
 | Refresh succeeds with replacement credentials | Atomically compare expected credential revision, replace the selected account credentials/revision, and clear the marker. Acknowledged commit is the only persisted-success response. |
-| Refresh succeeds without credential replacement | Do not claim refresh success: this binding requires a replacement credential set for refresh. Keep/quarantine the marker unless the operation was proven not invoked. |
+| Refresh returns incomplete credentials or continuation state/action | Do not claim refresh success: require non-empty named replacement values and no continuation state/action. Quarantine the marker; invocation may already have consumed a token. |
 | Refresh ambiguous / cancelled after call begins / generic error / `Supported:false` returned | Treat exchange outcome as uncertain. Retain a quarantined marker, fail closed for automatic refresh, and never infer safe delivery/no exchange from a generic error or unsupported result. |
 | Same-account concurrent refresh | Serialize by account. A waiter reloads credential revision and re-evaluates whether refresh is still needed; if the prior refresh advanced revision and credentials are valid, skip its Connector call. Otherwise it uses a fresh snapshot/revision and its own durable marker. Transactions end before network work. |
 | Different-account refresh | Independent account locks and snapshots; one account's wait/failure cannot block or disclose another account's credentials. |
@@ -80,6 +83,9 @@ timestamps only; never store provider diagnostics, token values, or raw errors.
 Quarantined rows are exempt from ordinary expiry/cleanup and remain until an
 explicit successful reauthentication resolves them atomically. Restart converts
 every leftover `refresh_in_progress` row to `uncertain` and never retries it.
+Restart also consumes sessions with leftover interactive invocation claims,
+erases their encrypted state and removes the claims; it never repeats an
+ambiguous continuation. Unclaimed, unexpired interactive sessions survive.
 Expired ordinary sessions are consumed and their encrypted state removed;
 account/Connector invalidation consumes ordinary session state but converts any
 in-progress refresh to `uncertain`, preserving the quarantine evidence.
@@ -103,5 +109,8 @@ AAD from [M3-STORAGE.md](M3-STORAGE.md#state-and-schema); a refresh marker is th
 same table with no Connector state envelope. Credential replacements and marker
 resolution use one revision-checked atomic transaction. These are runtime-owned
 conventions over existing operation fields, not new provider-facing fields.
-Subsequent storage and coordinator cards must implement these rules; this note
-does not claim runtime auth is implemented.
+`internal/core.AuthCoordinator`, `internal/storage/sqlite.AuthSessions` and the
+composition adapter implement these rules. The current adapter requires one
+pre-provisioned credential per account; multi-credential/enrollment flows and
+live provider OAuth remain outside this validated M3 binding. See
+[DEC-007](../project/DECISIONS.md#dec-007--durably-claim-interactive-auth-continuations).

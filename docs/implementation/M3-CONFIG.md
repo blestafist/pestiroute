@@ -1,7 +1,7 @@
 # M3 Protected Configuration and Retry Admission
 
-This is the proposed M3 startup contract, not implemented behavior. M3-020 owns
-the loader and M3-037–M3-041 own fallback implementation. The accepted
+This describes implemented protected startup and retry admission. M3-020
+records loader evidence; M3-037–M3-041 record candidate/fallback evidence. The accepted
 [v1 contract](CONTRACT.md) and the M3 persistence and runtime notes
 ([storage](M3-STORAGE.md), [runtime](M3-RUNTIME.md)) remain authoritative.
 
@@ -185,7 +185,7 @@ see [M3-STORAGE key handling](M3-STORAGE.md#state-and-schema).
 
 These concrete inputs trace the three explicit startup paths (port values are
 illustrative). The implemented legacy and topology field shapes are documented
-in [CONFIGURATION.md](CONFIGURATION.md#implemented-m2-startup-json) and its
+in [CONFIGURATION.md](CONFIGURATION.md#implemented-m2-startup-json-development-compatibility) and its
 [runnable M2 procedure](LOCAL-M2.md); protected YAML follows the schema above.
 
 ```json
@@ -267,6 +267,10 @@ aborts startup; it does not retry another config mode.
    itself has one target, A may execute, but any safe failure terminates and
    target B cannot be attempted or synthesized.
 
-These are specified behaviors only; the protected loader and fallback are not
-implemented by this document. See [M3-020](tasks/M3-020.md) for loader work
-and [M3-037](tasks/M3-037.md) for candidate-selection implementation.
+These behaviors are implemented and covered by deterministic fixtures. See
+[M3-020](tasks/M3-020.md) for loader evidence, [M3-037](tasks/M3-037.md) for
+candidate selection, and [M3-046](tasks/M3-046.md) for final audit results.
+A policy-excluded primary is skipped before admission; an eligible configured
+secondary can be selected even when retry is disabled. The native Connector
+leaves ambiguous transport delivery unknown, so it does not automatically retry
+such failures.

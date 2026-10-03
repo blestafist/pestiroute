@@ -1,9 +1,9 @@
 # M3 Storage and Crash Consistency
 
-This note fixes the proposed M3 persistence boundary before implementation. It
-does not claim that SQLite, protected startup, durable accounting, or recovery
-is implemented. The accepted v1 semantics remain in [CONTRACT.md](CONTRACT.md);
-the existing M2 observation callback is not a persistence API.
+This describes implemented M3 persistence in `internal/storage/sqlite` and
+protected startup in `cmd/gateway`. The accepted v1 semantics remain in
+[CONTRACT.md](CONTRACT.md); the M2 observation callback is not a persistence API.
+The final audit and remaining limits are recorded in [M3-046](tasks/M3-046.md).
 
 ## Ownership and database operation
 
@@ -48,11 +48,13 @@ type AccountingStore interface {
     BeginAttempt(context.Context, AttemptRecord, ReservationRecord) error
     RecordDispatchIntent(context.Context, AttemptID) error
     FinalizeAttempt(context.Context, TerminalRecord) error
-    Recover(context.Context, time.Time) (RecoveryReport, error)
+    FinishRequest(context.Context, RequestID) error
 }
 ```
 
-These are semantic signatures, not existing package declarations. The runtime
+These abbreviate the implemented Core-owned operations; concrete record types
+and signatures live in `internal/core/accounting.go`. Recovery is a separate
+repository operation invoked during exclusive protected startup. The runtime
 and repository signatures in [M3-RUNTIME.md](M3-RUNTIME.md#admission-and-accounting-operations)
 use these same record arguments. Initial `Admit` is one atomic transaction: it
 rechecks the trusted key/policy revisions and enabled state, then checks RPM
@@ -70,9 +72,11 @@ a second request nor takes another RPM charge. A failed admission rolls back
 all four effects. `RecordDispatchIntent` is an acknowledged durable transition
 required before `Connector.Execute`;
 `FinalizeAttempt` atomically stores terminal attempt outcome, nullable usage,
-and reservation reconciliation, idempotently keyed by attempt ID; its terminal
-record says whether this is the final attempt so intermediate fallback attempts
-do not terminalize the request. It assigns `reconciled_at` after acquiring the
+and reservation reconciliation, idempotently keyed by attempt ID. Intermediate
+fallback attempts leave the request open. `FinishRequest` separately checks
+that all attempts/holds are terminal, then closes the request with the last
+attempt's persisted outcome and timestamp; dispatch acknowledges it before
+exposing Complete. `FinalizeAttempt` assigns `reconciled_at` after acquiring the
 writer lock in that transaction, so the settlement-window charge is ordered
 with concurrent admissions. `Recover` atomically closes stale in-flight
 attempts, conservatively settles them, and terminalizes their still-open request
@@ -85,11 +89,11 @@ an admitted request has an initial attempt. Recovery never creates an attempt
 or retries work.
 The runtime owns interface/types and propagates errors through dispatch to a
 client-safe gateway error. The storage implementation owns SQL transactions,
-uniqueness, and constraints. No storage implementation is injected into Core;
-the composition root adapts it to future Core-owned execution hooks without
-changing Core's standard-library-only imports. Such hooks must preserve the
-existing `AttemptResult` semantics and make terminal acknowledgement explicit;
-the current void `Finalize` and lossy `TryRecord` cannot satisfy this boundary.
+uniqueness, and constraints. The composition root adapts repositories to
+Core-owned interfaces without
+changing Core's standard-library-only imports. Durable operations preserve
+`AttemptResult` semantics and explicitly acknowledge terminal persistence;
+void `Finalize` and lossy `TryRecord` remain observation-only hooks.
 
 ## State and schema
 
@@ -107,6 +111,7 @@ Store neither request/response payloads nor plaintext secrets/master key.
 | `virtual_keys` | Internal `id` primary key and unique public identifier; unique keyed digest; current `(policy_id, policy_revision)` reference, monotonic key `revision`, enabled/revoked state, created/revoked UTC timestamps. Store only a cryptographic digest, never the presented key. CLI create/revoke/policy reassignment is an atomic repository mutation that increments key revision; revocation is monotonic and historical request references are retained. |
 | `key_policies` | Immutable `(id, revision)` primary key with policy values and UTC timestamps. Model/connector restrictions are exact values; edits add a revision and do not rewrite historical rows. |
 | `auth_sessions` | Runtime-assigned `id` primary key; account foreign key, selected Connector instance, `kind` (`interactive` or `refresh`), expected credential revision, lifecycle (`active`, `refresh_in_progress`, `uncertain`, or `consumed`), nullable expiry plus creation/update UTC timestamps, nullable encrypted opaque Connector state and format/key version, and nullable safe quarantine reason/current-revision metadata. An interactive active row requires encrypted state and expiry. A refresh marker has `kind=refresh`, `state_envelope=NULL`, `expires_at=NULL`, and is committed before network exchange; a partial unique index permits at most one `refresh_in_progress`/`uncertain` row per account. `uncertain` is excluded from TTL cleanup and remains until explicitly resolved. Startup converts leftover `refresh_in_progress` rows to `uncertain`, never retries them. See [M3-AUTH](M3-AUTH.md) for transitions. |
+| `auth_session_invocations` | `session_id` primary/foreign key to an interactive session; non-secret start timestamp. A durable claim excludes concurrent continuation before provider exchange. Claim checks the loaded encrypted-state nonce as a CAS token; advancing or finishing resolves it atomically. Startup consumes/erases sessions with leftover claims and removes the claims without replay. |
 | `requests` | `id` primary key; virtual-key reference retained with `SET NULL` on key purge (prefer revocation), observed `key_revision`, and composite reference to immutable `(policy_id, policy_revision)`; indexed `accepted_at` assigned inside the serialized admission transaction (the one RPM count), exact requested protocol/model/route identity, state `admitted` or terminal outcome, and finish timestamp. No payload/body fields. |
 | `attempts` | `id` primary key; request foreign key, ordinal unique per request, selected account reference retained with `SET NULL`, connector/route identifiers, route-budget policy and estimate metadata, state, commit flag, safe error category/retry disposition, dispatch/finish UTC timestamps. Initial admission creates ordinal 1 and its reservation atomically; retries use higher ordinals. No provider diagnostics or raw errors. |
 | `usage_records` | `attempt_id` primary key and foreign key; nullable input/output/reasoning/cached token counts, source and completeness, recorded UTC timestamp. Unknown counts stay SQL `NULL`; detail counters are not summed again. One terminal usage row per attempt. |
@@ -126,7 +131,7 @@ versioned migration/operational design.
 
 Credentials and auth temporary state use an authenticated encrypted envelope:
 algorithm/format version, key version, nonce, ciphertext, and authentication
-tag. AES-GCM is the initial candidate. AAD binds table/purpose, stable record
+tag. AES-256-GCM is implemented. AAD binds table/purpose, stable record
 ID, account ID where applicable, and format version. Generate a fresh nonce
 with `crypto/rand` for every encryption. Master-key version selects the
 decryption key; rotation tooling is not in M3, so deployments must retain the
@@ -140,11 +145,14 @@ read exactly 32 bytes. Do not silently fall back to environment variables or
 development JSON when unavailable. File permissions and external provisioning
 are the boundary; M3 does not implement key rotation or a secret manager.
 
-Initial migration order: (1) migration journal and accounts, (2) credentials
-and auth sessions, (3) policies and virtual keys, (4) requests and attempts,
-(5) usage and reservations, then indexes/constraints and any additive
-compatibility migrations. Each version is transactional and immutable after
-release; later changes add migrations, never edit an applied migration.
+The current schema version is 6. Applied migrations are: (1) journal,
+(2) accounts and encrypted credentials, (3) policies and virtual keys,
+(4) requests, attempts, usage and reservations, (5) auth sessions,
+(6) durable interactive-continuation claims. Each version is transactional and
+immutable; later changes add migrations. Stop the gateway and run `admin migrate`
+before using this binary with an older database; protected startup requires the
+current version. An older binary refuses a future schema. See
+[LOCAL-M3](LOCAL-M3.md) for setup and backup/restore.
 
 ## Lifecycle and recovery
 
@@ -176,6 +184,7 @@ attempts are additive because each may consume upstream tokens. See
 | Crash after non-final attempt, before retry | The last attempt and its usage/reservation are already terminal/settled, but the request remains admitted and has no active attempt. Recovery terminalizes only the request using that last attempt's outcome; it creates no attempt, retry, or accounting entry. |
 | Repeated recovery/restart | One transaction changes each stale nonterminal attempt to interrupted (or failed with `not_dispatched` reason), reconciles/releases its reservation once by attempt ID, then terminalizes its still-open request. It also terminalizes admitted requests whose attempts are all terminal using the last attempt outcome. Terminal attempts/requests and existing settlements are unchanged; repeated runs are idempotent. |
 | Startup finds auth `refresh_in_progress` | Before accepting auth work, atomically convert each leftover marker to `uncertain` with reason `restart_in_progress`; preserve account, operation ID, expected revision, and timestamps, but no provider payload/error. Never infer that no exchange occurred and never retry automatically. |
+| Startup finds an interactive continuation claim | Consume the associated session and erase encrypted state before listen; remove the claim. The provider may have consumed the state, so never continue/replay it. Ordinary unclaimed, unexpired sessions remain usable. |
 | Startup finds expired interactive auth session | Mark consumed and remove encrypted temporary state. TTL cleanup does not delete `uncertain` refresh markers, even if their expiry elapsed; they remain quarantined until explicit successful reauthentication resolves them atomically with credential replacement. |
 | Account/Connector invalidation | Consume interactive sessions and erase their encrypted state. Convert in-progress refresh markers to `uncertain` rather than deleting their evidence; explicit successful reauthentication atomically replaces credentials and resolves quarantine. |
 
@@ -184,7 +193,10 @@ attempts are additive because each may consume upstream tokens. See
 **Successful known usage:** commit admission and attempt reservation; commit
 dispatch intent; invoke Execute outside SQL; consume Complete and validate EOF;
 commit succeeded attempt, usage counters/source/completeness, and reservation
-settlement together; only then acknowledge terminal persistence. If usage is
+settlement together; acknowledge `FinishRequest` in a separate short transaction;
+only then expose Complete. Recovery closes the request if a crash occurs
+between these two transactions, preserving the settled attempt and charge.
+If usage is
 provider-reported, store its nullable values without adding cached/reasoning
 details to input/output totals.
 
