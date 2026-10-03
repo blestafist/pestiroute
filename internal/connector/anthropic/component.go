@@ -99,8 +99,8 @@ func (c *Connector) Capabilities(_ context.Context, scope core.CapabilityScope) 
 		scope.Model != c.model || scope.AccountID != c.accountID {
 		return core.CapabilityResult{}
 	}
-	// Streaming is implemented locally; provider entitlement and other features remain unknown.
-	return core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}}
+	// Streaming and ordinary function tools are implemented locally; provider entitlement and other features remain unknown.
+	return core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported, "llm.tools": core.Supported}}
 }
 
 func (c *Connector) Models(_ context.Context, query core.ModelQuery, _ core.InvocationServices) (core.ModelsResult, *core.GatewayError) {
@@ -109,7 +109,7 @@ func (c *Connector) Models(_ context.Context, query core.ModelQuery, _ core.Invo
 	if c.state != core.HealthReady || query.Protocol != protocol || query.Mode != core.ModeTranslation || query.AccountID != c.accountID {
 		return core.ModelsResult{}, nil
 	}
-	return core.ModelsResult{Supported: true, Models: []core.ModelInfo{{ID: c.model, Capabilities: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}}}}, nil
+	return core.ModelsResult{Supported: true, Models: []core.ModelInfo{{ID: c.model, Capabilities: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported, "llm.tools": core.Supported}}}}, nil
 }
 
 func (c *Connector) EstimateUsage(_ context.Context, query core.UsageQuery, _ core.InvocationServices) (core.EstimateResult, *core.GatewayError) {

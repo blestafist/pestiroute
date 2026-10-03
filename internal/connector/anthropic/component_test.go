@@ -64,8 +64,8 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 	if got := c.Capabilities(context.Background(), scope).State("llm.streaming"); got != core.Supported {
 		t.Fatalf("implemented streaming capability = %q", got)
 	}
-	if got := c.Capabilities(context.Background(), scope).State("llm.tools"); got != core.Unknown {
-		t.Fatalf("unverified tools capability = %q", got)
+	if got := c.Capabilities(context.Background(), scope).State("llm.tools"); got != core.Supported {
+		t.Fatalf("implemented tools capability = %q", got)
 	}
 	for _, bad := range []core.CapabilityScope{
 		{Protocol: "other", Mode: scope.Mode, Model: scope.Model, AccountID: scope.AccountID},
@@ -83,6 +83,9 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 	}
 	if models.Models[0].Capabilities["llm.streaming"] != core.Supported {
 		t.Fatalf("models omitted verified streaming capability: %+v", models.Models[0])
+	}
+	if models.Models[0].Capabilities["llm.tools"] != core.Supported {
+		t.Fatalf("models omitted verified tools capability: %+v", models.Models[0])
 	}
 	for _, query := range []core.ModelQuery{
 		{Protocol: "other", Mode: core.ModeTranslation, AccountID: "account-a"},
