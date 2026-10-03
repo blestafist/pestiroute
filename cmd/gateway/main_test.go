@@ -1454,7 +1454,7 @@ connectors:
     kind: connector
     implementation: pestiroute.anthropic.messages
     protocols: [openai.responses.v1]
-    settings: {model: client-model, account_id: account-a}
+    settings: {model: client-model, account_id: account-a, credential_id: anthro-key}
 routes:
   - id: translated
     protocol: openai.responses.v1
@@ -1473,7 +1473,7 @@ policies: {standard: policy-id-a}
 	if err != nil {
 		t.Fatalf("valid translated YAML: %v", err)
 	}
-	if c.protected.Connectors[0].Settings.Model != "client-model" || c.protected.Connectors[0].Settings.AccountID != "account-a" || c.protected.Routes[0].Mode != "translation" {
+	if c.protected.Connectors[0].Settings.Model != "client-model" || c.protected.Connectors[0].Settings.AccountID != "account-a" || c.protected.Connectors[0].Settings.CredentialID != "anthro-key" || c.protected.Routes[0].Mode != "translation" {
 		t.Fatalf("translation config did not normalize: %+v", c.protected)
 	}
 	for _, tc := range []struct{ name, from, to, want string }{
@@ -1481,8 +1481,11 @@ policies: {standard: policy-id-a}
 		{"wrong mode", "mode: translation", "mode: native", "does not match Anthropic translation mode"},
 		{"wrong account", "account: account-a", "account: account-b", "does not match Anthropic translation mode, model, and account settings"},
 		{"wrong model", "model: client-model", "model: other-model", "does not match Anthropic translation mode, model, and account settings"},
-		{"credential setting", "settings: {model: client-model, account_id: account-a}", "settings: {model: client-model, account_id: account-a, api_key: secret}", `unsupported field "api_key"`},
-		{"native setting", "settings: {model: client-model, account_id: account-a}", "settings: {model: client-model, account_id: account-a, max_request_body_bytes: 0}", `unsupported field "max_request_body_bytes"`},
+		{"credential setting", "settings: {model: client-model, account_id: account-a, credential_id: anthro-key}", "settings: {model: client-model, account_id: account-a, credential_id: anthro-key, api_key: secret}", `unsupported field "api_key"`},
+		{"native setting", "settings: {model: client-model, account_id: account-a, credential_id: anthro-key}", "settings: {model: client-model, account_id: account-a, credential_id: anthro-key, max_request_body_bytes: 0}", `unsupported field "max_request_body_bytes"`},
+		{"missing credential id", ", credential_id: anthro-key", "", "requires non-empty model, account_id, and credential_id"},
+		{"empty credential id", "credential_id: anthro-key", "credential_id: ''", "requires non-empty model, account_id, and credential_id"},
+		{"whitespace credential id", "credential_id: anthro-key", `credential_id: "  "`, "requires non-empty model, account_id, and credential_id"},
 		{"wrong implementation", "pestiroute.anthropic.messages", "pestiroute.unknown", "unsupported connector implementation"},
 		{"wrong protocol", "protocols: [openai.responses.v1]", "protocols: [anthropic.messages.v1]", "invalid identity, kind, implementation, or protocols"},
 	} {
@@ -1514,7 +1517,7 @@ policies: {standard: policy-id-a}
 
 	// Multi-target Anthropic reserve budgets use the same floor.
 	multi := strings.Replace(native,
-		"routes:\n  - id: translated", "  - id: anthropic-b\n    kind: connector\n    implementation: pestiroute.anthropic.messages\n    protocols: [openai.responses.v1]\n    settings: {model: client-model, account_id: account-b}\nroutes:\n  - id: translated", 1)
+		"routes:\n  - id: translated", "  - id: anthropic-b\n    kind: connector\n    implementation: pestiroute.anthropic.messages\n    protocols: [openai.responses.v1]\n    settings: {model: client-model, account_id: account-b, credential_id: anthro-key-b}\nroutes:\n  - id: translated", 1)
 	multi = strings.Replace(multi, "targets: [{connector: anthropic, account: account-a}]", "targets: [{connector: anthropic, account: account-a}, {connector: anthropic-b, account: account-b}]", 1)
 	if err := os.WriteFile(path, []byte(multi), 0600); err != nil {
 		t.Fatal(err)
@@ -1550,7 +1553,7 @@ policies: {standard: policy-id-a}
 		t.Fatalf("translation reject budget: %v", err)
 	}
 	nativeSmallReserve := strings.Replace(reject, "implementation: pestiroute.anthropic.messages", "implementation: pestiroute.responses.native", 1)
-	nativeSmallReserve = strings.Replace(nativeSmallReserve, "settings: {model: client-model, account_id: account-a}", "settings: {base_url: https://backend.example/v1, upstream_protocol: openai.responses.v1, mode: native, credential_env: PESTIROUTE_YAML_TEST_KEY, max_request_body_bytes: 1048576, max_request_header_bytes: 16384, connect_timeout: 2s, tls_handshake_timeout: 2s, response_header_timeout: 5s, stream_idle_timeout: 30s}", 1)
+	nativeSmallReserve = strings.Replace(nativeSmallReserve, "settings: {model: client-model, account_id: account-a, credential_id: anthro-key}", "settings: {base_url: https://backend.example/v1, upstream_protocol: openai.responses.v1, mode: native, credential_env: PESTIROUTE_YAML_TEST_KEY, max_request_body_bytes: 1048576, max_request_header_bytes: 16384, connect_timeout: 2s, tls_handshake_timeout: 2s, response_header_timeout: 5s, stream_idle_timeout: 30s}", 1)
 	nativeSmallReserve = strings.Replace(nativeSmallReserve, "mode: translation", "mode: native", 1)
 	nativeSmallReserve = strings.Replace(nativeSmallReserve, "unknown_estimate: reject", "unknown_estimate: reserve, conservative_tokens: 1", 1)
 	if err := os.WriteFile(path, []byte(nativeSmallReserve), 0600); err != nil {
@@ -1558,6 +1561,110 @@ policies: {standard: policy-id-a}
 	}
 	if _, _, err := loadConfig([]string{"-config-format", "yaml", "-config", path}); err != nil {
 		t.Fatalf("native small reserve unexpectedly rejected: %v", err)
+	}
+}
+
+func TestYAMLRejectsAmbiguousProtocolModelGroupsButAllowsSameRouteTargets(t *testing.T) {
+	t.Setenv("PESTIROUTE_AMBIGUITY_NATIVE_KEY", "synthetic-native")
+	path := t.TempDir() + "/gateway.yaml"
+	base := `version: 1
+server: {listen: "127.0.0.1:8080", max_request_bytes: 1048576, shutdown_timeout: 5s}
+storage: {driver: sqlite, path: ./data/gateway.db}
+secrets: {master_key_file: ./secrets/master.key}
+connectors:
+  - id: anthropic
+    kind: connector
+    implementation: pestiroute.anthropic.messages
+    protocols: [openai.responses.v1]
+    settings: {model: shared-model, account_id: account-a, credential_id: key-a}
+  - id: anthropic-b
+    kind: connector
+    implementation: pestiroute.anthropic.messages
+    protocols: [openai.responses.v1]
+    settings: {model: shared-model, account_id: account-b, credential_id: key-b}
+routes:
+  - id: translated-group
+    protocol: openai.responses.v1
+    mode: translation
+    model: shared-model
+    adapter: pestiroute.responses.native
+    policy: standard
+    budget: {unknown_estimate: reserve, conservative_tokens: 4096}
+    targets: [{connector: anthropic, account: account-a}, {connector: anthropic-b, account: account-b}]
+policies: {standard: policy-id}
+`
+	load := func(body string) error {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := loadConfig([]string{"-config-format", "yaml", "-config", path})
+		return err
+	}
+	if err := load(base); err != nil {
+		t.Fatalf("same-route candidate targets should remain legal: %v", err)
+	}
+
+	nativeConnector := `  - id: responses
+    kind: connector
+    implementation: pestiroute.responses.native
+    protocols: [openai.responses.v1]
+    settings: {base_url: https://backend.example/v1, upstream_protocol: openai.responses.v1, mode: native, credential_env: PESTIROUTE_AMBIGUITY_NATIVE_KEY, max_request_body_bytes: 1048576, max_request_header_bytes: 16384, connect_timeout: 2s, tls_handshake_timeout: 2s, response_header_timeout: 5s, stream_idle_timeout: 30s}
+`
+	modeConflict := strings.Replace(base, "routes:\n", nativeConnector+"routes:\n", 1)
+	nativeRoute := `  - id: native-same-model
+    protocol: openai.responses.v1
+    mode: native
+    model: shared-model
+    adapter: pestiroute.responses.native
+    policy: standard
+    budget: {unknown_estimate: reject}
+    targets: [{connector: responses, account: account-native}]
+`
+	modeConflict = strings.Replace(modeConflict, "policies:", nativeRoute+"policies:", 1)
+	if err := load(modeConflict); err == nil || !strings.Contains(err.Error(), "ambiguous protocol/model route group") {
+		t.Fatalf("mode-conflicting model group was not rejected: %v", err)
+	}
+
+	accountConflict := strings.Replace(base, "policies:", `  - id: second-translated-group
+    protocol: openai.responses.v1
+    mode: translation
+    model: shared-model
+    adapter: pestiroute.responses.native
+    policy: standard
+    budget: {unknown_estimate: reserve, conservative_tokens: 4096}
+    targets: [{connector: anthropic-b, account: account-b}]
+policies:`, 1)
+	if err := load(accountConflict); err == nil || !strings.Contains(err.Error(), "ambiguous protocol/model route group") {
+		t.Fatalf("separate same-model route group was not rejected: %v", err)
+	}
+}
+
+func TestCompositionRejectsAmbiguousDispatcherGroupsAndAllowsCandidateFallback(t *testing.T) {
+	first := topologyRoute{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "model", Account: "account-a", CandidateGroup: "configured-group"}
+	for _, tc := range []struct {
+		name  string
+		other topologyRoute
+	}{
+		{"mode conflict", func() topologyRoute { r := first; r.Mode = core.ModeTranslation; return r }()},
+		{"account outside same candidate group", func() topologyRoute { r := first; r.Account, r.CandidateGroup = "account-b", "other-group"; return r }()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ready, draining := atomic.Bool{}, atomic.Bool{}
+			called := false
+			_, _, err := composeHandlerWithFactory(config{Routes: []topologyRoute{first, tc.other}}, &ready, &draining, nil, func(topologyComponent) core.Component {
+				called = true
+				return nil
+			})
+			if err == nil || !strings.Contains(err.Error(), "ambiguous protocol/model route group") || called {
+				t.Fatalf("ambiguous group was not rejected before composition: err=%v constructorCalled=%t", err, called)
+			}
+		})
+	}
+	control := first
+	control.Account = "account-b"
+	if err := validateDispatcherRouteGroups([]topologyRoute{first, control}); err != nil {
+		t.Fatalf("same-group candidate fallback rejected: %v", err)
 	}
 }
 

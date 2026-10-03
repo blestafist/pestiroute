@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
@@ -75,13 +76,24 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 
 	components := make([]topologyComponent, 0, len(p.Connectors))
 	for _, item := range p.Connectors {
-		if item.Implementation != "pestiroute.responses.native" {
-			return fail(db.Close, fmt.Errorf("connector %q: translation composition is not wired", item.ID))
-		}
 		s := item.Settings
-		components = append(components, topologyComponent{ID: core.InstanceID(item.ID), Implementation: item.Implementation, Kind: core.ComponentConnector,
-			Endpoint: s.BaseURL, CredentialEnv: s.CredentialEnv, MaxBodyBytes: s.MaxRequestBodyBytes, MaxHeaderBytes: s.MaxRequestHeaderBytes,
-			ConnectTimeout: s.ConnectTimeout, TLSTimeout: s.TLSHandshakeTimeout, HeaderTimeout: s.ResponseHeaderTimeout, IdleTimeout: s.StreamIdleTimeout})
+		component := topologyComponent{ID: core.InstanceID(item.ID), Implementation: item.Implementation, Kind: core.ComponentConnector}
+		switch item.Implementation {
+		case "pestiroute.responses.native":
+			component.Endpoint, component.CredentialEnv = s.BaseURL, s.CredentialEnv
+			component.MaxBodyBytes, component.MaxHeaderBytes = s.MaxRequestBodyBytes, s.MaxRequestHeaderBytes
+			component.ConnectTimeout, component.TLSTimeout = s.ConnectTimeout, s.TLSHandshakeTimeout
+			component.HeaderTimeout, component.IdleTimeout = s.ResponseHeaderTimeout, s.StreamIdleTimeout
+		case "pestiroute.anthropic.messages":
+			if strings.TrimSpace(s.Model) == "" || strings.TrimSpace(s.AccountID) == "" || strings.TrimSpace(s.CredentialID) == "" {
+				return fail(db.Close, fmt.Errorf("connector %q: Anthropic model, account_id, and credential_id are required", item.ID))
+			}
+			component.Model, component.AccountID, component.CredentialEnv = s.Model, s.AccountID, s.CredentialID
+			component.MaxBodyBytes, component.MaxHeaderBytes = p.Server.MaxRequestBytes, 1<<20
+		default:
+			return fail(db.Close, fmt.Errorf("connector %q: unsupported implementation", item.ID))
+		}
+		components = append(components, component)
 	}
 	adapterAdded := false
 	routes := make([]topologyRoute, 0, len(p.Routes))

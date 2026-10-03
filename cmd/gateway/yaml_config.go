@@ -65,6 +65,7 @@ type nativeSettings struct {
 	StreamIdleTimeout     string `yaml:"stream_idle_timeout"`
 	Model                 string `yaml:"model"`
 	AccountID             string `yaml:"account_id"`
+	CredentialID          string `yaml:"credential_id"`
 }
 
 type protectedRoute struct {
@@ -204,7 +205,7 @@ func validateConnectorSettingsFields(root *yaml.Node) error {
 				allowed[key] = true
 			}
 		case "pestiroute.anthropic.messages":
-			allowed["model"], allowed["account_id"] = true, true
+			allowed["model"], allowed["account_id"], allowed["credential_id"] = true, true, true
 		default:
 			continue // Implementation validation reports this case.
 		}
@@ -311,7 +312,7 @@ func validateProtectedConfig(c protectedConfig) error {
 		}
 		switch item.Implementation {
 		case "pestiroute.responses.native":
-			if item.Settings.Model != "" || item.Settings.AccountID != "" {
+			if item.Settings.Model != "" || item.Settings.AccountID != "" || item.Settings.CredentialID != "" {
 				return fmt.Errorf("%s.settings has fields not supported by native connector", prefix)
 			}
 			if err := validateNativeSettings(prefix+".settings", item.Settings); err != nil {
@@ -332,6 +333,8 @@ func validateProtectedConfig(c protectedConfig) error {
 		}
 	}
 	seenRoutes := make(map[string]struct{}, len(c.Routes))
+	type modelRouteGroup struct{ mode, routeID string }
+	modelGroups := make(map[struct{ protocol, model string }]modelRouteGroup, len(c.Routes))
 	for i := range c.Routes {
 		route := &c.Routes[i]
 		prefix := fmt.Sprintf("routes[%d]", i)
@@ -342,6 +345,11 @@ func validateProtectedConfig(c protectedConfig) error {
 			return fmt.Errorf("duplicate route id %q", route.ID)
 		}
 		seenRoutes[route.ID] = struct{}{}
+		modelKey := struct{ protocol, model string }{route.Protocol, route.Model}
+		if previous, exists := modelGroups[modelKey]; exists && (previous.mode != route.Mode || previous.routeID != route.ID) {
+			return fmt.Errorf("ambiguous protocol/model route group for %q and %q", route.Protocol, route.Model)
+		}
+		modelGroups[modelKey] = modelRouteGroup{mode: route.Mode, routeID: route.ID}
 		if _, ok := c.Policies[route.Policy]; !ok {
 			return fmt.Errorf("%s references unknown policy %q", prefix, route.Policy)
 		}
@@ -414,8 +422,8 @@ func validateProtectedConfig(c protectedConfig) error {
 }
 
 func validateAnthropicSettings(prefix string, s nativeSettings) error {
-	if strings.TrimSpace(s.Model) == "" || strings.TrimSpace(s.AccountID) == "" {
-		return fmt.Errorf("%s requires non-empty model and account_id", prefix)
+	if strings.TrimSpace(s.Model) == "" || strings.TrimSpace(s.AccountID) == "" || strings.TrimSpace(s.CredentialID) == "" {
+		return fmt.Errorf("%s requires non-empty model, account_id, and credential_id", prefix)
 	}
 	if s.BaseURL != "" || s.UpstreamProtocol != "" || s.Mode != "" || s.CredentialEnv != "" || s.MaxRequestBodyBytes != 0 || s.MaxRequestHeaderBytes != 0 || s.ConnectTimeout != "" || s.TLSHandshakeTimeout != "" || s.ResponseHeaderTimeout != "" || s.StreamIdleTimeout != "" {
 		return fmt.Errorf("%s has fields not supported by Anthropic connector", prefix)

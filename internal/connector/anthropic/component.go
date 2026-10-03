@@ -82,6 +82,16 @@ func (c *Connector) Health(context.Context) core.Health {
 	return core.Health{State: c.state}
 }
 
+// HTTPDoer exposes this connector's configured transport to invocation services.
+func (c *Connector) HTTPDoer() core.HTTPDoer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state != core.HealthReady || c.transport == nil {
+		return nil
+	}
+	return c.transport.client
+}
+
 func (c *Connector) Capabilities(_ context.Context, scope core.CapabilityScope) core.CapabilityResult {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -89,8 +99,8 @@ func (c *Connector) Capabilities(_ context.Context, scope core.CapabilityScope) 
 		scope.Model != c.model || scope.AccountID != c.accountID {
 		return core.CapabilityResult{}
 	}
-	// Provider entitlement, feature support, and inference readiness are unverified.
-	return core.CapabilityResult{}
+	// Streaming is implemented locally; provider entitlement and other features remain unknown.
+	return core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}}
 }
 
 func (c *Connector) Models(_ context.Context, query core.ModelQuery, _ core.InvocationServices) (core.ModelsResult, *core.GatewayError) {
@@ -99,7 +109,7 @@ func (c *Connector) Models(_ context.Context, query core.ModelQuery, _ core.Invo
 	if c.state != core.HealthReady || query.Protocol != protocol || query.Mode != core.ModeTranslation || query.AccountID != c.accountID {
 		return core.ModelsResult{}, nil
 	}
-	return core.ModelsResult{Supported: true, Models: []core.ModelInfo{{ID: c.model, Capabilities: map[core.Capability]core.CapabilityState{}}}}, nil
+	return core.ModelsResult{Supported: true, Models: []core.ModelInfo{{ID: c.model, Capabilities: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}}}}, nil
 }
 
 func (c *Connector) EstimateUsage(_ context.Context, query core.UsageQuery, _ core.InvocationServices) (core.EstimateResult, *core.GatewayError) {

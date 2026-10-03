@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"sync"
 	"testing"
 
@@ -12,6 +13,29 @@ import (
 func config(model, account string) core.ComponentConfig {
 	b, _ := json.Marshal(componentConfig{Model: model, AccountID: account})
 	return core.ComponentConfig{Data: b}
+}
+
+func TestHTTPDoerAccessorExposesConfiguredNoRedirectClient(t *testing.T) {
+	c := NewConnector()
+	if c.HTTPDoer() != nil {
+		t.Fatal("uninitialized connector exposed an HTTP client")
+	}
+	if err := c.Init(context.Background(), config("client-model", "account-a")); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := c.HTTPDoer().(*http.Client)
+	if !ok || got != c.transport.client {
+		t.Fatalf("HTTPDoer() = %T, want connector's configured *http.Client", c.HTTPDoer())
+	}
+	if err := got.CheckRedirect(nil, nil); err != http.ErrUseLastResponse {
+		t.Fatalf("configured redirect policy = %v, want ErrUseLastResponse", err)
+	}
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c.HTTPDoer() != nil {
+		t.Fatal("closed connector exposed an HTTP client")
+	}
 }
 
 func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
@@ -37,8 +61,11 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 		t.Fatalf("initialized health = %q", got)
 	}
 	scope := core.CapabilityScope{Protocol: protocol, Mode: core.ModeTranslation, Model: "gpt-4.1-mini", AccountID: "account-a"}
-	if len(c.Capabilities(context.Background(), scope).Values) != 0 {
-		t.Fatal("unverified feature declarations must remain unknown")
+	if got := c.Capabilities(context.Background(), scope).State("llm.streaming"); got != core.Supported {
+		t.Fatalf("implemented streaming capability = %q", got)
+	}
+	if got := c.Capabilities(context.Background(), scope).State("llm.tools"); got != core.Unknown {
+		t.Fatalf("unverified tools capability = %q", got)
 	}
 	for _, bad := range []core.CapabilityScope{
 		{Protocol: "other", Mode: scope.Mode, Model: scope.Model, AccountID: scope.AccountID},
@@ -54,8 +81,8 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 	if err != nil || !models.Supported || len(models.Models) != 1 || models.Models[0].ID != "gpt-4.1-mini" {
 		t.Fatalf("scoped models = %+v, %v", models, err)
 	}
-	if len(models.Models[0].Capabilities) != 0 {
-		t.Fatalf("models claimed unverified capabilities: %+v", models.Models[0])
+	if models.Models[0].Capabilities["llm.streaming"] != core.Supported {
+		t.Fatalf("models omitted verified streaming capability: %+v", models.Models[0])
 	}
 	for _, query := range []core.ModelQuery{
 		{Protocol: "other", Mode: core.ModeTranslation, AccountID: "account-a"},

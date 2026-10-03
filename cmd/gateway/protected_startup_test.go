@@ -96,7 +96,7 @@ func TestProtectedStartupValidationAndRecovery(t *testing.T) {
 	}
 }
 
-func TestProtectedTranslationStartupFailsUntilCompositionWired(t *testing.T) {
+func TestProtectedTranslationStartupComposesCredentialScope(t *testing.T) {
 	_, dbPath, keyPath := protectedFixture(t)
 	db, err := sqlite.Open(dbPath)
 	if err != nil {
@@ -104,6 +104,17 @@ func TestProtectedTranslationStartupFailsUntilCompositionWired(t *testing.T) {
 	}
 	ctx := context.Background()
 	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: "anthropic-account", Connector: "anthropic", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := secure.Seal(key, 2, "test-v1", "credentials", "anthro-key", "anthropic-account", []byte("synthetic-anthropic-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: "anthro-key", AccountID: "anthropic-account", FormatVersion: envelope.FormatVersion, KeyVersion: envelope.KeyVersion, Nonce: envelope.Nonce, Ciphertext: envelope.Ciphertext}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := sqlite.NewKeyPolicies(db).Create(ctx, sqlite.CreateKeyPolicyParams{ID: "translation-policy", Enabled: true, Models: []string{"client-model"}, Connectors: []string{"anthropic"}, RPM: 10, TPM: 5000}); err != nil {
@@ -122,7 +133,7 @@ connectors:
     kind: connector
     implementation: pestiroute.anthropic.messages
     protocols: [openai.responses.v1]
-    settings: {model: client-model, account_id: anthropic-account}
+    settings: {model: client-model, account_id: anthropic-account, credential_id: anthro-key}
 routes:
   - id: translated
     protocol: openai.responses.v1
@@ -143,14 +154,18 @@ policies: {standard: translation-policy}
 	}
 
 	prepared, err := prepareProtectedConfig(ctx, c)
-	if err == nil || !strings.Contains(err.Error(), `connector "anthropic": translation composition is not wired`) {
-		if prepared.runtimeDB != nil {
-			_ = prepared.runtimeDB.Close()
-		}
-		if prepared.processLock != nil {
-			_ = prepared.processLock.Close()
-		}
-		t.Fatalf("translation startup error = %v", err)
+	if err != nil {
+		t.Fatalf("prepare translated config: %v", err)
+	}
+	ready, draining := atomic.Bool{}, atomic.Bool{}
+	_, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)
+	if err != nil {
+		_ = prepared.runtimeDB.Close()
+		_ = prepared.processLock.Close()
+		t.Fatalf("compose translated config: %v", err)
+	}
+	if err := closeComponents(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

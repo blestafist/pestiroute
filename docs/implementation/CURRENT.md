@@ -27,20 +27,22 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: commit verified M4-014 strict YAML translation settings and routes
+## Immediate focus: commit verified M4-015 protected translated and native composition
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
 Anthropic Messages translation. [M4-001](tasks/M4-001.md) through [M4-011](tasks/M4-011.md)
-are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`) and
-[M4-013](tasks/M4-013.md) (`594d684`) are committed locally on `dev-m4` ahead 2 of origin.
+are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`),
+[M4-013](tasks/M4-013.md) (`594d684`), and [M4-014](tasks/M4-014.md) (`cf9d7d6`) are
+committed locally on `dev-m4` ahead 3 of origin.
 
-[M4-014](tasks/M4-014.md) is verified and reviewed (reviewer PASS `ses_efd74936cffeWEqi116Z8PGKi3`).
-14 tasks are newly DONE across M4 (18 total cap, at most 4 additional newly DONE tasks in this
-continuation phase), with no backlog expansion. It delivers strict Anthropic YAML connector/routes,
-enforces mandatory `conservative_tokens >= 4096` reserve floor (single and multi-target), preserves
-native/legacy compatibility, and ensures protected startup fails closed pending M4-015 composition.
-Scoped commit is pending.
+15 tasks are newly DONE across M4 (18 total cap, at most 3 additional newly DONE tasks in this
+continuation phase), with no backlog expansion. [M4-015](tasks/M4-015.md) is verified and reviewed
+(reviewer PASS `ses_efd52db19ffeogXw0SJBgjayjY`). It delivers Anthropic connector composition at
+the gateway composition root with explicit non-secret `credential_id` binding to SQLite
+`(account_id, credential_id)`, concurrent protected native and translated routes sharing admission,
+accounting, and lifecycle, fail-closed handling for missing, blank, or misbound credentials, and
+fail-closed rejection of ambiguous route/model groups. Scoped commit is pending.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
@@ -49,9 +51,9 @@ Live capture is a separate later gate. [Tooling](TOOLING.md#m4-tooling-gate) ret
 Context7, gopls and existing shell/Git checks without a new MCP installation.
 
 Roadmap order remains unchanged: Anthropic in M4, Codex in M5.1. Reuse registry,
-scoped services, authorization/admission/accounting and dispatch. Enable generic
-translation mode where current code is native-only; keep request transformation,
-provider SSE/errors and token normalization inside the new Connector.
+scoped services, authorization/admission/accounting and dispatch. The existing
+generic translation mode is composed without provider branches in Core; request
+transformation, provider SSE/errors and token normalization remain Connector-owned.
 
 ## Available checks
 
@@ -69,13 +71,14 @@ remain loopback development compatibility modes; see [LOCAL-M2](LOCAL-M2.md).
 
 ## Evidence limits and open inputs
 
-- The built-in Connector is native Responses only. One configured instance has
-  one account/model scope; the auth storage adapter requires one pre-provisioned
-  credential per account. Protected YAML still requires a present non-empty
-  `credential_env`; inference uses the scoped SQLite credential.
+- Built-in Connectors include native Responses and protected Anthropic Messages
+  translation. A translated instance has one account/model scope; protected YAML
+  selects its SQLite credential explicitly with `credential_id`, while native
+  settings retain `credential_env`. Inference uses scoped SQLite credentials.
 - Native transport failures retain unknown delivery; safe fallback is proven
   with explicit deterministic fixtures, not a broader real-provider retry claim.
-  Translation, stateful cross-target affinity, live OAuth and IPC remain M4/M5/M6.
+  Remaining translation gates/live compatibility, stateful cross-target affinity,
+  live OAuth and IPC remain M4/M5/M6.
 - Historical live evidence remains OpenCode 2.0.6 / OpenAI Responses /
   `gpt-5.4-mini`, with parallel tools unknown. M3 adds no live inference claim.
   Remote provider compute cancellation remains unverified.

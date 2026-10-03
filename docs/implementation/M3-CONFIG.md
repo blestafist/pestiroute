@@ -43,7 +43,7 @@ Each connector mapping has exactly:
 | `kind` | String, exactly `connector`. |
 | `implementation` | String; `pestiroute.responses.native` or `pestiroute.anthropic.messages`. |
 | `protocols` | Non-empty sequence of unique declared protocol strings; currently exactly `openai.responses.v1` for either supported implementation. |
-| `settings` | Mapping owned and validated by the selected Connector implementation. Native Responses accepts `base_url`, `upstream_protocol`, `mode`, `credential_env`, positive request byte limits, and positive transport durations as detailed below. Anthropic Messages accepts only non-empty `model` (configured client-side route model) and `account_id` (selected SQLite account ID); credentials remain in protected SQLite and are never YAML fields. Reject settings belonging to another implementation or unknown fields. |
+| `settings` | Mapping owned and validated by the selected Connector implementation. Native Responses accepts `base_url`, `upstream_protocol`, `mode`, `credential_env`, positive request byte limits, and positive transport durations as detailed below. Anthropic Messages accepts non-empty `model` (configured client-side route model), `account_id` (selected SQLite account ID), and `credential_id` (selected SQLite credential record ID scoped to that account); credential values remain in protected SQLite and are never YAML fields. Reject settings belonging to another implementation or unknown fields. |
 
 Connector-specific endpoint, authentication, transport, and size settings
 stay inside `settings`; Core does not interpret URLs, provider protocols,
