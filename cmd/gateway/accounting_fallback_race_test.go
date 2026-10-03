@@ -74,18 +74,26 @@ type accountingRaceEvent struct {
 }
 
 type accountingRaceStream struct {
-	mu       sync.Mutex
-	first    bool
-	events   chan accountingRaceEvent
-	closed   chan struct{}
-	closeOne sync.Once
+	mu        sync.Mutex
+	first     bool
+	events    chan accountingRaceEvent
+	closed    chan struct{}
+	closeOne  sync.Once
+	pulls     atomic.Int32
+	active    atomic.Int32
+	maxActive atomic.Int32
 }
 
 func newAccountingRaceStream() *accountingRaceStream {
-	return &accountingRaceStream{events: make(chan accountingRaceEvent, 1), closed: make(chan struct{})}
+	return &accountingRaceStream{events: make(chan accountingRaceEvent), closed: make(chan struct{})}
 }
 
 func (s *accountingRaceStream) Next(ctx context.Context) (core.StreamFrame, error) {
+	s.pulls.Add(1)
+	active := s.active.Add(1)
+	for old := s.maxActive.Load(); active > old && !s.maxActive.CompareAndSwap(old, active); old = s.maxActive.Load() {
+	}
+	defer s.active.Add(-1)
 	s.mu.Lock()
 	if !s.first {
 		s.first = true
@@ -145,7 +153,7 @@ func fallbackSQLiteStreamRace(t *testing.T, terminalError, exhaustBudget bool) {
 	if exhaustBudget {
 		tpm = 5
 	}
-	policy, err := policies.Create(ctx, sqlite.CreateKeyPolicyParams{ID: "policy", Models: []string{"model"}, Connectors: []string{"connector-a", "connector-b"}, RPM: 1, TPM: tpm})
+	policy, err := policies.Create(ctx, sqlite.CreateKeyPolicyParams{ID: "policy", Models: []string{"model"}, Connectors: []string{"connector-a", "connector-b", "connector-c"}, RPM: 1, TPM: tpm})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +162,7 @@ func fallbackSQLiteStreamRace(t *testing.T, terminalError, exhaustBudget bool) {
 		t.Fatal(err)
 	}
 	accounts := sqlite.NewAccounts(db)
-	for _, target := range []struct{ id, connector string }{{"account-a", "connector-a"}, {"account-b", "connector-b"}} {
+	for _, target := range []struct{ id, connector string }{{"account-a", "connector-a"}, {"account-b", "connector-b"}, {"account-c", "connector-c"}} {
 		if _, err := accounts.Create(ctx, sqlite.Account{ID: target.id, Connector: target.connector, Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
@@ -173,8 +181,9 @@ func fallbackSQLiteStreamRace(t *testing.T, terminalError, exhaustBudget bool) {
 	connectors := []*accountingRaceConnector{
 		{descriptor: accountingRaceConnectorDescriptor("connector-a"), stream: newAccountingRaceStream(), rejectFirst: true},
 		{descriptor: accountingRaceConnectorDescriptor("connector-b"), stream: stream},
+		{descriptor: accountingRaceConnectorDescriptor("connector-c"), stream: newAccountingRaceStream()},
 	}
-	for _, component := range []core.Component{adapter, connectors[0], connectors[1]} {
+	for _, component := range []core.Component{adapter, connectors[0], connectors[1], connectors[2]} {
 		id := core.InstanceID(component.Descriptor().ID)
 		if err := registry.Register(id, component, component.Descriptor().Kind); err != nil {
 			t.Fatal(err)
@@ -184,8 +193,8 @@ func fallbackSQLiteStreamRace(t *testing.T, terminalError, exhaustBudget bool) {
 		}
 	}
 	defer registry.Close(context.Background())
-	routes := make([]core.Route, 2)
-	for i, account := range []string{"account-a", "account-b"} {
+	routes := make([]core.Route, 3)
+	for i, account := range []string{"account-a", "account-b", "account-c"} {
 		routes[i] = core.Route{
 			Identity: core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: accountingRaceProtocol, Mode: core.ModeNative, Model: "model"}, AccountID: account},
 			Adapter:  "adapter", Connector: core.InstanceID("connector-" + string(rune('a'+i))), CandidateGroup: "fallback",
@@ -202,15 +211,15 @@ func fallbackSQLiteStreamRace(t *testing.T, terminalError, exhaustBudget bool) {
 	dispatcher := &core.Dispatcher{
 		Routes: table, Services: raceServices{}, Policies: sqlitePolicyStore{policies: policies}, Accounts: sqliteAccountAuthorizer{accounts: accounts},
 		Accounting: sqliteAccountingStore{ledger: sqlite.NewLedger(db)}, Budget: core.RouteBudget{UnknownEstimate: core.UnknownEstimateReject},
-		BudgetPolicy: "known", RouteID: "fallback-route", AccountID: "account-a", RetryMaxAttempts: 2, RetryDeadline: time.Second,
+		BudgetPolicy: "known", RouteID: "fallback-route", AccountID: "account-a", RetryMaxAttempts: 3, RetryDeadline: time.Second,
 	}
 	response, gatewayErr := dispatcher.Execute(raceCtx, core.ExecutionRequest{
 		Model: "model", Payload: core.RawPayload{Protocol: accountingRaceProtocol, Body: []byte("opaque")},
 		Metadata: core.RequestMetadata{AffinityKnown: true, IngressHeaderBytes: 1},
 	})
 	if exhaustBudget {
-		if gatewayErr == nil || gatewayErr.Category != core.CategoryRateLimited || connectors[0].calls.Load() != 1 || connectors[1].calls.Load() != 0 {
-			t.Fatalf("second attempt budget result=%#v executions=%d/%d", gatewayErr, connectors[0].calls.Load(), connectors[1].calls.Load())
+		if gatewayErr == nil || gatewayErr.Category != core.CategoryRateLimited || connectors[0].calls.Load() != 1 || connectors[1].calls.Load() != 0 || connectors[2].calls.Load() != 0 {
+			t.Fatalf("second attempt budget result=%#v executions=%d/%d/%d", gatewayErr, connectors[0].calls.Load(), connectors[1].calls.Load(), connectors[2].calls.Load())
 		}
 		requests, err := sqlite.NewLedger(db).QueryRequests(ctx, sqlite.RequestFilter{Limit: 10})
 		if err != nil || len(requests) != 1 || len(requests[0].Attempts) != 1 {
@@ -230,6 +239,9 @@ func fallbackSQLiteStreamRace(t *testing.T, terminalError, exhaustBudget bool) {
 	}
 	if got := connectors[1].calls.Load(); got != 1 {
 		t.Fatalf("fallback executions = %d, want 1", got)
+	}
+	if got := connectors[2].calls.Load(); got != 0 {
+		t.Fatalf("committed fallback stream failure invoked eligible third candidate %d times", got)
 	}
 	frame, err := response.Stream.Next(raceCtx)
 	if err != nil || frame.Type != core.FrameHead {
@@ -290,8 +302,15 @@ func fallbackSQLiteStreamRace(t *testing.T, terminalError, exhaustBudget bool) {
 	for range results { /* both Next and Close have settled */
 	}
 	_ = response.Stream.Close()
+	assertProducerClosed(t, stream)
+	if stream.active.Load() != 0 {
+		t.Fatalf("fallback stream reader remained active after cancellation/Close: %d", stream.active.Load())
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if got := connectors[2].calls.Load(); got != 0 {
+		t.Fatalf("committed stream failure invoked eligible third fallback candidate %d times", got)
 	}
 	db, err = sqlite.Open(dbPath)
 	if err != nil {
