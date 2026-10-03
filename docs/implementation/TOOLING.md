@@ -4,13 +4,13 @@ This plan covers tools for **building PestiRoute with OpenCode**, not the gatewa
 
 | When / trigger | Tool or practice | What to do and acceptance signal |
 | --- | --- | --- |
-| Now, M3 storage, access and accounting planning | Existing `AGENTS.md`, project agents, atomic task cards, Context7 and official gopls MCP | M2 is complete; [CURRENT](CURRENT.md) and [TASKS](TASKS.md#m3--access-accounts-and-accounting) identify [M3-001](tasks/M3-001.md) as the sole READY design slice. Use Context7 for pinned SQLite/YAML documentation, gopls for selected Go symbols/references and the existing checks. The Planner → Worker → Reviewer flow and `/next n` use one READY card per worker; the 46-card plan is not a session assignment. See the [M3 tooling gate](#m3-tooling-gate). |
+| M3 protected operations and acceptance | Existing `AGENTS.md`, project agents, atomic task cards, Context7 and official gopls MCP | See [CURRENT](CURRENT.md) and [TASKS](TASKS.md#m3--access-accounts-and-accounting) for the active task and current blocker. Use the [LOCAL-M3 procedure](LOCAL-M3.md), pinned SQLite/YAML documentation and existing checks; assign one READY card per worker. |
 | M0 scaffold, then ongoing | Go toolchain and CI, built-in OpenCode file/shell tools | Pin Go in the scaffold; establish `gofmt`, vet, tests, race checks, and build in the task/CI. These checks provide evidence before introducing another code-navigation MCP. `CURRENT.md` records commands only after they work. |
 | When PR work becomes routine | Git CLI and GitHub integration already available to the developer | Use Git for scoped local diffs/commits and GitHub integration for PR review/CI where useful. Keep credentials out of the project config. No additional Git MCP is needed just to edit files or open a PR. |
 | M2 onward, only if navigation remains a measured bottleneck | Serena (candidate code-navigation MCP) | Evaluate only if targeted gopls and source searches leave a concrete gap. Check supported Go indexing, OpenCode v2 connection/tool exposure, context overhead, and additional useful references. Keep it personal/disabled by default; no installation now. |
 | When shell output repeatedly wastes context | Personal RTK plugin or a small output filter | A local RTK plugin is loaded on the inspected machine (see inventory below). Compare raw and filtered results on test failures, review diffs, and streaming diagnostics before project adoption. Verify exit status and decisive error context; plugin discovery alone does not prove those properties. |
 | M2–M4, when contract and protocol checks recur | Small project-local commands or skills (candidate) | Extract a repeatable checklist only after it has been used successfully on real tasks, for example contract conformance or fixture review. Prefer links to the owning docs over copied rules. Add no blanket skills package now; Ponytail guidance already lives in the worker agent. |
-| M3, when the storage spike exists | Optional SQLite CLI and deterministic file-backed diagnostics | Use `sqlite3` for local schema, integrity and reference checks on synthetic databases; driver/API calls in Go tests are the required evidence. No database MCP is required. Verify CLI/embedded-driver SQLite versions separately and do not expose production credentials or use raw WAL file copying as backup. |
+| M3 protected operations | Optional SQLite CLI and deterministic file-backed diagnostics | Use `sqlite3` for local schema, integrity and reference checks on synthetic databases; Go driver/API calls remain required evidence. No database MCP is required. Verify CLI/embedded-driver SQLite versions separately and use `.backup` or an offline copy after a clean shutdown, never raw active-WAL copying. See [LOCAL-M3](LOCAL-M3.md). |
 | M4–M5, if protocol research grows beyond targeted docs/search | Provider-specific documentation or trace helpers (candidates) | First use versioned fixtures and official protocol docs. Evaluate a helper on one named compatibility investigation and retain it only if it improves reproducibility without placing request bodies or secrets in logs. |
 | M5–M6, if connector count and cross-package navigation justify it | Graphify or a simple Go dependency graph (candidates) | Generate a graph from actual Go imports/contract boundaries and compare it to targeted search. Adopt only if it detects useful dependency drift; it must not become a second source of architectural truth. External Connector IPC is a **product** milestone in M6, not an OpenCode plugin requirement. |
 | If an admin UI enters the roadmap | Browser/Playwright checks (candidate) | Introduce only with an actual UI acceptance scenario and deterministic local test target. A browser MCP brings no value to the current documentation/backend foundation. |
@@ -29,7 +29,7 @@ This is a recommendation from the repository's M3 scope and checked-in configura
 | Manage commits and CI | Git and the developer's existing GitHub integration | Keep; no additional Git MCP. |
 | Browser/provider OAuth | Scripted auth in M3 | Leave browser/Playwright disabled for this milestone; real flows are M5.1. |
 
-Optional CLI checks once a synthetic M3 database exists:
+Optional CLI checks for a synthetic M3 database:
 
 ```sh
 sqlite3 --version
@@ -37,7 +37,12 @@ sqlite3 -readonly /path/to/synthetic-gateway.db '.schema'
 sqlite3 -readonly /path/to/synthetic-gateway.db 'PRAGMA integrity_check; PRAGMA foreign_key_check;'
 ```
 
-These commands have not been executed in this planning session. Expected integrity result is `ok`; the reference check returns no violations. [SQLite CLI](https://www.sqlite.org/cli.html) and [PRAGMA reference](https://www.sqlite.org/pragma.html) own syntax/behavior; the driver's [official package docs](https://pkg.go.dev/modernc.org/sqlite) own its connection configuration. `sqlite3` is optional: the worker can run equivalent checks through the selected Go driver. Use a documented SQLite backup/snapshot method in M3-045, with the master key retained separately.
+Expected integrity result is `ok`; the reference check returns no violations.
+[SQLite CLI](https://www.sqlite.org/cli.html) and [PRAGMA reference](https://www.sqlite.org/pragma.html)
+own syntax/behavior; the driver's [official package docs](https://pkg.go.dev/modernc.org/sqlite)
+own its connection configuration. `sqlite3` is optional: [LOCAL-M3](LOCAL-M3.md)
+uses the CLI for a consistent backup when available; the master key is retained
+separately.
 
 Do not add a broad skills bundle or change the existing RTK/Ponytail setup for planning. First verify a real repeated gap; keep optional output filters personal and preserve decisive failures/exit codes. The practical context control is one selected task card, exact linked sections and fresh worker/reviewer sessions.
 

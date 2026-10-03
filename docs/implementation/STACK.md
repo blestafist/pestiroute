@@ -24,7 +24,15 @@ These are initial preferences. The SQLite driver will be validated with a small 
 
 The [M1 native binding and startup note](M1-BINDING.md) fixes the initial single-target JSON subset. [M2-BINDING.md](M2-BINDING.md) defines the contract-preserving component, scoped-service, route, and stream-validation binding; the broader stack choices below are not an implementation checklist.
 
-The implemented gateway startup format is M2 strict JSON with `components` and `routes`; [M3-CONFIG](M3-CONFIG.md) specifies protected YAML, but its loader and SQLite-backed startup are not implemented. The [local M2 procedure](LOCAL-M2.md) demonstrates offline build, loopback multi-route dispatch, and legacy single-target compatibility. M2 conformance and gateway regressions can be run offline with `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -race -count=15 ./internal/conformance/...` and `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -race -count=1 ./cmd/gateway/...`; `./scripts/check.sh` runs repository-wide checks.
+Protected version-1 YAML startup and SQLite-backed state are implemented;
+[M3-CONFIG](M3-CONFIG.md) specifies the schema and [LOCAL-M3](LOCAL-M3.md)
+walks through offline setup, provisioning, startup, accounting and backup/restore.
+Legacy and M2 topology JSON remain loopback development compatibility modes;
+[LOCAL-M2](LOCAL-M2.md) demonstrates them. M2 conformance and gateway
+regressions can be run offline with `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off
+go test -race -count=15 ./internal/conformance/...` and `GOTOOLCHAIN=local
+GOPROXY=off GOSUMDB=off go test -race -count=1 ./cmd/gateway/...`;
+`./scripts/check.sh` runs repository-wide checks.
 
 Each connector instance has a reusable HTTP client with connection pooling. Timeouts are separated into connection establishment, TLS handshake, response header reception, and idle time for active streams. A single short global `Client.Timeout` is unsuitable for long agent responses.
 
@@ -40,9 +48,16 @@ The SSE parser is located in the connector or its protocol helper. It must corre
 
 SQLite stores accounts, encrypted credentials, virtual keys, usage data, and the migration journal. The pinned pure-Go driver is `modernc.org/sqlite` v1.60.1. `internal/storage/sqlite.Open` configures WAL, `synchronous=FULL`, foreign keys, and a 500 ms busy timeout via connection DSN so pooled connections receive connection-local settings. The file-backed spike passed on Linux/amd64, Go 1.27.1 with `CGO_ENABLED=0`; other deployment platforms remain unverified. A context cancelled during SQLite's busy-handler wait is observed after that bounded wait (up to 500 ms), not immediately. WAL mode, busy timeout, and short transactions reduce contention; network calls are never made inside SQL transactions. For a single-process setup, a serialized writer is acceptable if load tests confirm sufficient throughput.
 
-Credentials are encrypted using standard library primitives, such as AES-GCM with a unique nonce and AAD that binds the ciphertext to the credential ID and format version. For the proposed M3 protected startup, the master key comes from a permission-checked external file and is not stored in the database; see the key policy below. Virtual keys are generated from cryptographically random bytes, displayed upon creation, and stored only as a digest with a separate public identifier.
+Credentials are encrypted with AES-256-GCM and schema-v2 AAD binding. The
+protected startup master key comes from a permission-checked external file and
+is not stored in the database. Virtual keys are generated from cryptographically
+random bytes, displayed once upon creation, and stored only as a digest with a
+separate public identifier. Keep CLI key-issuance output private.
 
-The M3-specific schema, writer/repository boundary, acknowledged intent and terminal writes, conservative recovery, key-file policy, and crash traces are fixed in [M3-STORAGE.md](M3-STORAGE.md). That design narrows the initial master-key source to a protected external file; it does not add implementation support or change the M2 startup path.
+The M3-specific schema, writer/repository boundary, acknowledged intent and
+terminal writes, conservative recovery, key-file policy, and crash traces are
+specified in [M3-STORAGE.md](M3-STORAGE.md) and implemented in the protected
+startup path.
 
 ## Observability
 

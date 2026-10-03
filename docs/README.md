@@ -24,6 +24,7 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | [Configuration](implementation/CONFIGURATION.md) | Target configuration schema, persistent state, access and accounting |
 | [Testing](implementation/TESTING.md) | Behavioral verification, conformance, fixtures, smoke tests |
 | [Local M2 topology check](implementation/LOCAL-M2.md) | Offline, loopback-only multi-route and legacy startup procedure |
+| [Local M3 operations](implementation/LOCAL-M3.md) | Protected setup, local administration, accounting recovery and WAL-safe backup/restore |
 | [References](implementation/REFERENCES.md) | Protocol sources and connector/migration research workflow |
 | [Development tooling](implementation/TOOLING.md) | When to add OpenCode MCPs, plugins, commands, and local tools |
 

@@ -1,8 +1,19 @@
 # Data and Configuration
 
-## Implemented M2 startup JSON
+## Implemented startup formats
 
-The implemented gateway startup subset is strict JSON, not the protected M3 YAML specified in [M3-CONFIG](M3-CONFIG.md). It is loaded once at startup; this M2 slice has no YAML loader or persistent store. See [the local M2 procedure](LOCAL-M2.md) for a runnable loopback example.
+Protected YAML startup is implemented; the operational walkthrough is
+[LOCAL-M3.md](LOCAL-M3.md). The schema, validation rules, retry behavior and
+startup isolation contract are in [M3-CONFIG.md](M3-CONFIG.md). M3 protected
+startup uses persistent SQLite entities and an external master-key file.
+
+Legacy single-target and strict topology JSON remain numeric-loopback
+development compatibility modes. They do not provide SQLite-backed keys,
+policies, or durable accounting; see [LOCAL-M2.md](LOCAL-M2.md).
+
+## Implemented M2 startup JSON (development compatibility)
+
+The JSON format is strict and does not configure protected M3 persistence. See [the local M2 procedure](LOCAL-M2.md) for a runnable loopback example.
 
 An M2 configuration uses `listen` (inference must bind numeric loopback `127.0.0.1` or `::1`), optional positive Go-duration `shutdown_timeout` (default `5s`), and both non-empty arrays `components` and `routes`. These cannot be mixed with legacy `upstream_*`, request-limit, or timeout fields. JSON keys are exact and case-sensitive; unknown keys and any JSON `null` are rejected. The one-MiB configuration limit and complete validation are enforced at startup.
 
@@ -18,23 +29,21 @@ The old single-target JSON form remains supported: `upstream_endpoint`, `upstrea
 
 ## State Separation
 
-The proposed M3 design uses YAML to describe the listener, connector instances, routes, per-route estimate budgets, and references to persistent policies. SQLite stores mutable state: accounts, credentials, virtual keys, auth sessions, policies, attempts, and usage. Secrets in YAML are replaced with references; startup validation checks references and protocol/mode compatibility before serving. These capabilities are not part of the implemented M2 startup path; [M3-CONFIG](M3-CONFIG.md) owns their schema.
+Protected YAML describes the listener, connector instances, routes, per-route estimate budgets, and references to persistent policies. SQLite stores mutable state: accounts, encrypted credentials, virtual keys, auth sessions, policies, attempts, and usage. Secrets in YAML are replaced with references; startup validates references before serving. [M3-CONFIG](M3-CONFIG.md) owns the schema.
 
-The detailed proposed entity keys, relations, migrations, durable accounting boundary, and crash recovery policy are specified in [M3-STORAGE.md](M3-STORAGE.md). The note is design only; it does not imply a SQLite repository or protected YAML loader exists.
+The detailed entity keys, relations, migrations, durable accounting boundary, and crash recovery policy are specified in [M3-STORAGE.md](M3-STORAGE.md).
 
 Hot reload is not required for the initial MVP. Configuration is applied in full at startup; administrative operations on keys and accounts use storage and runtime services. The initial management interface is local CLI commands; a separate admin API may be added later.
 
 ## Proposed YAML
 
 The versioned YAML schema, route budget, retry policy, entity references, and
-startup rules are specified only in [M3-CONFIG](M3-CONFIG.md). That document is
-the single source for the M3 YAML shape; this overview does not duplicate a
-sample schema. Its route policy reference selects the persistent key policy;
-the route's estimate budget is separate configuration, not key-policy data.
+startup rules are specified in [M3-CONFIG](M3-CONFIG.md). Its route policy
+reference selects the persistent key policy; the route estimate budget is
+separate configuration. Run [LOCAL-M3](LOCAL-M3.md) for migration, provisioning,
+startup, usage, recovery and backup/restore commands.
 
-**Not part of M2:** protected YAML loading, SQLite-backed entities, virtual-key
-authentication, persistent policy/account checks, and retry/fallback are not
-implemented by the M2 JSON startup path. Legacy and M2 topology JSON remain
+Legacy and M2 topology JSON remain
 numeric-loopback development compatibility modes; they do not silently
 downgrade from failed protected startup. See [M3-CONFIG startup isolation](M3-CONFIG.md#startup-isolation-and-compatibility).
 
