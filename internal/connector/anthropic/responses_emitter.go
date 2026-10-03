@@ -157,9 +157,13 @@ func (e *responsesEmitter) Delta(text string) ([]byte, error) {
 	return responseEvent("response.output_text.delta", responseDelta{OutputIndex: 0, ItemID: e.itemID, Delta: text}), nil
 }
 
-func (e *responsesEmitter) Finish(stopReason string, inputTokens, outputTokens int) ([][]byte, error) {
-	if !e.started || e.closed || !e.itemAdded || inputTokens < 0 || outputTokens < 0 {
+func (e *responsesEmitter) Finish(stopReason string, inputTokens, outputTokens, cachedTokens *int64) ([][]byte, error) {
+	if !e.started || e.closed || !e.itemAdded || invalidCount(inputTokens) || invalidCount(outputTokens) || invalidCount(cachedTokens) {
 		return nil, errResponsesLifecycle
+	}
+	totalTokens, err := addCounts(inputTokens, outputTokens)
+	if err != nil {
+		return nil, err
 	}
 	var terminal, status, reason string
 	switch stopReason {
@@ -175,7 +179,7 @@ func (e *responsesEmitter) Finish(stopReason string, inputTokens, outputTokens i
 			e.closed = true
 			return nil, errors.New("incomplete tool call stream")
 		}
-		response := responseEnvelope{ID: e.responseID, Object: "response", Status: status, Output: append([]responseItem(nil), e.output...), Usage: &responseUsage{InputTokens: inputTokens, OutputTokens: outputTokens, TotalTokens: inputTokens + outputTokens}}
+		response := responseEnvelope{ID: e.responseID, Object: "response", Status: status, Output: append([]responseItem(nil), e.output...), Usage: responseUsageFor(inputTokens, outputTokens, totalTokens, cachedTokens)}
 		e.closed = true
 		return [][]byte{responseEvent(terminal, responseLifecycleEvent{Response: response})}, nil
 	}
@@ -191,7 +195,7 @@ func (e *responsesEmitter) Finish(stopReason string, inputTokens, outputTokens i
 		responseEvent("response.content_part.done", responsePartEvent{OutputIndex: 0, ItemID: e.itemID, Part: part}),
 		responseEvent("response.output_item.done", responseItemEvent{OutputIndex: 0, Item: item}),
 	}
-	response := responseEnvelope{ID: e.responseID, Object: "response", Status: status, Output: []responseItem{item}, Usage: &responseUsage{InputTokens: inputTokens, OutputTokens: outputTokens, TotalTokens: inputTokens + outputTokens}}
+	response := responseEnvelope{ID: e.responseID, Object: "response", Status: status, Output: []responseItem{item}, Usage: responseUsageFor(inputTokens, outputTokens, totalTokens, cachedTokens)}
 	if reason != "" {
 		response.IncompleteDetails = &responseIncompleteDetails{Reason: reason}
 	}
@@ -213,9 +217,22 @@ type responseEnvelope struct {
 }
 
 type responseUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens        *int64              `json:"input_tokens,omitempty"`
+	OutputTokens       *int64              `json:"output_tokens,omitempty"`
+	TotalTokens        *int64              `json:"total_tokens,omitempty"`
+	InputTokensDetails *inputTokensDetails `json:"input_tokens_details,omitempty"`
+}
+
+type inputTokensDetails struct {
+	CachedTokens *int64 `json:"cached_tokens,omitempty"`
+}
+
+func responseUsageFor(input, output, total, cached *int64) *responseUsage {
+	usage := &responseUsage{InputTokens: input, OutputTokens: output, TotalTokens: total}
+	if cached != nil {
+		usage.InputTokensDetails = &inputTokensDetails{CachedTokens: cached}
+	}
+	return usage
 }
 
 type responseIncompleteDetails struct {

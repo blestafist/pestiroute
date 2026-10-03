@@ -26,7 +26,7 @@ func executeConnector(t *testing.T) *Connector {
 }
 
 func TestExecuteStreamTranslateEarlyHeadAndUsage(t *testing.T) {
-	first := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"
+	first := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"
 	terminal := "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 	gate := make(chan struct{})
 	upstreamDone := make(chan struct{})
@@ -109,7 +109,7 @@ func TestExecuteStreamTranslateEarlyHeadAndUsage(t *testing.T) {
 
 func TestExecuteToolStreamLifecycle(t *testing.T) {
 	body := strings.Join([]string{
-		`event: message_start`, `data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}`, ``,
+		`event: message_start`, `data: {"type":"message_start","message":{"usage":{"input_tokens":7,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}`, ``,
 		`event: content_block_start`, `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_weather","name":"weather"}}`, ``,
 		`event: content_block_delta`, `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"Mün"}}`, ``,
 		`event: content_block_delta`, `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"chen 🌍\"}"}}`, ``,
@@ -283,7 +283,7 @@ func TestToolStreamRejectsUnknownDeltaAndOverflow(t *testing.T) {
 	if _, err := e.ToolDelta(strings.Repeat("x", maxRetainedText+1)); err == nil {
 		t.Fatal("oversized tool arguments accepted")
 	}
-	if _, err := e.Finish("tool_use", 1, 1); err == nil {
+	if _, err := e.Finish("tool_use", new(int64(1)), new(int64(1)), nil); err == nil {
 		t.Fatal("overflow emitted successful terminal")
 	}
 	stream := &messagesStream{started: true, block: true, tool: true, emitter: func() *responsesEmitter {
@@ -382,7 +382,7 @@ func TestExecuteEOFWithoutMessageStopIsError(t *testing.T) {
 	resp, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Model: "gpt-4.1-mini", Payload: core.RawPayload{Protocol: protocol, Body: []byte(executeBody)}}, core.AttemptScope{Mode: core.ModeTranslation, AccountID: "account-a"}, core.InvocationServices{
 		Credentials: credentialStub("secret"),
 		Transport: doerFunc(func(*http.Request) (*http.Response, error) {
-			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n"))}, nil
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n\n"))}, nil
 		}),
 	})
 	if gatewayErr != nil {
@@ -397,8 +397,94 @@ func TestExecuteEOFWithoutMessageStopIsError(t *testing.T) {
 			t.Fatalf("initial lifecycle frame %d: %v", i, err)
 		}
 	}
-	if _, err := resp.Stream.Next(context.Background()); err == nil || err == io.EOF {
-		t.Fatalf("EOF without message_stop returned %v", err)
+	frame, err := resp.Stream.Next(context.Background())
+	if err != nil || frame.Type != core.FrameComplete || frame.Complete.Outcome != core.OutcomeIncomplete || frame.Complete.Usage == nil || frame.Complete.Usage.Completeness != core.UsagePartial || frame.Complete.Usage.InputTokens == nil || *frame.Complete.Usage.InputTokens != 1 {
+		t.Fatalf("EOF without message_stop returned %+v, %v", frame, err)
+	}
+}
+
+func TestExecuteUsageCacheCumulativeAndMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name, start, deltas   string
+		input, output, cached *int64
+	}{
+		{name: "cache and cumulative", start: `{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":3}`, deltas: `{"output_tokens":7}`, input: new(int64(15)), output: new(int64(7)), cached: new(int64(2))},
+		{name: "zero and missing", start: `{"input_tokens":0,"cache_read_input_tokens":0}`, deltas: `{"output_tokens":0}`, output: new(int64(0)), cached: new(int64(0))},
+		{name: "all missing", start: `{}`, deltas: `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := &messagesStream{body: io.NopCloser(strings.NewReader("")), cancel: func() {}, phase: 1}
+			for _, event := range []messagesSSEEvent{
+				{typeName: "message_start", data: []byte(`{"message":{"usage":` + tc.start + `}}`)},
+				{typeName: "content_block_start", data: []byte(`{"index":0,"content_block":{"type":"text"}}`)},
+				{typeName: "content_block_stop", data: []byte(`{"index":0}`)},
+				{typeName: "message_delta", data: []byte(`{"delta":{"stop_reason":null},"usage":{"output_tokens":4}}`)},
+				{typeName: "message_delta", data: []byte(`{"delta":{"stop_reason":"end_turn"},"usage":` + tc.deltas + `}`)},
+			} {
+				if err := stream.consume(event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := stream.consume(messagesSSEEvent{typeName: "message_stop", data: []byte(`{}`)}); err != nil {
+				t.Fatal(err)
+			}
+			usage := stream.terminal.Complete.Usage
+			check := func(name string, got, want *int64) {
+				t.Helper()
+				if got == nil != (want == nil) || got != nil && *got != *want {
+					t.Fatalf("%s = %v, want %v", name, got, want)
+				}
+			}
+			check("input", usage.InputTokens, tc.input)
+			check("output", usage.OutputTokens, tc.output)
+			check("cached", usage.CachedTokens, tc.cached)
+			if usage.Completeness != core.UsageComplete {
+				t.Fatalf("usage completeness = %q", usage.Completeness)
+			}
+			wantSource := core.UsageProvider
+			if tc.input == nil && tc.output == nil && tc.cached == nil {
+				wantSource = core.UsageUnknown
+			}
+			if usage.Source != wantSource {
+				t.Fatalf("usage source = %q, want %q", usage.Source, wantSource)
+			}
+			var response map[string]any
+			for _, frame := range stream.pending {
+				name, payload := decodeResponseFrame(t, frame)
+				if name == "response.completed" {
+					response = payload["response"].(map[string]any)
+				}
+			}
+			wireUsage := response["usage"].(map[string]any)
+			if tc.input == nil {
+				if _, exists := wireUsage["input_tokens"]; exists {
+					t.Fatalf("unknown input serialized: %#v", wireUsage)
+				}
+			} else if wireUsage["input_tokens"] != float64(*tc.input) {
+				t.Fatalf("response usage = %#v", wireUsage)
+			}
+			if tc.output != nil && wireUsage["output_tokens"] != float64(*tc.output) {
+				t.Fatalf("response output usage = %#v", wireUsage)
+			}
+			if tc.input != nil && tc.output != nil && wireUsage["total_tokens"] != float64(*tc.input+*tc.output) {
+				t.Fatalf("response total usage = %#v", wireUsage)
+			}
+			if tc.cached != nil && wireUsage["input_tokens_details"].(map[string]any)["cached_tokens"] != float64(*tc.cached) {
+				t.Fatalf("cache details = %#v", wireUsage)
+			}
+		})
+	}
+}
+
+func TestExecuteUsageRejectsNegativeAndOverflow(t *testing.T) {
+	for _, usage := range []string{
+		`{"input_tokens":-1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}`,
+		`{"input_tokens":9223372036854775807,"cache_read_input_tokens":1,"cache_creation_input_tokens":0}`,
+	} {
+		stream := &messagesStream{}
+		if err := stream.consume(messagesSSEEvent{typeName: "message_start", data: []byte(`{"message":{"usage":` + usage + `}}`)}); err == nil {
+			t.Fatalf("invalid usage accepted: %s", usage)
+		}
 	}
 }
 

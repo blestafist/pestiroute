@@ -66,7 +66,7 @@ func TestResponsesEmitterLifecycle(t *testing.T) {
 	}
 	// Mutate the handed-off frame before later snapshot generation.
 	delta[0] ^= 0xff
-	terminal, err := emitter.Finish("end_turn", 12, 3)
+	terminal, err := emitter.Finish("end_turn", new(int64(12)), new(int64(3)), nil)
 	if err != nil || len(terminal) != 4 {
 		t.Fatalf("Finish() = %d frames, %v", len(terminal), err)
 	}
@@ -93,7 +93,7 @@ func TestResponsesEmitterLifecycle(t *testing.T) {
 		if i == 3 {
 			response := payload["response"].(map[string]any)
 			usage := response["usage"].(map[string]any)
-			if response["status"] != "completed" || usage["input_tokens"] != float64(12) || usage["output_tokens"] != float64(3) || usage["total_tokens"] != float64(15) {
+			if response["status"] != "completed" || usage["input_tokens"] != float64(12) || usage["output_tokens"] != float64(3) || usage["total_tokens"] != float64(15) || len(usage) != 3 {
 				t.Fatalf("completed response = %#v", response)
 			}
 		}
@@ -101,7 +101,7 @@ func TestResponsesEmitterLifecycle(t *testing.T) {
 	if _, err := emitter.Delta("late"); err == nil {
 		t.Fatal("Delta after termination succeeded")
 	}
-	if _, err := emitter.Finish("end_turn", 12, 3); err == nil {
+	if _, err := emitter.Finish("end_turn", new(int64(12)), new(int64(3)), nil); err == nil {
 		t.Fatal("duplicate terminal succeeded")
 	}
 	// Mutating the handed-off delta did not change retained terminal reconstruction.
@@ -113,7 +113,7 @@ func TestResponsesEmitterLifecycle(t *testing.T) {
 
 func TestResponsesEmitterTruncationAndBounds(t *testing.T) {
 	emitter, _ := newResponsesEmitter()
-	if _, err := emitter.Finish("end_turn", 0, 0); err == nil {
+	if _, err := emitter.Finish("end_turn", new(int64(0)), new(int64(0)), nil); err == nil {
 		t.Fatal("Finish before Start succeeded")
 	}
 	if _, err := emitter.Delta("before start"); err == nil {
@@ -123,7 +123,7 @@ func TestResponsesEmitterTruncationAndBounds(t *testing.T) {
 	if _, err := emitter.Delta(strings.Repeat("x", maxRetainedText)); err != nil {
 		t.Fatalf("1 MiB delta rejected: %v", err)
 	}
-	terminal, err := emitter.Finish("max_tokens", 2, 4)
+	terminal, err := emitter.Finish("max_tokens", new(int64(2)), new(int64(4)), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestResponsesEmitterTruncationAndBounds(t *testing.T) {
 	if _, err := oversized.Delta("later"); err == nil {
 		t.Fatal("event emitted after retained-state exhaustion")
 	}
-	if _, err := oversized.Finish("end_turn", 1, 1); err == nil {
+	if _, err := oversized.Finish("end_turn", new(int64(1)), new(int64(1)), nil); err == nil {
 		t.Fatal("terminal emitted after retained-state exhaustion")
 	}
 	accumulated, _ := newResponsesEmitter()
@@ -156,7 +156,7 @@ func TestResponsesEmitterTruncationAndBounds(t *testing.T) {
 	if _, err := accumulated.Delta("y"); err == nil {
 		t.Fatal("cumulative text over 1 MiB accepted")
 	}
-	if _, err := accumulated.Finish("end_turn", 1, 1); err == nil {
+	if _, err := accumulated.Finish("end_turn", new(int64(1)), new(int64(1)), nil); err == nil {
 		t.Fatal("terminal emitted after cumulative overflow")
 	}
 	for _, tc := range []struct {
@@ -171,7 +171,7 @@ func TestResponsesEmitterTruncationAndBounds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			invalid, _ := newResponsesEmitter()
 			_, _ = invalid.Start()
-			if _, err := invalid.Finish(tc.stop, tc.input, tc.out); err == nil {
+			if _, err := invalid.Finish(tc.stop, new(int64(tc.input)), new(int64(tc.out)), nil); err == nil {
 				t.Fatal("invalid terminal arguments succeeded")
 			}
 			if _, err := invalid.Delta("still open"); err != nil {
@@ -184,7 +184,7 @@ func TestResponsesEmitterTruncationAndBounds(t *testing.T) {
 	if _, err := invalidUTF8.Delta(string([]byte{0xff})); err == nil {
 		t.Fatal("invalid UTF-8 delta accepted")
 	}
-	if _, err := invalidUTF8.Finish("end_turn", 1, 1); err == nil {
+	if _, err := invalidUTF8.Finish("end_turn", new(int64(1)), new(int64(1)), nil); err == nil {
 		t.Fatal("terminal emitted after invalid UTF-8 delta")
 	}
 }

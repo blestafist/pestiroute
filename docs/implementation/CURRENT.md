@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-022 DONE (22 tasks completed)
+## Immediate focus: M4-023 DONE (23 tasks completed)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
@@ -36,16 +36,17 @@ are pushed to `origin/dev-m4` (`8ec7660`). [M4-012](tasks/M4-012.md) (`1c308c0`)
 [M4-013](tasks/M4-013.md) (`594d684`), [M4-014](tasks/M4-014.md) (`cf9d7d6`),
 [M4-015](tasks/M4-015.md) (`58cf823`), [M4-016](tasks/M4-016.md) (`e65671c`),
 [M4-017](tasks/M4-017.md) (`4555ea4`), [M4-018](tasks/M4-018.md) (`a65f424`),
-[M4-019](tasks/M4-019.md) (`8076e38`), [M4-020](tasks/M4-020.md) (`f82975a`), and
-[M4-021](tasks/M4-021.md) (`77913d2`) are committed locally on `dev-m4` ahead of origin.
+[M4-019](tasks/M4-019.md) (`8076e38`), [M4-020](tasks/M4-020.md) (`f82975a`),
+[M4-021](tasks/M4-021.md) (`77913d2`), and [M4-022](tasks/M4-022.md) (`3a0cf49`)
+are committed locally on `dev-m4` ahead of origin.
 
-[M4-022](tasks/M4-022.md) (Verify at least two complete client-owned tool rounds) is verified
-and passed review (reviewer PASS `ses_efc985bd8ffeg80m211HP3g3N6`). It verifies end-to-end
-client-driven multi-turn tool calling across a protected translated route with a fake Anthropic
-backend, ensuring `call_id` linkage, role grouping, strict single-request-per-turn dispatch (3
-turns = 3 upstream requests), incremental Responses SSE delivery, and zero gateway session or
-tool execution state. Scoped capability `llm.tools` is declared supported.
-22 tasks are DONE in M4. No new tasks are promoted or prepared pending task commit.
+[M4-023](tasks/M4-023.md) (Normalize cumulative usage and cache components) is verified
+and closed DONE (reviewer PASS `ses_efc8aafadffew3RjVJNQNyLywz`). It normalizes Anthropic
+cumulative output snapshots (replacing rather than accumulating), sums base and cache-read/
+creation input counts with overflow checks, preserves missing vs zero counters, emits
+cached token details in Responses completed events, and reports partial usage upon stream
+interruption without adding Core or SQLite fields.
+23 tasks are DONE in M4. No new tasks are promoted or prepared pending task commit.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

@@ -27,8 +27,9 @@ type messagesStream struct {
 	blockIndex int
 	nextIndex  int
 	stop       string
-	input      int
-	output     int
+	input      *int64
+	output     *int64
+	cached     *int64
 	closed     bool
 	close      sync.Once
 }
@@ -93,15 +94,17 @@ func (s *messagesStream) Next(ctx context.Context) (core.StreamFrame, error) {
 			return core.StreamFrame{}, ctx.Err()
 		}
 		if err != nil {
-			_ = s.Close()
+			if s.ctx.Err() != nil || ctx.Err() != nil {
+				_ = s.Close()
+				return core.StreamFrame{}, context.Canceled
+			}
 			if err == io.EOF {
 				err = errors.New("Anthropic stream ended without message_stop")
 			}
-			return core.StreamFrame{}, err
+			return s.incomplete(), nil
 		}
 		if err = s.consume(event); err != nil {
-			_ = s.Close()
-			return core.StreamFrame{}, err
+			return s.incomplete(), nil
 		}
 		s.mu.Lock()
 		if len(s.pending) > 0 {
@@ -112,6 +115,29 @@ func (s *messagesStream) Next(ctx context.Context) (core.StreamFrame, error) {
 		}
 		s.mu.Unlock()
 	}
+}
+
+func (s *messagesStream) incomplete() core.StreamFrame {
+	s.mu.Lock()
+	s.phase = 3
+	s.mu.Unlock()
+	s.cancel()
+	_ = s.body.Close()
+	usage := s.usage(core.UsagePartial)
+	done := &core.CompleteFrame{
+		Outcome: core.OutcomeIncomplete,
+		Error:   &core.GatewayError{Code: "incomplete_response", Category: core.CategoryUnavailable, Message: "Upstream response was incomplete"},
+		Usage:   usage,
+	}
+	return core.StreamFrame{Type: core.FrameComplete, Complete: done}
+}
+
+func (s *messagesStream) usage(completeness core.UsageCompleteness) *core.UsageReport {
+	source := core.UsageProvider
+	if s.input == nil && s.output == nil && s.cached == nil {
+		source = core.UsageUnknown
+	}
+	return &core.UsageReport{InputTokens: s.input, OutputTokens: s.output, CachedTokens: s.cached, Source: source, Completeness: completeness}
 }
 
 func bodyFrame(data []byte) core.StreamFrame {
@@ -129,20 +155,26 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 			return errResponsesLifecycle
 		}
 		var v struct {
-			Message struct {
-				Usage struct {
-					Input *int `json:"input_tokens"`
+			Message *struct {
+				Usage *struct {
+					Input        *int64 `json:"input_tokens"`
+					CacheRead    *int64 `json:"cache_read_input_tokens"`
+					CacheCreated *int64 `json:"cache_creation_input_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
 		}
-		if json.Unmarshal(event.data, &v) != nil || v.Message.Usage.Input == nil || *v.Message.Usage.Input < 0 {
+		if json.Unmarshal(event.data, &v) != nil || v.Message == nil || v.Message.Usage == nil || invalidCount(v.Message.Usage.Input) || invalidCount(v.Message.Usage.CacheRead) || invalidCount(v.Message.Usage.CacheCreated) {
+			return errors.New("invalid Anthropic message_start")
+		}
+		input, err := addCounts(v.Message.Usage.Input, v.Message.Usage.CacheRead, v.Message.Usage.CacheCreated)
+		if err != nil {
 			return errors.New("invalid Anthropic message_start")
 		}
 		e, err := newResponsesEmitter()
 		if err != nil {
 			return err
 		}
-		s.emitter, s.started, s.input = e, true, *v.Message.Usage.Input
+		s.emitter, s.started, s.input, s.cached = e, true, input, v.Message.Usage.CacheRead
 		frames, err := e.StartResponse()
 		if err == nil {
 			s.pending = append(s.pending, frames...)
@@ -226,18 +258,21 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 				StopReason *string `json:"stop_reason"`
 			} `json:"delta"`
 			Usage struct {
-				Output *int `json:"output_tokens"`
+				Output *int64 `json:"output_tokens"`
 			} `json:"usage"`
 		}
-		if !s.started || s.block || s.nextIndex == 0 || s.stop != "" || json.Unmarshal(event.data, &v) != nil || v.Usage.Output == nil || *v.Usage.Output < 0 || v.Delta.StopReason == nil {
+		if !s.started || s.block || s.nextIndex == 0 || json.Unmarshal(event.data, &v) != nil || invalidCount(v.Usage.Output) {
 			return errors.New("invalid Anthropic message_delta")
 		}
-		s.stop, s.output = *v.Delta.StopReason, *v.Usage.Output
+		if v.Delta.StopReason != nil {
+			s.stop = *v.Delta.StopReason
+		}
+		s.output = v.Usage.Output
 	case "message_stop":
 		if !s.started || s.nextIndex == 0 || s.block || s.stop == "" || s.phase != 1 {
 			return errors.New("invalid Anthropic message_stop")
 		}
-		frames, err := s.emitter.Finish(s.stop, s.input, s.output)
+		frames, err := s.emitter.Finish(s.stop, s.input, s.output, s.cached)
 		if err != nil {
 			return err
 		}
@@ -248,14 +283,29 @@ func (s *messagesStream) consume(event messagesSSEEvent) error {
 			outcome = core.OutcomeIncomplete
 			terminalErr = &core.GatewayError{Code: "output_truncated", Category: core.CategoryUnavailable, Message: "Upstream output was truncated"}
 		}
-		input, output := int64(s.input), int64(s.output)
-		complete := core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: outcome, Error: terminalErr, Usage: &core.UsageReport{InputTokens: &input, OutputTokens: &output, Source: core.UsageProvider, Completeness: core.UsageComplete}}}
+		complete := core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: outcome, Error: terminalErr, Usage: s.usage(core.UsageComplete)}}
 		s.terminal = &complete
 		s.phase = 2
 	default:
 		return errors.New("unsupported Anthropic event")
 	}
 	return nil
+}
+
+func invalidCount(v *int64) bool { return v != nil && *v < 0 }
+
+func addCounts(counts ...*int64) (*int64, error) {
+	var total int64
+	for _, count := range counts {
+		if count == nil {
+			return nil, nil
+		}
+		if *count < 0 || total > int64(^uint64(0)>>1)-*count {
+			return nil, errors.New("usage count overflow")
+		}
+		total += *count
+	}
+	return &total, nil
 }
 
 var _ core.Stream = (*messagesStream)(nil)
