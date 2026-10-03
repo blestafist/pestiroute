@@ -380,6 +380,77 @@ func TestToolStreamRejectsUnknownDeltaAndOverflow(t *testing.T) {
 	}
 }
 
+func TestReasoningProviderBlocksFailClosed(t *testing.T) {
+	for _, block := range []string{"thinking", "redacted_thinking"} {
+		t.Run(block, func(t *testing.T) {
+			e, err := newResponsesEmitter()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.StartResponse(); err != nil {
+				t.Fatal(err)
+			}
+			stream := &messagesStream{started: true, emitter: e}
+			data := `{"index":0,"content_block":{"type":"` + block + `"}}`
+			if err := stream.consume(messagesSSEEvent{typeName: "content_block_start", data: []byte(data)}); err == nil {
+				t.Fatal("reasoning block was accepted")
+			}
+			if stream.block || len(stream.pending) != 0 {
+				t.Fatalf("reasoning block changed output state: block=%t pending=%d", stream.block, len(stream.pending))
+			}
+		})
+	}
+}
+
+func TestReasoningDeltasOnTextAndToolBlocksFailClosed(t *testing.T) {
+	for _, block := range []string{"text", "tool_use"} {
+		for _, delta := range []struct{ kind, field, marker string }{
+			{"thinking_delta", "thinking", "thinking_private_marker"},
+			{"signature_delta", "signature", "signature_private_marker"},
+		} {
+			t.Run(block+"/"+delta.kind, func(t *testing.T) {
+				blockJSON := `{"type":"text"}`
+				if block == "tool_use" {
+					blockJSON = `{"type":"tool_use","id":"call_x","name":"lookup"}`
+				}
+				body := "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n" +
+					"event: content_block_start\ndata: {\"index\":0,\"content_block\":" + blockJSON + "}\n\n" +
+					"event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"" + delta.kind + "\",\"" + delta.field + "\":\"" + delta.marker + "\"}}\n\n"
+				stream := newMessagesStream(context.Background(), func() {}, io.NopCloser(strings.NewReader(body)))
+				defer stream.Close()
+				if frame, err := stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+					t.Fatalf("Head=%+v err=%v", frame, err)
+				}
+				var output strings.Builder
+				var terminals []string
+				for {
+					frame, err := stream.Next(context.Background())
+					if err != nil {
+						t.Fatal(err)
+					}
+					if frame.Type == core.FrameBody {
+						output.Write(frame.Body.Data)
+						for _, name := range []string{"response.completed", "response.incomplete", "response.failed"} {
+							if strings.Contains(string(frame.Body.Data), name) {
+								terminals = append(terminals, name)
+							}
+						}
+					}
+					if frame.Type == core.FrameComplete {
+						if frame.Complete.Outcome != core.OutcomeFailed || frame.Complete.Error == nil || frame.Complete.Error.Message != "Upstream response was invalid" || len(terminals) != 1 || terminals[0] != "response.failed" {
+							t.Fatalf("Complete=%+v terminals=%v", frame.Complete, terminals)
+						}
+						break
+					}
+				}
+				if strings.Contains(output.String(), delta.marker) || !strings.Contains(output.String(), "response.created") || strings.Contains(output.String(), "response.completed") {
+					t.Fatalf("unexpected response bytes: %s", output.String())
+				}
+			})
+		}
+	}
+}
+
 func TestToolStreamRejectsDuplicateIDsAndOutOfOrderBlocks(t *testing.T) {
 	e, _ := newResponsesEmitter()
 	_, _ = e.StartResponse()

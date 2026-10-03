@@ -58,4 +58,37 @@ Finite reconstruction ceilings for this profile: at most 64 provider content blo
 4. **Truncation/error:** `max_tokens` stop yields `response.incomplete`, not completed. Provider SSE error, malformed sequence, absent required stop, premature EOF, or retained-state ceiling yields failed/incomplete; before Head, classify/reject pre-commit; after commit, only an in-band terminal failure or close. HTTP 200 alone is not success and ambiguous delivery is not safe to replay.
 5. **Unsupported input:** image, tool, reasoning, a `system` history item, a developer message after any user/assistant turn, developer-only input, non-text content, non-streaming request, unsupported stateful/structured-output fields, or invalid output budget is rejected locally before provider call. An initial developer prefix followed by at least one user/assistant message is accepted and mapped in order with top-level instructions. No translation may silently discard meaning. Any unrecognized semantic provider content fails conservatively; only harmless notifications explicitly documented by later parser work may be ignored.
 
-Later cards must use this binding as the baseline. Tool-call/result history and streamed tool calls remain unresolved and are not part of this request-control mapping. Reasoning is handled separately. No live API entitlement, provider behavior, account availability, or PestiRoute compatibility is claimed.
+## Reasoning decision (M4-029)
+
+**Decision: reasoning is unsupported for this translation profile.** There is no
+lossless mapping from Responses reasoning to Anthropic extended-thinking blocks
+that preserves the protocol's distinct state and lets a later client request
+replay it. Do not enable, expose, synthesize, or claim reasoning support; no ADR
+is needed because this is a Connector-local unsupported policy and changes no
+v1 semantic contract.
+
+| Boundary | Responses side | Anthropic side | Binding outcome |
+| --- | --- | --- | --- |
+| Request effort | `reasoning.effort` | Current Messages API has distinct thinking configuration and effort controls; the pinned `claude-opus-5-5` currently uses adaptive thinking by default, rejects manual `thinking.type:"enabled"`, and cannot disable thinking | No mapping. Reject any client `reasoning` object locally; do not infer a budget, mode, or provider effort. |
+| Request summary/display | `reasoning.summary` | Anthropic `thinking.display` selects summarized or omitted thinking, and is not the same choice/contract | No mapping. Reject with the other reasoning controls. |
+| Temperature / budget constraints | Responses generation controls and output budget | Anthropic manual extended thinking has distinct budget/temperature constraints; the pinned model does not accept that manual mode | No derived `temperature:1` or `budget_tokens`. Existing ordinary temperature/output-budget behavior is unchanged for requests without reasoning. |
+| Responses output item | `type:"reasoning"`, summary entries and optional `encrypted_content` | Anthropic `thinking` exposes a summary string plus a `signature`; `redacted_thinking.data` is separate opaque state | Not equivalent. Never put an Anthropic signature or redacted data in `encrypted_content`; never convert thinking text to `output_text`. |
+| Provider stream | Anthropic `thinking_delta` and `signature_delta` form a thinking block before/among text and tool blocks; redacted blocks are opaque | Responses has its own reasoning-item event and snapshot lifecycle | Not translated. The Connector rejects `thinking` and `redacted_thinking` blocks and rejects their deltas as unsupported semantic content; no reasoning item/delta is emitted. Existing provider-stream failure handling applies. |
+| Assistant history / tool rounds | Responses can replay its protocol's reasoning item representation | Anthropic requires original thinking/redacted blocks, unchanged and in order, including signatures, for applicable same-turn tool replay | No replay mapping. Reject reasoning history locally; never stash provider blocks in gateway state or assume signatures portable across accounts. Ordinary tool history remains governed by the separate tool binding. |
+| `include` | `reasoning.encrypted_content` requests an optional Responses field | Does not make a Messages signature into Responses ciphertext or configure Anthropic thinking | Existing accepted include value remains a no-op request hint only; no reasoning support is implied. |
+
+Implementation boundary: request translation admits no top-level `reasoning`
+field and assistant history admits only `output_text`; provider response parsing
+fails on unknown thinking/redacted blocks instead of flattening or dropping
+them. The rejection is intentionally conservative, including provider thinking
+that may arise under the pinned model's adaptive default. Thus plain-text success
+for every prompt on this model is not guaranteed; local synthetic tests prove
+only fail-closed handling, not live behavior.
+
+Source review (2026-10-04): [Anthropic thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)
+and [Messages create](https://platform.claude.com/docs/en/api/messages/create);
+[Responses streaming](https://developers.openai.com/api/docs/guides/streaming-responses)
+and the pinned OpenCode v2.0.6 source/test baseline above. Provider docs are
+mutable references; live compatibility and current entitlement are unverified.
+
+Later cards must use this binding as the baseline. Tool-call/result history and streamed tool calls remain unresolved and are not part of this request-control mapping. The unsupported reasoning policy above is binding. No live API entitlement, provider behavior, account availability, or PestiRoute compatibility is claimed.

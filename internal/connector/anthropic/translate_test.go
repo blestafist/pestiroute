@@ -375,3 +375,21 @@ func TestTranslateHistoryRejectsUnrepresentableRequests(t *testing.T) {
 		})
 	}
 }
+
+func TestReasoningRequestsFailClosed(t *testing.T) {
+	base := `"model":"client-model","stream":true,"input":`
+	tests := map[string]string{
+		"effort":              `{` + base + `"hi","reasoning":{"effort":"high"}}`,
+		"summary":             `{` + base + `"hi","reasoning":{"summary":"auto"}}`,
+		"reasoning item":      `{` + base + `[{"type":"reasoning","summary":[]}]}`,
+		"reasoning text part": `{` + base + `[{"type":"message","role":"assistant","content":[{"type":"reasoning_text","text":"hidden"}]}]}`,
+		"encrypted item":      `{` + base + `[{"type":"reasoning","encrypted_content":"opaque"}]}`,
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, gatewayErr := translateRequest([]byte(body)); gatewayErr == nil || gatewayErr.Category != "invalid_request" {
+				t.Fatalf("translateRequest() error = %+v, want local invalid_request", gatewayErr)
+			}
+		})
+	}
+}

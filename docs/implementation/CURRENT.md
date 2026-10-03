@@ -27,22 +27,21 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-028 DONE (awaiting verified commit; batch 10/19 DONE)
+## Immediate focus: M4-029 DONE (awaiting verified commit; batch 11/19 DONE)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. All 27 predecessor tasks ([M4-001](tasks/M4-001.md)
-through [M4-027](tasks/M4-027.md)) are committed (`90bec04`). Batch progress:
-10 of 19 objective DONE (total 28 DONE; 9 remaining).
+Anthropic Messages translation. All 28 predecessor tasks ([M4-001](tasks/M4-001.md)
+through [M4-028](tasks/M4-028.md)) are committed (`fe54e5c`). Batch progress:
+11 of 19 objective DONE (total 29 DONE; 9 remaining).
 
-[M4-028](tasks/M4-028.md) (Verify durable translated admission and settlement)
-acceptance is reviewed and closed DONE (reviewer PASS `ses_efbde6020ffemmNCtAu26qIZ7K`).
-Precise opaque Body vs Complete semantics: streamed Body bytes flow incrementally under
-bounded backpressure; terminal persistence failure suppresses Core's internal Complete
-control frame and durable ledger success, leaves attempt intent uncommitted in SQLite,
-drops readiness to 503, and blocks subsequent requests across all routes without buffering
-or recalling wire bytes. 28 tasks are DONE in the registry; implementation is preserved.
-Per policy, no next card is prepared or promoted until the M4-028 commit is cleanly created
+[M4-029](tasks/M4-029.md) (Decide reversible reasoning support for the selected profile)
+acceptance is reviewed and closed DONE (reviewer PASS `ses_efbd74f50ffeWmtKArT257KHpL`).
+Connector-local unsupported reasoning decision and field matrix are documented in
+[M4-BINDING.md](M4-BINDING.md) without ADR or Core/contract changes. Responses reasoning
+controls/items and provider thinking/redacted blocks/deltas fail closed locally without
+emitting reasoning output state. 29 tasks are DONE in the registry; implementation is preserved.
+Per policy, no next card is prepared or promoted until the M4-029 commit is cleanly created
 and verified.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
