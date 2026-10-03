@@ -683,7 +683,9 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	accountAuthorizer := c.accountAuthorizer
 	if persistentDB != nil {
 		accounts := sqlite.NewAccounts(persistentDB)
-		accounting = sqliteAccountingStore{ledger: sqlite.NewLedger(persistentDB)}
+		if accounting == nil {
+			accounting = sqliteAccountingStore{ledger: sqlite.NewLedger(persistentDB)}
+		}
 		services = core.NewPersistentServices(sqliteAccountReader{accounts: accounts}, sqliteCredentialReader{credentials: sqlite.NewCredentials(persistentDB), key: persistentKey}, persistentRefs, transports, c.logger)
 		if policyStore == nil {
 			policyStore = sqlitePolicyStore{policies: sqlite.NewKeyPolicies(persistentDB)}
