@@ -506,7 +506,7 @@ func TestMigrateCancellationRollsBackAndReleasesConnection(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- migrate(ctx, db, append(append([]migration(nil), schemaMigrations...), migration{
-			version: 6, statements: []string{`CREATE TABLE cancelled_migration (id INTEGER)`},
+			version: CurrentSchemaVersion() + 1, statements: []string{`CREATE TABLE cancelled_migration (id INTEGER)`},
 		}))
 	}()
 	select {
@@ -579,7 +579,7 @@ func TestMigrateReadsFutureVersionAfterWaitingForWriteLock(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- migrate(ctx, db2, append(append([]migration(nil), schemaMigrations...), migration{
-			version: 6, statements: []string{`CREATE TABLE must_not_apply (id INTEGER)`},
+			version: CurrentSchemaVersion() + 1, statements: []string{`CREATE TABLE must_not_apply (id INTEGER)`},
 		}))
 	}()
 	select {

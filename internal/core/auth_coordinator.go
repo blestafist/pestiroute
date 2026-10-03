@@ -35,6 +35,8 @@ type AuthSession struct {
 	ConnectorID   InstanceID
 	Revision      int64
 	ExpiresAt     time.Time
+	// ContinuationVersion is an opaque store-owned CAS token for the loaded state.
+	ContinuationVersion string
 }
 
 // AuthCoordinatorStore is the runtime persistence seam. Implementations protect
@@ -44,6 +46,8 @@ type AuthCoordinatorStore interface {
 	AuthCredentials(context.Context, string) (AuthCredentials, error)
 	CreateAuthSession(context.Context, AuthSession, []byte) error
 	GetAuthSession(context.Context, string, time.Time) (AuthSession, []byte, error)
+	// ClaimAuthSession durably excludes another continuation before provider exchange.
+	ClaimAuthSession(context.Context, AuthSession) error
 	AdvanceAuthSession(context.Context, AuthSession, []byte) error
 	ConsumeAuthSession(context.Context, AuthSession) error
 	FinishAuthSession(context.Context, AuthSession, map[string][]byte) error
@@ -127,6 +131,7 @@ func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthS
 	if err != nil {
 		return AuthSession{}, ErrAuthUnavailable
 	}
+	defer clear(state)
 	account, connector, services, creds, err := c.prepare(ctx, session.AccountID)
 	if err != nil {
 		if c.discardSession(session) != nil {
@@ -146,7 +151,16 @@ func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthS
 		}
 		return AuthSession{}, err
 	}
-	defer clear(state)
+	if err := c.store.ClaimAuthSession(ctx, session); err != nil {
+		if errors.Is(err, ErrAuthUnavailable) {
+			return AuthSession{}, ErrAuthUnavailable
+		}
+		return AuthSession{}, authPersistence(err)
+	}
+	if err := ctx.Err(); err != nil {
+		_ = c.discardSession(session)
+		return AuthSession{}, err
+	}
 	result, callErr := connector.Authenticate(ctx, AuthRequest{AccountID: account.ID, Action: "continue", State: state}, services)
 	if callErr != nil || !result.Supported || !validNextAction(result.NextAction) {
 		if c.discardSession(session) != nil {
@@ -157,6 +171,7 @@ func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthS
 	if result.NextAction == "" {
 		if err := c.store.FinishAuthSession(ctx, session, result.Credentials); err != nil {
 			if errors.Is(err, ErrAuthRevisionMismatch) {
+				_ = c.discardSession(session)
 				return AuthSession{}, ErrAuthRevisionMismatch
 			}
 			_ = c.discardSession(session)
@@ -166,6 +181,7 @@ func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthS
 	}
 	if err := c.store.AdvanceAuthSession(ctx, session, []byte(result.State)); err != nil {
 		if errors.Is(err, ErrAuthRevisionMismatch) {
+			_ = c.discardSession(session)
 			return AuthSession{}, ErrAuthRevisionMismatch
 		}
 		_ = c.discardSession(session)
@@ -216,7 +232,7 @@ func (c *AuthCoordinator) Refresh(ctx context.Context, accountID string) (AuthCr
 		return AuthCredentials{}, err
 	}
 	result, callErr := connector.Authenticate(ctx, AuthRequest{AccountID: account.ID, Action: "refresh"}, services)
-	if callErr != nil || !result.Supported {
+	if callErr != nil || !result.Supported || result.NextAction != "" || result.State != "" || !validCredentialCandidates(result.Credentials) {
 		reason := "ambiguous_result"
 		if ctx.Err() != nil {
 			reason = "cancelled_after_call"
@@ -337,4 +353,16 @@ func clear(values []byte) {
 	for i := range values {
 		values[i] = 0
 	}
+}
+
+func validCredentialCandidates(values map[string][]byte) bool {
+	if len(values) == 0 {
+		return false
+	}
+	for name, value := range values {
+		if name == "" || len(value) == 0 {
+			return false
+		}
+	}
+	return true
 }

@@ -644,6 +644,58 @@ func (r *Ledger) FinalizeAttempt(ctx context.Context, terminal TerminalAttempt) 
 	return nil
 }
 
+// FinishRequest closes only a fully settled request. It is deliberately separate
+// from attempt finalization because an uncommitted safe failure may fall back.
+func (r *Ledger) FinishRequest(ctx context.Context, id string) error {
+	if id == "" {
+		return ErrLedgerConflict
+	}
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire request finish connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("begin request finish: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	var state string
+	err = conn.QueryRowContext(ctx, `SELECT state FROM requests WHERE id=?`, id).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read request finish: %w", err)
+	}
+	if state != "admitted" {
+		return nil
+	}
+	var pending bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM attempts a JOIN reservations r ON r.attempt_id=a.id WHERE a.request_id=? AND (a.state IN ('reserved','intent') OR r.state='held'))`, id).Scan(&pending); err != nil {
+		return fmt.Errorf("check request settlement: %w", err)
+	}
+	if pending {
+		return fmt.Errorf("finish unsettled request: %w", ErrLedgerConflict)
+	}
+	var finished int64
+	if err := conn.QueryRowContext(ctx, `SELECT state,finished_at FROM attempts WHERE request_id=? ORDER BY ordinal DESC LIMIT 1`, id).Scan(&state, &finished); err != nil {
+		return fmt.Errorf("read final request attempt: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `UPDATE requests SET state=?,finished_at=? WHERE id=? AND state='admitted'`, state, finished, id); err != nil {
+		return fmt.Errorf("finish request: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("commit request finish: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 // RecoverySummary reports the stable request and attempt state counts after a
 // recovery pass. Repeated calls on an unchanged database return the same value.
 type RecoverySummary struct {

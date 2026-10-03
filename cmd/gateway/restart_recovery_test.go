@@ -583,3 +583,7 @@ func (g postAdmitCrashGate) RecordDispatchIntent(ctx context.Context, attemptID 
 func (g postAdmitCrashGate) FinalizeAttempt(ctx context.Context, terminal core.AccountingTerminal) error {
 	return g.store.FinalizeAttempt(ctx, terminal)
 }
+
+func (g postAdmitCrashGate) FinishRequest(ctx context.Context, id string) error {
+	return g.store.FinishRequest(ctx, id)
+}

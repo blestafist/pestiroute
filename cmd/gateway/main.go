@@ -700,6 +700,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	if legacy {
 		services = fixedLegacyServices{account: c.UpstreamCredentialEnv, credential: []byte(c.credential), transport: transports[c.UpstreamCredentialEnv]}
 	}
+	var accountingFailed atomic.Bool
 	dispatchers := make(map[string]*core.Dispatcher, len(models))
 	protocolAdapters := make(map[string]core.ProtocolAdapter, len(models))
 	for _, route := range c.Routes {
@@ -717,6 +718,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			Accounting: accounting, Budget: route.Budget, BudgetPolicy: route.BudgetPolicy,
 			RouteID: route.RouteID, AccountID: route.Account, Finalize: finalize,
 			RetryMaxAttempts: route.RetryMaxAttempts, RetryDeadline: route.RetryDeadline,
+			OnAccountingFailure: func() { accountingFailed.Store(true); ready.Store(false) },
 		}
 	}
 	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
@@ -725,6 +727,10 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			return
 		}
 		protocolAdapter := firstAdapter(protocolAdapters)
+		if accountingFailed.Load() {
+			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, &core.GatewayError{Code: "accounting_unavailable", Category: core.CategoryUnavailable, Message: "Request accounting is unavailable"}, core.ExecutionResponse{})
+			return
+		}
 		if keyStore != nil {
 			token, ok := adapter.BearerToken(r)
 			if !ok {

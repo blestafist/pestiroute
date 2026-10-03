@@ -55,6 +55,7 @@ func (c *authCoordinatorTestConnector) Authenticate(ctx context.Context, req Aut
 }
 
 type authCoordinatorTestStore struct {
+	claimErr      error
 	mu            sync.Mutex
 	accounts      map[string]AuthAccount
 	credentials   map[string]AuthCredentials
@@ -512,5 +513,43 @@ func TestAuthCoordinatorInvalidationDelegatesAccountAndConnectorScope(t *testing
 	}
 	if store.invalidations != 1 {
 		t.Fatalf("invalidations=%d", store.invalidations)
+	}
+}
+
+func TestAuthCoordinatorInvalidRefreshResultQuarantines(t *testing.T) {
+	for _, result := range []AuthResult{
+		{Supported: true, NextAction: "continue", Credentials: map[string][]byte{"token": []byte("candidate")}},
+		{Supported: true, NextAction: "unrecognized", Credentials: map[string][]byte{"token": []byte("candidate")}},
+		{Supported: true, State: "unfinished-state", Credentials: map[string][]byte{"token": []byte("candidate")}},
+		{Supported: true, Credentials: map[string][]byte{"token": {}}},
+	} {
+		connector := &authCoordinatorTestConnector{respond: func(AuthRequest) (AuthResult, *GatewayError) { return result, nil }}
+		c, store := newAuthCoordinatorTest(t, connector, "a")
+		if _, err := c.Refresh(context.Background(), "a"); !errors.Is(err, ErrAuthUnavailable) {
+			t.Fatalf("invalid refresh accepted: %v", err)
+		}
+		if store.credentials["a"].Revision != 1 || store.quarantine != "ambiguous_result" {
+			t.Fatalf("invalid refresh wrote credentials or lost quarantine: rev=%d reason=%s", store.credentials["a"].Revision, store.quarantine)
+		}
+	}
+}
+
+func (s *authCoordinatorTestStore) ClaimAuthSession(context.Context, AuthSession) error {
+	return s.claimErr
+}
+
+func TestAuthCoordinatorContinueClaimFailureSuppressesProviderCall(t *testing.T) {
+	connector := &authCoordinatorTestConnector{}
+	c, store := newAuthCoordinatorTest(t, connector, "a")
+	session, err := c.Start(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.claimErr = errors.New("controlled claim storage failure")
+	if _, err := c.Continue(context.Background(), session.ID); !errors.Is(err, ErrAuthPersistence) {
+		t.Fatalf("claim error=%v", err)
+	}
+	if connector.calls != 1 {
+		t.Fatalf("failed durable claim invoked continuation: calls=%d", connector.calls)
 	}
 }

@@ -72,12 +72,13 @@ type Dispatcher struct {
 	Services           interface {
 		ForAttempt(AttemptScope) InvocationServices
 	}
-	AccountID    string
-	Mode         string // Empty uses the M1 native mode.
-	Adapter      map[Capability]CapabilityState
-	Connector    map[Capability]CapabilityState
-	Finalize     func(AttemptResult)
-	Observations AttemptObservationSink
+	AccountID           string
+	Mode                string // Empty uses the M1 native mode.
+	Adapter             map[Capability]CapabilityState
+	Connector           map[Capability]CapabilityState
+	Finalize            func(AttemptResult)
+	Observations        AttemptObservationSink
+	OnAccountingFailure func()
 }
 
 func (d *Dispatcher) degraded() bool {
@@ -88,6 +89,9 @@ func (d *Dispatcher) degraded() bool {
 }
 
 func (d *Dispatcher) markDegraded() {
+	if d.OnAccountingFailure != nil {
+		d.OnAccountingFailure()
+	}
 	d.accountingDegraded.Store(true)
 	if d.degradationLatch != nil {
 		d.degradationLatch.Store(true)

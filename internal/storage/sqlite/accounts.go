@@ -85,16 +85,40 @@ func (r *Accounts) List(ctx context.Context, filter AccountFilter) ([]Account, e
 }
 
 func (r *Accounts) SetEnabled(ctx context.Context, id string, enabled bool) (Account, error) {
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return Account{}, fmt.Errorf("acquire account update connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return Account{}, fmt.Errorf("begin account update: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
 	now := time.Now().UTC().Truncate(time.Millisecond).UnixMilli()
-	account, err := scanAccount(r.db.QueryRowContext(ctx, `UPDATE accounts SET enabled = ?,
-		updated_at = CASE WHEN updated_at >= ? THEN updated_at + 1 ELSE ? END
-		WHERE id = ? RETURNING id, connector, enabled, created_at, updated_at`, enabled, now, now, id))
+	account, err := scanAccount(conn.QueryRowContext(ctx, `UPDATE accounts SET enabled=?,updated_at=CASE WHEN updated_at>=? THEN updated_at+1 ELSE ? END WHERE id=? RETURNING id,connector,enabled,created_at,updated_at`, enabled, now, now, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Account{}, ErrAccountNotFound
 	}
 	if err != nil {
 		return Account{}, fmt.Errorf("set account enabled: %w", err)
 	}
+	if !enabled {
+		if _, err := conn.ExecContext(ctx, `UPDATE auth_sessions SET lifecycle='consumed',format_version=NULL,key_version=NULL,nonce=NULL,ciphertext=NULL,updated_at=? WHERE account_id=? AND kind='interactive' AND lifecycle='active'`, now, id); err != nil {
+			return Account{}, fmt.Errorf("invalidate disabled account sessions: %w", err)
+		}
+		if _, err := conn.ExecContext(ctx, `UPDATE auth_sessions SET lifecycle='uncertain',quarantine_reason='ambiguous_result',updated_at=? WHERE account_id=? AND kind='refresh' AND lifecycle='refresh_in_progress'`, now, id); err != nil {
+			return Account{}, fmt.Errorf("quarantine disabled account refresh: %w", err)
+		}
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return Account{}, fmt.Errorf("commit account update: %w", err)
+	}
+	committed = true
 	return account, nil
 }
 

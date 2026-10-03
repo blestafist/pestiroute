@@ -351,3 +351,5 @@ func TestStatefulAffinityFallbackBoundaries(t *testing.T) {
 		}
 	})
 }
+
+func (a affinityAccountingStore) FinishRequest(ctx context.Context, id string) error { return nil }

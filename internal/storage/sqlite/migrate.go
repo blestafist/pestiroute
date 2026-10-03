@@ -160,6 +160,12 @@ var schemaMigrations = []migration{{
 		`CREATE INDEX idx_auth_sessions_account_id ON auth_sessions(account_id)`,
 		`CREATE INDEX idx_auth_sessions_lifecycle_expires ON auth_sessions(lifecycle, expires_at)`,
 	},
+}, {
+	version: 6,
+	statements: []string{`CREATE TABLE auth_session_invocations (
+			session_id TEXT PRIMARY KEY REFERENCES auth_sessions(id) ON DELETE RESTRICT,
+			started_at INTEGER NOT NULL
+		)`},
 }}
 
 // CurrentSchemaVersion is the newest schema version supported by this binary.

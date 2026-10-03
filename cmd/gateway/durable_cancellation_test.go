@@ -658,3 +658,7 @@ func mustOpenSQLite(t *testing.T, path string) *sql.DB {
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
+
+func (s *countedSQLiteAccountingStore) FinishRequest(ctx context.Context, id string) error {
+	return s.store.FinishRequest(ctx, id)
+}

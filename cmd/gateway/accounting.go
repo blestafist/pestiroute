@@ -83,3 +83,7 @@ func (s sqliteAccountingStore) FinalizeAttempt(ctx context.Context, in core.Acco
 	}
 	return accountingStoreError(ctx, s.ledger.FinalizeAttempt(ctx, terminal))
 }
+
+func (s sqliteAccountingStore) FinishRequest(ctx context.Context, id string) error {
+	return accountingStoreError(ctx, s.ledger.FinishRequest(ctx, id))
+}

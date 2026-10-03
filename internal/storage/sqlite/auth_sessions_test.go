@@ -107,7 +107,7 @@ func TestAuthSessionSchemaAndRefreshMarkerUniqueness(t *testing.T) {
 	db, _, repo, _ := authSessionFixture(t, filepath.Join(t.TempDir(), "auth.db"))
 	ctx := context.Background()
 	now := time.Now().UTC()
-	if version, err := SchemaVersion(ctx, db); err != nil || version != 5 {
+	if version, err := SchemaVersion(ctx, db); err != nil || version != CurrentSchemaVersion() {
 		t.Fatalf("schema version=%d err=%v", version, err)
 	}
 	if _, err := db.Exec(`INSERT INTO auth_sessions(id,account_id,connector,kind,expected_credential_revision,lifecycle,created_at,updated_at) VALUES ('bad','account','test','interactive',1,'active',1,1)`); err == nil {

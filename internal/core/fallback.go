@@ -15,7 +15,7 @@ type dispatchState struct {
 	deadline  *retryDeadline
 }
 
-func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (ExecutionResponse, *GatewayError) {
+func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (response ExecutionResponse, gatewayErr *GatewayError) {
 	_, principalPresent := TrustedPrincipalFromContext(ctx)
 	if (principalPresent || d.Policies != nil) && d.degraded() {
 		return ExecutionResponse{}, accountingUnavailableError(nil)
@@ -24,14 +24,40 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	if err != nil {
 		return ExecutionResponse{}, executionError(err)
 	}
+	if (principalPresent || d.Policies != nil) && d.Accounting != nil {
+		finish := func() error {
+			err := d.Accounting.FinishRequest(context.WithoutCancel(ctx), requestID)
+			if err != nil {
+				if isAccountingStorageFailure(err) {
+					d.markDegraded()
+				}
+				return accountingUnavailableError(err)
+			}
+			return nil
+		}
+		defer func() {
+			if gatewayErr != nil {
+				if err := finish(); err != nil {
+					gatewayErr = accountingUnavailableError(err)
+				}
+			} else if response.Stream != nil {
+				response.Stream = &requestAccountingStream{source: response.Stream, finish: finish}
+			}
+		}()
+	}
 	maxAttempts := d.RetryMaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
-	if d.Routes == nil || (maxAttempts == 1 && d.RetryDeadline <= 0) {
+	mode := d.Mode
+	if mode == "" {
+		mode = ModeNative
+	}
+	multiTarget := d.Routes != nil && len(d.Routes.Candidates(in, mode, d.AccountID)) > 1
+	if d.Routes == nil || (maxAttempts == 1 && d.RetryDeadline <= 0 && !multiTarget) {
 		return d.executeAttempt(context.WithValue(ctx, dispatchStateKey{}, dispatchState{requestID: requestID}), in)
 	}
-	if d.RetryDeadline <= 0 {
+	if d.RetryDeadline <= 0 && maxAttempts > 1 {
 		return ExecutionResponse{}, &GatewayError{Code: "invalid_retry_policy", Category: CategoryInternal, Message: "Retry policy is unavailable"}
 	}
 	retryCtx, cancelRequest := context.WithCancelCause(ctx)
@@ -44,7 +70,7 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 			deadline.cleanup()
 		}
 	}()
-	if maxAttempts == 1 {
+	if maxAttempts == 1 && !multiTarget {
 		response, gatewayErr := d.executeAttempt(retryCtx, in)
 		if gatewayErr != nil {
 			return ExecutionResponse{}, gatewayErr
@@ -57,6 +83,9 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		if deadline.isExpired() || retryCtx.Err() != nil {
 			return ExecutionResponse{}, deadline.error(ctx)
 		}
+		if errors.Is(err, ErrCandidateLimits) {
+			return ExecutionResponse{}, &GatewayError{Code: "invalid_request", Category: CategoryInvalidRequest, Message: "Request too large for target limits"}
+		}
 		return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 	}
 	primary := -1
@@ -67,7 +96,7 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 		}
 	}
 	if primary < 0 {
-		return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
+		primary = 0
 	}
 	current := primary
 	lastTried := -1
@@ -110,12 +139,16 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 			Budget: d.Budget, BudgetPolicy: d.BudgetPolicy, RetryMaxAttempts: d.RetryMaxAttempts, RetryDeadline: d.RetryDeadline,
 			RouteID: d.RouteID, Services: d.Services, AccountID: candidate.Route.Identity.AccountID,
 			Mode: d.Mode, Adapter: d.Adapter, Connector: d.Connector, Finalize: d.Finalize, Observations: d.Observations,
-			degradationLatch: degradationLatch,
+			degradationLatch: degradationLatch, OnAccountingFailure: d.OnAccountingFailure,
 		}
 		attemptBase, cancelAttempt := context.WithCancel(retryCtx)
 		attemptCtx := context.WithValue(attemptBase, dispatchStateKey{}, dispatchState{requestID: requestID, ordinal: ordinal, deadline: deadline})
 		response, gatewayErr := attemptDispatcher.executeAttempt(attemptCtx, in)
 		if gatewayErr == nil {
+			if maxAttempts == 1 {
+				keepDeadline = true
+				return ExecutionResponse{Stream: &cleanupStream{source: response.Stream, cleanup: func() { cancelAttempt(); deadline.cleanup() }}}, nil
+			}
 			frame, readErr := response.Stream.Next(attemptCtx)
 			if readErr == nil && frame.Type == FrameHead && frame.Head != nil && frame.Head.Error == nil {
 				attemptStream, ok := response.Stream.(*attemptStream)
@@ -189,7 +222,7 @@ func newRetryDeadline(ctx context.Context, duration time.Duration, cancel contex
 func (d *retryDeadline) start() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.timer != nil || d.ctx.Err() != nil {
+	if d.duration <= 0 || d.timer != nil || d.ctx.Err() != nil {
 		return
 	}
 	d.at = time.Now().Add(d.duration)
@@ -316,4 +349,31 @@ func contextError(ctx context.Context) error {
 		return cause
 	}
 	return ctx.Err()
+}
+
+// requestAccountingStream terminalizes the request only after the attempt has
+// settled, before exposing Complete. Safe failed attempts remain open for fallback.
+type requestAccountingStream struct {
+	source Stream
+	finish func() error
+	once   sync.Once
+	err    error
+}
+
+func (s *requestAccountingStream) settle() error {
+	s.once.Do(func() { s.err = s.finish() })
+	return s.err
+}
+func (s *requestAccountingStream) Next(ctx context.Context) (StreamFrame, error) {
+	frame, err := s.source.Next(ctx)
+	if err != nil || frame.Type == FrameComplete {
+		if finishErr := s.settle(); finishErr != nil {
+			return StreamFrame{}, finishErr
+		}
+	}
+	return frame, err
+}
+func (s *requestAccountingStream) Close() error {
+	err := s.source.Close()
+	return errors.Join(err, s.settle())
 }

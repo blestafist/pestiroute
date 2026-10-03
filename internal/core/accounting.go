@@ -24,6 +24,9 @@ type AccountingStore interface {
 	BeginAttempt(context.Context, AccountingAdmission) error
 	RecordDispatchIntent(context.Context, string, time.Time) error
 	FinalizeAttempt(context.Context, AccountingTerminal) error
+	// FinishRequest closes an admitted request from its last settled attempt.
+	// Missing requests (rejected before admission) and already closed requests are no-ops.
+	FinishRequest(context.Context, string) error
 }
 
 type AccountingAdmission struct {

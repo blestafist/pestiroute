@@ -52,7 +52,7 @@ func (r *AuthSessions) CreateInteractiveSession(ctx context.Context, id, account
 	nowMS, expiryMS := millis(now), millis(expiresAt)
 	res, err := r.db.ExecContext(ctx, `INSERT INTO auth_sessions
 		(id,account_id,connector,kind,expected_credential_revision,lifecycle,expires_at,created_at,updated_at,format_version,key_version,nonce,ciphertext)
-		SELECT ?,a.id,a.connector,'interactive',?,'active',?,?,?,?,?,?,? FROM accounts a WHERE a.id=? AND a.connector=? AND (NOT EXISTS (SELECT 1 FROM credentials c WHERE c.account_id=a.id) OR EXISTS (SELECT 1 FROM credentials c WHERE c.account_id=a.id AND c.revision=?))`, id, expectedRevision, expiryMS,
+		SELECT ?,a.id,a.connector,'interactive',?,'active',?,?,?,?,?,?,? FROM accounts a WHERE a.id=? AND a.connector=? AND a.enabled=1 AND (NOT EXISTS (SELECT 1 FROM credentials c WHERE c.account_id=a.id) OR EXISTS (SELECT 1 FROM credentials c WHERE c.account_id=a.id AND c.revision=?))`, id, expectedRevision, expiryMS,
 		nowMS, nowMS, envelope.FormatVersion, envelope.KeyVersion, envelope.Nonce, envelope.Ciphertext, accountID, connector, expectedRevision)
 	if err != nil {
 		return AuthSession{}, fmt.Errorf("create interactive session: %w", err)
@@ -69,7 +69,7 @@ func (r *AuthSessions) CreateInteractiveSession(ctx context.Context, id, account
 }
 
 func (r *AuthSessions) GetInteractiveSessionDecrypted(ctx context.Context, id string, key crypto.MasterKey, now time.Time) (AuthSession, []byte, error) {
-	v, err := scanAuthSession(r.db.QueryRowContext(ctx, `SELECT `+authSessionColumns+` FROM auth_sessions WHERE id=? AND kind='interactive'`, id))
+	v, err := scanAuthSession(r.db.QueryRowContext(ctx, `SELECT `+authSessionColumns+` FROM auth_sessions WHERE id=? AND kind='interactive' AND NOT EXISTS (SELECT 1 FROM auth_session_invocations i WHERE i.session_id=auth_sessions.id)`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return AuthSession{}, nil, ErrAuthSessionUnavailable
 	}
@@ -90,6 +90,40 @@ func (r *AuthSessions) GetInteractiveSessionDecrypted(ctx context.Context, id st
 		return AuthSession{}, nil, err
 	}
 	return v.clone(), append([]byte(nil), plain...), nil
+}
+
+// ClaimInteractiveSession persists the no-replay boundary before Authenticate.
+// A process crash leaves the session unavailable until expiry or startup recovery.
+func (r *AuthSessions) ClaimInteractiveSession(ctx context.Context, id, account, connector string, revision int64, nonce []byte, now time.Time) error {
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire auth claim connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("begin auth claim: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+	var available bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM auth_sessions s JOIN accounts a ON a.id=s.account_id AND a.connector=s.connector AND a.enabled=1 WHERE s.id=? AND s.account_id=? AND s.connector=? AND s.kind='interactive' AND s.lifecycle='active' AND s.expires_at>? AND s.expected_credential_revision=? AND s.nonce=? AND EXISTS(SELECT 1 FROM credentials c WHERE c.account_id=s.account_id AND c.revision=?) AND NOT EXISTS(SELECT 1 FROM auth_session_invocations i WHERE i.session_id=s.id))`, id, account, connector, millis(now), revision, nonce, revision).Scan(&available); err != nil {
+		return fmt.Errorf("check auth claim: %w", err)
+	}
+	if !available {
+		return ErrAuthSessionUnavailable
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO auth_session_invocations(session_id,started_at) VALUES (?,?)`, id, millis(now)); err != nil {
+		return fmt.Errorf("claim auth continuation: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("commit auth claim: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func (r *AuthSessions) ConsumeInteractiveSession(ctx context.Context, id, accountID string, now time.Time) error {
@@ -130,6 +164,7 @@ func (r *AuthSessions) AdvanceInteractiveSession(ctx context.Context, id, accoun
 	}()
 	res, err := conn.ExecContext(ctx, `UPDATE auth_sessions SET expires_at=?,format_version=?,key_version=?,nonce=?,ciphertext=?,updated_at=?
 		WHERE id=? AND account_id=? AND connector=? AND kind='interactive' AND lifecycle='active' AND expires_at>? AND expected_credential_revision=?
+		AND EXISTS (SELECT 1 FROM accounts WHERE id=auth_sessions.account_id AND connector=auth_sessions.connector AND enabled=1)
 		AND EXISTS (SELECT 1 FROM credentials WHERE account_id=? AND revision=?)`, millis(expiresAt), envelope.FormatVersion, envelope.KeyVersion, envelope.Nonce, envelope.Ciphertext, millis(now), id, accountID, connector, millis(now), expectedRevision, accountID, expectedRevision)
 	if err != nil {
 		return fmt.Errorf("advance interactive session: %w", err)
@@ -148,6 +183,9 @@ func (r *AuthSessions) AdvanceInteractiveSession(ctx context.Context, id, accoun
 		}
 		committed = true
 		return ErrRevisionMismatch
+	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM auth_session_invocations WHERE session_id=?`, id); err != nil {
+		return fmt.Errorf("resolve auth continuation claim: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return fmt.Errorf("commit interactive session advance: %w", err)
@@ -174,7 +212,7 @@ func (r *AuthSessions) FinishInteractiveSession(ctx context.Context, id, account
 		}
 	}()
 	var active int
-	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM auth_sessions WHERE id=? AND account_id=? AND connector=? AND kind='interactive' AND lifecycle='active' AND expires_at>? AND expected_credential_revision=?`, id, accountID, connector, millis(now), expectedRevision).Scan(&active); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM auth_sessions WHERE id=? AND account_id=? AND connector=? AND kind='interactive' AND lifecycle='active' AND expires_at>? AND expected_credential_revision=? AND EXISTS (SELECT 1 FROM accounts WHERE id=auth_sessions.account_id AND connector=auth_sessions.connector AND enabled=1)`, id, accountID, connector, millis(now), expectedRevision).Scan(&active); err != nil {
 		return fmt.Errorf("check interactive finish session: %w", err)
 	}
 	if active != 1 {
@@ -182,7 +220,7 @@ func (r *AuthSessions) FinishInteractiveSession(ctx context.Context, id, account
 	}
 	if replacement != nil {
 		res, err := conn.ExecContext(ctx, `UPDATE credentials SET format_version=?,key_version=?,nonce=?,ciphertext=?,expires_at=?,revision=revision+1,
-			updated_at=CASE WHEN updated_at>=? THEN updated_at+1 ELSE ? END WHERE id=? AND account_id=? AND revision=?`, replacement.FormatVersion, replacement.KeyVersion, replacement.Nonce, replacement.Ciphertext, unixMillis(replacement.ExpiresAt), millis(now), millis(now), replacement.ID, accountID, expectedRevision)
+			updated_at=CASE WHEN updated_at>=? THEN updated_at+1 ELSE ? END WHERE id=? AND account_id=? AND revision=? AND EXISTS (SELECT 1 FROM accounts WHERE id=credentials.account_id AND enabled=1)`, replacement.FormatVersion, replacement.KeyVersion, replacement.Nonce, replacement.Ciphertext, unixMillis(replacement.ExpiresAt), millis(now), millis(now), replacement.ID, accountID, expectedRevision)
 		if err != nil {
 			return fmt.Errorf("replace interactive credentials: %w", err)
 		}
@@ -216,6 +254,9 @@ func (r *AuthSessions) FinishInteractiveSession(ctx context.Context, id, account
 	if n != 1 {
 		return r.consumeStaleInteractive(ctx, conn, id, accountID, now, &committed)
 	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM auth_session_invocations WHERE session_id=?`, id); err != nil {
+		return fmt.Errorf("resolve completed auth claim: %w", err)
+	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return fmt.Errorf("commit interactive finish: %w", err)
 	}
@@ -244,7 +285,7 @@ func (r *AuthSessions) ReplaceCredentialsAndResolveUncertain(ctx context.Context
 		}
 	}()
 	res, err := conn.ExecContext(ctx, `UPDATE credentials SET format_version=?,key_version=?,nonce=?,ciphertext=?,expires_at=?,revision=revision+1,
-		updated_at=CASE WHEN updated_at>=? THEN updated_at+1 ELSE ? END WHERE id=? AND account_id=? AND revision=?`, replacement.FormatVersion, replacement.KeyVersion, replacement.Nonce, replacement.Ciphertext, unixMillis(replacement.ExpiresAt), millis(now), millis(now), replacement.ID, replacement.AccountID, replacement.Revision)
+		updated_at=CASE WHEN updated_at>=? THEN updated_at+1 ELSE ? END WHERE id=? AND account_id=? AND revision=? AND EXISTS (SELECT 1 FROM accounts WHERE id=credentials.account_id AND enabled=1)`, replacement.FormatVersion, replacement.KeyVersion, replacement.Nonce, replacement.Ciphertext, unixMillis(replacement.ExpiresAt), millis(now), millis(now), replacement.ID, replacement.AccountID, replacement.Revision)
 	if err != nil {
 		return Credential{}, fmt.Errorf("replace reauthentication credentials: %w", err)
 	}
@@ -312,7 +353,7 @@ func (r *AuthSessions) CreateRefreshMarker(ctx context.Context, id, accountID, c
 	}
 	stamp := millis(now)
 	res, err := r.db.ExecContext(ctx, `INSERT INTO auth_sessions (id,account_id,connector,kind,expected_credential_revision,lifecycle,created_at,updated_at)
-		SELECT ?,a.id,a.connector,'refresh',?,'refresh_in_progress',?,? FROM accounts a WHERE a.id=? AND a.connector=? AND (NOT EXISTS (SELECT 1 FROM credentials c WHERE c.account_id=a.id) OR EXISTS (SELECT 1 FROM credentials c WHERE c.account_id=a.id AND c.revision=?))`, id, expectedRevision, stamp, stamp, accountID, connector, expectedRevision)
+		SELECT ?,a.id,a.connector,'refresh',?,'refresh_in_progress',?,? FROM accounts a WHERE a.id=? AND a.connector=? AND a.enabled=1 AND (NOT EXISTS (SELECT 1 FROM credentials c WHERE c.account_id=a.id) OR EXISTS (SELECT 1 FROM credentials c WHERE c.account_id=a.id AND c.revision=?))`, id, expectedRevision, stamp, stamp, accountID, connector, expectedRevision)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed: auth_sessions.account_id") {
 			return errors.Join(ErrRefreshMarkerConflict, fmt.Errorf("create refresh marker: %w", err))
@@ -386,7 +427,7 @@ func (r *AuthSessions) ResolveRefreshAndReplaceCredentials(ctx context.Context, 
 	var accountID string
 	var expected int64
 	var lifecycle string
-	if err := conn.QueryRowContext(ctx, `SELECT account_id,expected_credential_revision,lifecycle FROM auth_sessions WHERE id=? AND kind='refresh'`, markerID).Scan(&accountID, &expected, &lifecycle); errors.Is(err, sql.ErrNoRows) {
+	if err := conn.QueryRowContext(ctx, `SELECT s.account_id,s.expected_credential_revision,s.lifecycle FROM auth_sessions s JOIN accounts a ON a.id=s.account_id AND a.connector=s.connector AND a.enabled=1 WHERE s.id=? AND s.kind='refresh'`, markerID).Scan(&accountID, &expected, &lifecycle); errors.Is(err, sql.ErrNoRows) {
 		return Credential{}, ErrRefreshMarkerConflict
 	} else if err != nil {
 		return Credential{}, fmt.Errorf("read refresh marker: %w", err)
@@ -465,6 +506,12 @@ func (r *AuthSessions) RecoverAuthSessions(ctx context.Context, now time.Time) (
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("count recovered auth sessions: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `UPDATE auth_sessions SET lifecycle='consumed',format_version=NULL,key_version=NULL,nonce=NULL,ciphertext=NULL,updated_at=? WHERE kind='interactive' AND lifecycle='active' AND EXISTS(SELECT 1 FROM auth_session_invocations i WHERE i.session_id=auth_sessions.id)`, millis(now)); err != nil {
+		return 0, fmt.Errorf("recover auth continuation claims: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM auth_session_invocations`); err != nil {
+		return 0, fmt.Errorf("clear recovered auth claims: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return 0, fmt.Errorf("commit auth recovery: %w", err)

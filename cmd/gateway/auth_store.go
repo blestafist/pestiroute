@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -60,7 +61,7 @@ func (s *sqliteAuthCoordinatorStore) AuthCredentials(ctx context.Context, accoun
 			return core.AuthCredentials{}, core.ErrAuthRevisionMismatch
 		}
 		revision = row.Revision
-		plain, err := s.credentials.GetDecrypted(ctx, account, id, s.key)
+		plain, err := crypto.Open(s.key, crypto.Envelope{FormatVersion: row.FormatVersion, KeyVersion: row.KeyVersion, Nonce: row.Nonce, Ciphertext: row.Ciphertext}, "credentials", row.ID, row.AccountID)
 		if err != nil {
 			return core.AuthCredentials{}, core.ErrCredentialUnavailable
 		}
@@ -80,7 +81,7 @@ func (s *sqliteAuthCoordinatorStore) GetAuthSession(ctx context.Context, id stri
 	if err != nil {
 		return core.AuthSession{}, nil, core.ErrAuthUnavailable
 	}
-	return core.AuthSession{ID: v.ID, AccountID: v.AccountID, ConnectorID: core.InstanceID(v.Connector), Revision: v.ExpectedCredentialRevision, ExpiresAt: v.ExpiresAt}, state, nil
+	return core.AuthSession{ID: v.ID, AccountID: v.AccountID, ConnectorID: core.InstanceID(v.Connector), Revision: v.ExpectedCredentialRevision, ExpiresAt: v.ExpiresAt, ContinuationVersion: hex.EncodeToString(v.Nonce)}, state, nil
 }
 func (s *sqliteAuthCoordinatorStore) AdvanceAuthSession(ctx context.Context, v core.AuthSession, state []byte) error {
 	err := s.sessions.AdvanceInteractiveSession(ctx, v.ID, v.AccountID, string(v.ConnectorID), v.Revision, v.ExpiresAt, state, s.key, s.keyVersion, s.clock())
@@ -150,7 +151,7 @@ func (s *sqliteAuthCoordinatorStore) credentialReplacement(ctx context.Context, 
 		name, id = n, v
 	}
 	plain, ok := candidates[name]
-	if !ok {
+	if !ok || len(plain) == 0 {
 		return sqlite.Credential{}, core.ErrAuthUnavailable
 	}
 	old, err := s.credentials.Get(ctx, account, id)
@@ -186,3 +187,15 @@ func mapAuthStoreError(err error) error {
 }
 
 var _ core.AuthCoordinatorStore = (*sqliteAuthCoordinatorStore)(nil)
+
+func (s *sqliteAuthCoordinatorStore) ClaimAuthSession(ctx context.Context, v core.AuthSession) error {
+	nonce, err := hex.DecodeString(v.ContinuationVersion)
+	if err != nil || len(nonce) == 0 {
+		return core.ErrAuthUnavailable
+	}
+	err = s.sessions.ClaimInteractiveSession(ctx, v.ID, v.AccountID, string(v.ConnectorID), v.Revision, nonce, s.clock())
+	if errors.Is(err, sqlite.ErrAuthSessionUnavailable) {
+		return core.ErrAuthUnavailable
+	}
+	return mapAuthStoreError(err)
+}

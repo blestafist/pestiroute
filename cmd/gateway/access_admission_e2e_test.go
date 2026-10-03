@@ -381,7 +381,11 @@ func TestAdmissionConcurrentLimit(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if reservation.State == "held" {
+					request, requestErr := ledger.GetRequest(context.Background(), item.requestID)
+					if requestErr != nil {
+						t.Fatal(requestErr)
+					}
+					if reservation.State == "held" || request.State == "admitted" {
 						finalized = false
 						break
 					}
@@ -397,7 +401,7 @@ func TestAdmissionConcurrentLimit(t *testing.T) {
 			}
 			for _, item := range held {
 				request, err := ledger.GetRequest(context.Background(), item.requestID)
-				if err != nil || request.VirtualKeyID != keyID || request.KeyRevision != 2 || request.PolicyID != "policy-id-a" || request.PolicyRevision != 2 || request.Model != "model-a" || request.State != "admitted" || request.FinishedAt != nil {
+				if err != nil || request.VirtualKeyID != keyID || request.KeyRevision != 2 || request.PolicyID != "policy-id-a" || request.PolicyRevision != 2 || request.Model != "model-a" || request.State == "admitted" || request.FinishedAt == nil {
 					t.Fatalf("final request identity/lifecycle %+v, %v", request, err)
 				}
 				attempt, err := ledger.GetAttempt(context.Background(), item.attemptID)

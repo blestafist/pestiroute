@@ -55,22 +55,23 @@ func (c *accountingTestConnector) Execute(ctx context.Context, in ExecutionReque
 }
 
 type accountingTestStore struct {
-	order       *[]string
-	admitted    AccountingAdmission
-	terminal    AccountingTerminal
-	persisted   bool
-	admitErr    error
-	beginErr    error
-	intentErr   error
-	finalizeErr error
-	cancelAdmit context.CancelFunc
-	finalized   chan AccountingTerminal
-	admits      int
-	intents     int
-	finals      int
-	begins      int
-	terminals   []AccountingTerminal
-	admissions  []AccountingAdmission
+	order            *[]string
+	admitted         AccountingAdmission
+	terminal         AccountingTerminal
+	persisted        bool
+	admitErr         error
+	beginErr         error
+	intentErr        error
+	finalizeErr      error
+	requestFinishErr error
+	cancelAdmit      context.CancelFunc
+	finalized        chan AccountingTerminal
+	admits           int
+	intents          int
+	finals           int
+	begins           int
+	terminals        []AccountingTerminal
+	admissions       []AccountingAdmission
 }
 
 func (s *accountingTestStore) Admit(_ context.Context, admission AccountingAdmission) error {
@@ -309,6 +310,36 @@ func TestExecuteFallbackUsesDurablePerAttemptAccounting(t *testing.T) {
 		RetryMaxAttempts: 2, RetryDeadline: time.Second,
 	}
 	in := ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol, Body: []byte("opaque")}, Metadata: RequestMetadata{AffinityKnown: true, IngressHeaderBytes: 1}}
+	policyStore := d.Policies.(*authorizationPolicyStore)
+	policyStore.snapshot.Connectors = []string{"connector-account-b"}
+	for _, attemptLimit := range []int{1, 2} {
+		d.RetryMaxAttempts = attemptLimit
+		d.RetryDeadline = 0
+		if attemptLimit > 1 {
+			d.RetryDeadline = time.Second
+		}
+		selected, err := d.Execute(ctx, in)
+		if err != nil {
+			t.Fatalf("eligible target after excluded primary (limit %d): %v", attemptLimit, err)
+		}
+		for {
+			_, err := selected.Stream.Next(ctx)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if connectors[0].executions != 0 || connectors[1].executions != attemptLimit || store.begins != 0 || store.admitted.AccountID != "account-b" {
+			t.Fatalf("ineligible primary was not skipped: executions=%d/%d begins=%d selected=%s", connectors[0].executions, connectors[1].executions, store.begins, store.admitted.AccountID)
+		}
+	}
+	policyStore.snapshot.Connectors = []string{"connector-account-a", "connector-account-b"}
+	d.RetryMaxAttempts, d.RetryDeadline = 2, time.Second
+	connectors[1].executions = 0
+	store = &accountingTestStore{order: &order}
+	d.Accounting = store
 	response, gatewayErr := d.Execute(ctx, in)
 	if gatewayErr != nil {
 		t.Fatal(gatewayErr)
@@ -767,5 +798,36 @@ func TestDispatchAccountingStreamCancellationAndTrailingFrameOnce(t *testing.T) 
 				t.Fatalf("repeated close settled %d times", finals)
 			}
 		})
+	}
+}
+
+func (s *accountingTestStore) FinishRequest(ctx context.Context, id string) error {
+	return s.requestFinishErr
+}
+
+func TestDispatchAccountingRequestFinishFailureSuppressesComplete(t *testing.T) {
+	var order []string
+	store := &accountingTestStore{order: &order, requestFinishErr: AccountingStorageFailure{Err: errors.New("private finish detail")}}
+	connector := &accountingTestConnector{order: &order}
+	d := accountingDispatcher(t, authContext(), connector, store)
+	var healthFailed bool
+	d.OnAccountingFailure = func() { healthFailed = true }
+	response, gatewayErr := d.Execute(authContext(), ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol, Body: []byte("opaque")}})
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	for _, want := range []FrameType{FrameHead, FrameBody} {
+		frame, err := response.Stream.Next(authContext())
+		if err != nil || frame.Type != want {
+			t.Fatalf("frame %+v err=%v", frame, err)
+		}
+	}
+	frame, err := response.Stream.Next(authContext())
+	if err == nil || frame.Type != "" || !healthFailed || store.finals != 1 {
+		t.Fatalf("request finish failure exposed Complete: %+v err=%v health=%t finals=%d", frame, err, healthFailed, store.finals)
+	}
+	_, gatewayErr = d.Execute(authContext(), ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol}})
+	if gatewayErr == nil || gatewayErr.Code != "accounting_unavailable" || store.admits != 1 {
+		t.Fatalf("request finish failure admitted new work: %+v admits=%d", gatewayErr, store.admits)
 	}
 }

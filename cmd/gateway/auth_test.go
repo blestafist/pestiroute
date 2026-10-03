@@ -173,3 +173,5 @@ func TestProtectedAuthInfrastructureFailureAndProbes(t *testing.T) {
 		t.Fatalf("storage failure response = %d %s", w.Code, w.Body.String())
 	}
 }
+
+func (testAccountingStore) FinishRequest(ctx context.Context, id string) error { return nil }

@@ -40,6 +40,13 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 	if _, err := sqlite.NewLedger(db).Recover(ctx); err != nil {
 		return fail(db.Close, fmt.Errorf("recover runtime database: %w", err))
 	}
+	authSessions := sqlite.NewAuthSessions(db)
+	if _, err := authSessions.RecoverAuthSessions(ctx, time.Now()); err != nil {
+		return fail(db.Close, errors.New("cannot recover runtime authentication"))
+	}
+	if _, err := authSessions.CleanupExpired(ctx, time.Now()); err != nil {
+		return fail(db.Close, errors.New("cannot clean expired authentication sessions"))
+	}
 	accounts := sqlite.NewAccounts(db)
 	policies := sqlite.NewKeyPolicies(db)
 	for _, route := range p.Routes {
