@@ -42,8 +42,10 @@ type accountingTestStore struct {
 	order       *[]string
 	admitted    AccountingAdmission
 	terminal    AccountingTerminal
+	persisted   bool
 	admitErr    error
 	intentErr   error
+	finalizeErr error
 	cancelAdmit context.CancelFunc
 	finalized   chan AccountingTerminal
 	admits      int
@@ -72,7 +74,8 @@ func (s *accountingTestStore) FinalizeAttempt(_ context.Context, terminal Accoun
 	if s.finalized != nil {
 		s.finalized <- terminal
 	}
-	return nil
+	s.persisted = s.finalizeErr == nil
+	return s.finalizeErr
 }
 
 func accountingDispatcher(t *testing.T, ctx context.Context, connector *accountingTestConnector, store *accountingTestStore) *Dispatcher {
@@ -171,8 +174,8 @@ func TestDispatchAccountingRejectsBeforeExecute(t *testing.T) {
 		connector := &accountingTestConnector{order: &order}
 		d := accountingDispatcher(t, authContext(), connector, store)
 		_, gatewayErr := d.Execute(authContext(), ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol}})
-		if gatewayErr == nil || gatewayErr.Category != CategoryInternal {
-			t.Fatalf("intent failure = %#v, want infrastructure error", gatewayErr)
+		if gatewayErr == nil || gatewayErr.Category != CategoryUnavailable || gatewayErr.Code != "accounting_unavailable" {
+			t.Fatalf("intent failure = %#v, want accounting_unavailable", gatewayErr)
 		}
 		if store.intents != 1 || store.finals != 1 || slices.Contains(order, "execute") || store.terminal.Committed {
 			t.Fatalf("intent failure side effects: order=%v store=%+v", order, store)
@@ -193,6 +196,117 @@ func TestDispatchAccountingRejectsBeforeExecute(t *testing.T) {
 			t.Fatalf("pre-intent cancellation side effects: order=%v store=%+v", order, store)
 		}
 	})
+}
+
+func TestDispatchAccountingStorageFailureBeforeExecute(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		store func(*accountingTestStore)
+	}{
+		{name: "admission", store: func(s *accountingTestStore) {
+			s.admitErr = AccountingStorageFailure{Err: errors.New("private database detail")}
+		}},
+		{name: "intent", store: func(s *accountingTestStore) {
+			s.intentErr = AccountingStorageFailure{Err: errors.New("private database detail")}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var order []string
+			store := &accountingTestStore{order: &order}
+			tc.store(store)
+			connector := &accountingTestConnector{order: &order}
+			d := accountingDispatcher(t, authContext(), connector, store)
+			_, gatewayErr := d.Execute(authContext(), ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol}})
+			if gatewayErr == nil || gatewayErr.Code != "accounting_unavailable" || gatewayErr.Category != CategoryUnavailable || gatewayErr.Retryable || gatewayErr.Message != "Request accounting is unavailable" {
+				t.Fatalf("storage error = %#v, want sanitized accounting_unavailable", gatewayErr)
+			}
+			if slices.Contains(order, "execute") {
+				t.Fatalf("storage failure executed upstream: %v", order)
+			}
+			before := store.admits
+			_, nextErr := d.Execute(authContext(), ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol}})
+			if nextErr == nil || nextErr.Code != "accounting_unavailable" || store.admits != before || slices.Contains(order, "execute") {
+				t.Fatalf("degraded dispatcher admitted later request: err=%#v order=%v store=%+v", nextErr, order, store)
+			}
+		})
+	}
+}
+
+func TestDispatchAccountingStorageFailureAfterCommitFailClosed(t *testing.T) {
+	var order []string
+	store := &accountingTestStore{order: &order, finalizeErr: AccountingStorageFailure{Err: errors.New("private database detail")}}
+	connector := &accountingTestConnector{order: &order}
+	d := accountingDispatcher(t, authContext(), connector, store)
+	response, gatewayErr := d.Execute(authContext(), ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol, Body: []byte("opaque")}})
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	frame, err := response.Stream.Next(authContext())
+	if err != nil || frame.Type != FrameHead {
+		t.Fatalf("Head = %#v, %v", frame, err)
+	}
+	frame, err = response.Stream.Next(authContext())
+	if err != nil || frame.Type != FrameBody || string(frame.Body.Data) != "opaque" {
+		t.Fatalf("Body = %#v, %v", frame, err)
+	}
+	frame, err = response.Stream.Next(authContext())
+	if err == nil || frame.Type != "" || err.Error() != "Request accounting is unavailable" || store.finals != 1 || store.persisted || !store.terminal.Committed {
+		t.Fatalf("failed terminal persistence = frame %#v, err %v, terminal %+v", frame, err, store.terminal)
+	}
+	before := store.admits
+	_, nextErr := d.Execute(authContext(), ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol}})
+	executeCalls := 0
+	for _, operation := range order {
+		if operation == "execute" {
+			executeCalls++
+		}
+	}
+	if nextErr == nil || nextErr.Code != "accounting_unavailable" || store.admits != before || executeCalls != 1 {
+		t.Fatalf("terminal failure did not fail closed: err=%#v order=%v store=%+v", nextErr, order, store)
+	}
+}
+
+func TestDispatchAccountingNonStorageFailuresDoNotDegrade(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*accountingTestStore)
+	}{
+		{name: "admission conflict", set: func(s *accountingTestStore) { s.admitErr = errors.New("ledger conflict") }},
+		{name: "intent not found", set: func(s *accountingTestStore) { s.intentErr = errors.New("ledger record not found") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var order []string
+			store := &accountingTestStore{order: &order}
+			tc.set(store)
+			connector := &accountingTestConnector{order: &order}
+			d := accountingDispatcher(t, authContext(), connector, store)
+			_, gatewayErr := d.Execute(authContext(), ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol}})
+			if gatewayErr == nil || gatewayErr.Code != "accounting_unavailable" || slices.Contains(order, "execute") {
+				t.Fatalf("non-storage failure = %#v, order=%v", gatewayErr, order)
+			}
+			admissions := store.admits
+			_, _ = d.Execute(authContext(), ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol}})
+			if store.admits != admissions+1 {
+				t.Fatalf("non-storage failure degraded dispatcher: admissions %d -> %d", admissions, store.admits)
+			}
+		})
+	}
+}
+
+func TestDispatchAccountingCancelledAdmissionDoesNotDegrade(t *testing.T) {
+	ctx, cancel := context.WithCancel(authContext())
+	var order []string
+	store := &accountingTestStore{order: &order, admitErr: context.Canceled, cancelAdmit: cancel}
+	connector := &accountingTestConnector{order: &order}
+	d := accountingDispatcher(t, ctx, connector, store)
+	_, gatewayErr := d.Execute(ctx, ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol}})
+	if gatewayErr == nil || gatewayErr.Category != CategoryCancelled || slices.Contains(order, "execute") {
+		t.Fatalf("cancelled admission = %#v, order=%v", gatewayErr, order)
+	}
+	_, _ = d.Execute(authContext(), ExecutionRequest{Model: "model", Payload: RawPayload{Protocol: m1Protocol}})
+	if store.admits != 2 {
+		t.Fatalf("cancelled admission degraded dispatcher: admissions=%d", store.admits)
+	}
 }
 
 func TestDispatchAccountingTrailingFrameFinalizesOnce(t *testing.T) {

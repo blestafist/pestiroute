@@ -8,6 +8,15 @@ import (
 
 var ErrAdmissionLimit = errors.New("admission limit exceeded")
 
+// AccountingStorageFailure marks errors that indicate the durable store cannot
+// safely serve accounting operations. Business conflicts and cancellation must
+// not be wrapped in this type.
+type AccountingStorageFailure struct{ Err error }
+
+func (AccountingStorageFailure) Error() string { return "accounting storage failure" }
+
+func (e AccountingStorageFailure) Unwrap() error { return e.Err }
+
 // AccountingStore is the authoritative request/attempt ledger. Implementations
 // acknowledge each operation only after its durable transaction commits.
 type AccountingStore interface {

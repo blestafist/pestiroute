@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -50,15 +51,16 @@ type AttemptResult struct {
 // Dispatcher uses the route registry when configured and retains the fixed
 // target/account fields for the legacy M1 path. Finalize records each attempt.
 type Dispatcher struct {
-	Target       Target
-	Routes       *RouteTable
-	Policies     PolicyStore
-	Accounts     AccountAuthorizer
-	Accounting   AccountingStore
-	Budget       RouteBudget
-	BudgetPolicy string
-	RouteID      string
-	Services     interface {
+	accountingDegraded atomic.Bool
+	Target             Target
+	Routes             *RouteTable
+	Policies           PolicyStore
+	Accounts           AccountAuthorizer
+	Accounting         AccountingStore
+	Budget             RouteBudget
+	BudgetPolicy       string
+	RouteID            string
+	Services           interface {
 		ForAttempt(AttemptScope) InvocationServices
 	}
 	AccountID    string
@@ -109,6 +111,9 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	var authorization CandidateAuthorization
 	_, principalPresent := TrustedPrincipalFromContext(ctx)
 	protected := principalPresent || d.Policies != nil
+	if protected && d.accountingDegraded.Load() {
+		return ExecutionResponse{}, accountingUnavailableError(nil)
+	}
 	legacy := d.Routes == nil
 	if legacy {
 		if in.Model != m1Model {
@@ -209,6 +214,12 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 			if errors.Is(err, ErrAdmissionLimit) {
 				return ExecutionResponse{}, &GatewayError{Code: "rate_limit_exceeded", Category: CategoryRateLimited, Retryable: true, Message: "Request rate limit exceeded"}
 			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return ExecutionResponse{}, executionError(err)
+			}
+			if isAccountingStorageFailure(err) {
+				d.accountingDegraded.Store(true)
+			}
 			return ExecutionResponse{}, accountingUnavailableError(err)
 		}
 	}
@@ -220,7 +231,10 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	persist := func(r AttemptResult) error {
 		if protected {
 			if err := d.Accounting.FinalizeAttempt(context.WithoutCancel(ctx), accountingTerminal(r)); err != nil {
-				return err
+				if isAccountingStorageFailure(err) {
+					d.accountingDegraded.Store(true)
+				}
+				return accountingUnavailableError(err)
 			}
 		}
 		return nil
@@ -257,7 +271,14 @@ func (d *Dispatcher) Execute(ctx context.Context, in ExecutionRequest) (Executio
 	if protected {
 		if err := ExecuteAfterDispatchIntent(ctx, d.Accounting, attemptID, time.Now(), execute); err != nil {
 			if gatewayErr == nil {
-				gatewayErr = executionError(err)
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					gatewayErr = executionError(err)
+				} else {
+					if isAccountingStorageFailure(err) {
+						d.accountingDegraded.Store(true)
+					}
+					gatewayErr = accountingUnavailableError(err)
+				}
 			}
 			if response.Stream != nil {
 				_ = response.Stream.Close()
@@ -326,6 +347,11 @@ func authorizationError(err error) *GatewayError {
 
 func accountingUnavailableError(error) *GatewayError {
 	return &GatewayError{Code: "accounting_unavailable", Category: CategoryUnavailable, Message: "Request accounting is unavailable"}
+}
+
+func isAccountingStorageFailure(err error) bool {
+	var failure AccountingStorageFailure
+	return errors.As(err, &failure)
 }
 
 func accountingTerminal(result AttemptResult) AccountingTerminal {

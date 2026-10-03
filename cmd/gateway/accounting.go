@@ -23,7 +23,7 @@ func (s sqliteAccountingStore) Admit(ctx context.Context, in core.AccountingAdmi
 		EstimateTokens: in.EstimateTokens, EstimateMethod: in.EstimateMethod, State: "reserved",
 	}
 	err := s.ledger.Admit(ctx, request, attempt, sqlite.ReservationRecord{AttemptID: in.AttemptID, EstimatedTokens: in.EstimateTokens})
-	return coreAdmissionError(err)
+	return accountingStoreError(ctx, coreAdmissionError(err))
 }
 
 func coreAdmissionError(err error) error {
@@ -33,8 +33,22 @@ func coreAdmissionError(err error) error {
 	return err
 }
 
+func accountingStoreError(ctx context.Context, err error) error {
+	if err == nil || errors.Is(err, sqlite.ErrLedgerConflict) || errors.Is(err, sqlite.ErrLedgerNotFound) ||
+		errors.Is(err, core.ErrAdmissionLimit) {
+		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return core.AccountingStorageFailure{Err: err}
+}
+
 func (s sqliteAccountingStore) RecordDispatchIntent(ctx context.Context, attemptID string, at time.Time) error {
-	return s.ledger.RecordDispatchIntent(ctx, attemptID, at)
+	return accountingStoreError(ctx, s.ledger.RecordDispatchIntent(ctx, attemptID, at))
 }
 
 func (s sqliteAccountingStore) FinalizeAttempt(ctx context.Context, in core.AccountingTerminal) error {
@@ -57,5 +71,5 @@ func (s sqliteAccountingStore) FinalizeAttempt(ctx context.Context, in core.Acco
 	if in.Reason != "" {
 		terminal.ErrorReason = &in.Reason
 	}
-	return s.ledger.FinalizeAttempt(ctx, terminal)
+	return accountingStoreError(ctx, s.ledger.FinalizeAttempt(ctx, terminal))
 }
