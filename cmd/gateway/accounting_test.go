@@ -58,7 +58,8 @@ func TestAccountingStoreErrorNormalizesDriverInterruptFromCanceledContext(t *tes
 
 func TestSQLiteAccountingStorePersistsFallbackAttemptWithoutSecondRPM(t *testing.T) {
 	ctx := context.Background()
-	db, err := sqlite.Open(filepath.Join(t.TempDir(), "fallback.db"))
+	dbPath := filepath.Join(t.TempDir(), "fallback.db")
+	db, err := sqlite.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +68,7 @@ func TestSQLiteAccountingStorePersistsFallbackAttemptWithoutSecondRPM(t *testing
 		t.Fatal(err)
 	}
 	policy, err := sqlite.NewKeyPolicies(db).Create(ctx, sqlite.CreateKeyPolicyParams{
-		ID: "policy", Models: []string{"model"}, Connectors: []string{"connector-a", "connector-b"}, RPM: 1, TPM: 100,
+		ID: "policy", Models: []string{"model"}, Connectors: []string{"connector-a", "connector-b"}, RPM: 1, TPM: 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -93,9 +94,6 @@ func TestSQLiteAccountingStorePersistsFallbackAttemptWithoutSecondRPM(t *testing
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	if err := store.RecordDispatchIntent(ctx, first.AttemptID, now); err != nil {
-		t.Fatal(err)
-	}
 	if err := store.FinalizeAttempt(ctx, core.AccountingTerminal{
 		AttemptID: first.AttemptID, Outcome: core.OutcomeFailed, Usage: core.UsageReport{Source: core.UsageUnknown, Completeness: core.UsageUnknownCompleteness},
 		Category: core.CategoryUnavailable, Reason: "safe_rejection", EndedAt: now,
@@ -133,5 +131,106 @@ func TestSQLiteAccountingStorePersistsFallbackAttemptWithoutSecondRPM(t *testing
 		if err != nil || reservation.State == "held" {
 			t.Fatalf("reservation %q was not reconciled: %+v, %v", attemptID, reservation, err)
 		}
+	}
+	firstReservation, err := store.ledger.GetReservation(ctx, first.AttemptID)
+	if err != nil || firstReservation.State != "released" || firstReservation.EffectiveCharge != 0 {
+		t.Fatalf("undispatched safe failure reservation = %+v, %v", firstReservation, err)
+	}
+	secondReservation, err := store.ledger.GetReservation(ctx, second.AttemptID)
+	if err != nil || secondReservation.State != "settled" || secondReservation.EffectiveCharge != 10 {
+		t.Fatalf("exact fallback settlement = %+v, %v", secondReservation, err)
+	}
+	partialInput := int64(3)
+	third := base
+	third.AttemptID, third.AccountID, third.Connector = "attempt-c", "account-a", "connector-a"
+	third.EstimateTokens = 11
+	if err := store.BeginAttempt(ctx, third); !errors.Is(err, core.ErrAdmissionLimit) {
+		t.Fatalf("fallback beyond remaining TPM = %v, want admission limit", err)
+	}
+	if _, err := store.ledger.GetReservation(ctx, third.AttemptID); !errors.Is(err, sqlite.ErrLedgerNotFound) {
+		t.Fatalf("rejected fallback left reservation: %v", err)
+	}
+	third.AttemptID = "attempt-d"
+	third.EstimateTokens = 5
+	if err := store.BeginAttempt(ctx, third); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordDispatchIntent(ctx, third.AttemptID, now.Add(3*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	terminal := core.AccountingTerminal{
+		AttemptID: third.AttemptID, Outcome: core.OutcomeIncomplete, Committed: true,
+		Usage: core.UsageReport{InputTokens: &partialInput, Source: core.UsageProvider, Completeness: core.UsagePartial}, EndedAt: now.Add(4 * time.Millisecond),
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 8)
+	for i := 0; i < cap(errs); i++ {
+		go func() { <-start; errs <- store.FinalizeAttempt(ctx, terminal) }()
+	}
+	close(start)
+	for i := 0; i < cap(errs); i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("idempotent competing finalization: %v", err)
+		}
+	}
+	thirdReservation, err := store.ledger.GetReservation(ctx, third.AttemptID)
+	if err != nil || thirdReservation.State != "conservative" || thirdReservation.EffectiveCharge != 5 {
+		t.Fatalf("partial fallback settlement = %+v, %v", thirdReservation, err)
+	}
+	usage, err := store.ledger.GetUsage(ctx, third.AttemptID)
+	if err != nil || usage.InputTokens == nil || *usage.InputTokens != partialInput || usage.OutputTokens != nil {
+		t.Fatalf("partial fallback usage record = %+v, %v", usage, err)
+	}
+	unknown := base
+	unknown.AttemptID, unknown.AccountID, unknown.Connector = "attempt-e", "account-b", "connector-b"
+	if err := store.BeginAttempt(ctx, unknown); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordDispatchIntent(ctx, unknown.AttemptID, now.Add(5*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinalizeAttempt(ctx, core.AccountingTerminal{
+		AttemptID: unknown.AttemptID, Outcome: core.OutcomeIncomplete, Committed: true,
+		Usage: core.UsageReport{Source: core.UsageUnknown, Completeness: core.UsageUnknownCompleteness}, EndedAt: now.Add(6 * time.Millisecond),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unknownReservation, err := store.ledger.GetReservation(ctx, unknown.AttemptID)
+	if err != nil || unknownReservation.State != "conservative" || unknownReservation.EffectiveCharge != 5 {
+		t.Fatalf("unknown fallback settlement = %+v, %v", unknownReservation, err)
+	}
+	secondRequest := base
+	secondRequest.RequestID, secondRequest.AttemptID = "request-rpm-check", "attempt-rpm-check"
+	secondRequest.AccountID, secondRequest.Connector = "account-a", "connector-a"
+	if err := store.Admit(ctx, secondRequest); !errors.Is(err, core.ErrAdmissionLimit) {
+		t.Fatalf("second client request under RPM=1 = %v, want admission limit", err)
+	}
+	exhausted := base
+	exhausted.AttemptID, exhausted.AccountID, exhausted.Connector = "attempt-f", "account-a", "connector-a"
+	exhausted.EstimateTokens = 1
+	if err := store.BeginAttempt(ctx, exhausted); !errors.Is(err, core.ErrAdmissionLimit) {
+		t.Fatalf("fallback after exhausted budget = %v, want admission limit", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ledger := sqlite.NewLedger(db)
+	request, err = ledger.GetRequest(ctx, first.RequestID)
+	if err != nil || request.ID != first.RequestID {
+		t.Fatalf("reopened fallback request = %+v, %v", request, err)
+	}
+	for _, id := range []string{first.AttemptID, second.AttemptID, third.AttemptID, unknown.AttemptID} {
+		reservation, err := ledger.GetReservation(ctx, id)
+		if err != nil || reservation.State == "held" {
+			t.Fatalf("reopened fallback reservation %q = %+v, %v", id, reservation, err)
+		}
+	}
+	if _, err := ledger.GetRequest(ctx, secondRequest.RequestID); !errors.Is(err, sqlite.ErrLedgerNotFound) {
+		t.Fatalf("RPM-rejected request persisted: %v", err)
 	}
 }

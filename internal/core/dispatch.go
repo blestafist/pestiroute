@@ -536,7 +536,6 @@ type attemptStream struct {
 	done                   bool
 	closing                bool
 	closeCause             error
-	published              chan struct{}
 	persisted              chan struct{}
 	commit                 bool
 	pending                *CompleteFrame
@@ -549,22 +548,21 @@ type attemptStream struct {
 func (s *attemptStream) finalize(outcome Outcome, usage *UsageReport, err *GatewayError, preHeadGateway bool) bool {
 	s.mu.Lock()
 	if s.done {
-		published := s.published
+		persisted := s.persisted
 		s.mu.Unlock()
-		if published != nil {
-			<-published
+		if persisted != nil {
+			<-persisted
 		}
 		return false
 	}
-	r, published := s.reserveLocked(outcome, usage, err, preHeadGateway)
+	r := s.reserveLocked(outcome, usage, err, preHeadGateway)
 	s.mu.Unlock()
-	s.publish(r, published)
+	s.publish(r)
 	return true
 }
 
-func (s *attemptStream) reserveLocked(outcome Outcome, usage *UsageReport, err *GatewayError, preHeadGateway bool) (AttemptResult, chan struct{}) {
+func (s *attemptStream) reserveLocked(outcome Outcome, usage *UsageReport, err *GatewayError, preHeadGateway bool) AttemptResult {
 	s.done = true
-	s.published = make(chan struct{})
 	s.persisted = make(chan struct{})
 	r := s.result
 	r.Committed = s.commit
@@ -578,14 +576,13 @@ func (s *attemptStream) reserveLocked(outcome Outcome, usage *UsageReport, err *
 	}
 	r.Error = err
 	r.EndedAt = time.Now()
-	return r, s.published
+	return r
 }
 
-func (s *attemptStream) publish(r AttemptResult, published chan struct{}) {
+func (s *attemptStream) publish(r AttemptResult) {
 	if s.observe != nil {
 		s.observe(r)
 	}
-	close(published)
 	if s.persist != nil {
 		err := s.persist(r)
 		s.mu.Lock()
@@ -619,17 +616,17 @@ func (s *attemptStream) finalizeEOF(pending *CompleteFrame) error {
 			cause = context.Canceled
 		}
 		outcome, usage, gatewayErr = OutcomeCancelled, pending.Usage, executionError(cause)
-		r, published := s.reserveLocked(outcome, usage, gatewayErr, false)
+		r := s.reserveLocked(outcome, usage, gatewayErr, false)
 		s.mu.Unlock()
-		s.publish(r, published)
+		s.publish(r)
 		if cause != nil {
 			return cause
 		}
 		return s.finishErr
 	}
-	r, published := s.reserveLocked(outcome, usage, gatewayErr, false)
+	r := s.reserveLocked(outcome, usage, gatewayErr, false)
 	s.mu.Unlock()
-	s.publish(r, published)
+	s.publish(r)
 	return s.finishErr
 }
 
