@@ -24,15 +24,23 @@ type backpressureFixture struct {
 	maxProgress int
 	progress    func() int
 	runner      core.Connector
+	gate        chan struct{}
+	waiting     chan struct{}
 }
 
 func TestConformanceBackpressure(t *testing.T) {
-	for _, name := range []string{"native-loopback", "scripted"} {
+	for _, name := range []string{"native-loopback", "anthropic-translation", "scripted"} {
 		t.Run(name, func(t *testing.T) {
 			bf := newBackpressureFixture(t, name)
 			t.Cleanup(bf.close)
 			if err := bf.init(context.Background()); err != nil {
 				t.Fatal(err)
+			}
+			if bf.translated {
+				if err := assertTranslationBackpressure(bf, nil); err != nil {
+					t.Fatal(err)
+				}
+				return
 			}
 			if err := assertBoundedPause(bf, bf.runner); err != nil {
 				t.Fatal(err)
@@ -42,7 +50,7 @@ func TestConformanceBackpressure(t *testing.T) {
 }
 
 func TestConformanceBackpressureRejectsReadAheadMutation(t *testing.T) {
-	for _, name := range []string{"native-loopback", "scripted"} {
+	for _, name := range []string{"native-loopback", "anthropic-translation", "scripted"} {
 		t.Run(name, func(t *testing.T) {
 			for _, mutationName := range []string{"whole-response", "bounded-64"} {
 				if name == "native-loopback" && mutationName == "bounded-64" {
@@ -60,7 +68,13 @@ func TestConformanceBackpressureRejectsReadAheadMutation(t *testing.T) {
 						}
 						return &bufferingStream{Stream: stream}
 					}}
-					if err := assertBoundedPause(bf, mutation); err == nil {
+					var err error
+					if bf.translated {
+						err = assertTranslationBackpressure(bf, mutation)
+					} else {
+						err = assertBoundedPause(bf, mutation)
+					}
+					if err == nil {
 						t.Fatalf("%s mutation passed the shared stalled-reader assertion", mutationName)
 					}
 				})
@@ -109,6 +123,9 @@ func assertBoundedPause(bf backpressureFixture, connector core.Connector) error 
 
 func newBackpressureFixture(t *testing.T, name string) backpressureFixture {
 	t.Helper()
+	if name == "anthropic-translation" {
+		return newTranslationBackpressureFixture(t)
+	}
 	if name == "scripted" {
 		steps := []scripted.Step{{Frame: headFrame()}}
 		for range backpressureFrames {
@@ -167,6 +184,153 @@ func newBackpressureFixture(t *testing.T, name string) backpressureFixture {
 		}
 		return sentCount
 	}}
+}
+
+func newTranslationBackpressureFixture(t *testing.T) backpressureFixture {
+	t.Helper()
+	gate, waiting := make(chan struct{}), make(chan struct{}, 1)
+	steps := []fakeupstream.Step{
+		{Data: []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}\n\n")},
+		{Gate: gate, Waiting: waiting, Data: []byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n")},
+	}
+	steps = append(steps,
+		fakeupstream.Step{Data: []byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"released\"}}\n\n")},
+		fakeupstream.Step{Data: []byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")},
+		fakeupstream.Step{Data: []byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n")},
+		fakeupstream.Step{Data: []byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")},
+	)
+	fx := translationFixtureWithResponse(t, fakeupstream.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: steps})
+	fx.release = func() { close(gate) }
+	return backpressureFixture{
+		fixture: fx, runner: fx.connector, gate: gate, waiting: waiting,
+	}
+}
+
+func assertTranslationBackpressure(bf backpressureFixture, connector core.Connector) error {
+	var (
+		response   core.ExecutionResponse
+		gatewayErr *core.GatewayError
+		attempts   []core.AttemptResult
+		finalized  = make(chan struct{}, 1)
+	)
+	if connector == nil {
+		d := bf.dispatcher
+		d.Finalize = func(result core.AttemptResult) {
+			attempts = append(attempts, result)
+			finalized <- struct{}{}
+		}
+		response, gatewayErr = d.Execute(context.Background(), bf.request)
+	} else {
+		response, gatewayErr = connector.Execute(context.Background(), bf.request, bf.scope, bf.services())
+	}
+	if gatewayErr != nil {
+		return gatewayErr
+	}
+	defer response.Stream.Close()
+	defer func() {
+		select {
+		case <-bf.gate:
+		default:
+			close(bf.gate)
+		}
+	}()
+	frame, err := boundedNext(response.Stream, 2*time.Second)
+	if err != nil || frame.Type != core.FrameHead {
+		return fmt.Errorf("translation Head = %+v, %v", frame, err)
+	}
+	frame, err = boundedNext(response.Stream, 2*time.Second)
+	if err != nil || frame.Type != core.FrameBody || !bytes.Contains(frame.Body.Data, []byte(`"type":"response.created"`)) {
+		return fmt.Errorf("first translated Body = %+v, %v", frame, err)
+	}
+	select {
+	case <-bf.waiting:
+	case <-time.After(2 * time.Second):
+		return fmt.Errorf("upstream did not pause at the gated event")
+	}
+	type nextResult struct {
+		frame core.StreamFrame
+		err   error
+	}
+	var pending chan nextResult
+	var seenFrames []core.StreamFrame
+	var seenBody []byte
+	for {
+		next := make(chan nextResult, 1)
+		go func() {
+			frame, err := response.Stream.Next(context.Background())
+			next <- nextResult{frame: frame, err: err}
+		}()
+		select {
+		case got := <-next:
+			if got.err != nil {
+				return fmt.Errorf("translation stream ended before gated upstream resumed: %w", got.err)
+			}
+			seenFrames = append(seenFrames, got.frame)
+			if got.frame.Type == core.FrameBody {
+				seenBody = append(seenBody, got.frame.Body.Data...)
+			}
+		case <-time.After(50 * time.Millisecond):
+			pending = next
+			goto paused
+		}
+	}
+
+paused:
+	select {
+	case <-bf.gate:
+	default:
+		close(bf.gate)
+	}
+	var resumed core.StreamFrame
+	select {
+	case got := <-pending:
+		if got.err != nil {
+			return fmt.Errorf("translation Next after gate: %w", got.err)
+		}
+		resumed = got.frame
+	case <-time.After(2 * time.Second):
+		return fmt.Errorf("translation Next stayed blocked after gate release")
+	}
+	frames, body, err := readFrames(response.Stream)
+	frames = append(append(seenFrames, resumed), frames...)
+	if resumed.Type == core.FrameBody {
+		body = append(append(seenBody, resumed.Body.Data...), body...)
+	} else {
+		body = append(seenBody, body...)
+	}
+	if err != nil || countFrames(frames, core.FrameComplete) != 1 || !bytes.Contains(body, []byte(`"type":"response.completed"`)) {
+		return fmt.Errorf("translation did not resume after gate: frames=%+v err=%v", frames, err)
+	}
+	if connector == nil {
+		select {
+		case <-finalized:
+		default:
+			return fmt.Errorf("dispatcher did not finalize translated backpressure attempt")
+		}
+		if len(attempts) != 1 || attempts[0].Outcome != core.OutcomeSucceeded || !attempts[0].Committed || !attempts[0].HasUsage || attempts[0].Usage.Source != core.UsageProvider || attempts[0].Usage.Completeness != core.UsageComplete || attempts[0].Usage.InputTokens == nil || *attempts[0].Usage.InputTokens != 1 || attempts[0].Usage.OutputTokens == nil || *attempts[0].Usage.OutputTokens != 1 {
+			return fmt.Errorf("translated backpressure attempt did not finalize once as committed success: %+v", attempts)
+		}
+	}
+	return nil
+}
+
+func boundedNext(stream core.Stream, timeout time.Duration) (core.StreamFrame, error) {
+	type result struct {
+		frame core.StreamFrame
+		err   error
+	}
+	done := make(chan result, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { frame, err := stream.Next(ctx); done <- result{frame: frame, err: err} }()
+	select {
+	case result := <-done:
+		return result.frame, result.err
+	case <-time.After(timeout):
+		cancel()
+		<-done
+		return core.StreamFrame{}, fmt.Errorf("stream Next exceeded %s", timeout)
+	}
 }
 
 type readAheadStream struct {
@@ -237,14 +401,23 @@ func TestConformanceBackpressureCancellationWhileStalledNext(t *testing.T) {
 			if gatewayErr != nil {
 				t.Fatal(gatewayErr)
 			}
-			for i := range 2 {
-				if _, err := response.Stream.Next(ctx); err != nil {
-					t.Fatalf("initial frame %d: %v", i, err)
+			var next chan error
+			if tc.translated {
+				if frame, err := response.Stream.Next(ctx); err != nil || frame.Type != core.FrameHead {
+					t.Fatalf("Head = %+v, %v", frame, err)
 				}
+				waitSignal(t, waiting, "translation upstream gate")
+				next = nextUntilBlocked(ctx, response.Stream)
+			} else {
+				for i := range 2 {
+					if _, err := response.Stream.Next(ctx); err != nil {
+						t.Fatalf("initial frame %d: %v", i, err)
+					}
+				}
+				next = make(chan error, 1)
+				go func() { _, err := response.Stream.Next(ctx); next <- err }()
+				waitSignal(t, waiting, "producer waiting at future-frame gate")
 			}
-			next := make(chan error, 1)
-			go func() { _, err := response.Stream.Next(ctx); next <- err }()
-			waitSignal(t, waiting, "producer waiting at future-frame gate")
 			cancel()
 			select {
 			case err := <-next:
@@ -257,8 +430,10 @@ func TestConformanceBackpressureCancellationWhileStalledNext(t *testing.T) {
 			if err := response.Stream.Close(); err != nil {
 				t.Fatal(err)
 			}
-			awaitFinalized(t, finalized)
-			assertOneAttempt(t, attempts, true, core.OutcomeCancelled, core.CategoryCancelled)
+			if !tc.translated {
+				awaitFinalized(t, finalized)
+				assertOneAttempt(t, attempts, true, core.OutcomeCancelled, core.CategoryCancelled)
+			}
 			if !tc.scripted && (fx.waitCancel == nil || !fx.waitCancel()) {
 				t.Fatal("native upstream did not observe local cancellation")
 			}

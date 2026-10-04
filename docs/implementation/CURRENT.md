@@ -27,23 +27,24 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-032 DONE (awaiting verified commit; batch 14/19 DONE)
+## Immediate focus: M4-033 DONE (awaiting verified commit; batch 15/19 DONE)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. All 31 predecessor tasks ([M4-001](tasks/M4-001.md)
-through [M4-031](tasks/M4-031.md)) are committed (`353b4be`). Batch progress:
-14 of 19 objective DONE (total 32 DONE; 6 remaining).
+Anthropic Messages translation. All 32 predecessor tasks ([M4-001](tasks/M4-001.md)
+through [M4-032](tasks/M4-032.md)) are committed (`4572ae2`). Batch progress:
+15 of 19 objective DONE (total 33 DONE; 5 remaining).
 
-[M4-032](tasks/M4-032.md) (Publish the evidence-backed compatibility matrix)
-acceptance is reviewed and closed DONE (reviewer PASS `ses_efbaeee4affepido3MITj01fF3`).
-`M4-COMPATIBILITY.md` is published with the complete scoped profile, CONTRACT capability
-matrix (`llm.streaming` and `llm.tools` supported; other capabilities unknown/unsupported),
-field policy, and local test evidence vs unverified live status. Connector declarations and
-models are synchronized; gateway fake-upstream negative admission for unknown parallel tools,
-reasoning, and structured output verified without extra egress. Core and Adapter remain
-untouched. 32 tasks are DONE in the registry; implementation is preserved. Per policy,
-no next card is prepared or promoted until the M4-032 commit is cleanly created and verified.
+[M4-033](tasks/M4-033.md) (Run translation conformance and native boundary regressions)
+acceptance is reviewed and closed DONE (reviewer PASS `ses_efb92c395ffegjSIlM00gIdAIL`).
+Offline Anthropic translation fixtures are registered across conformance scenarios (lifecycle,
+failed-Init, scope, upstream error/usage, cancellation, and backpressure) through the
+Responses adapter, translation Dispatcher, and fake-upstream server. Native byte-identity
+assertions and inverse wrong-mode rejections remain intact; the only conformance skips are the
+three optional `llm.tools.parallel` tests reporting `unknown`. Core remains provider-neutral
+and Connector has no storage dependency. 33 tasks are DONE in the registry; implementation
+is preserved. Per policy, no next card is prepared or promoted until the M4-033 commit is cleanly
+created and verified.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
