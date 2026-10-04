@@ -327,7 +327,7 @@ and [tooling gate](TOOLING.md#m51-tooling-gate).
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M5.1-001](tasks/M5.1-001.md) | READY | — | M4-045 | Freeze the Codex source and first-profile baseline | — | [Direct proof](tasks/M5.1-001.md#verification) |
+| [M5.1-001](tasks/M5.1-001.md) | DONE | GPT-6 Luna subagent (M5.1-001 worker) | M4-045 | Freeze the Codex source and first-profile baseline | Pinned v2/official sources and standard HTTP/SSE candidate profile documented; runnable OpenCode 2.0.6 release identified but Codex behavior/model catalog unverified | [Manual source/profile review](tasks/M5.1-001.md#completion-evidence) and `git diff --check` |
 | [M5.1-002](tasks/M5.1-002.md) | DRAFT | — | M5.1-001 | Resolve safe device-login presentation and continuation binding | — | [Direct proof](tasks/M5.1-002.md#verification) |
 | [M5.1-003](tasks/M5.1-003.md) | DRAFT | — | M5.1-001 | Fix the atomic OAuth credential and freshness binding | — | [Direct proof](tasks/M5.1-003.md#verification) |
 | [M5.1-004](tasks/M5.1-004.md) | DRAFT | — | M5.1-001, M5.1-002, M5.1-003 | Fix request dialect account affinity and retry boundaries | — | [Direct proof](tasks/M5.1-004.md#verification) |
