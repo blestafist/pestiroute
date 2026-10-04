@@ -27,6 +27,7 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | [Testing](implementation/TESTING.md) | Behavioral verification, conformance, fixtures, smoke tests |
 | [Local M2 topology check](implementation/LOCAL-M2.md) | Offline, loopback-only multi-route and legacy startup procedure |
 | [Local M3 operations](implementation/LOCAL-M3.md) | Protected setup, local administration, accounting recovery and WAL-safe backup/restore |
+| [Local M4 operations](implementation/LOCAL-M4.md) | Offline dual native/translation topology, local rejection gates, usage and backup/restore |
 | [References](implementation/REFERENCES.md) | Protocol sources and connector/migration research workflow |
 | [Development tooling](implementation/TOOLING.md) | When to add OpenCode MCPs, plugins, commands, and local tools |
 

@@ -27,24 +27,25 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-033 DONE (awaiting verified commit; batch 15/19 DONE)
+## Immediate focus: M4-034 DONE (awaiting verified commit; batch 16/19 DONE)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. All 32 predecessor tasks ([M4-001](tasks/M4-001.md)
-through [M4-032](tasks/M4-032.md)) are committed (`4572ae2`). Batch progress:
-15 of 19 objective DONE (total 33 DONE; 5 remaining).
+Anthropic Messages translation. All 33 predecessor tasks ([M4-001](tasks/M4-001.md)
+through [M4-033](tasks/M4-033.md)) are committed (`dd3aee5`). Batch progress:
+16 of 19 objective DONE (total 34 DONE; 4 remaining in M4; 3 remaining in batch).
 
-[M4-033](tasks/M4-033.md) (Run translation conformance and native boundary regressions)
-acceptance is reviewed and closed DONE (reviewer PASS `ses_efb92c395ffegjSIlM00gIdAIL`).
-Offline Anthropic translation fixtures are registered across conformance scenarios (lifecycle,
-failed-Init, scope, upstream error/usage, cancellation, and backpressure) through the
-Responses adapter, translation Dispatcher, and fake-upstream server. Native byte-identity
-assertions and inverse wrong-mode rejections remain intact; the only conformance skips are the
-three optional `llm.tools.parallel` tests reporting `unknown`. Core remains provider-neutral
-and Connector has no storage dependency. 33 tasks are DONE in the registry; implementation
-is preserved. Per policy, no next card is prepared or promoted until the M4-033 commit is cleanly
-created and verified.
+[M4-034](tasks/M4-034.md) (Document and verify runnable local M4 operations)
+acceptance is reviewed and closed DONE (reviewer PASS `ses_efb7d74fbffe6hx8iBQR4Rk6QS`).
+The reproducible offline procedure in [LOCAL-M4](LOCAL-M4.md) demonstrates
+master key generation, admin migration to schema v6, account/credential/policy/key
+provisioning, dual native/translated protected YAML gateway startup, authorized native
+dispatch, local fail-closed validation/rejection for translation routes (`stream: false`
+and undeclared structured output), 429 rate limiting, usage queries, graceful restart,
+and WAL-safe SQLite backup/restore integrity with retained external master key decryption.
+Zero synthetic credentials leaked to logs. 34 tasks are DONE in the registry;
+implementation is preserved. Per policy, no next card is prepared or promoted until
+the M4-034 commit is cleanly created and verified.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
@@ -65,6 +66,9 @@ SQLite suites, ten repeated focused accounting/access/auth races, and SQLite
 checks with CGO disabled. Mandatory conformance has no skips; only two optional
 parallel-tools scenarios skip. Exact commands and evidence are in [M3-046](tasks/M3-046.md).
 
+[LOCAL-M4](LOCAL-M4.md) passes offline dual native/translation protected provisioning,
+native loopback dispatch, local translation validation/rejections, rate limiting,
+usage inspection, restart, and WAL-safe backup/restore integrity.
 [LOCAL-M3](LOCAL-M3.md) passes protected provisioning, inference, limits, usage,
 restart and consistent backup/restore. For an existing older M3 database: stop
 the gateway, make a consistent backup and run `admin migrate` to v6 before
