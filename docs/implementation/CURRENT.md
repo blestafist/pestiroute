@@ -40,10 +40,11 @@ and final review fixes are committed; [M4-045](tasks/M4-045.md) retains evidence
 
 The new branch is `dev-m5.1`, based on that merge. The
 [Codex plan](TASKS.md#m51--codex-subscription-connector) has 43 small cards:
-[M5.1-001](tasks/M5.1-001.md) is DONE with source/client/model/profile selection
-recorded in [M5.1-BINDING](M5.1-BINDING.md); 42 dependent cards remain DRAFT
-pending planner review. The selected profile is not a live support or
-entitlement claim.
+[M5.1-001](tasks/M5.1-001.md) and [M5.1-002](tasks/M5.1-002.md) are DONE,
+resolving the source/profile baseline and safe device-login presentation/continuation
+binding under accepted [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state);
+41 dependent cards remain DRAFT pending sequential promotion. The selected
+profile is not a live support or entitlement claim.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
 

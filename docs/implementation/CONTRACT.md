@@ -98,9 +98,37 @@ The existing support operations retain their responsibilities alongside the stab
 | --- | --- |
 | `EstimateUsage` | Estimate, known/unknown indicator, and method for admission budgeting; provider tokenization remains in the Connector |
 | `Models` | Scoped model IDs, capabilities, and availability; optional context-window/provider metadata, not universal model behavior |
-| `Authenticate` | Authentication state-machine step: start, continue, or refresh; returns the next action or updated credentials for runtime persistence |
+| `Authenticate` | Authentication state-machine step: start, continue, or refresh; returns opaque continuation state, next action, optional safe user-action projection, and/or candidate credentials for runtime persistence |
 
 These operations must report unsupported or unknown explicitly where applicable rather than fabricate success, models, or zero usage. Provider auth endpoints, scopes, exchanges, and streaming/usage formats remain private to the Connector. API, OpenAI-Compatible, Agent Protocol, and Local Runtime remain the four Connector categories; category does not alter Execute semantics.
+
+`AuthUserAction` is the optional presentation-only value
+`{VerificationURI string, UserCode string, PollInterval time.Duration}`;
+`PollInterval` is positive when an action is present. Core validates the action
+before exposing it: `VerificationURI` is 1–2048 printable ASCII bytes (no
+spaces/control bytes), an absolute HTTPS URI with a host and no userinfo;
+`UserCode` is 1–256 printable ASCII bytes (no controls, including terminal
+escape/newline). `AuthResult` contains
+`Supported`, opaque `State`, `NextAction`, optional `UserAction *AuthUserAction`,
+and candidate `Credentials`. The projection is never continuation state or a
+credential. Neither presentation field may contain device-auth identifiers,
+PKCE material, tokens, or raw provider responses. A Connector needing operator interaction returns
+the safe action separately from its opaque state. `UserAction` is valid only
+with `Supported=true` and `NextAction=continue`; it is invalid on completed,
+unsupported, or refresh results. A nil action with `continue` remains valid for
+legacy opaque continuations that require no operator interaction. A Connector
+whose flow requires user interaction MUST return a valid action. Presence is
+self-describing; no new capability is required. New Connector conformance tests
+must prove both this requirement and rejection of malformed/inconsistent
+actions; Core cannot infer that an omitted action was required from opaque
+state. Older producers may omit the optional projection, and older consumers
+may ignore it. Core owns encryption and persistence of `State`, session expiry
+and claims, and credential persistence; it exposes only a validated transient
+projection with the returned auth session, never persisting it as opaque session
+state. Invalid action results fail closed: discard all result fields before
+exposure or credential/state persistence. On a claimed continuation, consume
+the session/claim as for other invalid results; refresh remains quarantined if
+its invoked result is invalid or incomplete.
 
 ## Protocol Adapter Contract
 

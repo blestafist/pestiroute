@@ -105,6 +105,72 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Acceptance condition:** Satisfied by explicit human governance acceptance on 2026-10-04, including the reduced claim boundary, offline requirements, mandatory pre-production live obligation, and authorization to perform the bounded documentation synchronization autonomously.
 - **Verification:** On any later accepted path, audit offline conformance and negative cases separately from the exact official live evidence matrix; verify provenance, privacy, event/usage/cancellation scope, and every public support claim against evidence. This ADR itself requires documentation/link and registry/dependency checks only.
 
+### DEC-009 — Separate Safe User Actions from Opaque Auth State
+
+- **Status:** Accepted for the M5.1 Codex device-auth binding under the
+  authorized M5.1 roadmap and M5.1-002 scope.
+- **Context:** `AuthResult.State` is opaque Connector continuation state encrypted
+  by Core. Reusing it for display data or printing it can disclose device
+  identifiers, PKCE material, or tokens, while the current result has no generic
+  way to present a verification URL/code to the operator.
+- **Decision:** Add optional `AuthResult.UserAction *AuthUserAction` with
+  `VerificationURI`, `UserCode`, and `PollInterval`. This is a presentation-only
+  projection, separate from opaque `State` and credential values. The Connector
+  extracts only the safe action from provider response; the URI is absolute
+  HTTPS without embedded credentials, and the value never contains a
+  device-auth identifier, PKCE material, token, or raw response.
+  Core projects it to transient `AuthSession.UserAction` for the admin
+  presentation seam and does not persist it as continuation state. Admin output
+  may display the URI, code, poll interval, opaque runtime session handle, and
+  runtime expiry, but not `State` or credentials.
+- **Validation and discovery:** Core validates before exposing: URI is 1–2048
+  printable ASCII bytes with no spaces/control bytes, absolute HTTPS with a
+  host and no userinfo; code is 1–256 printable ASCII bytes with no controls;
+  poll interval is positive. `UserAction` is valid only with
+  `Supported=true, NextAction=continue`. Nil presence is explicit, self-
+  describing discovery; a nil action on continue is valid for legacy opaque
+  continuations that do not require operator interaction. Any Connector flow
+  that does require user interaction MUST return a valid action. Connector
+  auth-flow conformance tests enforce this obligation; Core cannot infer a
+  missing action from opaque state, and no new capability is introduced.
+- **Lifecycle and security:** Start calls Authenticate once. A continuing result
+  creates the existing encrypted opaque session with fixed runtime expiry.
+  Each explicit continuation makes at most one poll; a pending result can return
+  a new user action and provider interval, which the caller observes before its
+  next poll. There is no runtime polling loop and no provider response extends
+  expiry. Caller cancellation follows M3-AUTH: before invocation it consumes
+  the session; after invocation begins it consumes the durably claimed
+  continuation conservatively. DEC-007 claim ownership, revision checks,
+  acknowledged credential persistence, and no-SQL-during-provider-call rules
+  are unchanged. An action on a completed, unsupported, or refresh result is
+  invalid. For any malformed/inconsistent action result, discard all result
+  fields before exposure/persistence; Start creates no session, Continue
+  consumes its already-claimed session/claim, and an invoked Refresh result is
+  quarantined. If claim consumption cannot commit, expose no result and rely on
+  DEC-007 restart recovery to consume the ambiguous claim. Expired or stale
+  sessions are rejected before provider work.
+- **Alternatives:** Encode the action in opaque state, expose provider-specific
+  structures, or have Connectors print directly. Each couples presentation to
+  secrets/provider format or bypasses runtime ownership; rejected.
+- **Compatibility / impact:** Additive optional AuthResult field and one generic
+  AuthUserAction value; Core exposes the result transiently as
+  `AuthSession.UserAction`. Presence is self-describing (`nil` means absent), so
+  older producers may omit it and older consumers may ignore it. A nil action
+  remains valid for legacy continue flows that do not require user interaction;
+  interactive Connector flows are contractually required to return one and
+  conformance-tested. No new
+  operation, provider branch, database column,
+  encrypted-state format, or session-lifetime change. Existing Connectors that
+  omit the field remain valid for auth flows not requiring user presentation;
+  implementations requiring operator action must supply it. CONTRACT and
+  M3-AUTH are synchronized. This is an additive v1 semantic extension under the
+  existing Connector API version; old consumers ignore the optional value and
+  old producers yield nil. No protocol-adapter or inference contract changes.
+- **Verification:** Paper-walk start, pending poll, success, expiry/timeout,
+  cancellation, and competing/stale continuation; audit that user output never
+  contains opaque state or credentials. Verify synchronized specifications and
+  existing offline checks before dependent implementation proceeds.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |
