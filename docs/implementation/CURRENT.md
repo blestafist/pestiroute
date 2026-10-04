@@ -27,26 +27,22 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-039 DONE; M4-036 remains BLOCKED on live credentials
+## Immediate focus: M4-040 DONE; M4-036 remains BLOCKED on official credentials
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
-cards for Responses ↔ Anthropic Messages translation. All 35 predecessor tasks
-([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md)) are committed through `e517f27`.
+cards for Responses ↔ Anthropic Messages translation. 37 tasks in M4
+([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md), [M4-039](tasks/M4-039.md),
+and [M4-040](tasks/M4-040.md)) are complete.
 
-[M4-039](tasks/M4-039.md) acceptance is reviewed and closed DONE (reviewer PASS
-`ses_ef9adb40bffewJPdhJu9krH6s8`). Production `NewTransport` strictly retains the official
-`https://api.anthropic.com/v1/messages` default without reading environment variables.
-An internal test seam with test-only resolution in `transport_test.go` normalizes base URLs
-(e.g. `https://ai.pestit.pl/v1` to `/v1/messages`), validates schemas, enforces literal
-loopback for HTTP, and preserves redirect/proxy security restrictions. [SMOKE-M4](SMOKE-M4.md)
-and its artifact validator enforce `endpoint_profile` partitioning (`offline_fixture`,
-`official_anthropic`, `compatible_endpoint`), guaranteeing compatible captures never satisfy
-or close pinned direct-Anthropic [M4-036](tasks/M4-036.md). 36 tasks are DONE in M4.
-
-[M4-036](tasks/M4-036.md) remains BLOCKED pending explicit live Anthropic credentials
-(`ANTHROPIC_API_KEY`), live spend limits, and external network authorization for `api.anthropic.com`.
-Any live testing against third-party compatible endpoints likewise remains gated on credential
-and spend authorization. Downstream tasks [M4-037](tasks/M4-037.md) and [M4-038](tasks/M4-038.md) remain DRAFT.
+[M4-040](tasks/M4-040.md) is closed DONE (reviewer PASS `ses_ef8fe6103ffeAEIyWwJHuczOX7`).
+Bounded live probe against compatible endpoint (`https://ai.pestit.pl/v1`, model
+`cc/claude-sonnet-5-5`) completed with exactly 2 provider calls (1 direct Messages leg,
+1 gateway translated leg; both HTTP 200, 0 retries, usage unknown). Validated sanitized
+artifacts under `/tmp/opencode/m4-040-live.eqUAaf` enforce `compatible_endpoint` profile and
+`test_only_model_override: true`. Handoff credential files were deleted by EXIT trap and
+verified absent. Production configuration, defaults, and Core contracts remain unchanged.
+[M4-036](tasks/M4-036.md) remains separately BLOCKED on official Anthropic credentials;
+[M4-037](tasks/M4-037.md) and [M4-038](tasks/M4-038.md) remain DRAFT.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

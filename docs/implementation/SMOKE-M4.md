@@ -176,8 +176,15 @@ trace must be labeled `direct_messages`; the gateway trace must be labeled
 `compatible_endpoint`. The offline harness writes `offline_fixture`; a later
 approved official capture uses `official_anthropic`. Compatible service runs
 must be labeled `compatible_endpoint`, and the validator refuses to pair them
-with a different profile. Such captures test Messages compatibility only and
-never satisfy or close M4-036, whose direct leg remains pinned to
+with a different profile. Only this compatible profile accepts a validated
+explicit backend model and requires `test_only_model_override: true`; offline
+and official artifacts forbid that marker and remain pinned to
+`claude-opus-5-5`. M4-040's test-only Go helper uses an explicit parsed endpoint
+through protected gateway composition and overrides the translated model only
+inside its injected test doer after verifying the production Connector's pinned
+model. This does not establish production custom-model support and changes
+neither `NewTransport` nor YAML/Core. Compatible captures test that endpoint and
+model only and never satisfy or close M4-036, whose direct leg remains pinned to
 `api.anthropic.com`.
 
 The `limits` object contains exactly `timeout_seconds`, `max_output_tokens`,

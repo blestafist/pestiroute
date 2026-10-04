@@ -18,8 +18,10 @@ SCENARIOS = {"plain_text", "single_tool", "two_calls", "two_rounds", "reasoning_
 ROOT_KEYS = {"schema_version", "leg", "endpoint_profile", "captured_at_utc", "source_revision", "client",
              "gateway", "provider", "scenario", "fixture_id", "backend_model", "limits",
              "requests", "outcome", "observations"}
+COMPAT_ROOT_KEYS = ROOT_KEYS | {"test_only_model_override"}
 BAD_KEY = re.compile(r"authorization|cookie|x-api-key|api.?key|secret|credential|prompt|arguments|body", re.I)
 BAD_VALUE = re.compile(r"(?i)(sk-(?:ant-|proj-|live-|test-)?[a-z0-9_-]{8,}|bearer\s+\S+|synthetic-(?:anthropic|client)-key|synthetic-loopback-only)")
+MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,95}")
 
 
 def require(condition, message):
@@ -29,16 +31,22 @@ def require(condition, message):
 
 def load(path, expected_leg):
     data = json.loads(Path(path).read_text())
-    require(type(data) is dict and set(data) == ROOT_KEYS, "artifact has missing or extra top-level fields")
+    require(type(data) is dict and set(data) in (ROOT_KEYS, COMPAT_ROOT_KEYS), "artifact has missing or extra top-level fields")
     require(data["schema_version"] == 1, "schema_version must be 1")
     require(data["leg"] == expected_leg, f"leg must be {expected_leg}")
     require(data["endpoint_profile"] in {"offline_fixture", "official_anthropic", "compatible_endpoint"}, "unknown endpoint profile")
+    if data["endpoint_profile"] == "compatible_endpoint":
+        require(set(data) == COMPAT_ROOT_KEYS and data["test_only_model_override"] is True, "compatible capture must declare test-only model override")
+    else:
+        require(set(data) == ROOT_KEYS, "test-only model override is not valid for this profile")
     require(isinstance(data["captured_at_utc"], str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", data["captured_at_utc"]), "captured_at_utc must be RFC3339 UTC")
     datetime.strptime(data["captured_at_utc"], "%Y-%m-%dT%H:%M:%SZ")
     require(isinstance(data["source_revision"], str) and re.fullmatch(r"(?:[a-fA-F0-9]{7,64}|offline-fixture-revision)", data["source_revision"]), "source_revision must be a git hash")
     require(data["scenario"] in SCENARIOS, "unknown scenario")
     require(isinstance(data["fixture_id"], str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,96}", data["fixture_id"]), "fixture_id must be a safe matched-fixture label")
-    require(data["backend_model"] == "claude-opus-5-5", "backend model mismatch")
+    require(isinstance(data["backend_model"], str) and MODEL_ID.fullmatch(data["backend_model"]) and ".." not in data["backend_model"], "invalid backend model label")
+    if data["endpoint_profile"] != "compatible_endpoint":
+        require(data["backend_model"] == "claude-opus-5-5", "official/offline backend model mismatch")
     limits = data["limits"]
     require(type(limits) is dict and set(limits) == {"timeout_seconds", "max_output_tokens", "client_runs"}, "invalid limits fields")
     require(type(limits["timeout_seconds"]) is int and 0 < limits["timeout_seconds"] <= 30, "timeout exceeds 30 seconds")
@@ -61,11 +69,16 @@ def load(path, expected_leg):
     require(type(data["provider"]) is dict and data["provider"] == {"api": "anthropic-messages", "api_version": "2023-06-01"}, "provider/API version mismatch")
     require(type(data["client"]) is dict and set(data["client"]) == {"name", "version"} and all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9.+/: _-]{1,80}", v) for v in data["client"].values()), "client name/version required")
     if expected_leg == "direct_messages":
-        require(data["gateway"] is None and data["client"]["name"] in {"curl", "Python http.client"}, "direct leg must identify curl or the offline harness and no gateway")
+        compatible_go_probe = data["endpoint_profile"] == "compatible_endpoint" and data["client"]["name"] == "Go http.Client" and re.fullmatch(r"go[0-9.]+(?:[-+:][A-Za-z0-9._:-]+)?", data["client"]["version"])
+        require(data["gateway"] is None and (data["client"]["name"] in {"curl", "Python http.client"} or compatible_go_probe), "direct leg must identify curl, the offline harness, or the compatible Go probe")
     else:
         require(type(data["gateway"]) is dict and set(data["gateway"]) == {"client_protocol", "route_model", "source_revision"}, "gateway provenance required")
         require(data["gateway"]["client_protocol"] == "openai.responses.v1" and data["gateway"]["source_revision"], "invalid gateway provenance")
-        require(re.fullmatch(r"[A-Za-z0-9._:-]{1,96}", data["gateway"]["route_model"]), "gateway route model must be a safe label")
+        route_model = data["gateway"]["route_model"]
+        if data["endpoint_profile"] == "compatible_endpoint":
+            require(isinstance(route_model, str) and MODEL_ID.fullmatch(route_model) and ".." not in route_model, "gateway route model must be a safe compatible label")
+        else:
+            require(re.fullmatch(r"[A-Za-z0-9._:-]{1,96}", route_model), "gateway route model must be a safe label")
         require((data["client"]["name"] == "OpenCode" and data["client"]["version"] == "2.0.6") or data["client"]["name"] in {"curl", "Python http.client"} or (data["client"]["name"] == "Go http.Client" and re.fullmatch(r"go[0-9.]+(?:[-+:][A-Za-z0-9._:-]+)?", data["client"]["version"])), "gateway client/version must identify OpenCode 2.0.6, curl, or the local Go test client")
     require(type(data["observations"]) is dict and set(data["observations"]) == {"terminal", "tool_links", "usage", "target_dispatches"}, "invalid comparison observations")
     require(type(data["observations"]["tool_links"]) is list and type(data["observations"]["target_dispatches"]) is int, "invalid comparison output")
@@ -208,6 +221,47 @@ def self_test(outdir):
         env.update({"GOTOOLCHAIN": "local", "GOPROXY": "off", "GOSUMDB": "off", "PESTIROUTE_SMOKE_M4_ARTIFACT_DIR": str(outdir)})
         subprocess.run(["go", "test", "-race", "-v", "-count=1", "./cmd/gateway", "-run", "^TestTranslationClientOwnedToolRounds$"], check=True, env=env, timeout=120)
         validate_pair(outdir / "direct.json", outdir / "gateway.json")
+        compatible = json.loads((outdir / "direct.json").read_text())
+        compatible["endpoint_profile"] = "compatible_endpoint"
+        compatible["backend_model"] = "cc/claude-sonnet-5-5"
+        compatible["test_only_model_override"] = True
+        compatible_path = outdir / "compatible-model.json"
+        compatible_path.write_text(json.dumps(compatible))
+        require(load(compatible_path, "direct_messages")["backend_model"] == "cc/claude-sonnet-5-5", "compatible profile rejected explicit model override")
+        compatible.pop("test_only_model_override")
+        compatible_path.write_text(json.dumps(compatible))
+        try:
+            load(compatible_path, "direct_messages")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("compatible profile accepted an artifact without explicit test-only override marker")
+        compatible["test_only_model_override"] = True
+        compatible_path.write_text(json.dumps(compatible))
+        compatible_gateway = json.loads((outdir / "gateway.json").read_text())
+        compatible_gateway["endpoint_profile"] = "compatible_endpoint"
+        compatible_gateway["backend_model"] = "cc/claude-sonnet-5-5"
+        compatible_gateway["test_only_model_override"] = True
+        compatible_gateway["client"] = {"name": "Go http.Client", "version": "go1.0"}
+        compatible_gateway["gateway"]["route_model"] = "cc/claude-sonnet-5-5"
+        compatible_gateway_path = outdir / "compatible-gateway.json"
+        compatible_gateway_path.write_text(json.dumps(compatible_gateway))
+        validate_pair(compatible_path, compatible_gateway_path)
+        compatible["endpoint_profile"] = "official_anthropic"
+        compatible.pop("test_only_model_override")
+        compatible["backend_model"] = "claude-opus-5-5"
+        compatible_path.write_text(json.dumps(compatible))
+        require(load(compatible_path, "direct_messages")["backend_model"] == "claude-opus-5-5", "official profile did not retain pinned model")
+        compatible["endpoint_profile"] = "compatible_endpoint"
+        compatible["test_only_model_override"] = True
+        compatible["backend_model"] = "../invalid"
+        compatible_path.write_text(json.dumps(compatible))
+        try:
+            load(compatible_path, "direct_messages")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("artifact validator accepted an unsafe compatible model label")
         bad = json.loads((outdir / "gateway.json").read_text())
         bad["endpoint_profile"] = "compatible_endpoint"
         bad_path = outdir / "invalid-profile.json"
