@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
@@ -76,9 +77,23 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 	components := make([]topologyComponent, 0, len(p.Connectors))
 	for _, item := range p.Connectors {
 		s := item.Settings
-		components = append(components, topologyComponent{ID: core.InstanceID(item.ID), Implementation: item.Implementation, Kind: core.ComponentConnector,
-			Endpoint: s.BaseURL, CredentialEnv: s.CredentialEnv, MaxBodyBytes: s.MaxRequestBodyBytes, MaxHeaderBytes: s.MaxRequestHeaderBytes,
-			ConnectTimeout: s.ConnectTimeout, TLSTimeout: s.TLSHandshakeTimeout, HeaderTimeout: s.ResponseHeaderTimeout, IdleTimeout: s.StreamIdleTimeout})
+		component := topologyComponent{ID: core.InstanceID(item.ID), Implementation: item.Implementation, Kind: core.ComponentConnector}
+		switch item.Implementation {
+		case "pestiroute.responses.native":
+			component.Endpoint, component.CredentialEnv = s.BaseURL, s.CredentialEnv
+			component.MaxBodyBytes, component.MaxHeaderBytes = s.MaxRequestBodyBytes, s.MaxRequestHeaderBytes
+			component.ConnectTimeout, component.TLSTimeout = s.ConnectTimeout, s.TLSHandshakeTimeout
+			component.HeaderTimeout, component.IdleTimeout = s.ResponseHeaderTimeout, s.StreamIdleTimeout
+		case "pestiroute.anthropic.messages":
+			if strings.TrimSpace(s.Model) == "" || strings.TrimSpace(s.AccountID) == "" || strings.TrimSpace(s.CredentialID) == "" {
+				return fail(db.Close, fmt.Errorf("connector %q: Anthropic model, account_id, and credential_id are required", item.ID))
+			}
+			component.Model, component.AccountID, component.CredentialEnv = s.Model, s.AccountID, s.CredentialID
+			component.MaxBodyBytes, component.MaxHeaderBytes = p.Server.MaxRequestBytes, 1<<20
+		default:
+			return fail(db.Close, fmt.Errorf("connector %q: unsupported implementation", item.ID))
+		}
+		components = append(components, component)
 	}
 	adapterAdded := false
 	routes := make([]topologyRoute, 0, len(p.Routes))
@@ -108,13 +123,17 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 		for i, capability := range route.Requirements {
 			requirements[i] = core.Capability(capability)
 		}
+		mode := core.ModeNative
+		if route.Mode == "translation" {
+			mode = core.ModeTranslation
+		}
 		for _, target := range route.Targets {
 			for i := range components {
 				if components[i].ID == core.InstanceID(target.Connector) && p.Server.MaxRequestBytes < components[i].MaxBodyBytes {
 					components[i].MaxBodyBytes = p.Server.MaxRequestBytes
 				}
 			}
-			routes = append(routes, topologyRoute{Protocol: route.Protocol, Mode: core.ModeNative, Model: route.Model, Account: target.Account,
+			routes = append(routes, topologyRoute{Protocol: route.Protocol, Mode: mode, Model: route.Model, Account: target.Account,
 				Adapter: "responses-adapter", Connector: core.InstanceID(target.Connector), Budget: budget, BudgetPolicy: route.Budget.UnknownEstimate, RouteID: route.ID, CandidateGroup: route.ID, Requirements: requirements,
 				RetryMaxAttempts: maxAttempts, RetryDeadline: retryDeadline})
 		}

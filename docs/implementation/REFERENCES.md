@@ -22,6 +22,17 @@ Below are research starting points, not a promise to support all described capab
 
 OpenAI-compatible does not mean full support for the Responses API. For each upstream, endpoint, streaming, tools, reasoning, and session semantics must be verified separately. Similarly, the official public API does not necessarily match the backend protocol of a subscription client.
 
+## M4 Translation Sources
+
+The [M4 planning brief](M4-TRANSLATION.md#source-selection) links official Messages
+create/stream/tool/thinking/cache/error documentation and the Responses streaming
+reference inspected on 2026-10-03. [M4-001 binding](M4-BINDING.md) selects the
+direct API/model/client profile; M4-002 records versioned fixture provenance and
+reuse attribution.
+These mutable source pages do not establish PestiRoute live compatibility.
+Codex subscription research belongs to M5.1 and must not supply Anthropic auth,
+request fields, stream events or usage semantics by analogy.
+
 ## M1 Compatibility Baseline
 
 **Historical selection (FND-005, source review 2026-09-29; no inference run):** OpenAI public Responses / `gpt-4.1-mini-2025-04-14` with OpenCode V2 CLI 2.0.6 was selected on source evidence. This records the original decision, not the current M1 smoke model.

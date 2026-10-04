@@ -142,6 +142,10 @@ func (d *Dispatcher) executeAttempt(ctx context.Context, in ExecutionRequest) (E
 		return ExecutionResponse{}, accountingUnavailableError(nil)
 	}
 	legacy := d.Routes == nil
+	executionMode := d.Mode
+	if executionMode == "" {
+		executionMode = ModeNative
+	}
 	if legacy {
 		if in.Model != m1Model {
 			return ExecutionResponse{}, &GatewayError{Code: "invalid_request", Category: CategoryInvalidRequest, Message: "Invalid request"}
@@ -155,18 +159,14 @@ func (d *Dispatcher) executeAttempt(ctx context.Context, in ExecutionRequest) (E
 			}
 		}
 	} else {
-		mode := d.Mode
-		if mode == "" {
-			mode = ModeNative
-		}
-		candidates := d.Routes.Candidates(in, mode, d.AccountID)
+		candidates := d.Routes.Candidates(in, executionMode, d.AccountID)
 		if len(candidates) == 0 {
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 		}
 		if len(candidates) > 1 && (in.Metadata.SessionBound || !in.Metadata.AffinityKnown) {
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 		}
-		selection, err := d.Routes.Select(ctx, in, SelectionContext{Mode: mode, AccountID: d.AccountID})
+		selection, err := d.Routes.Select(ctx, in, SelectionContext{Mode: executionMode, AccountID: d.AccountID})
 		if err != nil {
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 		}
@@ -189,7 +189,7 @@ func (d *Dispatcher) executeAttempt(ctx context.Context, in ExecutionRequest) (E
 				return ExecutionResponse{}, authorizationError(err)
 			}
 		}
-		scope := CapabilityScope{Protocol: in.Payload.Protocol, Mode: mode, Model: in.Model, AccountID: d.AccountID}
+		scope := CapabilityScope{Protocol: in.Payload.Protocol, Mode: executionMode, Model: in.Model, AccountID: d.AccountID}
 		candidate := EligibilityCandidate{
 			Scope: scope, Adapter: selection.Adapter.Descriptor(), Connector: selection.Connector.Descriptor(),
 			InitializedAndReady: true, AdapterCapabilityScope: scope, ConnectorCapabilityScope: scope,
@@ -228,7 +228,7 @@ func (d *Dispatcher) executeAttempt(ctx context.Context, in ExecutionRequest) (E
 		return ExecutionResponse{}, executionError(err)
 	}
 	in.ID = requestID
-	scope := AttemptScope{ID: attemptID, AccountID: d.AccountID, Mode: "native"}
+	scope := AttemptScope{ID: attemptID, AccountID: d.AccountID, Mode: executionMode}
 	result := AttemptResult{RequestID: requestID, Scope: scope, Route: route, Adapter: adapterID, Connector: connectorID, Outcome: OutcomeIncomplete, Usage: UsageReport{Source: UsageUnknown, Completeness: UsageUnknownCompleteness}, StartedAt: time.Now()}
 	var gatewayErr *GatewayError
 	var accountingEstimate ResolvedEstimate

@@ -37,6 +37,9 @@ type fixture struct {
 	waitCancel func() bool
 	release    func()
 	close      func()
+	translated bool
+	validate   func() error
+	dispatcher *core.Dispatcher
 }
 
 var opaqueRequest = []byte("{ \"model\" : \"gpt-5.4-mini\", \"input\" : \"snowman ☃\", \"future_field\" : { \"keep\" : true } }\n")
@@ -336,6 +339,7 @@ type scenario struct {
 func TestConformance(t *testing.T) {
 	factories := []factory{
 		{name: "native-loopback", new: nativeFixture},
+		{name: "anthropic-translation", new: translationFixture},
 		{name: "scripted", new: scriptedFixture},
 	}
 	scenarios := []scenario{
@@ -375,6 +379,7 @@ func TestConformance(t *testing.T) {
 func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 	factories := []factory{
 		{name: "native-loopback", new: nativeFixture},
+		{name: "anthropic-translation", new: translationFixture},
 		{name: "scripted", new: scriptedFixture},
 	}
 	for _, f := range factories {
@@ -413,7 +418,10 @@ func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 			wrongAccount.AccountID = "other-account"
 			assertExecuteRejected(t, fx.connector, fx.request, wrongAccount, services)
 			wrongMode := fx.scope
-			wrongMode.Mode = "translated"
+			wrongMode.Mode = core.ModeTranslation
+			if fx.translated {
+				wrongMode.Mode = core.ModeNative
+			}
 			assertExecuteRejected(t, fx.connector, fx.request, wrongMode, services)
 			wrongModel := fx.request
 			wrongModel.Model = "other-model"
@@ -421,15 +429,19 @@ func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 			if got := fx.callCount(); got != 0 {
 				t.Fatalf("rejected credential/protocol/scope call reached upstream/script: %d calls", got)
 			}
-			models, err := fx.connector.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: "native", AccountID: account}, services)
+			models, err := fx.connector.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: fx.scope.Mode, AccountID: account}, services)
 			if err != nil || !honestModelsResult(models) {
 				t.Fatalf("valid scoped Models result=%+v error=%v", models, err)
 			}
-			otherModels, err := fx.connector.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: "native", AccountID: "other-account"}, services)
+			otherModels, err := fx.connector.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: fx.scope.Mode, AccountID: "other-account"}, services)
 			if err != nil || otherModels.Supported || len(otherModels.Models) != 0 {
 				t.Fatalf("cross-account Models result=%+v error=%v", otherModels, err)
 			}
-			if result, err := fx.connector.EstimateUsage(context.Background(), core.UsageQuery{}, services); err != nil || result.Supported || result.Known || result.Usage != nil {
+			usageQuery := core.UsageQuery{}
+			if fx.translated {
+				usageQuery = core.UsageQuery{Protocol: protocol, Mode: fx.scope.Mode, Model: fx.request.Model, AccountID: fx.scope.AccountID}
+			}
+			if result, err := fx.connector.EstimateUsage(context.Background(), usageQuery, services); err != nil || result.Supported != fx.translated || result.Known || result.Usage != nil {
 				t.Fatalf("unsupported usage estimate fabricated result=%+v error=%v", result, err)
 			}
 			if result, err := fx.connector.Authenticate(context.Background(), core.AuthRequest{}, services); err != nil || result.Supported || result.State != "" || len(result.Credentials) != 0 {
@@ -458,7 +470,7 @@ func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 }
 
 func TestConformanceFailedInitIsUnavailable(t *testing.T) {
-	for _, f := range []factory{{name: "native-loopback", new: nativeFixture}, {name: "scripted", new: scriptedFixture}} {
+	for _, f := range []factory{{name: "native-loopback", new: nativeFixture}, {name: "anthropic-translation", new: translationFixture}, {name: "scripted", new: scriptedFixture}} {
 		t.Run(f.name, func(t *testing.T) {
 			fx := f.new(t)
 			t.Cleanup(fx.close)
@@ -974,8 +986,16 @@ func runBaseline(fx fixture) error {
 			return errors.New("unknown frame type")
 		}
 	}
-	if !head || !complete || len(body) == 0 || !bytes.Equal(body, fx.wantBody) {
+	if fx.validate != nil {
+		if err := fx.validate(); err != nil {
+			return err
+		}
+	}
+	if !head || !complete || len(body) == 0 || (!fx.translated && !bytes.Equal(body, fx.wantBody)) {
 		return errors.New("missing Head, Body, successful Complete, or expected response bytes")
+	}
+	if fx.translated && (!bytes.Contains(body, []byte(`"type":"response.output_text.delta"`)) || !bytes.Contains(body, []byte(`"type":"response.completed"`))) {
+		return errors.New("translation omitted declared output-text or completion events")
 	}
 	return nil
 }

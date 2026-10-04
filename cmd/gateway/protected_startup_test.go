@@ -96,6 +96,79 @@ func TestProtectedStartupValidationAndRecovery(t *testing.T) {
 	}
 }
 
+func TestProtectedTranslationStartupComposesCredentialScope(t *testing.T) {
+	_, dbPath, keyPath := protectedFixture(t)
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: "anthropic-account", Connector: "anthropic", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := secure.Seal(key, 2, "test-v1", "credentials", "anthro-key", "anthropic-account", []byte("synthetic-anthropic-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: "anthro-key", AccountID: "anthropic-account", FormatVersion: envelope.FormatVersion, KeyVersion: envelope.KeyVersion, Nonce: envelope.Nonce, Ciphertext: envelope.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewKeyPolicies(db).Create(ctx, sqlite.CreateKeyPolicyParams{ID: "translation-policy", Enabled: true, Models: []string{"client-model"}, Connectors: []string{"anthropic"}, RPM: 10, TPM: 5000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "translation.yaml")
+	body := fmt.Sprintf(`version: 1
+server: {listen: "127.0.0.1:0", max_request_bytes: 1048576, shutdown_timeout: 1s}
+storage: {driver: sqlite, path: %q}
+secrets: {master_key_file: %q}
+connectors:
+  - id: anthropic
+    kind: connector
+    implementation: pestiroute.anthropic.messages
+    protocols: [openai.responses.v1]
+    settings: {model: client-model, account_id: anthropic-account, credential_id: anthro-key}
+routes:
+  - id: translated
+    protocol: openai.responses.v1
+    mode: translation
+    model: client-model
+    adapter: pestiroute.responses.native
+    policy: standard
+    budget: {unknown_estimate: reserve, conservative_tokens: 4096}
+    targets: [{connector: anthropic, account: anthropic-account}]
+policies: {standard: translation-policy}
+`, dbPath, keyPath)
+	if err := os.WriteFile(configPath, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := loadConfig([]string{"-config-format", "yaml", "-config", configPath})
+	if err != nil {
+		t.Fatalf("parse translated protected YAML: %v", err)
+	}
+
+	prepared, err := prepareProtectedConfig(ctx, c)
+	if err != nil {
+		t.Fatalf("prepare translated config: %v", err)
+	}
+	ready, draining := atomic.Bool{}, atomic.Bool{}
+	_, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)
+	if err != nil {
+		_ = prepared.runtimeDB.Close()
+		_ = prepared.processLock.Close()
+		t.Fatalf("compose translated config: %v", err)
+	}
+	if err := closeComponents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProtectedMultiTargetAffinityGateAndOrdinaryRequest(t *testing.T) {
 	t.Setenv("PROTECTED_TEST_CREDENTIAL", "synthetic")
 	t.Setenv("PROTECTED_TEST_CREDENTIAL_B", "synthetic-b")

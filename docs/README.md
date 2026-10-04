@@ -16,15 +16,18 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | Document | Owns |
 | --- | --- |
 | [Current](implementation/CURRENT.md) | Verified state, immediate focus, blockers, available commands |
-| [Tasks](implementation/TASKS.md) | Task status, owner, dependencies, scope, result, primary check; [M2 plan](implementation/TASKS.md#m2--connector-api-and-conformance-baseline) and [bounded M3 plan](implementation/TASKS.md#m3--access-accounts-and-accounting) |
+| [Tasks](implementation/TASKS.md) | Task status, owner, dependencies, scope, result, primary check; [M2 plan](implementation/TASKS.md#m2--connector-api-and-conformance-baseline), [bounded M3 plan](implementation/TASKS.md#m3--access-accounts-and-accounting), and [bounded M4 plan](implementation/TASKS.md#m4--first-translation-connector) |
 | [Task template](implementation/tasks/TEMPLATE.md) | Planner's format for bounded task cards in `implementation/tasks/` |
 | [Roadmap](implementation/ROADMAP.md) | Milestones and acceptance gates; not a task checklist |
 | [Stack](implementation/STACK.md) | Toolchain, libraries, build and operational conventions |
+| [M4 translation brief](implementation/M4-TRANSLATION.md) | Current-code seams, first-slice policy/decision gates and official sources; planning input until reviewed by M4-001 |
+| [M4 compatibility matrix](implementation/M4-COMPATIBILITY.md) | Evidence-backed scope, capabilities, field policy, and local/live proof boundary for Anthropic translation |
 | [Contract](implementation/CONTRACT.md) | Normative v1 Adapter–Core Runtime–Connector boundary, frames, capabilities, errors and lifecycle |
 | [Configuration](implementation/CONFIGURATION.md) | Target configuration schema, persistent state, access and accounting |
 | [Testing](implementation/TESTING.md) | Behavioral verification, conformance, fixtures, smoke tests |
 | [Local M2 topology check](implementation/LOCAL-M2.md) | Offline, loopback-only multi-route and legacy startup procedure |
 | [Local M3 operations](implementation/LOCAL-M3.md) | Protected setup, local administration, accounting recovery and WAL-safe backup/restore |
+| [Local M4 operations](implementation/LOCAL-M4.md) | Offline dual native/translation topology, local rejection gates, usage and backup/restore |
 | [References](implementation/REFERENCES.md) | Protocol sources and connector/migration research workflow |
 | [Development tooling](implementation/TOOLING.md) | When to add OpenCode MCPs, plugins, commands, and local tools |
 

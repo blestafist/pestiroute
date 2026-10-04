@@ -63,6 +63,9 @@ type nativeSettings struct {
 	TLSHandshakeTimeout   string `yaml:"tls_handshake_timeout"`
 	ResponseHeaderTimeout string `yaml:"response_header_timeout"`
 	StreamIdleTimeout     string `yaml:"stream_idle_timeout"`
+	Model                 string `yaml:"model"`
+	AccountID             string `yaml:"account_id"`
+	CredentialID          string `yaml:"credential_id"`
 }
 
 type protectedRoute struct {
@@ -125,6 +128,9 @@ func loadProtectedYAML(path string) (protectedConfig, error) {
 		return protectedConfig{}, fmt.Errorf("config %q: expected one YAML document", path)
 	}
 	root := doc.Content[0]
+	if err := validateConnectorSettingsFields(root); err != nil {
+		return protectedConfig{}, fmt.Errorf("config %q: %w", path, err)
+	}
 	if err := validateYAMLTypes(root, reflect.TypeOf(protectedConfig{})); err != nil {
 		return protectedConfig{}, fmt.Errorf("config %q: %w", path, err)
 	}
@@ -163,6 +169,50 @@ func inspectYAMLNode(node *yaml.Node) error {
 	for _, child := range node.Content {
 		if err := inspectYAMLNode(child); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateConnectorSettingsFields(root *yaml.Node) error {
+	var connectors *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "connectors" {
+			connectors = root.Content[i+1]
+			break
+		}
+	}
+	if connectors == nil || connectors.Kind != yaml.SequenceNode {
+		return nil // Shape validation below reports the structural error.
+	}
+	for i, connector := range connectors.Content {
+		var implementation, settings *yaml.Node
+		for j := 0; j+1 < len(connector.Content); j += 2 {
+			switch connector.Content[j].Value {
+			case "implementation":
+				implementation = connector.Content[j+1]
+			case "settings":
+				settings = connector.Content[j+1]
+			}
+		}
+		if implementation == nil || settings == nil || settings.Kind != yaml.MappingNode {
+			continue // Required-field and type validation reports this case.
+		}
+		allowed := map[string]bool{}
+		switch implementation.Value {
+		case "pestiroute.responses.native":
+			for _, key := range []string{"base_url", "upstream_protocol", "mode", "credential_env", "max_request_body_bytes", "max_request_header_bytes", "connect_timeout", "tls_handshake_timeout", "response_header_timeout", "stream_idle_timeout"} {
+				allowed[key] = true
+			}
+		case "pestiroute.anthropic.messages":
+			allowed["model"], allowed["account_id"], allowed["credential_id"] = true, true, true
+		default:
+			continue // Implementation validation reports this case.
+		}
+		for j := 0; j+1 < len(settings.Content); j += 2 {
+			if !allowed[settings.Content[j].Value] {
+				return fmt.Errorf("connectors[%d].settings has unsupported field %q", i, settings.Content[j].Value)
+			}
 		}
 	}
 	return nil
@@ -254,16 +304,28 @@ func validateProtectedConfig(c protectedConfig) error {
 	connectors := make(map[string]struct{}, len(c.Connectors))
 	for i, item := range c.Connectors {
 		prefix := fmt.Sprintf("connectors[%d]", i)
-		if strings.TrimSpace(item.ID) == "" || item.Kind != "connector" || item.Implementation != "pestiroute.responses.native" || len(item.Protocols) != 1 || item.Protocols[0] != responsesProtocol {
+		if strings.TrimSpace(item.ID) == "" || item.Kind != "connector" || len(item.Protocols) != 1 || item.Protocols[0] != responsesProtocol {
 			return fmt.Errorf("%s has invalid identity, kind, implementation, or protocols", prefix)
 		}
 		if _, exists := connectors[item.ID]; exists {
 			return fmt.Errorf("duplicate connector id %q", item.ID)
 		}
-		connectors[item.ID] = struct{}{}
-		if err := validateNativeSettings(prefix+".settings", item.Settings); err != nil {
-			return err
+		switch item.Implementation {
+		case "pestiroute.responses.native":
+			if item.Settings.Model != "" || item.Settings.AccountID != "" || item.Settings.CredentialID != "" {
+				return fmt.Errorf("%s.settings has fields not supported by native connector", prefix)
+			}
+			if err := validateNativeSettings(prefix+".settings", item.Settings); err != nil {
+				return err
+			}
+		case "pestiroute.anthropic.messages":
+			if err := validateAnthropicSettings(prefix+".settings", item.Settings); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("%s has unsupported connector implementation %q", prefix, item.Implementation)
 		}
+		connectors[item.ID] = struct{}{}
 	}
 	for name, id := range c.Policies {
 		if strings.TrimSpace(name) == "" || strings.TrimSpace(id) == "" {
@@ -271,16 +333,23 @@ func validateProtectedConfig(c protectedConfig) error {
 		}
 	}
 	seenRoutes := make(map[string]struct{}, len(c.Routes))
+	type modelRouteGroup struct{ mode, routeID string }
+	modelGroups := make(map[struct{ protocol, model string }]modelRouteGroup, len(c.Routes))
 	for i := range c.Routes {
 		route := &c.Routes[i]
 		prefix := fmt.Sprintf("routes[%d]", i)
-		if strings.TrimSpace(route.ID) == "" || route.Protocol != responsesProtocol || route.Mode != "native" || strings.TrimSpace(route.Model) == "" || route.Adapter != "pestiroute.responses.native" {
+		if strings.TrimSpace(route.ID) == "" || route.Protocol != responsesProtocol || (route.Mode != "native" && route.Mode != "translation") || strings.TrimSpace(route.Model) == "" || route.Adapter != "pestiroute.responses.native" {
 			return fmt.Errorf("%s has invalid identity, protocol, mode, model, or adapter", prefix)
 		}
 		if _, exists := seenRoutes[route.ID]; exists {
 			return fmt.Errorf("duplicate route id %q", route.ID)
 		}
 		seenRoutes[route.ID] = struct{}{}
+		modelKey := struct{ protocol, model string }{route.Protocol, route.Model}
+		if previous, exists := modelGroups[modelKey]; exists && (previous.mode != route.Mode || previous.routeID != route.ID) {
+			return fmt.Errorf("ambiguous protocol/model route group for %q and %q", route.Protocol, route.Model)
+		}
+		modelGroups[modelKey] = modelRouteGroup{mode: route.Mode, routeID: route.ID}
 		if _, ok := c.Policies[route.Policy]; !ok {
 			return fmt.Errorf("%s references unknown policy %q", prefix, route.Policy)
 		}
@@ -293,6 +362,7 @@ func validateProtectedConfig(c protectedConfig) error {
 		seenTargets := make(map[routeTarget]struct{}, len(route.Targets))
 		seenAccounts := make(map[string]struct{}, len(route.Targets))
 		seenConnectors := make(map[string]struct{}, len(route.Targets))
+		translationTarget := false
 		for j, target := range route.Targets {
 			if _, ok := connectors[target.Connector]; !ok || strings.TrimSpace(target.Account) == "" {
 				return fmt.Errorf("%s.targets[%d] has unknown connector or empty account", prefix, j)
@@ -309,6 +379,22 @@ func validateProtectedConfig(c protectedConfig) error {
 			seenTargets[target] = struct{}{}
 			seenAccounts[target.Account] = struct{}{}
 			seenConnectors[target.Connector] = struct{}{}
+			for _, connector := range c.Connectors {
+				if connector.ID != target.Connector {
+					continue
+				}
+				if connector.Implementation == "pestiroute.anthropic.messages" {
+					translationTarget = true
+					if route.Mode != "translation" || connector.Settings.Model != route.Model || connector.Settings.AccountID != target.Account {
+						return fmt.Errorf("%s target %q does not match Anthropic translation mode, model, and account settings", prefix, target.Connector)
+					}
+				} else if route.Mode == "translation" {
+					return fmt.Errorf("%s target %q implementation does not match translation mode", prefix, target.Connector)
+				}
+			}
+		}
+		if translationTarget && route.Budget.UnknownEstimate == "reserve" && *route.Budget.ConservativeTokens < 4096 {
+			return fmt.Errorf("%s.budget.conservative_tokens must be at least 4096 for Anthropic translation reserve", prefix)
 		}
 		if err := validateUniqueStrings(prefix+".requirements", route.Requirements); err != nil {
 			return err
@@ -331,6 +417,16 @@ func validateProtectedConfig(c protectedConfig) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateAnthropicSettings(prefix string, s nativeSettings) error {
+	if strings.TrimSpace(s.Model) == "" || strings.TrimSpace(s.AccountID) == "" || strings.TrimSpace(s.CredentialID) == "" {
+		return fmt.Errorf("%s requires non-empty model, account_id, and credential_id", prefix)
+	}
+	if s.BaseURL != "" || s.UpstreamProtocol != "" || s.Mode != "" || s.CredentialEnv != "" || s.MaxRequestBodyBytes != 0 || s.MaxRequestHeaderBytes != 0 || s.ConnectTimeout != "" || s.TLSHandshakeTimeout != "" || s.ResponseHeaderTimeout != "" || s.StreamIdleTimeout != "" {
+		return fmt.Errorf("%s has fields not supported by Anthropic connector", prefix)
 	}
 	return nil
 }

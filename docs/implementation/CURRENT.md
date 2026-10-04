@@ -27,30 +27,52 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: prepare the first M4 slice
+## Immediate focus: M4 offline gate verified; PR handoff to M5.1 research
 
-Read the [M4 outcome](ROADMAP.md#m4--first-translation-connector),
-[Connector contract](CONTRACT.md#connector-contract),
-[translation decision](../project/DECISIONS.md#dec-003--why-connectors-own-provider-translation)
-and [conformance scenarios](TESTING.md). Research the official Anthropic Messages
-API and choose versioned request/stream fixtures. Then prepare one bounded READY
-card for plain text plus incremental streaming as an explicit Responses ↔ Messages
-Connector transformation. Establish supported/unsupported/unknown claims and
-negative cases before implementing tools/reasoning. No M4 cards are pre-created.
+M4 implements explicit Responses ↔ Anthropic Messages translation under the
+accepted [DEC-008/D18](../project/DECISIONS.md#dec-008--accepted-narrow-deferral-of-official-anthropic-verification)
+offline milestone gate. [M4-038](tasks/M4-038.md) audited the earlier committed
+baseline; [M4-045](tasks/M4-045.md) reviews the assembled branch and fixes mixed
+text/tool output, tool argument validation, truncation, SSE metadata and missing
+function results. Core remains protocol-neutral and native bodies remain opaque. The registry has
+45 M4 cards: 43 DONE, 2 BLOCKED, and no pending offline implementation.
 
-Reuse registry lifecycle, scoped services, route mode/capability eligibility,
-usage estimation and common dispatch/accounting. Keep protocol parsing,
-transformation and provider errors inside the Connector. Preserve native byte
-identity and incremental delivery; do not extend Core with provider-specific APIs.
+The compatible-endpoint harness is committed in `9035e18`, including all five
+files previously left in the local worktree. Its deterministic TLS/HTTP2 tests
+cover client-owned tool rounds, replay, cancellation and durable settlement.
+Those tests do not satisfy either live gate:
+
+- [M4-036](tasks/M4-036.md): official Anthropic capture remains BLOCKED and is
+  mandatory before production release under DEC-008/D18.
+- [M4-041](tasks/M4-041.md): compatible-endpoint tool cycles remain BLOCKED.
+  The prior live batch stopped on its first direct request with HTTP 200,
+  `unexpected_tool_name`, one dispatch and zero retries. Later rounds and
+  cancellation were unrun. The task card preserves the historical report;
+  its local temporary failure artifact is not included in the repository.
+
+Production targets direct Anthropic with the pinned backend model. The
+`cc/claude-sonnet-5-5` compatible model and endpoint override remain test-only.
+Live parallel tools, reasoning, OAuth and remote compute cancellation have no
+support claim. No live inference is part of the final branch review.
+
+After the PR, the next planning boundary is M5.1 Codex translation research and
+scoping; no M5 implementation is included. Reuse registry, scoped services,
+authorization, admission, accounting and dispatch. Request translation, provider
+SSE/errors and token normalization remain Connector-owned. Keep the existing
+Context7, gopls, shell and Git tool configuration; see [Tooling](TOOLING.md#m4-tooling-gate).
 
 ## Available checks
 
-`./scripts/check.sh` passes formatting, vet, unit/race tests and offline build.
-The final audit also passed uncached race-enabled conformance and gateway/Core/
-SQLite suites, ten repeated focused accounting/access/auth races, and SQLite
-checks with CGO disabled. Mandatory conformance has no skips; only two optional
-parallel-tools scenarios skip. Exact commands and evidence are in [M3-046](tasks/M3-046.md).
+[M4-045](tasks/M4-045.md) records the final review on `9035e18` plus the
+review fixes. `./scripts/check.sh` passes formatting, vet, unit/race tests and
+offline build. The uncached Anthropic/gateway/conformance race suites, ten
+repeated new regressions, pure-Go tests/build, compatible TLS/HTTP2 harness,
+artifact validator, shell syntax, and Markdown link/dependency audit also pass.
+Hosted PR CI is reported separately in GitHub.
 
+[LOCAL-M4](LOCAL-M4.md) passes offline dual native/translation protected provisioning,
+native loopback dispatch, local translation validation/rejections, rate limiting,
+usage inspection, restart, and WAL-safe backup/restore integrity.
 [LOCAL-M3](LOCAL-M3.md) passes protected provisioning, inference, limits, usage,
 restart and consistent backup/restore. For an existing older M3 database: stop
 the gateway, make a consistent backup and run `admin migrate` to v6 before
@@ -59,13 +81,14 @@ remain loopback development compatibility modes; see [LOCAL-M2](LOCAL-M2.md).
 
 ## Evidence limits and open inputs
 
-- The built-in Connector is native Responses only. One configured instance has
-  one account/model scope; the auth storage adapter requires one pre-provisioned
-  credential per account. Protected YAML still requires a present non-empty
-  `credential_env`; inference uses the scoped SQLite credential.
+- Built-in Connectors include native Responses and protected Anthropic Messages
+  translation. A translated instance has one account/model scope; protected YAML
+  selects its SQLite credential explicitly with `credential_id`, while native
+  settings retain `credential_env`. Inference uses scoped SQLite credentials.
 - Native transport failures retain unknown delivery; safe fallback is proven
   with explicit deterministic fixtures, not a broader real-provider retry claim.
-  Translation, stateful cross-target affinity, live OAuth and IPC remain M4/M5/M6.
+  Remaining translation gates/live compatibility, stateful cross-target affinity,
+  live OAuth and IPC remain M4/M5/M6.
 - Historical live evidence remains OpenCode 2.0.6 / OpenAI Responses /
   `gpt-5.4-mini`, with parallel tools unknown. M3 adds no live inference claim.
   Remote provider compute cancellation remains unverified.

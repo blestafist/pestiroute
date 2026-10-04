@@ -52,7 +52,56 @@ func TestConformanceErrorUsageRejectionsThroughDispatcher(t *testing.T) {
 			if fx.callCount() != 1 {
 				t.Fatalf("native upstream requests=%d, want exactly one", fx.callCount())
 			}
+			t.Run("anthropic-translation", func(t *testing.T) {
+				translated := translationFixtureWithResponse(t, fakeupstream.Response{Status: tc.status, Header: headers, Body: body})
+				defer translated.close()
+				if err := translated.init(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				d, attempts := dispatcherFor(t, translated, translated.services())
+				_, gatewayErr := d.Execute(context.Background(), translated.request)
+				if gatewayErr == nil || gatewayErr.Category != tc.category || gatewayErr.Retryable != tc.retryable || bytes.Contains([]byte(gatewayErr.Message), []byte("private")) {
+					t.Fatalf("translation rejection=%+v; want category=%s retryable=%v without provider body", gatewayErr, tc.category, tc.retryable)
+				}
+				assertOneAttempt(t, attempts, false, core.OutcomeFailed, tc.category)
+				assertAttemptRetryMetadata(t, attempts, tc.retryable)
+				if translated.callCount() != 1 {
+					t.Fatalf("translated upstream requests=%d, want one", translated.callCount())
+				}
+			})
 		})
+	}
+}
+
+func TestConformanceTranslationUsage(t *testing.T) {
+	fx := translationFixture(t)
+	defer fx.close()
+	if err := fx.init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	d, attempts := dispatcherFor(t, fx, fx.services())
+	response, gatewayErr := d.Execute(context.Background(), fx.request)
+	if gatewayErr != nil {
+		t.Fatalf("Execute: %v", gatewayErr)
+	}
+	frames, body, err := readFrames(response.Stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countFrames(frames, core.FrameComplete) != 1 || !bytes.Contains(body, []byte(`"type":"response.completed"`)) {
+		t.Fatalf("translated terminal response missing: frames=%+v body=%q", frames, body)
+	}
+	complete := frames[len(frames)-1].Complete
+	if complete == nil || complete.Usage == nil {
+		t.Fatalf("translated completion missing provider usage: %+v", frames)
+	}
+	assertOneAttempt(t, attempts, true, core.OutcomeSucceeded, "")
+	if !(*attempts)[0].HasUsage {
+		t.Fatal("dispatcher did not retain translated provider usage")
+	}
+	usage := (*attempts)[0].Usage
+	if usage.Source != core.UsageProvider || usage.Completeness != core.UsageComplete || usage.InputTokens == nil || *usage.InputTokens != 2 || usage.OutputTokens == nil || *usage.OutputTokens != 3 {
+		t.Fatalf("translated provider usage was not retained: %+v frames=%+v body=%q", usage, frames, body)
 	}
 }
 
@@ -314,6 +363,11 @@ func TestConformanceNativePreHeadAndPostCommitNoReplay(t *testing.T) {
 func dispatcherFor(t *testing.T, fx fixture, services core.InvocationServices) (*core.Dispatcher, *[]core.AttemptResult) {
 	t.Helper()
 	var attempts []core.AttemptResult
+	if fx.translated {
+		d := fx.dispatcher
+		d.Finalize = func(result core.AttemptResult) { attempts = append(attempts, result) }
+		return d, &attempts
+	}
 	d := &core.Dispatcher{AccountID: account, Finalize: func(result core.AttemptResult) { attempts = append(attempts, result) }}
 	d.Target = conformanceTarget(func(ctx context.Context, in core.ExecutionRequest, scope core.AttemptScope) (core.ExecutionResponse, *core.GatewayError) {
 		// Dispatcher assigns a fresh ID; scripted scripts are intentionally keyed

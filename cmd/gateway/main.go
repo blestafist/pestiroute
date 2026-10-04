@@ -22,6 +22,7 @@ import (
 	"time"
 
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
+	anthropic "github.com/blestafist/pestiroute/internal/connector/anthropic"
 	connector "github.com/blestafist/pestiroute/internal/connector/responses"
 	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
@@ -71,6 +72,8 @@ type topologyComponent struct {
 	TLSTimeout     string             `json:"tls_handshake_timeout,omitempty"`
 	HeaderTimeout  string             `json:"response_header_timeout,omitempty"`
 	IdleTimeout    string             `json:"stream_idle_timeout,omitempty"`
+	Model          string             `json:"-"`
+	AccountID      string             `json:"-"`
 }
 
 type topologyRoute struct {
@@ -510,8 +513,16 @@ func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.A
 		if item.Kind == core.ComponentAdapter {
 			return adapter.NewAdapter()
 		}
+		if item.Implementation == "pestiroute.anthropic.messages" {
+			return anthropic.NewConnector()
+		}
 		return connector.NewConnector()
 	})
+}
+
+type anthropicInit struct {
+	Model     string `json:"model"`
+	AccountID string `json:"account_id"`
 }
 
 func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component) (http.Handler, func(context.Context) error, error) {
@@ -520,6 +531,9 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	if legacy {
 		c.Components = legacyComponents(c)
 		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector", Budget: c.routeBudget, BudgetPolicy: c.budgetPolicy, RouteID: c.routeID}}
+	}
+	if err := validateDispatcherRouteGroups(c.Routes); err != nil {
+		return nil, nil, err
 	}
 	if len(c.Components) == 0 {
 		return mux, func(context.Context) error { return nil }, nil
@@ -623,6 +637,8 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		var cfg any
 		if item.Kind == core.ComponentAdapter {
 			cfg = adapterConfig{MaxBodyBytes: maxBody, MaxHeaderBytes: maxHeader}
+		} else if item.Implementation == "pestiroute.anthropic.messages" {
+			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(anthropicInit{Model: item.Model, AccountID: item.AccountID})}
 		} else {
 			connect, _ := time.ParseDuration(item.ConnectTimeout)
 			tlsHandshake, _ := time.ParseDuration(item.TLSTimeout)
@@ -716,6 +732,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		dispatchers[route.Model] = &core.Dispatcher{
 			Routes: table, Services: services, Policies: policyStore, Accounts: accountAuthorizer,
 			Accounting: accounting, Budget: route.Budget, BudgetPolicy: route.BudgetPolicy,
+			Mode:    route.Mode,
 			RouteID: route.RouteID, AccountID: route.Account, Finalize: finalize,
 			RetryMaxAttempts: route.RetryMaxAttempts, RetryDeadline: route.RetryDeadline,
 			OnAccountingFailure: func() { accountingFailed.Store(true); ready.Store(false) },
@@ -769,6 +786,23 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, resp)
 	})
 	return mux, closeComponents, nil
+}
+
+func validateDispatcherRouteGroups(routes []topologyRoute) error {
+	type group struct{ mode, candidateGroup string }
+	groups := make(map[struct{ protocol, model string }]group, len(routes))
+	for _, route := range routes {
+		if route.Protocol == "" || route.Model == "" {
+			continue
+		}
+		key := struct{ protocol, model string }{route.Protocol, route.Model}
+		current := group{mode: route.Mode, candidateGroup: route.CandidateGroup}
+		if previous, ok := groups[key]; ok && (previous.mode != current.mode || current.candidateGroup == "" || previous.candidateGroup != current.candidateGroup) {
+			return fmt.Errorf("ambiguous protocol/model route group for %q and %q", route.Protocol, route.Model)
+		}
+		groups[key] = current
+	}
+	return nil
 }
 
 type sqliteVirtualKeyStore struct{ keys *sqlite.VirtualKeys }

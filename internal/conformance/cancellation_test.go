@@ -70,17 +70,26 @@ func TestConformanceBlockedNextCancellationAndPartialClose(t *testing.T) {
 				if gatewayErr != nil {
 					t.Fatal(gatewayErr)
 				}
-				for i := range 2 { // Head and first Body, leaving the producer gated.
-					frame, err := response.Stream.Next(ctx)
-					if err != nil || (i == 0 && frame.Type != core.FrameHead) || (i == 1 && frame.Type != core.FrameBody) {
-						t.Fatalf("frame %d = %+v, %v", i, frame, err)
-					}
-				}
 				finished := make(chan error, 1)
-				go func() {
-					_, err := response.Stream.Next(ctx)
-					finished <- err
-				}()
+				if tc.translated {
+					frame, err := response.Stream.Next(ctx)
+					if err != nil || frame.Type != core.FrameHead {
+						t.Fatalf("Head = %+v, %v", frame, err)
+					}
+					waitSignal(t, waiting, "translation upstream gate")
+					finished = nextUntilBlocked(ctx, response.Stream)
+				} else {
+					for i := range 2 { // Head and first Body, leaving the producer gated.
+						frame, err := response.Stream.Next(ctx)
+						if err != nil || (i == 0 && frame.Type != core.FrameHead) || (i == 1 && frame.Type != core.FrameBody) {
+							t.Fatalf("frame %d = %+v, %v", i, frame, err)
+						}
+					}
+					go func() {
+						_, err := response.Stream.Next(ctx)
+						finished <- err
+					}()
+				}
 				if tc.scripted {
 					select {
 					case <-waiting:
@@ -223,6 +232,14 @@ func cancellationDispatcher(t *testing.T, fx fixture) (*core.Dispatcher, *[]core
 	t.Helper()
 	var attempts []core.AttemptResult
 	finalized := make(chan struct{}, 1)
+	if fx.translated {
+		d := fx.dispatcher
+		d.Finalize = func(result core.AttemptResult) {
+			attempts = append(attempts, result)
+			finalized <- struct{}{}
+		}
+		return d, &attempts, finalized
+	}
 	d := &core.Dispatcher{AccountID: account, Finalize: func(result core.AttemptResult) {
 		attempts = append(attempts, result)
 		finalized <- struct{}{}
@@ -294,14 +311,40 @@ func awaitFinalized(t *testing.T, finalized <-chan struct{}) {
 	}
 }
 
+func nextUntilBlocked(ctx context.Context, stream core.Stream) chan error {
+	for {
+		result := make(chan error, 1)
+		go func() { _, err := stream.Next(ctx); result <- err }()
+		select {
+		case err := <-result:
+			if err != nil {
+				result <- err
+				return result
+			}
+		case <-time.After(100 * time.Millisecond):
+			select {
+			case err := <-result:
+				if err == nil {
+					continue
+				}
+				result <- err
+			default:
+			}
+			return result
+		}
+	}
+}
+
 type cancellationFixture struct {
-	name     string
-	scripted bool
-	new      func(*testing.T, <-chan struct{}, chan<- struct{}) fixture
+	name       string
+	scripted   bool
+	translated bool
+	new        func(*testing.T, <-chan struct{}, chan<- struct{}) fixture
 }
 
 func cancellationFixtures() []cancellationFixture {
 	return []cancellationFixture{
+		{name: "anthropic-translation", translated: true, new: translationCancellationFixture},
 		{name: "native-loopback", new: func(t *testing.T, gate <-chan struct{}, sent chan<- struct{}) fixture {
 			var firstGate <-chan struct{}
 			var releaseGate chan struct{}

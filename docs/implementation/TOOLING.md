@@ -15,6 +15,26 @@ This plan covers tools for **building PestiRoute with OpenCode**, not the gatewa
 | M5–M6, if connector count and cross-package navigation justify it | Graphify or a simple Go dependency graph (candidates) | Generate a graph from actual Go imports/contract boundaries and compare it to targeted search. Adopt only if it detects useful dependency drift; it must not become a second source of architectural truth. External Connector IPC is a **product** milestone in M6, not an OpenCode plugin requirement. |
 | If an admin UI enters the roadmap | Browser/Playwright checks (candidate) | Introduce only with an actual UI acceptance scenario and deterministic local test target. A browser MCP brings no value to the current documentation/backend foundation. |
 
+## M4 Tooling Gate
+
+For the [M4 translation plan](TASKS.md#m4--first-translation-connector), keep the
+existing OpenCode configuration. `.opencode/opencode.json` declares Context7 and
+official `gopls mcp`; this planning session inspected configuration and repository
+guidance, not the developer's live MCP connections or plugin processes.
+
+Use targeted gopls/LSP navigation, `rg`, file/shell/Git tools and pinned Go
+format/vet/test/race/build checks. Official Messages/Responses documentation and
+small versioned local HTTP/SSE fixtures supply protocol evidence. Go's existing
+HTTP/JSON stack is sufficient for the first candidate; no SDK/retry framework,
+database MCP, Serena, Graphify, browser MCP or additional agent skill is required.
+Retain existing personal output/navigation plugins if already useful.
+
+During M4-001/002 record source/API/client versions and licensing. A small local
+capture helper may be justified in M4-035 after repeated fixture work; it is a
+test deliverable rather than a new MCP dependency. No production tool/MCP runner
+is needed: function calls return to the client. Real-account smoke access is a
+separate gate and cannot be replaced by installing another tool.
+
 ## M3 Tooling Gate
 
 This is a recommendation from the repository's M3 scope and checked-in configuration, not a new machine-local installation or connection check. `.opencode/opencode.json` declares Context7 and `gopls mcp`; the older observations below remain dated evidence. No agent/model/server permissions or personal plugin settings change in this planning commit.
