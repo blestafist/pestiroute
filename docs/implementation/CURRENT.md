@@ -27,29 +27,26 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-044 DONE; DEC-008/D18 accepted; offline M4-037/M4-038 eligible; M4-036/M4-041 BLOCKED
+## Immediate focus: M4-037 DONE; DEC-008/D18 accepted; M4-036/M4-041 BLOCKED; M4-038 DRAFT (eligible after commit verification)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 cards for Responses ↔ Anthropic Messages translation. Of 44 registered M4 rows in
-[TASKS](TASKS.md), 40 are complete ([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md),
-[M4-039](tasks/M4-039.md), [M4-040](tasks/M4-040.md), [M4-042](tasks/M4-042.md), [M4-043](tasks/M4-043.md),
-and [M4-044](tasks/M4-044.md)), 2 are BLOCKED ([M4-036](tasks/M4-036.md), [M4-041](tasks/M4-041.md)),
-2 remain DRAFT ([M4-037](tasks/M4-037.md), [M4-038](tasks/M4-038.md)), and 0 are ACTIVE or READY.
+[TASKS](TASKS.md), 41 are complete ([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md),
+[M4-037](tasks/M4-037.md), [M4-039](tasks/M4-039.md), [M4-040](tasks/M4-040.md), [M4-042](tasks/M4-042.md),
+[M4-043](tasks/M4-043.md), and [M4-044](tasks/M4-044.md)), 2 are BLOCKED ([M4-036](tasks/M4-036.md), [M4-041](tasks/M4-041.md)),
+1 remains DRAFT ([M4-038](tasks/M4-038.md)), and 0 are ACTIVE or READY.
 
-[M4-044](tasks/M4-044.md) is closed DONE (reviewer PASS `ses_ef7d73665ffehMAw63fb7G4G6Q`).
-Human governance authority explicitly accepted the DEC-008/D18 narrow deferral:
-defer official Anthropic verification to allow offline M4 completion (M4-037, M4-038),
-while keeping official M4-036 and compatible M4-041 strictly BLOCKED (no false passes),
-and retaining official live verification as a mandatory pre-production release gate.
-`DECISIONS.md` records accepted DEC-008/D18; `ROADMAP.md` aligns M4 offline gate criteria;
-`TASKS.md` updates M4-037 dependencies to (M4-044, M4-032, M4-035); Core runtime behavior,
-`CONTRACT.md`, and production code remain unchanged. M4-037/M4-038 remain DRAFT pending
-next-task promotion after commit verification.
+[M4-037](tasks/M4-037.md) is closed DONE (reviewer PASS `ses_ef7cd9695ffeUzlGtXwqYLJ5XD`).
+Its claim audit aligned `M4-COMPATIBILITY.md` with deterministic local proof and bounded compatible-endpoint
+observations (M4-040 text-stream success under test-only override; M4-041 local unversioned tool extraction
+failure with endpoint tool cycles unknown). Official live verification ([M4-036](tasks/M4-036.md)) remains
+deferred per accepted DEC-008/D18 and retained strictly BLOCKED as a mandatory pre-production release gate.
+[M4-038](tasks/M4-038.md) remains DRAFT pending scoped commit verification.
 
 [M4-041](tasks/M4-041.md) is settled as BLOCKED. Its authorized live batch stopped after
 one direct Messages request: actual HTTP 200, turn 1, terminal `tool_use`, safe tool class `other`,
 category `unexpected_tool_name`, one dispatch, zero retries. Live tool cycles acceptance is
-unmet; compatible 9router tool behavior is unsupported/unknown; no further live retry or
+unmet; that attempted cycle failed, while endpoint-wide tool behavior remains unknown; no further live retry or
 model credits will be spent. Sanitized failure evidence is preserved locally in non-repo/non-versioned
 `/tmp/opencode/m4-041-batch.PTHIKQ/partial-failure.json` and credentials were deleted.
 All M4-041 test harness, mock, script, and doc extensions remain pending in the uncommitted

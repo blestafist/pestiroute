@@ -3,8 +3,9 @@
 This matrix describes the implemented, scoped profile—not general Anthropic or
 OpenAI compatibility. `supported` means deterministic local evidence exists;
 it does not mean every prompt, account, or current provider deployment works.
-Live entitlement and wire compatibility are **unknown** pending M4-036/M4-037.
-No live calls were made for this audit.
+Official Anthropic entitlement and wire compatibility are **unverified**;
+M4-036 remains BLOCKED and official live verification is mandatory before
+production release. No live calls were made for this audit.
 
 ## Profile
 
@@ -28,14 +29,35 @@ rejected locally from a feature whose support is merely unproven.
 | CONTRACT capability | Profile result | Declared state | Evidence / limit |
 | --- | --- | --- | --- |
 | `llm.streaming` | Supported | `supported` | Synthetic SSE lifecycle and early-delivery checks: `TestExecuteStreamTranslateEarlyHeadAndUsage`, `TestExecuteBackpressureReadsOnlyOnDemand`, `TestResponsesEmitterLifecycle`; no live provider claim. |
-| `llm.tools` | Supported for ordinary function tools and client-owned rounds | `supported` | Schema/choice/history and stream checks plus protected three-request round trip: `TestTranslateTools`, `TestTranslateToolChoiceAndParallelControls`, `TestExecuteToolStreamLifecycle`, `TestExecuteTwoToolStreamAndParallelControls`, `TestTranslationClientOwnedToolRounds`. Tool execution is never performed by the gateway. |
+| `llm.tools` | Supported locally for ordinary function tools and client-owned rounds | `supported` | Schema/choice/history and stream checks plus protected three-request round trip: `TestTranslateTools`, `TestTranslateToolChoiceAndParallelControls`, `TestExecuteToolStreamLifecycle`, `TestExecuteTwoToolStreamAndParallelControls`, `TestTranslationClientOwnedToolRounds`. Tool execution is never performed by the gateway. Compatible-endpoint tool support remains unverified; see the bounded negative observation below. |
 | `llm.tools.parallel` | Unknown; no end-to-end support claim | `unknown` | Core does not infer it from `llm.tools`; true parallel requirement is rejected before egress. Connector-local false control is supported only as an explicit disable setting, not as parallel capability. |
 | `llm.reasoning` | Unsupported | `unknown` | Binding decision rejects reasoning input/history and provider thinking/redacted blocks; `TestReasoningRequestsFailClosed`, `TestReasoningProviderBlocksFailClosed`, `TestStreamThinkingBlocksFailClosedBeforeFollowingTool`, and gateway `TestTranslationClientOwnedToolRounds`. |
-| `llm.structured_output` | Unknown / not implemented | `unknown` | `json_schema` and `json_object` requirements fail Core eligibility; no strict-output guarantee. Tool parameter schemas are separate and do not imply structured response output. |
-| `llm.vision` | Unsupported by this profile | `unknown` | Non-text/image input is not translated and the scoped declaration does not claim vision. |
-| `llm.audio` | Unsupported by this profile | `unknown` | Audio fields/content are not translated and the scoped declaration does not claim audio. |
+| `llm.structured_output` | Unknown; no strict-output claim | `unknown` | `TestConnectorLifecycleScopeAndSupport` omits the declaration; `TestTranslationClientOwnedToolRounds` verifies a `json_schema` request fails Core eligibility before dispatch. This test does not establish behavior for every format. Tool parameter schemas are separate and do not imply structured response output. |
+| `llm.vision` | No support claim; image input is rejected locally | `unknown` | `TestConnectorLifecycleScopeAndSupport` omits the declaration; `TestTranslateHistoryRejectsUnrepresentableRequests` rejects an image part. This is scoped local behavior, not a provider-wide support claim. |
+| `llm.audio` | Unknown; no support claim | `unknown` | `TestConnectorLifecycleScopeAndSupport` omits the declaration. The cited capability test establishes only that audio is not advertised; it does not establish translation behavior for audio payloads. |
 | `auth.oauth` | Unsupported | `unknown` | Interactive `Authenticate` returns `Supported:false`; this profile uses a runtime-scoped API credential, not OAuth. |
 | `usage.exact` | Unknown | `unknown` | Provider counters are normalized when present; missing counters remain unknown and local estimation is conservative. `TestExecuteUsageCacheCumulativeAndMissing`, `TestExecuteUsageRejectsNegativeAndOverflow`, and `TestTranslationSettlementPersistsProviderUsage` do not establish exact usage for every request/provider response. |
+
+## Compatible-endpoint observations (not production capability evidence)
+
+The versioned M4-040 task-card report records one bounded direct Messages
+text-stream success and one translated gateway text-stream success against
+`https://ai.pestit.pl/v1`, using `cc/claude-sonnet-5-5`. It reports both
+sanitized captures marked `compatible_endpoint` and
+`test_only_model_override: true`; usage was unknown. The gateway test-only seam
+overrode the Connector's pinned model. These observations do not establish
+production model-override support, general endpoint compatibility, entitlement,
+or official Anthropic behavior. See [M4-040 evidence](tasks/M4-040.md#completion-evidence).
+
+The versioned M4-041 task-card report records a compatible-endpoint tool-cycle
+failure classified as `unexpected_tool_name`, with tool class `other`. The
+underlying sanitized capture is local, non-versioned output from the uncommitted
+M4-041 harness, not a versioned artifact. This records only that this local
+attempted case failed at tool extraction. The actual name, usage, subsequent
+behavior, and endpoint-wide tool support remain unknown; this is not evidence
+that all compatible-endpoint tools fail or evidence about official Anthropic
+behavior. Compatible-endpoint tool cycles remain unverified and M4-041 remains
+BLOCKED. See [M4-041 evidence](tasks/M4-041.md#completion-evidence).
 
 The current declaration intentionally contains only `llm.streaming` and
 `llm.tools` in both `Capabilities` and the single configured model result.
@@ -67,7 +89,7 @@ format; malformed formats remain `invalid_request`.
 | `tool_choice` | Optional `auto`, `required`, `none`, or declared named function; mapped explicitly. `none` suppresses tools. | Unsupported shape/name or choice without valid tools: `invalid_request`. |
 | `parallel_tool_calls` | Omitted or boolean. `false` maps to explicit backend disable. `true` requires `llm.tools.parallel` only when non-empty tools are supplied; true without tools is a no-op and does not require that capability. | With tools, true fails Core admission as `unsupported_capability` because parallel support is undeclared. Malformed values or false without tools (unless choice `none`): `invalid_request`. |
 | `reasoning` | Not admitted. | Adapter detects a reasoning requirement and Core returns `unsupported_capability`; reasoning history/content reaching Connector fails `invalid_request`. Provider thinking/redacted blocks fail the stream closed; never flattened to text. |
-| `text.format` (`json_schema`, `json_object`) | Not admitted; requires `llm.structured_output`. | Core returns `unsupported_capability` before Connector/upstream dispatch. Unknown format is Adapter `unsupported_feature`; malformed format is `invalid_request`. |
+| `text.format` (`json_schema`, `json_object`) | Not admitted; requires `llm.structured_output`. | Core returns `unsupported_capability` before Connector/upstream dispatch. `TestTranslationClientOwnedToolRounds` exercises `json_schema`; no separate `json_object` regression is claimed here. Unknown format is Adapter `unsupported_feature`; malformed format is `invalid_request`. |
 | Vision/audio, resource IDs and background/stateful fields | No image/audio mapping, stored response resources, `previous_response_id`, `conversation`, or background execution. | Image/audio capability requirements fail closed when recognized; unsupported resource/state fields fail Adapter or Connector validation (`invalid_request`) before dispatch. |
 | Other top-level fields | No unknown extensions are silently discarded. | Connector rejects unrecognized fields as `invalid_request`. |
 
@@ -101,4 +123,5 @@ named above, and `cmd/gateway/translation_tool_rounds_test.go`
 (`TestTranslationClientOwnedToolRounds`). That gateway test uses a local protected
 fixture/fake Messages server; capability negatives assert 400 and unchanged
 upstream request count. None proves live account entitlement or current wire
-compatibility. M4-036/M4-037 own that separate evidence gate.
+compatibility. Official live evidence remains the separate M4-036 gate;
+M4-037 audits and narrows claims, and does not substitute for that gate.
