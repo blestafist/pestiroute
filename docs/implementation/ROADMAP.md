@@ -45,7 +45,7 @@ Add SQLite schema/migrations, secret storage, accounts, and a CLI for managing v
 
 Implement Anthropic API connector as explicit Responses ↔ Messages transformation. First verify plain text and streaming, then tools, parallel tool calls, multiple tool rounds, tool choice, usage, and supported reasoning behavior. Record supported/unsupported/unknown status and transformation constraints for each feature.
 
-**Done when:** conformance suite confirms claimed capabilities; tool call IDs and tool results are correctly linked across rounds; streaming events have a proper lifecycle. Unsupported fields with significant semantics are rejected with a clear error, not silently lost. No Anthropic model or error code branches appear in Core.
+**Done when (offline milestone gate):** offline conformance confirms claimed capabilities; tool call IDs and tool results are correctly linked across rounds; streaming events have a proper lifecycle. Unsupported fields with significant semantics are rejected with a clear error, not silently lost. No Anthropic model or error code branches appear in Core. Official Anthropic live verification is not an M4 completion prerequisite, but remains mandatory before production release; [M4-036](tasks/M4-036.md) remains BLOCKED until that evidence is captured and reviewed. Compatible-endpoint evidence does not substitute for official verification, and [M4-041](tasks/M4-041.md) remains BLOCKED until its own acceptance is met.
 
 ## M5.1 · Agent Protocol Connectors
 

@@ -27,23 +27,24 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-043 DONE; DEC-008/D18 Proposed awaiting governance decision; M4-036/M4-041 BLOCKED
+## Immediate focus: M4-044 DONE; DEC-008/D18 accepted; offline M4-037/M4-038 eligible; M4-036/M4-041 BLOCKED
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
-cards for Responses ↔ Anthropic Messages translation. Of 43 registered M4 rows in
-[TASKS](TASKS.md), 39 are complete ([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md),
-[M4-039](tasks/M4-039.md), [M4-040](tasks/M4-040.md), [M4-042](tasks/M4-042.md), and [M4-043](tasks/M4-043.md)),
-2 are BLOCKED ([M4-036](tasks/M4-036.md), [M4-041](tasks/M4-041.md)), 2 remain DRAFT
-([M4-037](tasks/M4-037.md), [M4-038](tasks/M4-038.md)), and 0 are ACTIVE or READY (none eligible).
+cards for Responses ↔ Anthropic Messages translation. Of 44 registered M4 rows in
+[TASKS](TASKS.md), 40 are complete ([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md),
+[M4-039](tasks/M4-039.md), [M4-040](tasks/M4-040.md), [M4-042](tasks/M4-042.md), [M4-043](tasks/M4-043.md),
+and [M4-044](tasks/M4-044.md)), 2 are BLOCKED ([M4-036](tasks/M4-036.md), [M4-041](tasks/M4-041.md)),
+2 remain DRAFT ([M4-037](tasks/M4-037.md), [M4-038](tasks/M4-038.md)), and 0 are ACTIVE or READY.
 
-[M4-043](tasks/M4-043.md) is closed DONE (reviewer PASS `ses_ef858002fffemZ5wy7mUWKmBl1`).
-It added DEC-008 and D18 in `docs/project/DECISIONS.md` in strictly Proposed status,
-documenting a proposed narrow deferral of official live Anthropic verification while preserving
-all offline acceptance, deterministic conformance, and future live evidence obligations.
-Official [M4-036](tasks/M4-036.md) remains strictly BLOCKED; [M4-037](tasks/M4-037.md) and
-[M4-038](tasks/M4-038.md) remain DRAFT pending explicit human governance acceptance of DEC-008
-and subsequent separate Planner dependency/status revisions. Exactly zero independent offline
-implementation tasks exist in backlog without gate waiver or premature M5 scope.
+[M4-044](tasks/M4-044.md) is closed DONE (reviewer PASS `ses_ef7d73665ffehMAw63fb7G4G6Q`).
+Human governance authority explicitly accepted the DEC-008/D18 narrow deferral:
+defer official Anthropic verification to allow offline M4 completion (M4-037, M4-038),
+while keeping official M4-036 and compatible M4-041 strictly BLOCKED (no false passes),
+and retaining official live verification as a mandatory pre-production release gate.
+`DECISIONS.md` records accepted DEC-008/D18; `ROADMAP.md` aligns M4 offline gate criteria;
+`TASKS.md` updates M4-037 dependencies to (M4-044, M4-032, M4-035); Core runtime behavior,
+`CONTRACT.md`, and production code remain unchanged. M4-037/M4-038 remain DRAFT pending
+next-task promotion after commit verification.
 
 [M4-041](tasks/M4-041.md) is settled as BLOCKED. Its authorized live batch stopped after
 one direct Messages request: actual HTTP 200, turn 1, terminal `tool_use`, safe tool class `other`,
