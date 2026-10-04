@@ -36,7 +36,7 @@ func TestTranslationSettlementPersistsProviderUsage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"cache_read_input_tokens\":2,\"cache_creation_input_tokens\":3}}}\n\n")
+				_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"cache_read_input_tokens\":2,\"cache_creation_input_tokens\":3,\"reasoning_tokens\":99}}}\n\n")
 				_, _ = io.WriteString(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{"+tc.blockStart+"}}\n\n")
 				_, _ = io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{"+tc.blockDelta+"}}\n\n")
 				_, _ = io.WriteString(w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
@@ -66,7 +66,7 @@ func TestTranslationSettlementPersistsProviderUsage(t *testing.T) {
 				t.Fatalf("translated ledger rows=%+v err=%v", rows, err)
 			}
 			row := rows[0].Attempts[0]
-			if row.Attempt.State != tc.wantState || row.Usage == nil || row.Usage.InputTokens == nil || *row.Usage.InputTokens != 10 || row.Usage.OutputTokens == nil || *row.Usage.OutputTokens != 4 || row.Usage.CachedTokens == nil || *row.Usage.CachedTokens != 2 || row.Usage.Completeness != tc.completeness || row.Reservation.State != "settled" || row.Reservation.ActualTokens == nil || *row.Reservation.ActualTokens != 14 || row.Reservation.EffectiveCharge != 14 {
+			if row.Attempt.State != tc.wantState || row.Usage == nil || row.Usage.InputTokens == nil || *row.Usage.InputTokens != 10 || row.Usage.OutputTokens == nil || *row.Usage.OutputTokens != 4 || row.Usage.ReasoningTokens != nil || row.Usage.CachedTokens == nil || *row.Usage.CachedTokens != 2 || row.Usage.Completeness != tc.completeness || row.Reservation.State != "settled" || row.Reservation.ActualTokens == nil || *row.Reservation.ActualTokens != 14 || row.Reservation.EffectiveCharge != 14 {
 				t.Fatalf("translated durable settlement=%+v", row)
 			}
 		})

@@ -67,7 +67,7 @@ func TestTranslationClientOwnedToolRounds(t *testing.T) {
 	var upstreamCount atomic.Int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		turn := int(upstreamCount.Add(1)) - 1
-		if turn >= len(releases) {
+		if turn > len(releases) {
 			t.Errorf("unexpected upstream request %d", turn+1)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -85,6 +85,10 @@ func TestTranslationClientOwnedToolRounds(t *testing.T) {
 		requestsMu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n")
+		if turn == len(releases) {
+			_, _ = io.WriteString(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"private\",\"signature\":\"private-signature\"}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call-never-delivered\",\"name\":\"weather\"}}\n\n")
+			return
+		}
 		if turn == 2 {
 			_, _ = io.WriteString(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"All done.\"}}\n\n")
 		} else {
@@ -199,24 +203,106 @@ func TestTranslationClientOwnedToolRounds(t *testing.T) {
 				t.Fatalf("final completion snapshot=%v", completed["output"])
 			}
 		}
+		if turn == 0 {
+			// Reasoning attempts in client-owned tool history are rejected before dispatch.
+			for name, invalidInput := range map[string]string{
+				"item":             strings.TrimSuffix(string(input), "]") + `,{"type":"reasoning","id":"rs_private","encrypted_content":"private"}]`,
+				"thinking content": strings.TrimSuffix(string(input), "]") + `,{"type":"message","role":"assistant","content":[{"type":"thinking","thinking":"private","signature":"private-signature"}]}]`,
+				"redacted content": strings.TrimSuffix(string(input), "]") + `,{"type":"message","role":"assistant","content":[{"type":"redacted_thinking","data":"private-signature"}]}]`,
+			} {
+				invalidBody := fmt.Sprintf(`{"model":"client-model","stream":true,"input":%s,"tools":[{"type":"function","name":"weather","parameters":{"type":"object"}},{"type":"function","name":"clock","parameters":{"type":"object"}}]}`, invalidInput)
+				req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(invalidBody))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Authorization", "Bearer "+issued.Secret)
+				req.Header.Set("Content-Type", "application/json")
+				bad, err := client.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, _ := io.ReadAll(bad.Body)
+				_ = bad.Body.Close()
+				if bad.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), `"code":"invalid_request"`) || upstreamCount.Load() != int32(turn+1) {
+					t.Fatalf("%s reasoning rejection status=%d upstream=%d body=%s", name, bad.StatusCode, upstreamCount.Load(), body)
+				}
+			}
+		}
 	}
-	if got := upstreamCount.Load(); got != 3 {
-		t.Fatalf("upstream requests=%d, want one per turn (3)", got)
+	// The generic Adapter capability gate sees top-level reasoning before the
+	// Connector can apply its profile-specific invalid_request policy.
+	controlInput, err := json.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlBody := fmt.Sprintf(`{"model":"client-model","stream":true,"input":%s,"reasoning":{"effort":"high"}}`, controlInput)
+	req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(controlBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+issued.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	controlResponse, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlError, _ := io.ReadAll(controlResponse.Body)
+	_ = controlResponse.Body.Close()
+	if controlResponse.StatusCode != http.StatusBadRequest || !strings.Contains(string(controlError), `"code":"unsupported_capability"`) || upstreamCount.Load() != 3 {
+		t.Fatalf("reasoning control must be blocked before dispatch (existing capability gate): status=%d upstream=%d body=%s", controlResponse.StatusCode, upstreamCount.Load(), controlError)
+	}
+	// Provider thinking before tool_use must fail in-band without exposing a call.
+	input, err := json.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"model":"client-model","stream":true,"input":%s,"tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}]}`, input)
+	req, err = http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+issued.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		t.Fatalf("provider reasoning status=%d body=%s", response.StatusCode, data)
+	}
+	var failure strings.Builder
+	scanner := bufio.NewScanner(response.Body)
+	for scanner.Scan() {
+		if strings.HasPrefix(scanner.Text(), "data: ") {
+			failure.WriteString(strings.TrimPrefix(scanner.Text(), "data: "))
+		}
+	}
+	_ = response.Body.Close()
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(failure.String(), `"type":"response.failed"`) || strings.Contains(failure.String(), "response.completed") || strings.Contains(failure.String(), "response.output_item.added") || strings.Contains(failure.String(), "call-never-delivered") {
+		t.Fatalf("provider reasoning did not fail closed: %s", failure.String())
+	}
+	if got := upstreamCount.Load(); got != 4 {
+		t.Fatalf("upstream requests=%d, want three rounds plus one rejected provider stream (4)", got)
 	}
 	if len(allCalls) != 3 || allCalls[0]["call_id"] != "call-weather-1" || allCalls[1]["call_id"] != "call-weather-2" || allCalls[2]["call_id"] != "call-clock-2" {
 		t.Fatalf("client calls=%v", allCalls)
 	}
 	requestsMu.Lock()
 	defer requestsMu.Unlock()
-	if len(requests) != 3 {
-		t.Fatalf("captured upstream requests=%d, want 3", len(requests))
+	if len(requests) != 4 {
+		t.Fatalf("captured upstream requests=%d, want 4", len(requests))
 	}
 	wantMessages := [][]any{
 		{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "Help me check the weather and time."}}}},
 		{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "Help me check the weather and time."}}}, map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "call-weather-1", "name": "weather", "input": map[string]any{"city": "Paris"}}}}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call-weather-1", "content": "client result for weather"}}}},
 		{map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "Help me check the weather and time."}}}, map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "call-weather-1", "name": "weather", "input": map[string]any{"city": "Paris"}}}}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call-weather-1", "content": "client result for weather"}}}, map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "call-weather-2", "name": "weather", "input": map[string]any{"city": "Paris"}}, map[string]any{"type": "tool_use", "id": "call-clock-2", "name": "clock", "input": map[string]any{"zone": "UTC"}}}}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call-weather-2", "content": "client result for weather"}, map[string]any{"type": "tool_result", "tool_use_id": "call-clock-2", "content": "client result for clock"}}}},
 	}
-	for i := range requests {
+	for i := range wantMessages {
 		if !reflect.DeepEqual(requests[i]["messages"], wantMessages[i]) {
 			t.Errorf("turn %d translated messages=%#v, want %#v", i+1, requests[i]["messages"], wantMessages[i])
 		}

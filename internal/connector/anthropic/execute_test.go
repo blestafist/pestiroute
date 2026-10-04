@@ -416,6 +416,41 @@ func TestReasoningProviderBlocksFailClosed(t *testing.T) {
 	}
 }
 
+func TestStreamThinkingBlocksFailClosedBeforeFollowingTool(t *testing.T) {
+	for _, block := range []string{"thinking", "redacted_thinking"} {
+		t.Run(block, func(t *testing.T) {
+			body := "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":9,\"cache_read_input_tokens\":2,\"cache_creation_input_tokens\":0}}}\n\n" +
+				"event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"" + block + "\"}}\n\n" +
+				"event: content_block_start\ndata: {\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_private\",\"name\":\"lookup\"}}\n\n"
+			stream := newMessagesStream(context.Background(), func() {}, io.NopCloser(strings.NewReader(body)))
+			defer stream.Close()
+			if frame, err := stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+				t.Fatalf("Head=%+v err=%v", frame, err)
+			}
+			var output strings.Builder
+			for {
+				frame, err := stream.Next(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if frame.Type == core.FrameBody {
+					output.Write(frame.Body.Data)
+				}
+				if frame.Type == core.FrameComplete {
+					if frame.Complete.Outcome != core.OutcomeFailed || frame.Complete.Usage.ReasoningTokens != nil || frame.Complete.Usage.InputTokens == nil || *frame.Complete.Usage.InputTokens != 11 || frame.Complete.Usage.CachedTokens == nil || *frame.Complete.Usage.CachedTokens != 2 {
+						t.Fatalf("Complete=%+v", frame.Complete)
+					}
+					break
+				}
+			}
+			wire := output.String()
+			if strings.Count(wire, `"type":"response.failed"`) != 1 || strings.Contains(wire, `"type":"response.completed"`) || strings.Contains(wire, `"type":"response.output_item.added"`) || strings.Contains(wire, `"type":"response.output_text.delta"`) || strings.Contains(wire, "call_private") {
+				t.Fatalf("unexpected output for unsupported block: %s", wire)
+			}
+		})
+	}
+}
+
 func TestReasoningDeltasOnTextAndToolBlocksFailClosed(t *testing.T) {
 	for _, block := range []string{"text", "tool_use"} {
 		for _, delta := range []struct{ kind, field, marker string }{
@@ -781,7 +816,7 @@ func TestExecuteUsageCacheCumulativeAndMissing(t *testing.T) {
 		name, start, deltas   string
 		input, output, cached *int64
 	}{
-		{name: "cache and cumulative", start: `{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":3}`, deltas: `{"output_tokens":7}`, input: new(int64(15)), output: new(int64(7)), cached: new(int64(2))},
+		{name: "cache and cumulative", start: `{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"reasoning_tokens":99}`, deltas: `{"output_tokens":7}`, input: new(int64(15)), output: new(int64(7)), cached: new(int64(2))},
 		{name: "zero and missing", start: `{"input_tokens":0,"cache_read_input_tokens":0}`, deltas: `{"output_tokens":0}`, output: new(int64(0)), cached: new(int64(0))},
 		{name: "all missing", start: `{}`, deltas: `{}`},
 	} {
@@ -811,7 +846,7 @@ func TestExecuteUsageCacheCumulativeAndMissing(t *testing.T) {
 			check("input", usage.InputTokens, tc.input)
 			check("output", usage.OutputTokens, tc.output)
 			check("cached", usage.CachedTokens, tc.cached)
-			if usage.Completeness != core.UsageComplete {
+			if usage.Completeness != core.UsageComplete || usage.ReasoningTokens != nil {
 				t.Fatalf("usage completeness = %q", usage.Completeness)
 			}
 			wantSource := core.UsageProvider
