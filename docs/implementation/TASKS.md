@@ -248,17 +248,13 @@ This table maps outcomes, not test results. M3-046 may close the milestone only 
 
 ## M4 — First Translation Connector
 
-These 42 bounded cards implement the original [M4 outcome](ROADMAP.md#m4--first-translation-connector):
+M4 contains 45 bounded cards for the original [M4 outcome](ROADMAP.md#m4--first-translation-connector):
 explicit Responses ↔ Anthropic Messages translation. Roadmap order is unchanged;
-Codex remains M5.1. The [planning brief](M4-TRANSLATION.md) maps the merged M3
-baseline to the work and links official protocol sources.
-
-**Assign one READY card per worker session, never the milestone or a dependency
-chain.** Only M4-001 is initially READY. All other cards remain DRAFT until the
-Planner reviews actual prerequisite results, resolves relevant decisions and
-records concrete package/test commands. Dependencies are not additional scope.
-Expected new package/file names are candidates, not claims of existing code.
-No account login is needed for local development; M4-036 is a separate live gate.
+Codex remains M5.1. The [binding brief](M4-TRANSLATION.md) links the merged M3
+baseline and protocol sources. M4-045 records the final assembled-branch review.
+The offline milestone is accepted under DEC-008/D18; M4-036 remains the official
+pre-production live gate and M4-041 retains unmet compatible-endpoint live acceptance.
+The M4-041 harness is committed in `9035e18` and can be verified offline.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -306,3 +302,4 @@ No account login is needed for local development; M4-036 is a separate live gate
 | [M4-042](tasks/M4-042.md) | DONE | GPT-6 Luna (M4-042 worker) / reviewer (ses_ef86e976dffeCKffbOPQ5xzGG8) | M4-035, M4-040 | Plan official Anthropic smoke deferment and downstream execution options | Documented verified text streaming vs unsupported/unknown 9router tools; evaluated freeze (Option A) vs Proposed narrow deferment ADR (Option B); confirmed 0 eligible executable tasks without decision authority; M4-036/M4-041 remain BLOCKED; 38 tasks DONE in M4 | [Direct proof](tasks/M4-042.md#verification) |
 | [M4-043](tasks/M4-043.md) | DONE | OpenCode subagent (M4-043 worker) / reviewer (ses_ef858002fffemZ5wy7mUWKmBl1) | M4-042 | Author Proposed ADR for narrow official verification deferment | DEC-008/D18 added as Proposed; preserves offline conformance and future live evidence obligation; official M4-036/M4-041 remain BLOCKED; M4-037/M4-038 remain DRAFT; human acceptance required; 39 tasks DONE in M4 | [Direct proof](tasks/M4-043.md#verification), `./scripts/check.sh`, `git diff --check`; [evidence](tasks/M4-043.md#completion-evidence) |
 | [M4-044](tasks/M4-044.md) | DONE | GPT-6 Luna (M4-044 worker) / reviewer (ses_ef7d73665ffehMAw63fb7G4G6Q) | M4-043 | Record accepted DEC-008/D18 and synchronize specifications and roadmap gates | DEC-008/D18 accepted; offline M4 gate and pre-production official verification synchronized; M4-037 dependency updated to M4-044, M4-032, M4-035; M4-037/M4-038 remain DRAFT; M4-036/M4-041 remain BLOCKED; 40 tasks DONE in M4 | [Direct proof](tasks/M4-044.md#verification), `./scripts/check.sh`, `git diff --check`; [evidence](tasks/M4-044.md#completion-evidence) |
+| [M4-045](tasks/M4-045.md) | DONE | Codex | M4-038 | Review committed M4 code and compatible harness, fix translation defects, and prepare PR handoff | Mixed text/tool lifecycle, argument validation/truncation, missing/null results, SSE metadata/error shape and initial usage fixed; committed harness and offline operations verified; M5.1 handoff prepared | `./scripts/check.sh`; [evidence](tasks/M4-045.md#completion-evidence) |

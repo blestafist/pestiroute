@@ -524,7 +524,7 @@ func TestToolStreamRejectsDuplicateIDsAndOutOfOrderBlocks(t *testing.T) {
 	bounded, _ := newResponsesEmitter()
 	_, _ = bounded.StartResponse()
 	_, _ = bounded.StartTool("call_a", "a")
-	if _, err := bounded.ToolDelta(strings.Repeat("x", maxRetainedText-1)); err != nil {
+	if _, err := bounded.ToolDelta(`{"x":"` + strings.Repeat("x", maxRetainedText-9) + `"}`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := bounded.FinishTool(); err != nil {

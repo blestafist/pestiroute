@@ -51,8 +51,8 @@ or official Anthropic behavior. See [M4-040 evidence](tasks/M4-040.md#completion
 
 The versioned M4-041 task-card report records a compatible-endpoint tool-cycle
 failure classified as `unexpected_tool_name`, with tool class `other`. The
-underlying sanitized capture is local, non-versioned output from the uncommitted
-M4-041 harness, not a versioned artifact. This records only that this local
+underlying sanitized capture is local, non-versioned output; the harness was
+subsequently committed in `9035e18`, but the capture is not a versioned artifact. This records only that this local
 attempted case failed at tool extraction. The actual name, usage, subsequent
 behavior, and endpoint-wide tool support remain unknown; this is not evidence
 that all compatible-endpoint tools fail or evidence about official Anthropic
@@ -96,7 +96,13 @@ format; malformed formats remain `invalid_request`.
 ## Response and usage behavior
 
 Locally tested text and function streams preserve incremental order and emit
-Responses lifecycle snapshots with distinct response/item/call identities.
+Responses lifecycle snapshots with distinct response/item/call identities,
+monotonic sequence numbers and text content indexes. Mixed text/tool blocks
+retain ordered output items. Tool arguments must close as an unambiguous JSON
+object before a completed tool item is emitted; `max_tokens` yields an incomplete
+tool item and response. Missing client-owned results are rejected before dispatch.
+Committed failures carry sanitized error details in `response.error`.
+[M4-045](tasks/M4-045.md) records the assembled-branch review and regressions.
 Normal completion requires valid Messages stop markers. `max_tokens` is
 incomplete, not successful; malformed/missing terminal events, unknown semantic
 blocks, and provider thinking fail rather than becoming successful text.
@@ -125,3 +131,8 @@ fixture/fake Messages server; capability negatives assert 400 and unchanged
 upstream request count. None proves live account entitlement or current wire
 compatibility. Official live evidence remains the separate M4-036 gate;
 M4-037 audits and narrows claims, and does not substitute for that gate.
+
+The final branch review also verifies real-socket early delivery and exactly-once
+durable settlement for mixed text/tool output in
+`TestTranslationReviewMixedStreamFlushAndSettlement`, plus malformed argument,
+truncation, initial usage and event-shape regressions in `TestM4Review*`.

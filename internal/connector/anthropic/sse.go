@@ -142,6 +142,9 @@ func (s *messagesSSEReader) endEvent() (messagesSSEEvent, error) {
 	var payload struct {
 		Type string `json:"type"`
 	}
+	if !uniqueJSONValue(s.data) {
+		return messagesSSEEvent{}, errors.New("malformed or ambiguous Anthropic SSE data")
+	}
 	if err := json.Unmarshal(s.data, &payload); err != nil {
 		return messagesSSEEvent{}, fmt.Errorf("malformed Anthropic SSE data: %w", err)
 	}

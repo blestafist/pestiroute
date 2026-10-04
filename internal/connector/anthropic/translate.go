@@ -257,6 +257,9 @@ func translateRequest(body []byte) (messagesRequest, *core.GatewayError) {
 	if len(out.Messages) == 0 {
 		return messagesRequest{}, invalidTranslation("At least one user or assistant message is required")
 	}
+	if len(pendingCallIDs) != 0 {
+		return messagesRequest{}, invalidTranslation("Every function call requires a result")
+	}
 	return out, nil
 }
 
@@ -314,7 +317,7 @@ func translateFunctionHistoryItem(raw json.RawMessage, kind string, callIDs, pen
 		return textBlock{}, "", fmt.Errorf("invalid function output item id")
 	}
 	if json.Unmarshal(item["call_id"], &callID) != nil || callID == "" ||
-		json.Unmarshal(item["output"], &output) != nil {
+		json.Unmarshal(item["output"], &output) != nil || string(item["output"]) == "null" {
 		return textBlock{}, "", fmt.Errorf("invalid function output")
 	}
 	if id != "" && id == callID {

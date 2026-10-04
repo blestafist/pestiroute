@@ -92,3 +92,26 @@ and the pinned OpenCode v2.0.6 source/test baseline above. Provider docs are
 mutable references; live compatibility and current entitlement are unverified.
 
 Later cards must use this binding as the baseline. Tool-call/result history and streamed tool calls remain unresolved and are not part of this request-control mapping. The unsupported reasoning policy above is binding. No live API entitlement, provider behavior, account availability, or PestiRoute compatibility is claimed.
+
+## Assembled-branch stream corrections
+
+[M4-045](tasks/M4-045.md) verifies ordered mixed text/tool output and repeated
+text blocks. Each block has its own Responses item ID and output index; text
+parts use content index 0, and all emitted events have monotonic sequence numbers.
+Provider text present in a block-start event is forwarded incrementally. Nonempty
+initial tool input is rejected because this pinned streaming profile starts with
+an empty object and receives argument JSON through deltas. Ambiguous duplicate
+JSON fields and missing block indexes/text deltas fail closed.
+
+Tool closure waits for the next block or the terminal stop reason, so a truncated
+last tool can remain incomplete. Otherwise the assembled arguments must be an
+object without duplicate keys before any completed function item is emitted.
+No argument deltas means the initial empty object. Client-owned history requires
+a result for every call. Initial provider output usage is retained on interruption.
+Sanitized stream failures use the Responses `response.error` field. These are
+Connector-local protocol repairs; the v1 Core boundary is unchanged.
+
+Event fields were checked against the official
+[Responses streaming reference](https://developers.openai.com/api/reference/resources/responses/streaming-events)
+and [Messages streaming reference](https://platform.claude.com/docs/en/build-with-claude/streaming)
+on 2026-10-04. Deterministic fixtures remain separate from live compatibility.

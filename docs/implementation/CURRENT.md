@@ -27,60 +27,48 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4 offline milestone COMPLETE under accepted DEC-008/D18; handoff to M5.1 research
+## Immediate focus: M4 offline gate verified; PR handoff to M5.1 research
 
-The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
-cards for Responses ↔ Anthropic Messages translation. Of 44 registered M4 rows in
-[TASKS](TASKS.md), 42 are complete ([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md),
-[M4-037](tasks/M4-037.md) through [M4-040](tasks/M4-040.md), and [M4-042](tasks/M4-042.md) through
-[M4-044](tasks/M4-044.md)), 2 are BLOCKED ([M4-036](tasks/M4-036.md), [M4-041](tasks/M4-041.md)),
-0 remain DRAFT, 0 are ACTIVE, and 0 are READY.
+M4 implements explicit Responses ↔ Anthropic Messages translation under the
+accepted [DEC-008/D18](../project/DECISIONS.md#dec-008--accepted-narrow-deferral-of-official-anthropic-verification)
+offline milestone gate. [M4-038](tasks/M4-038.md) audited the earlier committed
+baseline; [M4-045](tasks/M4-045.md) reviews the assembled branch and fixes mixed
+text/tool output, tool argument validation, truncation, SSE metadata and missing
+function results. Core remains protocol-neutral and native bodies remain opaque. The registry has
+45 M4 cards: 43 DONE, 2 BLOCKED, and no pending offline implementation.
 
-[M4-038](tasks/M4-038.md) is closed DONE with reviewer explicit PASS `ses_ef7c003eaffeNmXuKoJsAITFUV`.
-Offline M4 milestone acceptance is fully verified: offline conformance, Core protocol
-neutrality, native byte preservation, SSE stream lifecycle, and fail-closed translation
-without silent semantic loss.
+The compatible-endpoint harness is committed in `9035e18`, including all five
+files previously left in the local worktree. Its deterministic TLS/HTTP2 tests
+cover client-owned tool rounds, replay, cancellation and durable settlement.
+Those tests do not satisfy either live gate:
 
-Official Anthropic live verification ([M4-036](tasks/M4-036.md)) remains deferred per
-accepted DEC-008/D18 and retained strictly BLOCKED as a mandatory pre-production release gate.
-No tool cycles passed, compatible endpoint tools remain unknown, and [M4-041](tasks/M4-041.md)
-remains BLOCKED. The 5 uncommitted M4-041 harness files are preserved in the working tree.
-The custom endpoint model (`cc/claude-sonnet-5-5`) is strictly a test-only override, not a
-production custom model.
+- [M4-036](tasks/M4-036.md): official Anthropic capture remains BLOCKED and is
+  mandatory before production release under DEC-008/D18.
+- [M4-041](tasks/M4-041.md): compatible-endpoint tool cycles remain BLOCKED.
+  The prior live batch stopped on its first direct request with HTTP 200,
+  `unexpected_tool_name`, one dispatch and zero retries. Later rounds and
+  cancellation were unrun. The task card preserves the historical report;
+  its local temporary failure artifact is not included in the repository.
 
-The autonomous finite offline batch is complete. Next step is bounded M5.1 Codex translation
-research and scoping only; no M5 tasks or code are implemented.
+Production targets direct Anthropic with the pinned backend model. The
+`cc/claude-sonnet-5-5` compatible model and endpoint override remain test-only.
+Live parallel tools, reasoning, OAuth and remote compute cancellation have no
+support claim. No live inference is part of the final branch review.
 
-[M4-041](tasks/M4-041.md) is settled as BLOCKED. Its authorized live batch stopped after
-one direct Messages request: actual HTTP 200, turn 1, terminal `tool_use`, safe tool class `other`,
-category `unexpected_tool_name`, one dispatch, zero retries. Live tool cycles acceptance is
-unmet; that attempted cycle failed, while endpoint-wide tool behavior remains unknown; no further live retry or
-model credits will be spent. Sanitized failure evidence is preserved locally in non-repo/non-versioned
-`/tmp/opencode/m4-041-batch.PTHIKQ/partial-failure.json` and credentials were deleted.
-All M4-041 test harness, mock, script, and doc extensions remain pending in the uncommitted
-working tree and are not part of any delivered task or committed branch; M4-041 is not DONE.
-Official [M4-036](tasks/M4-036.md) remains strictly BLOCKED with no waiver.
-
-Assign one READY card per worker. Refresh dependent DRAFTs against actual results
-before promotion; do not implement their dependencies in one session. Local
-fixtures and existing M3 services support development without real credentials.
-Live capture is a separate later gate. [Tooling](TOOLING.md#m4-tooling-gate) retains
-Context7, gopls and existing shell/Git checks without a new MCP installation.
-
-Immediate M5.1 planning focus is Codex translation research and scoping; no M5.1
-implementation is included in this handoff. Roadmap order remains unchanged:
-Anthropic in M4, Codex in M5.1. Reuse registry,
-scoped services, authorization/admission/accounting and dispatch. The existing
-generic translation mode is composed without provider branches in Core; request
-transformation, provider SSE/errors and token normalization remain Connector-owned.
+After the PR, the next planning boundary is M5.1 Codex translation research and
+scoping; no M5 implementation is included. Reuse registry, scoped services,
+authorization, admission, accounting and dispatch. Request translation, provider
+SSE/errors and token normalization remain Connector-owned. Keep the existing
+Context7, gopls, shell and Git tool configuration; see [Tooling](TOOLING.md#m4-tooling-gate).
 
 ## Available checks
 
-`./scripts/check.sh` passes formatting, vet, unit/race tests and offline build.
-The final audit also passed uncached race-enabled conformance and gateway/Core/
-SQLite suites, ten repeated focused accounting/access/auth races, and SQLite
-checks with CGO disabled. Mandatory conformance has no skips; only two optional
-parallel-tools scenarios skip. Exact commands and evidence are in [M3-046](tasks/M3-046.md).
+[M4-045](tasks/M4-045.md) records the final review on `9035e18` plus the
+review fixes. `./scripts/check.sh` passes formatting, vet, unit/race tests and
+offline build. The uncached Anthropic/gateway/conformance race suites, ten
+repeated new regressions, pure-Go tests/build, compatible TLS/HTTP2 harness,
+artifact validator, shell syntax, and Markdown link/dependency audit also pass.
+Hosted PR CI is reported separately in GitHub.
 
 [LOCAL-M4](LOCAL-M4.md) passes offline dual native/translation protected provisioning,
 native loopback dispatch, local translation validation/rejections, rate limiting,
