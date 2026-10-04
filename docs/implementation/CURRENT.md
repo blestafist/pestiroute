@@ -27,24 +27,26 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-035 DONE (awaiting verified commit; batch 17/19 DONE)
+## Immediate focus: M4-039 DONE; M4-036 remains BLOCKED on live credentials
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
-[38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. All 34 predecessor tasks ([M4-001](tasks/M4-001.md)
-through [M4-034](tasks/M4-034.md)) are committed through `5b17760`. Batch progress:
-17 of 19 objective DONE (total 35 DONE; 3 remaining in M4; 2 remaining in batch).
+cards for Responses ↔ Anthropic Messages translation. All 35 predecessor tasks
+([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md)) are committed through `e517f27`.
 
-[M4-035](tasks/M4-035.md) (Prepare bounded direct-versus-gateway smoke capture)
-acceptance is reviewed and closed DONE (reviewer PASS `ses_efb74802bffemwvER6Jm0YGNth`).
-The reproducible offline procedure in [SMOKE-M4](SMOKE-M4.md) and its validator
-harness (`scripts/smoke-m4-artifacts.py`) establish pinned direct Messages and
-protected Responses-to-Messages translation legs, five matched comparison scenarios,
-strict request/time/token caps, credential redaction rules, and loopback fake artifact
-generation. Deliberate over-cap and credential-leak fixtures fail closed. Zero live
-credentials or external network requests used. 35 tasks are DONE in the registry;
-implementation is preserved. Per policy, no next card is prepared or promoted until
-the M4-035 commit is cleanly created and verified.
+[M4-039](tasks/M4-039.md) acceptance is reviewed and closed DONE (reviewer PASS
+`ses_ef9adb40bffewJPdhJu9krH6s8`). Production `NewTransport` strictly retains the official
+`https://api.anthropic.com/v1/messages` default without reading environment variables.
+An internal test seam with test-only resolution in `transport_test.go` normalizes base URLs
+(e.g. `https://ai.pestit.pl/v1` to `/v1/messages`), validates schemas, enforces literal
+loopback for HTTP, and preserves redirect/proxy security restrictions. [SMOKE-M4](SMOKE-M4.md)
+and its artifact validator enforce `endpoint_profile` partitioning (`offline_fixture`,
+`official_anthropic`, `compatible_endpoint`), guaranteeing compatible captures never satisfy
+or close pinned direct-Anthropic [M4-036](tasks/M4-036.md). 36 tasks are DONE in M4.
+
+[M4-036](tasks/M4-036.md) remains BLOCKED pending explicit live Anthropic credentials
+(`ANTHROPIC_API_KEY`), live spend limits, and external network authorization for `api.anthropic.com`.
+Any live testing against third-party compatible endpoints likewise remains gated on credential
+and spend authorization. Downstream tasks [M4-037](tasks/M4-037.md) and [M4-038](tasks/M4-038.md) remain DRAFT.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

@@ -332,7 +332,7 @@ func TestTranslationClientOwnedToolRounds(t *testing.T) {
 		}
 		sourceHash := sha256.Sum256(source)
 		artifact := map[string]any{
-			"schema_version": 1, "leg": "gateway_responses_to_messages",
+			"schema_version": 1, "leg": "gateway_responses_to_messages", "endpoint_profile": "offline_fixture",
 			"captured_at_utc": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 			"source_revision": hex.EncodeToString(sourceHash[:]),
 			"client":          map[string]string{"name": "Go http.Client", "version": runtime.Version()},

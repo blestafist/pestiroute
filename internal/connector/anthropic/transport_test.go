@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"path"
 	"strings"
 	"testing"
 
@@ -24,7 +28,45 @@ type doerFunc func(*http.Request) (*http.Response, error)
 
 func (f doerFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
 
+func testTransportWithBaseURL(base string) *Transport {
+	endpoint, err := testMessagesEndpointForBase(base)
+	return newTransport(endpoint, err)
+}
+
+func testMessagesEndpointForBase(base string) (string, error) {
+	if base == "" {
+		return messagesEndpoint, nil
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(base, "#") || u.Opaque != "" {
+		return "", errors.New("invalid ANTHROPIC_BASE_URL")
+	}
+	ip := net.ParseIP(u.Hostname())
+	if u.Scheme != "https" && !(u.Scheme == "http" && ip != nil && ip.IsLoopback()) {
+		return "", errors.New("invalid ANTHROPIC_BASE_URL")
+	}
+	p := strings.TrimSuffix(u.EscapedPath(), "/")
+	if strings.Contains(p, "%") || (p != "" && path.Clean(p) != p) || strings.Contains(p, "..") {
+		return "", errors.New("invalid ANTHROPIC_BASE_URL")
+	}
+	switch p {
+	case "", "/":
+		u.Path = "/v1/messages"
+	case "/v1":
+		u.Path = "/v1/messages"
+	case "/messages":
+		u.Path = "/messages"
+	case "/v1/messages":
+		u.Path = "/v1/messages"
+	default:
+		return "", errors.New("invalid ANTHROPIC_BASE_URL")
+	}
+	u.RawPath = ""
+	return u.String(), nil
+}
+
 func TestTransportRequestHeadersAndCredentialScope(t *testing.T) {
+	t.Setenv("ANTHROPIC_BASE_URL", "")
 	transport := NewTransport()
 	defer transport.Close()
 	if !transport.transport.DisableCompression || transport.transport.ForceAttemptHTTP2 || transport.client.CheckRedirect == nil {
@@ -69,6 +111,46 @@ func TestTransportRequestHeadersAndCredentialScope(t *testing.T) {
 			t.Fatalf("Do: response=%v error=%v", resp, err)
 		}
 		resp.Body.Close()
+	}
+}
+
+func TestTransportBaseURLNormalizationAndValidation(t *testing.T) {
+	for _, test := range []struct{ base, want string }{
+		{"https://ai.pestit.pl/v1", "https://ai.pestit.pl/v1/messages"},
+		{"https://ai.pestit.pl", "https://ai.pestit.pl/v1/messages"},
+		{"https://ai.pestit.pl/messages", "https://ai.pestit.pl/messages"},
+		{"http://127.0.0.1:8123/v1", "http://127.0.0.1:8123/v1/messages"},
+		{"http://[::1]:8123/v1", "http://[::1]:8123/v1/messages"},
+	} {
+		got, err := testMessagesEndpointForBase(test.base)
+		if err != nil || got != test.want {
+			t.Errorf("testMessagesEndpointForBase(%q) = %q, %v; want %q", test.base, got, err, test.want)
+		}
+	}
+	for _, base := range []string{
+		"http://example.com/v1", "http://localhost:8123/v1", "https://user:pass@example.com/v1", "https://example.com/v1/../other",
+		"https://example.com/v1?redirect=1", "https://example.com/v1?", "https://example.com/v1#", "https://example.com/v2",
+	} {
+		if _, err := testMessagesEndpointForBase(base); err == nil {
+			t.Errorf("testMessagesEndpointForBase(%q) accepted unsafe/unsupported URL", base)
+		}
+	}
+	t.Setenv("ANTHROPIC_BASE_URL", "https://ai.pestit.pl/v1")
+	transport := testTransportWithBaseURL(os.Getenv("ANTHROPIC_BASE_URL"))
+	defer transport.Close()
+	req, err := transport.Request(context.Background(), core.ExecutionRequest{}, "synthetic-key")
+	if err != nil || req.URL.String() != "https://ai.pestit.pl/v1/messages" {
+		t.Fatalf("configured request target = %v, %v", req, err)
+	}
+}
+
+func TestNewTransportIgnoresEnvironmentBaseURL(t *testing.T) {
+	t.Setenv("ANTHROPIC_BASE_URL", "https://ai.pestit.pl/v1")
+	transport := NewTransport()
+	defer transport.Close()
+	req, err := transport.Request(context.Background(), core.ExecutionRequest{}, "synthetic-key")
+	if err != nil || req.URL.String() != messagesEndpoint {
+		t.Fatalf("production transport target = %v, %v; want official default", req, err)
 	}
 }
 

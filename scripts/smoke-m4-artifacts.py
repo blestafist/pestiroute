@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCENARIOS = {"plain_text", "single_tool", "two_calls", "two_rounds", "reasoning_rejection"}
-ROOT_KEYS = {"schema_version", "leg", "captured_at_utc", "source_revision", "client",
+ROOT_KEYS = {"schema_version", "leg", "endpoint_profile", "captured_at_utc", "source_revision", "client",
              "gateway", "provider", "scenario", "fixture_id", "backend_model", "limits",
              "requests", "outcome", "observations"}
 BAD_KEY = re.compile(r"authorization|cookie|x-api-key|api.?key|secret|credential|prompt|arguments|body", re.I)
@@ -32,6 +32,7 @@ def load(path, expected_leg):
     require(type(data) is dict and set(data) == ROOT_KEYS, "artifact has missing or extra top-level fields")
     require(data["schema_version"] == 1, "schema_version must be 1")
     require(data["leg"] == expected_leg, f"leg must be {expected_leg}")
+    require(data["endpoint_profile"] in {"offline_fixture", "official_anthropic", "compatible_endpoint"}, "unknown endpoint profile")
     require(isinstance(data["captured_at_utc"], str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", data["captured_at_utc"]), "captured_at_utc must be RFC3339 UTC")
     datetime.strptime(data["captured_at_utc"], "%Y-%m-%dT%H:%M:%SZ")
     require(isinstance(data["source_revision"], str) and re.fullmatch(r"(?:[a-fA-F0-9]{7,64}|offline-fixture-revision)", data["source_revision"]), "source_revision must be a git hash")
@@ -99,6 +100,7 @@ def validate_pair(direct_path, gateway_path):
     direct = load(direct_path, "direct_messages")
     gateway = load(gateway_path, "gateway_responses_to_messages")
     require(direct["scenario"] == gateway["scenario"], "direct/gateway scenarios differ")
+    require(direct["endpoint_profile"] == gateway["endpoint_profile"], "direct/gateway endpoint profiles differ")
     require(direct["fixture_id"] == gateway["fixture_id"], "direct/gateway matched fixture differs")
     require(direct["backend_model"] == gateway["backend_model"], "backend models differ")
     require(direct["limits"] == gateway["limits"], "direct/gateway budgets differ")
@@ -198,7 +200,7 @@ def self_test(outdir):
         digest = hashlib.sha256(Path("cmd/gateway/translation_tool_rounds_test.go").read_bytes()).hexdigest()
         seen = Fake.seen[0]
         requests = [{"run": 1, "attempt": 1, "timeout_seconds": client_timeout, "max_output_tokens": item["request"]["max_tokens"], "status": item["status"], "stream": item["request"]["stream"], "api_path": item["path"]} for item in Fake.seen]
-        direct = {"schema_version": 1, "leg": "direct_messages", "captured_at_utc": stamp, "source_revision": digest, "client": {"name": "Python http.client", "version": platform.python_version()}, "gateway": None, "provider": {"api": "anthropic-messages", "api_version": seen["headers"].get("anthropic-version")}, "scenario": "two_rounds", "fixture_id": "tool-rounds-weather-clock-v1", "backend_model": seen["request"]["model"], "limits": {"timeout_seconds": client_timeout, "max_output_tokens": max(req["max_output_tokens"] for req in requests), "client_runs": 1}, "requests": requests, "outcome": "completed", "observations": {"terminal": "message_stop", "tool_links": ["call_1", "call_2", "call_3"], "usage": "unknown", "target_dispatches": len(Fake.seen)}}
+        direct = {"schema_version": 1, "leg": "direct_messages", "endpoint_profile": "offline_fixture", "captured_at_utc": stamp, "source_revision": digest, "client": {"name": "Python http.client", "version": platform.python_version()}, "gateway": None, "provider": {"api": "anthropic-messages", "api_version": seen["headers"].get("anthropic-version")}, "scenario": "two_rounds", "fixture_id": "tool-rounds-weather-clock-v1", "backend_model": seen["request"]["model"], "limits": {"timeout_seconds": client_timeout, "max_output_tokens": max(req["max_output_tokens"] for req in requests), "client_runs": 1}, "requests": requests, "outcome": "completed", "observations": {"terminal": "message_stop", "tool_links": ["call_1", "call_2", "call_3"], "usage": "unknown", "target_dispatches": len(Fake.seen)}}
         direct_path = outdir / "direct.json"
         direct_path.write_text(json.dumps(direct, indent=2) + "\n")
         direct_path.chmod(0o600)
@@ -207,6 +209,16 @@ def self_test(outdir):
         subprocess.run(["go", "test", "-race", "-v", "-count=1", "./cmd/gateway", "-run", "^TestTranslationClientOwnedToolRounds$"], check=True, env=env, timeout=120)
         validate_pair(outdir / "direct.json", outdir / "gateway.json")
         bad = json.loads((outdir / "gateway.json").read_text())
+        bad["endpoint_profile"] = "compatible_endpoint"
+        bad_path = outdir / "invalid-profile.json"
+        bad_path.write_text(json.dumps(bad))
+        try:
+            validate_pair(outdir / "direct.json", bad_path)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("validator paired compatible-endpoint evidence with an offline fixture")
+        bad["endpoint_profile"] = "offline_fixture"
         bad["limits"]["max_output_tokens"] = 4097
         bad_path = outdir / "invalid-cap.json"
         bad_path.write_text(json.dumps(bad))

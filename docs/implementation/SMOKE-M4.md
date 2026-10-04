@@ -97,6 +97,15 @@ GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -race -v -count=1 ./cmd/gatewa
 ./scripts/check.sh
 ```
 
+`NewTransport` always uses the official
+`https://api.anthropic.com/v1/messages` default and never reads environment
+variables. Connector tests may resolve `ANTHROPIC_BASE_URL` themselves and pass
+it to the internal test seam; it is not a protected YAML or application setting.
+The seam normalizes `https://ai.pestit.pl/v1` to `/v1/messages`; HTTP is accepted
+only for literal loopback IPs (not `localhost`). The offline smoke self-test
+always uses its loopback fake and never sends a request to a configured public
+endpoint. Setting the variable does not authorize or perform a live call.
+
 The gateway integration test's fake is the local target for the translated
 leg; connector tests use local fakes for Messages wire behavior. The tests assert
 synthetic auth at the fake boundary rather than saving credentials in traces.
@@ -147,6 +156,7 @@ trace must be labeled `direct_messages`; the gateway trace must be labeled
 {
   "schema_version": 1,
   "leg": "direct_messages",
+  "endpoint_profile": "official_anthropic",
   "captured_at_utc": "YYYY-MM-DDTHH:MM:SSZ",
   "source_revision": "<git revision>",
   "client": {"name": "curl", "version": "<exact version>"},
@@ -161,6 +171,14 @@ trace must be labeled `direct_messages`; the gateway trace must be labeled
   "observations": {"terminal": "message_stop", "tool_links": [], "usage": "unknown", "target_dispatches": 1}
 }
 ```
+
+`endpoint_profile` is `offline_fixture`, `official_anthropic`, or
+`compatible_endpoint`. The offline harness writes `offline_fixture`; a later
+approved official capture uses `official_anthropic`. Compatible service runs
+must be labeled `compatible_endpoint`, and the validator refuses to pair them
+with a different profile. Such captures test Messages compatibility only and
+never satisfy or close M4-036, whose direct leg remains pinned to
+`api.anthropic.com`.
 
 The `limits` object contains exactly `timeout_seconds`, `max_output_tokens`,
 and `client_runs`; request records contain exactly the keys shown above. For a

@@ -16,11 +16,17 @@ import (
 const messagesEndpoint = "https://api.anthropic.com/v1/messages"
 
 type Transport struct {
-	client    *http.Client
-	transport *http.Transport
+	client      *http.Client
+	transport   *http.Transport
+	endpoint    string
+	endpointErr error
 }
 
 func NewTransport() *Transport {
+	return newTransport(messagesEndpoint, nil)
+}
+
+func newTransport(endpoint string, endpointErr error) *Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = nil
 	tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
@@ -28,14 +34,17 @@ func NewTransport() *Transport {
 	tr.ResponseHeaderTimeout = 30 * time.Second
 	tr.DisableCompression = true
 	tr.ForceAttemptHTTP2 = false
-	return &Transport{transport: tr, client: &http.Client{
+	return &Transport{transport: tr, endpoint: endpoint, endpointErr: endpointErr, client: &http.Client{
 		Transport:     tr,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}}
 }
 
 func (t *Transport) Request(ctx context.Context, in core.ExecutionRequest, credential string) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, messagesEndpoint, io.NopCloser(bytes.NewReader(in.Payload.Body)))
+	if t.endpointErr != nil {
+		return nil, t.endpointErr
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, io.NopCloser(bytes.NewReader(in.Payload.Body)))
 	if err != nil {
 		return nil, err
 	}
