@@ -42,14 +42,16 @@ The new branch is `dev-m5.1`, based on that merge. The
 [Codex plan](TASKS.md#m51--codex-subscription-connector) has 43 small cards:
 [M5.1-001](tasks/M5.1-001.md), [M5.1-002](tasks/M5.1-002.md),
 [M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
-[M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md), and [M5.1-007](tasks/M5.1-007.md) are DONE,
+[M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md),
+[M5.1-007](tasks/M5.1-007.md), and [M5.1-008](tasks/M5.1-008.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
 and [DEC-010](../project/DECISIONS.md#dec-010--carry-credential-expiry-with-auth-results),
 versioned synthetic OAuth test fixtures, versioned Responses stream/replay fixtures,
-and the scoped Codex component lifecycle and descriptor with conservative Unknown capabilities;
-36 dependent cards remain DRAFT pending sequential promotion. The selected profile is not a live support or
+the scoped Codex component lifecycle and descriptor with conservative Unknown capabilities,
+and bounded token metadata / credential bundle codec with strict secret sanitation;
+35 dependent cards remain DRAFT pending sequential promotion. The selected profile is not a live support or
 entitlement claim.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
