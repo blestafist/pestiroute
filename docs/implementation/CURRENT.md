@@ -40,18 +40,22 @@ and final review fixes are committed; [M4-045](tasks/M4-045.md) retains evidence
 
 The new branch is `dev-m5.1`, based on that merge. The
 [Codex plan](TASKS.md#m51--codex-subscription-connector) has 43 small cards:
-[M5.1-001](tasks/M5.1-001.md) and [M5.1-002](tasks/M5.1-002.md) are DONE,
-resolving the source/profile baseline and safe device-login presentation/continuation
-binding under accepted [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state);
-41 dependent cards remain DRAFT pending sequential promotion. The selected
+[M5.1-001](tasks/M5.1-001.md), [M5.1-002](tasks/M5.1-002.md), and
+[M5.1-003](tasks/M5.1-003.md) are DONE, resolving the source/profile baseline,
+safe device-login presentation/continuation, and atomic OAuth
+credential/freshness binding under accepted
+[DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
+and [DEC-010](../project/DECISIONS.md#dec-010-carry-credential-expiry-with-auth-results);
+40 dependent cards remain DRAFT pending sequential promotion. The selected
 profile is not a live support or entitlement claim.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
 
 The scoped candidate is ChatGPT subscription OAuth device login plus Responses
 HTTP/SSE, ordinary tools, full-history encrypted reasoning and existing
-protected accounting. Auth user presentation, credential expiry/bootstrap and
-proactive refresh need reviewed binding work first. Core remains provider-neutral.
+protected accounting. Auth user presentation is bound by DEC-009; M5.1-003
+specifies credential expiry/bootstrap and proactive refresh. Core remains
+provider-neutral. No M5.1 runtime implementation or live auth/inference is claimed.
 Claude Code, Gemini CLI, ACP, WebSockets and Lite implementation stay outside
 this plan. No live auth/inference was performed in planning. M5.1-040/041 own
 the separate live evidence gates; the M4 deferral does not apply to them.
