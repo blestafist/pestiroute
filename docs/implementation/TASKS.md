@@ -303,3 +303,70 @@ The M4-041 harness is committed in `9035e18` and can be verified offline.
 | [M4-043](tasks/M4-043.md) | DONE | OpenCode subagent (M4-043 worker) / reviewer (ses_ef858002fffemZ5wy7mUWKmBl1) | M4-042 | Author Proposed ADR for narrow official verification deferment | DEC-008/D18 added as Proposed; preserves offline conformance and future live evidence obligation; official M4-036/M4-041 remain BLOCKED; M4-037/M4-038 remain DRAFT; human acceptance required; 39 tasks DONE in M4 | [Direct proof](tasks/M4-043.md#verification), `./scripts/check.sh`, `git diff --check`; [evidence](tasks/M4-043.md#completion-evidence) |
 | [M4-044](tasks/M4-044.md) | DONE | GPT-6 Luna (M4-044 worker) / reviewer (ses_ef7d73665ffehMAw63fb7G4G6Q) | M4-043 | Record accepted DEC-008/D18 and synchronize specifications and roadmap gates | DEC-008/D18 accepted; offline M4 gate and pre-production official verification synchronized; M4-037 dependency updated to M4-044, M4-032, M4-035; M4-037/M4-038 remain DRAFT; M4-036/M4-041 remain BLOCKED; 40 tasks DONE in M4 | [Direct proof](tasks/M4-044.md#verification), `./scripts/check.sh`, `git diff --check`; [evidence](tasks/M4-044.md#completion-evidence) |
 | [M4-045](tasks/M4-045.md) | DONE | Codex | M4-038 | Review committed M4 code and compatible harness, fix translation defects, and prepare PR handoff | Mixed text/tool lifecycle, argument validation/truncation, missing/null results, SSE metadata/error shape and initial usage fixed; committed harness and offline operations verified; M5.1 handoff prepared | `./scripts/check.sh`; [evidence](tasks/M4-045.md#completion-evidence) |
+
+## M5.1 — Codex Subscription Connector
+
+The next slice of [M5.1](ROADMAP.md#m51--agent-protocol-connectors) is Codex
+only, planned in 43 bounded cards from the supplied
+[research](../references/CODEX_CONNECTOR_RESEARCH.md) and the inspected
+[current-code brief](M5.1-CODEX.md). Claude Code, Gemini CLI and ACP remain
+separate roadmap spikes. No Codex implementation or live compatibility is
+claimed by this plan.
+
+**Assign exactly one READY card per worker session.** Initially only M5.1-001
+is READY; all dependent cards are DRAFT. Before promotion, the planner checks
+actual dependency results, accepted decision boundaries and concrete primary
+checks. Keep one scoped commit per completed card. Do not dispatch the whole
+milestone, its dependency chain or an unreviewed draft.
+
+Live access is isolated to M5.1-040/041; missing input blocks the relevant gate
+when it becomes due, not local fixtures or implementation. M4-036/M4-041
+remain BLOCKED and are not Codex dependencies. DEC-008's Anthropic deferral does
+not change the Codex acceptance gate. See the [execution groups](M5.1-CODEX.md#execution-order-and-readiness)
+and [tooling gate](TOOLING.md#m51-tooling-gate).
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M5.1-001](tasks/M5.1-001.md) | READY | — | M4-045 | Freeze the Codex source and first-profile baseline | — | [Direct proof](tasks/M5.1-001.md#verification) |
+| [M5.1-002](tasks/M5.1-002.md) | DRAFT | — | M5.1-001 | Resolve safe device-login presentation and continuation binding | — | [Direct proof](tasks/M5.1-002.md#verification) |
+| [M5.1-003](tasks/M5.1-003.md) | DRAFT | — | M5.1-001 | Fix the atomic OAuth credential and freshness binding | — | [Direct proof](tasks/M5.1-003.md#verification) |
+| [M5.1-004](tasks/M5.1-004.md) | DRAFT | — | M5.1-001, M5.1-002, M5.1-003 | Fix request dialect account affinity and retry boundaries | — | [Direct proof](tasks/M5.1-004.md#verification) |
+| [M5.1-005](tasks/M5.1-005.md) | DRAFT | — | M5.1-002, M5.1-003 | Add versioned synthetic OAuth fixtures | — | [Direct proof](tasks/M5.1-005.md#verification) |
+| [M5.1-006](tasks/M5.1-006.md) | DRAFT | — | M5.1-004 | Add versioned Responses stream and replay fixtures | — | [Direct proof](tasks/M5.1-006.md#verification) |
+| [M5.1-007](tasks/M5.1-007.md) | DRAFT | — | M5.1-004, M5.1-005, M5.1-006 | Implement the scoped Codex component lifecycle | — | [Direct proof](tasks/M5.1-007.md#verification) |
+| [M5.1-008](tasks/M5.1-008.md) | DRAFT | — | M5.1-003, M5.1-005, M5.1-007 | Decode bounded token metadata and account identity | — | [Direct proof](tasks/M5.1-008.md#verification) |
+| [M5.1-009](tasks/M5.1-009.md) | DRAFT | — | M5.1-002, M5.1-005, M5.1-007, M5.1-008 | Implement one device-authorization start exchange | — | [Direct proof](tasks/M5.1-009.md#verification) |
+| [M5.1-010](tasks/M5.1-010.md) | DRAFT | — | M5.1-009 | Implement bounded pending and authorized device polling | — | [Direct proof](tasks/M5.1-010.md#verification) |
+| [M5.1-011](tasks/M5.1-011.md) | DRAFT | — | M5.1-008, M5.1-010 | Exchange the device authorization code for credentials | — | [Direct proof](tasks/M5.1-011.md#verification) |
+| [M5.1-012](tasks/M5.1-012.md) | DRAFT | — | M5.1-008, M5.1-011 | Implement one selected-account refresh exchange | — | [Direct proof](tasks/M5.1-012.md#verification) |
+| [M5.1-013](tasks/M5.1-013.md) | DRAFT | — | M5.1-003, M5.1-011, M5.1-012 | Persist OAuth credentials and expiry as one revision | — | [Direct proof](tasks/M5.1-013.md#verification) |
+| [M5.1-014](tasks/M5.1-014.md) | DRAFT | — | M5.1-002, M5.1-009, M5.1-013 | Carry safe authentication actions to the operator | — | [Direct proof](tasks/M5.1-014.md#verification) |
+| [M5.1-015](tasks/M5.1-015.md) | DRAFT | — | M5.1-011, M5.1-012, M5.1-013, M5.1-014 | Wire device auth commands to configured Codex accounts | — | [Direct proof](tasks/M5.1-015.md#verification) |
+| [M5.1-016](tasks/M5.1-016.md) | DRAFT | — | M5.1-003, M5.1-012, M5.1-013, M5.1-015 | Resolve credential freshness before inference dispatch | — | [Direct proof](tasks/M5.1-016.md#verification) |
+| [M5.1-017](tasks/M5.1-017.md) | DRAFT | — | M5.1-016 | Prove concurrent refresh coalescing and account isolation | — | [Direct proof](tasks/M5.1-017.md#verification) |
+| [M5.1-018](tasks/M5.1-018.md) | DRAFT | — | M5.1-015, M5.1-016 | Prove auth uncertainty persistence failure and restart recovery | — | [Direct proof](tasks/M5.1-018.md#verification) |
+| [M5.1-019](tasks/M5.1-019.md) | DRAFT | — | M5.1-004, M5.1-006, M5.1-007 | Validate the admitted standard Responses profile | — | [Direct proof](tasks/M5.1-019.md#verification) |
+| [M5.1-020](tasks/M5.1-020.md) | DRAFT | — | M5.1-019 | Build explicit Codex request adaptation without losing history | — | [Direct proof](tasks/M5.1-020.md#verification) |
+| [M5.1-021](tasks/M5.1-021.md) | DRAFT | — | M5.1-008, M5.1-016, M5.1-020 | Build trusted selected-account HTTP headers | — | [Direct proof](tasks/M5.1-021.md#verification) |
+| [M5.1-022](tasks/M5.1-022.md) | DRAFT | — | M5.1-007, M5.1-020, M5.1-021 | Execute one cancellable Codex HTTP streaming attempt | — | [Direct proof](tasks/M5.1-022.md#verification) |
+| [M5.1-023](tasks/M5.1-023.md) | DRAFT | — | M5.1-006, M5.1-022 | Observe SSE incrementally with bounded memory | — | [Direct proof](tasks/M5.1-023.md#verification) |
+| [M5.1-024](tasks/M5.1-024.md) | DRAFT | — | M5.1-023 | Classify HTTP rejection and SSE terminal outcomes | — | [Direct proof](tasks/M5.1-024.md#verification) |
+| [M5.1-025](tasks/M5.1-025.md) | DRAFT | — | M5.1-024 | Extract inclusive usage without subset double counting | — | [Direct proof](tasks/M5.1-025.md#verification) |
+| [M5.1-026](tasks/M5.1-026.md) | DRAFT | — | M5.1-004, M5.1-019 | Bind honest usage estimation to existing route budgets | — | [Direct proof](tasks/M5.1-026.md#verification) |
+| [M5.1-027](tasks/M5.1-027.md) | DRAFT | — | M5.1-015, M5.1-016, M5.1-024, M5.1-025, M5.1-026 | Compose protected Codex routes alongside existing Connectors | — | [Direct proof](tasks/M5.1-027.md#verification) |
+| [M5.1-028](tasks/M5.1-028.md) | DRAFT | — | M5.1-027 | Prove real-socket text streaming and terminal delivery | — | [Direct proof](tasks/M5.1-028.md#verification) |
+| [M5.1-029](tasks/M5.1-029.md) | DRAFT | — | M5.1-028 | Prove two client-owned function-tool rounds | — | [Direct proof](tasks/M5.1-029.md#verification) |
+| [M5.1-030](tasks/M5.1-030.md) | DRAFT | — | M5.1-029 | Prove parallel tool option and interleaved identity preservation | — | [Direct proof](tasks/M5.1-030.md#verification) |
+| [M5.1-031](tasks/M5.1-031.md) | DRAFT | — | M5.1-029 | Prove encrypted reasoning and chronological full-history replay | — | [Direct proof](tasks/M5.1-031.md#verification) |
+| [M5.1-032](tasks/M5.1-032.md) | DRAFT | — | M5.1-027, M5.1-031 | Prove authorization credential and cache-header isolation | — | [Direct proof](tasks/M5.1-032.md#verification) |
+| [M5.1-033](tasks/M5.1-033.md) | DRAFT | — | M5.1-028 | Prove cancellation bounded backpressure and shutdown | — | [Direct proof](tasks/M5.1-033.md#verification) |
+| [M5.1-034](tasks/M5.1-034.md) | DRAFT | — | M5.1-024, M5.1-027, M5.1-031, M5.1-033 | Prove delivery-safe retry and opaque replay affinity | — | [Direct proof](tasks/M5.1-034.md#verification) |
+| [M5.1-035](tasks/M5.1-035.md) | DRAFT | — | M5.1-018, M5.1-025, M5.1-027, M5.1-033, M5.1-034 | Prove durable settlement for success interruption and auth failure | — | [Direct proof](tasks/M5.1-035.md#verification) |
+| [M5.1-036](tasks/M5.1-036.md) | DRAFT | — | M5.1-017, M5.1-018, M5.1-030, M5.1-031, M5.1-032, M5.1-033, M5.1-034, M5.1-035 | Audit offline Codex conformance and scoped capability matrix | — | [Direct proof](tasks/M5.1-036.md#verification) |
+| [M5.1-037](tasks/M5.1-037.md) | DRAFT | — | M5.1-015, M5.1-018, M5.1-036 | Document and execute synthetic local Codex operations | — | [Direct proof](tasks/M5.1-037.md#verification) |
+| [M5.1-038](tasks/M5.1-038.md) | DRAFT | — | M5.1-036, M5.1-037 | Build bounded smoke capture and privacy validation | — | [Direct proof](tasks/M5.1-038.md#verification) |
+| [M5.1-039](tasks/M5.1-039.md) | DRAFT | — | M5.1-038 | Prepare the exact live auth and paired inference procedure | — | [Direct proof](tasks/M5.1-039.md#verification) |
+| [M5.1-040](tasks/M5.1-040.md) | DRAFT | — | M5.1-017, M5.1-018, M5.1-039 | Capture scoped live device auth and refresh evidence | — | [Direct proof](tasks/M5.1-040.md#verification) |
+| [M5.1-041](tasks/M5.1-041.md) | DRAFT | — | M5.1-030, M5.1-031, M5.1-035, M5.1-039, M5.1-040 | Capture matched direct-versus-gateway Codex inference | — | [Direct proof](tasks/M5.1-041.md#verification) |
+| [M5.1-042](tasks/M5.1-042.md) | DRAFT | — | M5.1-036, M5.1-040, M5.1-041 | Audit live evidence and publish final support claims | — | [Direct proof](tasks/M5.1-042.md#verification) |
+| [M5.1-043](tasks/M5.1-043.md) | DRAFT | — | M5.1-037, M5.1-042 | Review the Codex slice and prepare the next milestone handoff | — | [Direct proof](tasks/M5.1-043.md#verification) |

@@ -15,6 +15,37 @@ This plan covers tools for **building PestiRoute with OpenCode**, not the gatewa
 | M5–M6, if connector count and cross-package navigation justify it | Graphify or a simple Go dependency graph (candidates) | Generate a graph from actual Go imports/contract boundaries and compare it to targeted search. Adopt only if it detects useful dependency drift; it must not become a second source of architectural truth. External Connector IPC is a **product** milestone in M6, not an OpenCode plugin requirement. |
 | If an admin UI enters the roadmap | Browser/Playwright checks (candidate) | Introduce only with an actual UI acceptance scenario and deterministic local test target. A browser MCP brings no value to the current documentation/backend foundation. |
 
+## M5.1 Tooling Gate
+
+For the [Codex slice](TASKS.md#m51--codex-subscription-connector), keep
+`.opencode/opencode.json` unchanged: Context7 and official `gopls mcp` are
+already declared. Use existing file/shell/Git tools, targeted source reads,
+gofmt/vet/unit/race/build and local HTTP/SSE fixtures. This planning inspection
+checks repository configuration and code, not installed binaries or live MCP
+connections on the developer's machine.
+
+| Need | Existing tool or bounded deliverable | Decision |
+| --- | --- | --- |
+| OAuth/device/refresh implementation | Go HTTP/JSON/crypto and local fake issuer tests; pinned official Codex/OpenCode source | No OAuth MCP, browser MCP or SDK required |
+| Go navigation and binding changes | gopls, targeted rg and current import/conformance guards | No Serena/Graphify installation needed |
+| Device authorization by the account owner | Ordinary browser visiting the reviewed verification URL | Browser is a user auth step, not an agent automation dependency |
+| Incremental transport, concurrency and recovery | Existing Go race checks, synchronized sockets and real-file SQLite fixtures | No new fault-injection/database/testing plugin |
+| Versioned provider capture/privacy | M5.1-038 local capture helper and artifact self-test | Build the bounded test deliverable when due; no additional MCP |
+| PR, branch and commit delivery | Git and existing GitHub integration | No new Git MCP or permission/model changes |
+
+HTTP/SSE is the initial scope; defer WebSocket libraries, continuation pools and
+browser callback tooling until separate work is explicitly scoped. Codex CLI
+or OpenCode may be a pinned smoke-test client; neither is a gateway subprocess
+dependency. Keep existing personal RTK/Ponytail settings. No additional agent
+skill is needed: small cards, exact linked reads and fresh review sessions
+already bound context. Live account access cannot be replaced by installing a
+tool, and no new server is added in this commit.
+
+References: [supplied source map](../references/CODEX_CONNECTOR_RESEARCH.md#2-code-navigation-map),
+[OpenCode v2 MCP configuration](https://opencode.ai/v2/docs/mcp-servers/) and
+the existing pinned toolchain/repository checks. The source/profile gate owns
+live auth constants/client compatibility; tooling does not assert them verified.
+
 ## M4 Tooling Gate
 
 For the [M4 translation plan](TASKS.md#m4--first-translation-connector), keep the

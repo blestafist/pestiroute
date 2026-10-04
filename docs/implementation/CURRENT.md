@@ -27,39 +27,37 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4 offline gate verified; PR handoff to M5.1 research
+## Immediate focus: M5.1 Codex planning ready
 
-M4 implements explicit Responses ↔ Anthropic Messages translation under the
-accepted [DEC-008/D18](../project/DECISIONS.md#dec-008--accepted-narrow-deferral-of-official-anthropic-verification)
-offline milestone gate. [M4-038](tasks/M4-038.md) audited the earlier committed
-baseline; [M4-045](tasks/M4-045.md) reviews the assembled branch and fixes mixed
-text/tool output, tool argument validation, truncation, SSE metadata and missing
-function results. Core remains protocol-neutral and native bodies remain opaque. The registry has
-45 M4 cards: 43 DONE, 2 BLOCKED, and no pending offline implementation.
+M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
+merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
+`a030ef0949711b7172f1e93947772cd59febc0b7` had successful hosted CI run 47.
+M4 has 43 DONE cards and two retained BLOCKED live gates: official Anthropic
+[M4-036](tasks/M4-036.md), mandatory before production under
+[DEC-008/D18](../project/DECISIONS.md#dec-008--accepted-narrow-deferral-of-official-anthropic-verification),
+and compatible-endpoint tools [M4-041](tasks/M4-041.md). The compatible harness
+and final review fixes are committed; [M4-045](tasks/M4-045.md) retains evidence.
 
-The compatible-endpoint harness is committed in `9035e18`, including all five
-files previously left in the local worktree. Its deterministic TLS/HTTP2 tests
-cover client-owned tool rounds, replay, cancellation and durable settlement.
-Those tests do not satisfy either live gate:
+The new branch is `dev-m5.1`, based on that merge. The
+[Codex plan](TASKS.md#m51--codex-subscription-connector) has 43 small cards:
+M5.1-001 READY, 42 DRAFT, none implemented. Start with
+[M5.1-001](tasks/M5.1-001.md) to freeze the source/client/model/profile baseline;
+the planner promotes dependent cards only after actual predecessor review.
+The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
+in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
 
-- [M4-036](tasks/M4-036.md): official Anthropic capture remains BLOCKED and is
-  mandatory before production release under DEC-008/D18.
-- [M4-041](tasks/M4-041.md): compatible-endpoint tool cycles remain BLOCKED.
-  The prior live batch stopped on its first direct request with HTTP 200,
-  `unexpected_tool_name`, one dispatch and zero retries. Later rounds and
-  cancellation were unrun. The task card preserves the historical report;
-  its local temporary failure artifact is not included in the repository.
+The scoped candidate is ChatGPT subscription OAuth device login plus Responses
+HTTP/SSE, ordinary tools, full-history encrypted reasoning and existing
+protected accounting. Auth user presentation, credential expiry/bootstrap and
+proactive refresh need reviewed binding work first. Core remains provider-neutral.
+Claude Code, Gemini CLI, ACP, WebSockets and Lite implementation stay outside
+this plan. No live auth/inference was performed in planning. M5.1-040/041 own
+the separate live evidence gates; the M4 deferral does not apply to them.
 
-Production targets direct Anthropic with the pinned backend model. The
-`cc/claude-sonnet-5-5` compatible model and endpoint override remain test-only.
-Live parallel tools, reasoning, OAuth and remote compute cancellation have no
-support claim. No live inference is part of the final branch review.
-
-After the PR, the next planning boundary is M5.1 Codex translation research and
-scoping; no M5 implementation is included. Reuse registry, scoped services,
-authorization, admission, accounting and dispatch. Request translation, provider
-SSE/errors and token normalization remain Connector-owned. Keep the existing
-Context7, gopls, shell and Git tool configuration; see [Tooling](TOOLING.md#m4-tooling-gate).
+Keep the checked-in Context7/gopls configuration, shell/Git and Go checks;
+[M5.1 tooling](TOOLING.md#m51-tooling-gate) requires no new MCP/plugin. This
+inspection does not verify the developer's running MCP connections. Use one
+card per worker/reviewer session and the existing `/next N` workflow.
 
 ## Available checks
 
@@ -68,7 +66,11 @@ review fixes. `./scripts/check.sh` passes formatting, vet, unit/race tests and
 offline build. The uncached Anthropic/gateway/conformance race suites, ten
 repeated new regressions, pure-Go tests/build, compatible TLS/HTTP2 harness,
 artifact validator, shell syntax, and Markdown link/dependency audit also pass.
-Hosted PR CI is reported separately in GitHub.
+Hosted M4 PR CI run 47 passed on the exact merged PR head. Planning verification
+checked 205 registry rows, acyclic dependencies, all 43 new template cards,
+732 relative links/anchors across 69 documents, retained M4 blockers, and a
+content-preserving research copy; `git diff --check` passed. No Go code changed or
+runtime suite was rerun for this documentation-only plan.
 
 [LOCAL-M4](LOCAL-M4.md) passes offline dual native/translation protected provisioning,
 native loopback dispatch, local translation validation/rejections, rate limiting,
@@ -88,7 +90,7 @@ remain loopback development compatibility modes; see [LOCAL-M2](LOCAL-M2.md).
 - Native transport failures retain unknown delivery; safe fallback is proven
   with explicit deterministic fixtures, not a broader real-provider retry claim.
   Remaining translation gates/live compatibility, stateful cross-target affinity,
-  live OAuth and IPC remain M4/M5/M6.
+  live OAuth and IPC remain M4/M5/M6. Codex is planned, not implemented.
 - Historical live evidence remains OpenCode 2.0.6 / OpenAI Responses /
   `gpt-5.4-mini`, with parallel tools unknown. M3 adds no live inference claim.
   Remote provider compute cancellation remains unverified.

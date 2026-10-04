@@ -49,6 +49,13 @@ Implement Anthropic API connector as explicit Responses ↔ Messages transformat
 
 ## M5.1 · Agent Protocol Connectors
 
+The current bounded plan is [the Codex subscription slice](TASKS.md#m51--codex-subscription-connector),
+with [source/current-code gates](M5.1-CODEX.md) and 43 small task cards. Device
+OAuth and Responses HTTP/SSE come first; other agent protocols remain separate
+spikes and Lite/WebSocket implementation is not included. Planning is not
+implementation or live support; the per-connector completion gate below remains
+unchanged.
+
 Scope: Codex, Claude Code, Gemini CLI, and ACP. Research each protocol first: record the official client version, capture its authentication flow, request format, and streaming behavior, and create a minimal trace. Implement each connector separately, including refresh and account affinity where applicable.
 
 ACP is a protocol for communicating with an agent process, not equivalent to a subscription backend API. Its spike must identify a concrete agent, transport, and owner of the agent/tool loop before implementation.
