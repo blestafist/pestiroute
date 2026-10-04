@@ -27,23 +27,23 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-031 DONE (awaiting verified commit; batch 13/19 DONE)
+## Immediate focus: M4-032 DONE (awaiting verified commit; batch 14/19 DONE)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. All 30 predecessor tasks ([M4-001](tasks/M4-001.md)
-through [M4-030](tasks/M4-030.md)) are committed (`a3e6425`). Batch progress:
-13 of 19 objective DONE (total 31 DONE; 7 remaining).
+Anthropic Messages translation. All 31 predecessor tasks ([M4-001](tasks/M4-001.md)
+through [M4-031](tasks/M4-031.md)) are committed (`353b4be`). Batch progress:
+14 of 19 objective DONE (total 32 DONE; 6 remaining).
 
-[M4-031](tasks/M4-031.md) (Verify reasoning stream and tool-round behavior)
-acceptance is reviewed and closed DONE (reviewer PASS `ses_efbbb00b8ffeRHci33S0BlCcdD`).
-Stream thinking/redacted block rejection, `reasoning_tokens == nil` preservation (no hidden
-token fabrication or TPM double-counting), capability gate distinction (top-level controls
-rejected at Adapter/Core capability gate as `unsupported_capability` vs opaque history
-rejected in Connector translation as `invalid_request`), and non-regression for ordinary
-text and multi-round tools verified. Core and Adapter remain untouched. 31 tasks are DONE
-in the registry; implementation is preserved. Per policy, no next card is prepared or promoted
-until the M4-031 commit is cleanly created and verified.
+[M4-032](tasks/M4-032.md) (Publish the evidence-backed compatibility matrix)
+acceptance is reviewed and closed DONE (reviewer PASS `ses_efbaeee4affepido3MITj01fF3`).
+`M4-COMPATIBILITY.md` is published with the complete scoped profile, CONTRACT capability
+matrix (`llm.streaming` and `llm.tools` supported; other capabilities unknown/unsupported),
+field policy, and local test evidence vs unverified live status. Connector declarations and
+models are synchronized; gateway fake-upstream negative admission for unknown parallel tools,
+reasoning, and structured output verified without extra egress. Core and Adapter remain
+untouched. 32 tasks are DONE in the registry; implementation is preserved. Per policy,
+no next card is prepared or promoted until the M4-032 commit is cleanly created and verified.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

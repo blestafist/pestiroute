@@ -235,21 +235,27 @@ func TestTranslationClientOwnedToolRounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlBody := fmt.Sprintf(`{"model":"client-model","stream":true,"input":%s,"reasoning":{"effort":"high"}}`, controlInput)
-	req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(controlBody))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Authorization", "Bearer "+issued.Secret)
-	req.Header.Set("Content-Type", "application/json")
-	controlResponse, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	controlError, _ := io.ReadAll(controlResponse.Body)
-	_ = controlResponse.Body.Close()
-	if controlResponse.StatusCode != http.StatusBadRequest || !strings.Contains(string(controlError), `"code":"unsupported_capability"`) || upstreamCount.Load() != 3 {
-		t.Fatalf("reasoning control must be blocked before dispatch (existing capability gate): status=%d upstream=%d body=%s", controlResponse.StatusCode, upstreamCount.Load(), controlError)
+	for name, suffix := range map[string]string{
+		"reasoning":         `,"reasoning":{"effort":"high"}`,
+		"parallel tools":    `,"tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}],"parallel_tool_calls":true`,
+		"structured output": `,"text":{"format":{"type":"json_schema","name":"result","schema":{"type":"object"}}}`,
+	} {
+		controlBody := fmt.Sprintf(`{"model":"client-model","stream":true,"input":%s%s}`, controlInput, suffix)
+		req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(controlBody))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+issued.Secret)
+		req.Header.Set("Content-Type", "application/json")
+		controlResponse, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		controlError, _ := io.ReadAll(controlResponse.Body)
+		_ = controlResponse.Body.Close()
+		if controlResponse.StatusCode != http.StatusBadRequest || !strings.Contains(string(controlError), `"code":"unsupported_capability"`) || upstreamCount.Load() != 3 {
+			t.Fatalf("%s capability must be blocked before dispatch: status=%d upstream=%d body=%s", name, controlResponse.StatusCode, upstreamCount.Load(), controlError)
+		}
 	}
 	// Provider thinking before tool_use must fail in-band without exposing a call.
 	input, err := json.Marshal(history)
@@ -257,7 +263,7 @@ func TestTranslationClientOwnedToolRounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := fmt.Sprintf(`{"model":"client-model","stream":true,"input":%s,"tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}]}`, input)
-	req, err = http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}

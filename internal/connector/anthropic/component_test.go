@@ -67,6 +67,11 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 	if got := c.Capabilities(context.Background(), scope).State("llm.tools"); got != core.Supported {
 		t.Fatalf("implemented tools capability = %q", got)
 	}
+	for _, capability := range []core.Capability{"llm.tools.parallel", "llm.reasoning", "llm.structured_output", "llm.vision", "llm.audio", "auth.oauth", "usage.exact"} {
+		if got := c.Capabilities(context.Background(), scope).State(capability); got != core.Unknown {
+			t.Errorf("unproven capability %q = %q, want unknown", capability, got)
+		}
+	}
 	for _, bad := range []core.CapabilityScope{
 		{Protocol: "other", Mode: scope.Mode, Model: scope.Model, AccountID: scope.AccountID},
 		{Protocol: protocol, Mode: core.ModeNative, Model: scope.Model, AccountID: scope.AccountID},
@@ -86,6 +91,11 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 	}
 	if models.Models[0].Capabilities["llm.tools"] != core.Supported {
 		t.Fatalf("models omitted verified tools capability: %+v", models.Models[0])
+	}
+	for _, capability := range []core.Capability{"llm.tools.parallel", "llm.reasoning", "llm.structured_output", "llm.vision", "llm.audio", "auth.oauth", "usage.exact"} {
+		if got := (core.CapabilityResult{Values: models.Models[0].Capabilities}).State(capability); got != core.Unknown {
+			t.Errorf("model advertised unproven capability %q = %q, want unknown", capability, got)
+		}
 	}
 	for _, query := range []core.ModelQuery{
 		{Protocol: "other", Mode: core.ModeTranslation, AccountID: "account-a"},

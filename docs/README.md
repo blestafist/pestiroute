@@ -21,6 +21,7 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | [Roadmap](implementation/ROADMAP.md) | Milestones and acceptance gates; not a task checklist |
 | [Stack](implementation/STACK.md) | Toolchain, libraries, build and operational conventions |
 | [M4 translation brief](implementation/M4-TRANSLATION.md) | Current-code seams, first-slice policy/decision gates and official sources; planning input until reviewed by M4-001 |
+| [M4 compatibility matrix](implementation/M4-COMPATIBILITY.md) | Evidence-backed scope, capabilities, field policy, and local/live proof boundary for Anthropic translation |
 | [Contract](implementation/CONTRACT.md) | Normative v1 Adapter–Core Runtime–Connector boundary, frames, capabilities, errors and lifecycle |
 | [Configuration](implementation/CONFIGURATION.md) | Target configuration schema, persistent state, access and accounting |
 | [Testing](implementation/TESTING.md) | Behavioral verification, conformance, fixtures, smoke tests |
