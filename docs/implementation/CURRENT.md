@@ -27,14 +27,23 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-042 DONE; M4-036/M4-041 BLOCKED; awaiting user decision (Option A vs B)
+## Immediate focus: M4-043 DONE; DEC-008/D18 Proposed awaiting governance decision; M4-036/M4-041 BLOCKED
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
-cards for Responses ↔ Anthropic Messages translation. Of 42 registered M4 rows in
-[TASKS](TASKS.md), 38 are complete ([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md),
-[M4-039](tasks/M4-039.md), [M4-040](tasks/M4-040.md), and [M4-042](tasks/M4-042.md)),
+cards for Responses ↔ Anthropic Messages translation. Of 43 registered M4 rows in
+[TASKS](TASKS.md), 39 are complete ([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md),
+[M4-039](tasks/M4-039.md), [M4-040](tasks/M4-040.md), [M4-042](tasks/M4-042.md), and [M4-043](tasks/M4-043.md)),
 2 are BLOCKED ([M4-036](tasks/M4-036.md), [M4-041](tasks/M4-041.md)), 2 remain DRAFT
 ([M4-037](tasks/M4-037.md), [M4-038](tasks/M4-038.md)), and 0 are ACTIVE or READY (none eligible).
+
+[M4-043](tasks/M4-043.md) is closed DONE (reviewer PASS `ses_ef858002fffemZ5wy7mUWKmBl1`).
+It added DEC-008 and D18 in `docs/project/DECISIONS.md` in strictly Proposed status,
+documenting a proposed narrow deferral of official live Anthropic verification while preserving
+all offline acceptance, deterministic conformance, and future live evidence obligations.
+Official [M4-036](tasks/M4-036.md) remains strictly BLOCKED; [M4-037](tasks/M4-037.md) and
+[M4-038](tasks/M4-038.md) remain DRAFT pending explicit human governance acceptance of DEC-008
+and subsequent separate Planner dependency/status revisions. Exactly zero independent offline
+implementation tasks exist in backlog without gate waiver or premature M5 scope.
 
 [M4-041](tasks/M4-041.md) is settled as BLOCKED. Its authorized live batch stopped after
 one direct Messages request: actual HTTP 200, turn 1, terminal `tool_use`, safe tool class `other`,
@@ -45,14 +54,6 @@ model credits will be spent. Sanitized failure evidence is preserved locally in 
 All M4-041 test harness, mock, script, and doc extensions remain pending in the uncommitted
 working tree and are not part of any delivered task or committed branch; M4-041 is not DONE.
 Official [M4-036](tasks/M4-036.md) remains strictly BLOCKED with no waiver.
-
-[M4-042](tasks/M4-042.md) is closed DONE (reviewer PASS `ses_ef86e976dffeCKffbOPQ5xzGG8`).
-It documents verified text streaming versus unsupported/unknown 9router tool behavior,
-formulates trade-offs between freezing M4 at the official gate (Option A, operating default)
-and a human-authorized Proposed narrow deferment ADR (Option B), and confirms that exactly
-zero independent implementation tasks are presently executable without violating dependency
-gates or inventing premature M5 scope. [M4-037](tasks/M4-037.md) and [M4-038](tasks/M4-038.md)
-remain DRAFT with strict dependencies on M4-036.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local
