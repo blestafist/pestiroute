@@ -43,15 +43,17 @@ The new branch is `dev-m5.1`, based on that merge. The
 [M5.1-001](tasks/M5.1-001.md), [M5.1-002](tasks/M5.1-002.md),
 [M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
 [M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md),
-[M5.1-007](tasks/M5.1-007.md), and [M5.1-008](tasks/M5.1-008.md) are DONE,
+[M5.1-007](tasks/M5.1-007.md), [M5.1-008](tasks/M5.1-008.md), and [M5.1-009](tasks/M5.1-009.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
 and [DEC-010](../project/DECISIONS.md#dec-010--carry-credential-expiry-with-auth-results),
 versioned synthetic OAuth test fixtures, versioned Responses stream/replay fixtures,
 the scoped Codex component lifecycle and descriptor with conservative Unknown capabilities,
-and bounded token metadata / credential bundle codec with strict secret sanitation;
-35 dependent cards remain DRAFT pending sequential promotion. The selected profile is not a live support or
+bounded token metadata / credential bundle codec with strict secret sanitation,
+and one device-authorization start exchange with fail-closed direct RoundTrip redirect prevention;
+34 dependent cards remain DRAFT pending sequential promotion. Downstream M5.1-014 retains
+the requirement to wire a RoundTripper-backed transport and Core projection validation. The selected profile is not a live support or
 entitlement claim.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
@@ -60,7 +62,7 @@ The scoped candidate is ChatGPT subscription OAuth device login plus Responses
 HTTP/SSE, ordinary tools, full-history encrypted reasoning and existing
 protected accounting. Auth user presentation is bound by DEC-009; M5.1-003
 specifies credential expiry/bootstrap and proactive refresh. Core remains
-provider-neutral. No M5.1 runtime implementation or live auth/inference is claimed.
+provider-neutral. No live authentication or inference is claimed.
 Claude Code, Gemini CLI, ACP, WebSockets and Lite implementation stay outside
 this plan. No live auth/inference was performed in planning. M5.1-040/041 own
 the separate live evidence gates; the M4 deferral does not apply to them.

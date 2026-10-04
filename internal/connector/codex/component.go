@@ -29,6 +29,7 @@ type Connector struct {
 	mu        sync.Mutex
 	model     string
 	accountID string
+	authURL   string
 	state     core.HealthState
 	closed    bool
 }
@@ -157,16 +158,21 @@ func (c *Connector) EstimateUsage(_ context.Context, query core.UsageQuery, _ co
 	return core.EstimateResult{Supported: false, Known: false}, nil
 }
 
-func (c *Connector) Authenticate(_ context.Context, request core.AuthRequest, _ core.InvocationServices) (core.AuthResult, *core.GatewayError) {
+func (c *Connector) Authenticate(ctx context.Context, request core.AuthRequest, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.state != core.HealthReady {
+		c.mu.Unlock()
 		return core.AuthResult{}, connectorError("connector_unavailable", core.CategoryUnavailable, "Codex connector is unavailable")
 	}
 	if request.AccountID != c.accountID {
+		c.mu.Unlock()
 		return core.AuthResult{}, connectorError("scope_mismatch", core.CategoryPermissionDenied, "Authentication scope does not match configured target")
 	}
-	return core.AuthResult{Supported: false}, nil
+	c.mu.Unlock()
+	if request.Action != "start" {
+		return core.AuthResult{Supported: false}, nil
+	}
+	return c.authenticateStart(ctx, services)
 }
 
 func connectorError(code string, category core.ErrorCategory, message string) *core.GatewayError {
