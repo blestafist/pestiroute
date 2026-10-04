@@ -51,18 +51,34 @@ def load(path, expected_leg):
     require(type(limits) is dict and set(limits) == {"timeout_seconds", "max_output_tokens", "client_runs"}, "invalid limits fields")
     require(type(limits["timeout_seconds"]) is int and 0 < limits["timeout_seconds"] <= 30, "timeout exceeds 30 seconds")
     require(type(limits["max_output_tokens"]) is int and 0 < limits["max_output_tokens"] <= 4096, "output cap exceeds 4096")
+    if data["endpoint_profile"] == "compatible_endpoint":
+        require(limits["max_output_tokens"] <= 256, "compatible probe output cap exceeds 256")
     require(type(limits["client_runs"]) is int and 0 < limits["client_runs"] <= 2, "client run cap exceeds 2")
     require(type(data["requests"]) is list, "requests must be an array")
+    observations_value = data.get("observations")
+    compatible_batch_requests = data["endpoint_profile"] == "compatible_endpoint" and (
+        isinstance(observations_value, dict) and "cancellation" in observations_value
+        or bool(data["requests"]) and isinstance(data["requests"][0], dict) and "purpose" in data["requests"][0]
+    )
     runs = set()
     attempts = {}
     for req in data["requests"]:
-        require(type(req) is dict and set(req) == {"run", "attempt", "timeout_seconds", "max_output_tokens", "status", "stream", "api_path"}, "invalid request record fields")
+        base_request_keys = {"run", "attempt", "timeout_seconds", "max_output_tokens", "status", "stream", "api_path"}
+        request_keys = base_request_keys | ({"purpose"} if compatible_batch_requests else set())
+        require(type(req) is dict and set(req) == request_keys, "invalid request record fields")
         require(type(req["run"]) is int and 1 <= req["run"] <= limits["client_runs"], "run count exceeds cap")
-        require(type(req["attempt"]) is int and req["attempt"] == req["run"] and 1 <= req["attempt"] <= 2, "attempt/run count exceeds cap")
+        if data["endpoint_profile"] == "compatible_endpoint":
+            require(type(req["attempt"]) is int and req["attempt"] == 1, "compatible request retries are not allowed")
+        else:
+            require(type(req["attempt"]) is int and req["attempt"] == req["run"] and 1 <= req["attempt"] <= 2, "attempt/run count exceeds cap")
         require(type(req["timeout_seconds"]) is int and 0 < req["timeout_seconds"] <= 30, "request timeout exceeds 30 seconds")
         require(type(req["max_output_tokens"]) is int and 0 < req["max_output_tokens"] <= 4096, "request token cap exceeds 4096")
+        if data["endpoint_profile"] == "compatible_endpoint":
+            require(req["max_output_tokens"] <= 256, "compatible request output cap exceeds 256")
         require(type(req["status"]) is int and 100 <= req["status"] <= 599 and type(req["stream"]) is bool, "invalid request outcome")
         require(req["api_path"] == ("/v1/messages" if expected_leg == "direct_messages" else "/v1/responses"), "API path does not match trace leg")
+        if compatible_batch_requests:
+            require(req["purpose"] in {"tool_round", "cancellation"}, "unknown compatible batch request purpose")
         runs.add(req["run"])
         attempts.setdefault(req["run"], set()).add(req["attempt"])
     require(len(runs) <= limits["client_runs"] and all(max(a) <= 2 for a in attempts.values()), "request attempts exceed cap")
@@ -80,11 +96,21 @@ def load(path, expected_leg):
         else:
             require(re.fullmatch(r"[A-Za-z0-9._:-]{1,96}", route_model), "gateway route model must be a safe label")
         require((data["client"]["name"] == "OpenCode" and data["client"]["version"] == "2.0.6") or data["client"]["name"] in {"curl", "Python http.client"} or (data["client"]["name"] == "Go http.Client" and re.fullmatch(r"go[0-9.]+(?:[-+:][A-Za-z0-9._:-]+)?", data["client"]["version"])), "gateway client/version must identify OpenCode 2.0.6, curl, or the local Go test client")
-    require(type(data["observations"]) is dict and set(data["observations"]) == {"terminal", "tool_links", "usage", "target_dispatches"}, "invalid comparison observations")
+    observation_keys = {"terminal", "tool_links", "usage", "target_dispatches"}
+    has_cancellation = data["endpoint_profile"] == "compatible_endpoint" and isinstance(data["observations"], dict) and "cancellation" in data["observations"]
+    require(type(data["observations"]) is dict and set(data["observations"]) == observation_keys | ({"cancellation"} if has_cancellation else set()), "invalid comparison observations")
     require(type(data["observations"]["tool_links"]) is list and type(data["observations"]["target_dispatches"]) is int, "invalid comparison output")
+    if compatible_batch_requests:
+        require(data["observations"]["target_dispatches"] == len(data["requests"]), "compatible target dispatch/request counts mismatch")
     require(data["observations"]["usage"] in {"reported", "unknown", "reported_or_unknown"}, "invalid usage comparison")
     require(all(isinstance(link, str) and re.fullmatch(r"(?:call|result_for_call)_\d+", link) for link in data["observations"]["tool_links"]), "tool links must use sanitized ordinal labels")
     require(data["outcome"] in {"completed", "rejected", "not_run"}, "invalid scenario outcome")
+    if has_cancellation:
+        cancellation = data["observations"]["cancellation"]
+        require(expected_leg == "gateway_responses_to_messages" and type(cancellation) is dict and set(cancellation) == {"client_cancelled", "provider_context_cancelled", "remote_compute", "provider_dispatches", "retries", "accounting_finalizations"}, "invalid cancellation observation")
+        require(cancellation["client_cancelled"] is True and cancellation["provider_context_cancelled"] is True and cancellation["remote_compute"] == "unknown" and cancellation["provider_dispatches"] == 1 and cancellation["retries"] == 0 and cancellation["accounting_finalizations"] == 1, "cancellation or exactly-once accounting evidence invalid")
+        require(sum(req["purpose"] == "cancellation" for req in data["requests"]) == 1 and all(req["purpose"] == "tool_round" for req in data["requests"] if req["purpose"] != "cancellation"), "cancellation request not represented exactly once")
+        require(data["scenario"] == "two_rounds" and len(data["requests"]) == 4 and data["observations"]["target_dispatches"] == 4, "compatible batch dispatch/request counts mismatch")
     if data["scenario"] == "reasoning_rejection":
         if expected_leg == "direct_messages":
             require(data["outcome"] == "not_run" and not data["requests"] and data["observations"]["target_dispatches"] == 0, "reasoning must not be sent to direct provider")
@@ -117,9 +143,36 @@ def validate_pair(direct_path, gateway_path):
     require(direct["fixture_id"] == gateway["fixture_id"], "direct/gateway matched fixture differs")
     require(direct["backend_model"] == gateway["backend_model"], "backend models differ")
     require(direct["limits"] == gateway["limits"], "direct/gateway budgets differ")
-    if direct["scenario"] != "reasoning_rejection":
+    require(len(direct["requests"]) + len(gateway["requests"]) <= 8, "batch provider-call cap exceeds 8")
+    if "cancellation" in gateway["observations"]:
+        direct_rounds = [req for req in direct["requests"] if req["purpose"] == "tool_round"]
+        gateway_rounds = [req for req in gateway["requests"] if req["purpose"] == "tool_round"]
+        require(len(direct_rounds) == len(gateway_rounds) == 3 and len(direct["observations"]["tool_links"]) == len(gateway["observations"]["tool_links"]) == 4, "compatible tool-round evidence incomplete")
+    elif direct["scenario"] != "reasoning_rejection":
         require(len(direct["requests"]) == len(gateway["requests"]), "direct/gateway request-round counts differ")
     print(f"PASS {direct['scenario']} fixture={direct['fixture_id']} direct={len(direct['requests'])} request(s) gateway={len(gateway['requests'])} request(s); limits/redaction/schema valid")
+
+
+def validate_partial_failure(path):
+    data = json.loads(Path(path).read_text())
+    required = {"schema_version", "endpoint_profile", "test_only_model_override", "leg", "turn", "test_duration_ms", "http_status_scope", "provider_dispatches", "terminal", "tool_class", "category", "retries"}
+    require(type(data) is dict and set(data) in (required, required | {"http_status"}), "invalid partial failure fields")
+    require(type(data["schema_version"]) is int and data["schema_version"] == 1, "invalid partial failure version")
+    require(data["endpoint_profile"] == "compatible_endpoint" and data["test_only_model_override"] is True, "partial failure profile mismatch")
+    require(data["leg"] in ("direct_messages", "gateway_responses_to_messages"), "invalid partial failure leg")
+    require(type(data["turn"]) is int and 1 <= data["turn"] <= 3, "invalid partial failure turn")
+    require(type(data["test_duration_ms"]) is int and 0 <= data["test_duration_ms"] <= 30000, "invalid partial failure duration")
+    require(type(data["provider_dispatches"]) is int and 0 <= data["provider_dispatches"] <= 8, "invalid partial failure dispatch count")
+    require(data["http_status_scope"] in ("provider", "gateway", "unknown"), "invalid partial failure status scope")
+    require(data["terminal"] in ("tool_use", "end_turn", "max_tokens", "stop_sequence", "completed", "missing", "other"), "invalid partial failure terminal")
+    require(data["tool_class"] in ("weather", "clock", "other"), "invalid partial failure tool classification")
+    require(data["category"] in ("unexpected_tool_name", "unexpected_tool_arguments", "tool_round_missing", "final_turn_missing", "terminal_missing", "event_invalid", "stream_read", "message_shape_invalid", "other"), "invalid partial failure category")
+    require(type(data["retries"]) is int and data["retries"] == 0, "partial failure retries must be zero")
+    if "http_status" in data:
+        require(type(data["http_status"]) is int and 100 <= data["http_status"] <= 599 and data["http_status_scope"] in ("provider", "gateway"), "invalid partial failure HTTP status")
+    else:
+        require(data["http_status_scope"] == "unknown", "missing partial failure status scope")
+    print("PASS sanitized partial failure schema/allowlists")
 
 
 class Fake(http.server.BaseHTTPRequestHandler):
@@ -228,6 +281,16 @@ def self_test(outdir):
         compatible_path = outdir / "compatible-model.json"
         compatible_path.write_text(json.dumps(compatible))
         require(load(compatible_path, "direct_messages")["backend_model"] == "cc/claude-sonnet-5-5", "compatible profile rejected explicit model override")
+        require(len(load(compatible_path, "direct_messages")["requests"]) == 3, "compatible continuation requests rejected")
+        compatible["limits"]["max_output_tokens"] = 257
+        compatible_path.write_text(json.dumps(compatible))
+        try:
+            load(compatible_path, "direct_messages")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("compatible profile accepted output cap over 256")
+        compatible["limits"]["max_output_tokens"] = 256
         compatible.pop("test_only_model_override")
         compatible_path.write_text(json.dumps(compatible))
         try:
@@ -247,6 +310,53 @@ def self_test(outdir):
         compatible_gateway_path = outdir / "compatible-gateway.json"
         compatible_gateway_path.write_text(json.dumps(compatible_gateway))
         validate_pair(compatible_path, compatible_gateway_path)
+        batch_direct = json.loads(json.dumps(compatible))
+        batch_gateway = json.loads(json.dumps(compatible_gateway))
+        for artifact, purpose in ((batch_direct, "tool_round"), (batch_gateway, "tool_round")):
+            artifact["scenario"] = "two_rounds"
+            artifact["fixture_id"] = "m4-041-tool-two-rounds-v1"
+            artifact["observations"]["tool_links"] = ["call_1", "result_for_call_1", "call_2", "result_for_call_2"]
+            artifact["observations"]["usage"] = "unknown"
+            artifact["observations"]["target_dispatches"] = 3
+            for request in artifact["requests"]:
+                request["purpose"] = purpose
+        batch_gateway["requests"].append({"run": 1, "attempt": 1, "timeout_seconds": 30, "max_output_tokens": 256, "status": 200, "stream": True, "api_path": "/v1/responses", "purpose": "cancellation"})
+        batch_gateway["observations"]["target_dispatches"] = 4
+        batch_gateway["observations"]["cancellation"] = {"client_cancelled": True, "provider_context_cancelled": True, "remote_compute": "unknown", "provider_dispatches": 1, "retries": 0, "accounting_finalizations": 1}
+        batch_direct_path, batch_gateway_path = outdir / "batch-direct.json", outdir / "batch-gateway.json"
+        batch_direct_path.write_text(json.dumps(batch_direct))
+        batch_gateway_path.write_text(json.dumps(batch_gateway))
+        validate_pair(batch_direct_path, batch_gateway_path)
+        batch_gateway["observations"]["cancellation"]["accounting_finalizations"] = 2
+        batch_gateway_path.write_text(json.dumps(batch_gateway))
+        try:
+            validate_pair(batch_direct_path, batch_gateway_path)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("validator accepted duplicate cancellation finalization")
+        over_batch = json.loads(compatible_gateway_path.read_text())
+        over_batch["requests"] = over_batch["requests"] * 6
+        over_batch_path = outdir / "over-batch.json"
+        over_batch_path.write_text(json.dumps(over_batch))
+        try:
+            validate_pair(compatible_path, over_batch_path)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("validator accepted a batch exceeding eight provider calls")
+        partial = {"schema_version": 1, "endpoint_profile": "compatible_endpoint", "test_only_model_override": True, "leg": "direct_messages", "turn": 1, "http_status": 200, "test_duration_ms": 1440, "http_status_scope": "provider", "provider_dispatches": 1, "terminal": "tool_use", "tool_class": "other", "category": "unexpected_tool_name", "retries": 0}
+        partial_path = outdir / "partial-failure.json"
+        partial_path.write_text(json.dumps(partial))
+        validate_partial_failure(partial_path)
+        partial["tool_name"] = "PRIVATE_TOOL_NAME"
+        partial_path.write_text(json.dumps(partial))
+        try:
+            validate_partial_failure(partial_path)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("validator accepted raw partial failure tool name")
         compatible["endpoint_profile"] = "official_anthropic"
         compatible.pop("test_only_model_override")
         compatible["backend_model"] = "claude-opus-5-5"
@@ -304,10 +414,13 @@ def main():
     parser.add_argument("gateway", nargs="?")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--partial-failure", type=Path)
     args = parser.parse_args()
     if args.self_test:
         require(args.output_dir is not None, "--self-test requires --output-dir")
         self_test(args.output_dir)
+    elif args.partial_failure is not None:
+        validate_partial_failure(args.partial_failure)
     else:
         require(args.direct and args.gateway, "supply direct and gateway artifact paths")
         validate_pair(args.direct, args.gateway)

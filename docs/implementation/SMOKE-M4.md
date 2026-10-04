@@ -187,8 +187,21 @@ neither `NewTransport` nor YAML/Core. Compatible captures test that endpoint and
 model only and never satisfy or close M4-036, whose direct leg remains pinned to
 `api.anthropic.com`.
 
+The bounded M4-041 compatible batch uses `max_output_tokens`/`max_tokens: 256`,
+one client run, at most eight provider requests total, and one attempt per request.
+For its `two_rounds` tool scenario, direct Messages and translated Responses each
+record three provider requests; the translated leg also records one separately
+identified cancellation request. Compatible batch request records may add
+`purpose: "tool_round" | "cancellation"`. Only the translated document may add a
+`cancellation` observation with the client/provider-context cancellation result,
+retry count, exactly-once accounting finalization count, and
+`remote_compute: "unknown"`; it contains no stream bytes or private payload.
+Usage is recorded as reported only when both input and output counters were
+actually present, otherwise as `reported_or_unknown` or `unknown`.
+
 The `limits` object contains exactly `timeout_seconds`, `max_output_tokens`,
-and `client_runs`; request records contain exactly the keys shown above. For a
+and `client_runs`; standard request records contain exactly the keys shown above
+(M4-041 compatible batches use only the documented `purpose` extension). For a
 reasoning negative, record a rejected gateway outcome with zero upstream
 dispatches. Never store auth-header values or raw payloads.
 

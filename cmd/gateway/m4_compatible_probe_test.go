@@ -118,10 +118,22 @@ type m4CompatCallBudget struct{ calls atomic.Int32 }
 func (b *m4CompatCallBudget) take() bool {
 	for {
 		current := b.calls.Load()
-		if current >= 2 {
+		if current >= 8 {
 			return false
 		}
 		if b.calls.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
+}
+
+func (b *m4CompatCallBudget) takeBatch(n int32) bool {
+	for {
+		current := b.calls.Load()
+		if n < 0 || current+n > 8 {
+			return false
+		}
+		if b.calls.CompareAndSwap(current, current+n) {
 			return true
 		}
 	}
@@ -132,8 +144,11 @@ func TestM4CompatibleProbeBoundsAndRedaction(t *testing.T) {
 		t.Fatal("probe_profile_bounds_changed")
 	}
 	budget := &m4CompatCallBudget{}
-	first, second, third := budget.take(), budget.take(), budget.take()
-	if !first || !second || third || budget.calls.Load() != 2 {
+	accepted := true
+	for range 8 {
+		accepted = budget.take() && accepted
+	}
+	if !accepted || budget.take() || budget.calls.Load() != 8 {
 		t.Fatal("provider_call_cap_not_enforced")
 	}
 	updated, err := m4CompatOverrideBackendModel([]byte(`{"model":"claude-opus-5-5","max_tokens":256}`))
@@ -251,6 +266,7 @@ func TestM4CompatibleLiveProbe(t *testing.T) {
 	if os.Getenv("PESTIROUTE_M4_COMPAT_LIVE") != "1" {
 		t.Skip("live probe requires explicit PESTIROUTE_M4_COMPAT_LIVE=1")
 	}
+	probeStarted := time.Now()
 	baseBytes, err := m4CompatReadHandoff("/tmp/opencode/anthropic-base-url", 2048)
 	if err != nil {
 		t.Fatal("handoff_base_metadata")
@@ -263,29 +279,44 @@ func TestM4CompatibleLiveProbe(t *testing.T) {
 	if err != nil || len(key) == 0 {
 		t.Fatal("handoff_credential_rejected")
 	}
-
+	client, transport := m4CompatHTTPClient(nil)
+	defer transport.CloseIdleConnections()
 	budget := &m4CompatCallBudget{}
-	directStatus, directTerminal := m4CompatDirect(t, endpoint, string(key), budget)
-	if !directTerminal {
-		t.Fatalf("direct_stream_terminal_missing http_status=%d", directStatus)
+	direct, err := m4CompatRunDirectTools(client, endpoint, string(key), budget)
+	if err != nil {
+		if dir := os.Getenv("PESTIROUTE_SMOKE_M4_ARTIFACT_DIR"); dir != "" {
+			direct.Failure.TestDurationMS = time.Since(probeStarted).Milliseconds()
+			if writeErr := m4CompatWritePartialFailure(dir, direct.Failure); writeErr != nil {
+				t.Fatal("partial_failure_write_failed")
+			}
+		}
+		t.Fatalf("direct_tool_batch_failed: %v", err)
 	}
-	gatewayStatus, gatewayTerminal, upstreamStatus := m4CompatGateway(t, endpoint, string(key), budget)
-	if !gatewayTerminal {
-		t.Fatalf("gateway_stream_terminal_missing http_status=%d provider_http_status=%d", gatewayStatus, upstreamStatus)
+	translatedProvider := &m4CompatProviderDoer{endpoint: endpoint, key: string(key), client: client, budget: budget}
+	fixture := newTranslationLifecycleFixture(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), translatedProvider)
+	gatewayClient := fixture.gateway.Client()
+	gatewayClient.Timeout = m4CompatTimeout
+	translated, err := m4CompatRunResponsesTools(t, fixture, gatewayClient, budget)
+	if err != nil {
+		if dir := os.Getenv("PESTIROUTE_SMOKE_M4_ARTIFACT_DIR"); dir != "" {
+			translated.Failure.TestDurationMS = time.Since(probeStarted).Milliseconds()
+			if writeErr := m4CompatWritePartialFailure(dir, translated.Failure); writeErr != nil {
+				t.Fatal("partial_failure_write_failed")
+			}
+		}
+		t.Fatalf("translated_tool_batch_failed: %v", err)
+	}
+	cancelled := make(chan struct{}, 1)
+	cancellationStatus := m4CompatTranslatedCancellation(t, endpoint, string(key), client, budget, cancelled)
+	if budget.calls.Load() != 7 {
+		t.Fatalf("compatible_batch_provider_calls=%d", budget.calls.Load())
 	}
 	if dir := os.Getenv("PESTIROUTE_SMOKE_M4_ARTIFACT_DIR"); dir != "" {
-		if err := m4CompatWriteArtifacts(dir, directStatus, gatewayStatus); err != nil {
+		if err := m4CompatBatchArtifacts(dir, direct, translated, 1, cancellationStatus); err != nil {
 			t.Fatal("artifact_write_failed")
 		}
 	}
-	t.Logf("compatible_probe complete direct_status=%d gateway_status=%d provider_calls=%d retries=0", directStatus, gatewayStatus, budget.calls.Load())
-}
-
-func m4CompatDirect(t *testing.T, endpoint, key string, budget *m4CompatCallBudget) (int, bool) {
-	t.Helper()
-	client, tr := m4CompatHTTPClient(nil)
-	defer tr.CloseIdleConnections()
-	return m4CompatDirectWithClient(t, client, endpoint, key, budget)
+	t.Logf("compatible_batch complete direct_rounds=%d translated_rounds=%d cancellation_dispatches=1 provider_calls=%d direct_usage=%s translated_usage=%s retries=0 remote_compute_cancellation=unknown", len(direct.Requests), len(translated.Requests), budget.calls.Load(), direct.Usage, translated.Usage)
 }
 
 func m4CompatHTTPClient(base *http.Transport) (*http.Client, *http.Transport) {
@@ -464,6 +495,134 @@ func TestM4CompatibleHTTP2TransportDirectAndGateway(t *testing.T) {
 	}
 	if hits.Load() != 2 || budget.calls.Load() != 2 || protocolMismatch.Load() {
 		t.Fatalf("http2_fixture_invariant_failed hits=%d calls=%d protocol_mismatch=%t", hits.Load(), budget.calls.Load(), protocolMismatch.Load())
+	}
+}
+
+func TestM4CompatibleDirectToolResultReplayAndUsage(t *testing.T) {
+	var turns atomic.Int32
+	var replayOK atomic.Bool
+	backend := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turn := int(turns.Add(1))
+		if r.ProtoMajor != 2 || r.URL.Path != "/v1/messages" {
+			t.Errorf("direct_tool_http_contract")
+		}
+		var request struct {
+			Model    string `json:"model"`
+			Max      int    `json:"max_tokens"`
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		if json.NewDecoder(r.Body).Decode(&request) != nil || request.Model != m4CompatModel || request.Max != m4CompatMax {
+			t.Errorf("direct_tool_request_bounds")
+			return
+		}
+		if turn == 2 {
+			replayOK.Store(len(request.Messages) == 3 && request.Messages[1].Role == "assistant" && bytes.Contains(request.Messages[2].Content, []byte(`"tool_use_id":"call-weather"`)))
+		}
+		if turn == 3 && (len(request.Messages) != 5 || !bytes.Contains(request.Messages[4].Content, []byte(`"tool_use_id":"call-clock"`))) {
+			t.Errorf("second_tool_result_replay_missing")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch turn {
+		case 1:
+			_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call-weather\",\"name\":\"weather\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\\\"Paris\\\"}\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		case 2:
+			_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call-clock\",\"name\":\"clock\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		case 3:
+			_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Weather and time recorded.\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+		default:
+			t.Errorf("unexpected_direct_tool_turn")
+		}
+	}))
+	backend.EnableHTTP2 = true
+	backend.StartTLS()
+	defer backend.Close()
+	transport := backend.Client().Transport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	client := &http.Client{Transport: transport, Timeout: m4CompatTimeout}
+	defer transport.CloseIdleConnections()
+	budget := &m4CompatCallBudget{}
+	if !budget.takeBatch(3) {
+		t.Fatal("batch_call_budget")
+	}
+	history := []any{map[string]any{"role": "user", "content": "Get weather, then clock."}}
+	for turn := 1; turn <= 3; turn++ {
+		body, _ := json.Marshal(map[string]any{"model": m4CompatModel, "max_tokens": m4CompatMax, "stream": true, "messages": history, "tools": []any{map[string]any{"name": "weather", "input_schema": map[string]any{"type": "object"}}, map[string]any{"name": "clock", "input_schema": map[string]any{"type": "object"}}}})
+		req, err := http.NewRequest(http.MethodPost, backend.URL+"/v1/messages", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal("request_build")
+		}
+		req.Header.Set("x-api-key", "synthetic-offline-only")
+		req.Header.Set("anthropic-version", "2023-06-01")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal("direct_tool_request")
+		}
+		payload, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK || !bytes.Contains(payload, []byte("message_stop")) {
+			t.Fatal("direct_tool_stream")
+		}
+		if turn == 1 && (!bytes.Contains(payload, []byte(`"input_tokens":7`)) || !bytes.Contains(payload, []byte(`"output_tokens":2`))) {
+			t.Fatal("reported_usage_missing")
+		}
+		if turn == 1 && (!bytes.Contains(payload, []byte(`"type":"tool_use"`)) || !bytes.Contains(payload, []byte(`"id":"call-weather"`)) || !bytes.Contains(payload, []byte(`"name":"weather"`))) {
+			t.Fatal("tool_use_block_missing")
+		}
+		if turn == 3 && bytes.Contains(payload, []byte(`"input_tokens"`)) {
+			t.Fatal("missing_usage_should_remain_unknown")
+		}
+		if turn == 3 && !bytes.Contains(payload, []byte("Weather and time recorded.")) {
+			t.Fatal("final_text_missing")
+		}
+		if turn == 1 {
+			history = append(history, map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "call-weather", "name": "weather", "input": map[string]any{"city": "Paris"}}}}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call-weather", "content": "18C clear"}}})
+		}
+		if turn == 2 {
+			history = append(history, map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "call-clock", "name": "clock", "input": map[string]any{}}}}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call-clock", "content": "12:00Z"}}})
+		}
+	}
+	if turns.Load() != 3 || budget.calls.Load() != 3 || !replayOK.Load() {
+		t.Fatal("tool_result_replay_failed")
+	}
+}
+
+func TestM4CompatibleDirectCancellationDoesNotRetry(t *testing.T) {
+	started, canceled := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_start\ndata: {}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+		close(canceled)
+	}))
+	defer server.Close()
+	var calls atomic.Int32
+	client := &http.Client{Transport: m4CompatRoundTrip(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return http.DefaultTransport.RoundTrip(req)
+	}), Timeout: m4CompatTimeout}
+	ctx, cancel := context.WithCancel(context.Background())
+	body := []byte(`{"model":"cc/claude-sonnet-5-5","max_tokens":256,"stream":true,"messages":[]}`)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL, bytes.NewReader(body))
+	respCh := make(chan *http.Response, 1)
+	errCh := make(chan error, 1)
+	go func() { resp, err := client.Do(req); respCh <- resp; errCh <- err }()
+	<-started
+	resp := <-respCh
+	if resp == nil || resp.Body == nil {
+		cancel()
+		t.Fatal("cancel_fixture_response")
+	}
+	cancel()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	<-canceled
+	if err := <-errCh; err != nil || calls.Load() != 1 {
+		t.Fatalf("cancellation_retried_or_failed calls=%d", calls.Load())
 	}
 }
 
