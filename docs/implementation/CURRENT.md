@@ -27,25 +27,24 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-034 DONE (awaiting verified commit; batch 16/19 DONE)
+## Immediate focus: M4-035 DONE (awaiting verified commit; batch 17/19 DONE)
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 [38 bounded cards](TASKS.md#m4--first-translation-connector) for Responses ↔
-Anthropic Messages translation. All 33 predecessor tasks ([M4-001](tasks/M4-001.md)
-through [M4-033](tasks/M4-033.md)) are committed (`dd3aee5`). Batch progress:
-16 of 19 objective DONE (total 34 DONE; 4 remaining in M4; 3 remaining in batch).
+Anthropic Messages translation. All 34 predecessor tasks ([M4-001](tasks/M4-001.md)
+through [M4-034](tasks/M4-034.md)) are committed through `5b17760`. Batch progress:
+17 of 19 objective DONE (total 35 DONE; 3 remaining in M4; 2 remaining in batch).
 
-[M4-034](tasks/M4-034.md) (Document and verify runnable local M4 operations)
-acceptance is reviewed and closed DONE (reviewer PASS `ses_efb7d74fbffe6hx8iBQR4Rk6QS`).
-The reproducible offline procedure in [LOCAL-M4](LOCAL-M4.md) demonstrates
-master key generation, admin migration to schema v6, account/credential/policy/key
-provisioning, dual native/translated protected YAML gateway startup, authorized native
-dispatch, local fail-closed validation/rejection for translation routes (`stream: false`
-and undeclared structured output), 429 rate limiting, usage queries, graceful restart,
-and WAL-safe SQLite backup/restore integrity with retained external master key decryption.
-Zero synthetic credentials leaked to logs. 34 tasks are DONE in the registry;
+[M4-035](tasks/M4-035.md) (Prepare bounded direct-versus-gateway smoke capture)
+acceptance is reviewed and closed DONE (reviewer PASS `ses_efb74802bffemwvER6Jm0YGNth`).
+The reproducible offline procedure in [SMOKE-M4](SMOKE-M4.md) and its validator
+harness (`scripts/smoke-m4-artifacts.py`) establish pinned direct Messages and
+protected Responses-to-Messages translation legs, five matched comparison scenarios,
+strict request/time/token caps, credential redaction rules, and loopback fake artifact
+generation. Deliberate over-cap and credential-leak fixtures fail closed. Zero live
+credentials or external network requests used. 35 tasks are DONE in the registry;
 implementation is preserved. Per policy, no next card is prepared or promoted until
-the M4-034 commit is cleanly created and verified.
+the M4-035 commit is cleanly created and verified.
 
 Assign one READY card per worker. Refresh dependent DRAFTs against actual results
 before promotion; do not implement their dependencies in one session. Local

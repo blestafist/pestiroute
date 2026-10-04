@@ -3,17 +3,23 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	anthropic "github.com/blestafist/pestiroute/internal/connector/anthropic"
@@ -146,6 +152,8 @@ func TestTranslationClientOwnedToolRounds(t *testing.T) {
 	gateway := httptest.NewServer(h)
 	defer gateway.Close()
 	client := gateway.Client()
+	client.Timeout = 30 * time.Second
+	var clientStatuses []int
 
 	// This history belongs to the test client; the gateway receives only each POST body.
 	history := []map[string]any{{"type": "message", "role": "user", "content": "Help me check the weather and time."}}
@@ -155,7 +163,7 @@ func TestTranslationClientOwnedToolRounds(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		body := fmt.Sprintf(`{"model":"client-model","stream":true,"input":%s,"tools":[{"type":"function","name":"weather","parameters":{"type":"object"}},{"type":"function","name":"clock","parameters":{"type":"object"}}]}`, input)
+		body := fmt.Sprintf(`{"model":"client-model","stream":true,"max_output_tokens":256,"input":%s,"tools":[{"type":"function","name":"weather","description":"Get fixture weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}},{"type":"function","name":"clock","description":"Get fixture UTC time","parameters":{"type":"object","properties":{"zone":{"type":"string"}},"required":["zone"],"additionalProperties":false}}]}`, input)
 		req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
@@ -170,6 +178,7 @@ func TestTranslationClientOwnedToolRounds(t *testing.T) {
 			data, _ := io.ReadAll(response.Body)
 			t.Fatalf("turn %d status=%d content-type=%q body=%s", turn+1, response.StatusCode, response.Header.Get("Content-Type"), data)
 		}
+		clientStatuses = append(clientStatuses, response.StatusCode)
 		events, calls, text := readToolRound(t, response.Body, releases[turn])
 		_ = response.Body.Close()
 		if len(events) == 0 || events[len(events)-1]["type"] != "response.completed" {
@@ -311,6 +320,43 @@ func TestTranslationClientOwnedToolRounds(t *testing.T) {
 	for i := range wantMessages {
 		if !reflect.DeepEqual(requests[i]["messages"], wantMessages[i]) {
 			t.Errorf("turn %d translated messages=%#v, want %#v", i+1, requests[i]["messages"], wantMessages[i])
+		}
+		if requests[i]["max_tokens"] != float64(256) {
+			t.Errorf("turn %d upstream max_tokens=%v, want 256", i+1, requests[i]["max_tokens"])
+		}
+	}
+	if artifactDir := os.Getenv("PESTIROUTE_SMOKE_M4_ARTIFACT_DIR"); artifactDir != "" {
+		source, err := os.ReadFile("translation_tool_rounds_test.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sourceHash := sha256.Sum256(source)
+		artifact := map[string]any{
+			"schema_version": 1, "leg": "gateway_responses_to_messages",
+			"captured_at_utc": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+			"source_revision": hex.EncodeToString(sourceHash[:]),
+			"client":          map[string]string{"name": "Go http.Client", "version": runtime.Version()},
+			"gateway":         map[string]string{"client_protocol": responsesProtocol, "route_model": "client-model", "source_revision": hex.EncodeToString(sourceHash[:])},
+			"provider":        map[string]string{"api": "anthropic-messages", "api_version": "2023-06-01"},
+			"scenario":        "two_rounds", "fixture_id": "tool-rounds-weather-clock-v1", "backend_model": "claude-opus-5-5",
+			"limits": map[string]int{"timeout_seconds": 30, "max_output_tokens": 256, "client_runs": 1},
+			"requests": []map[string]any{
+				{"run": 1, "attempt": 1, "timeout_seconds": 30, "max_output_tokens": 256, "status": clientStatuses[0], "stream": true, "api_path": "/v1/responses"},
+				{"run": 1, "attempt": 1, "timeout_seconds": 30, "max_output_tokens": 256, "status": clientStatuses[1], "stream": true, "api_path": "/v1/responses"},
+				{"run": 1, "attempt": 1, "timeout_seconds": 30, "max_output_tokens": 256, "status": clientStatuses[2], "stream": true, "api_path": "/v1/responses"},
+			},
+			"outcome":      "completed",
+			"observations": map[string]any{"terminal": "response.completed", "tool_links": []string{"call_1", "call_2", "call_3"}, "usage": "unknown", "target_dispatches": 3},
+		}
+		encoded, err := json.MarshalIndent(artifact, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(artifactDir, "gateway.json"), append(encoded, '\n'), 0o600); err != nil {
+			t.Fatal(err)
 		}
 	}
 }
