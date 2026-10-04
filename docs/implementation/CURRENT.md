@@ -41,15 +41,15 @@ and final review fixes are committed; [M4-045](tasks/M4-045.md) retains evidence
 The new branch is `dev-m5.1`, based on that merge. The
 [Codex plan](TASKS.md#m51--codex-subscription-connector) has 43 small cards:
 [M5.1-001](tasks/M5.1-001.md), [M5.1-002](tasks/M5.1-002.md),
-[M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md), and
-[M5.1-005](tasks/M5.1-005.md) are DONE, resolving the source/profile baseline,
-safe device-login presentation/continuation, atomic OAuth credential/freshness
-binding, request dialect/affinity/retry policy under accepted
+[M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
+[M5.1-005](tasks/M5.1-005.md), and [M5.1-006](tasks/M5.1-006.md) are DONE,
+resolving the source/profile baseline, safe device-login presentation/continuation,
+atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
 and [DEC-010](../project/DECISIONS.md#dec-010--carry-credential-expiry-with-auth-results),
-and versioned synthetic OAuth test fixtures; independent [M5.1-006](tasks/M5.1-006.md)
-is eligible in the authorized backlog (deps DONE); 38 dependent cards remain DRAFT
-pending sequential promotion. The selected profile is not a live support or
+versioned synthetic OAuth test fixtures, and versioned Responses stream/replay fixtures
+(test-only invariants, not runtime validation or production claims); 37 dependent cards
+remain DRAFT pending sequential promotion. The selected profile is not a live support or
 entitlement claim.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.

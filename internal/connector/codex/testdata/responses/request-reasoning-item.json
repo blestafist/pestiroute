@@ -1,0 +1,1 @@
+{"model":"gpt-5.4-mini","stream":true,"store":false,"include":["reasoning.encrypted_content"],"input":[{"type":"reasoning","id":"rs_synthetic_01","summary":[{"type":"summary_text","text":"Synthetic summary fragment."}],"encrypted_content":"synthetic-ciphertext-not-a-credential"},{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue."}]}]}

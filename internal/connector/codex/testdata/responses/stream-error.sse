@@ -1,0 +1,3 @@
+event: error
+data: {"type":"error","error":{"code":"synthetic_error","message":"Synthetic stream error."}}
+
