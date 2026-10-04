@@ -27,21 +27,29 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M4-037 DONE; DEC-008/D18 accepted; M4-036/M4-041 BLOCKED; M4-038 DRAFT (eligible after commit verification)
+## Immediate focus: M4 offline milestone COMPLETE under accepted DEC-008/D18; handoff to M5.1 research
 
 The original [M4](ROADMAP.md#m4--first-translation-connector) is decomposed into
 cards for Responses ↔ Anthropic Messages translation. Of 44 registered M4 rows in
-[TASKS](TASKS.md), 41 are complete ([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md),
-[M4-037](tasks/M4-037.md), [M4-039](tasks/M4-039.md), [M4-040](tasks/M4-040.md), [M4-042](tasks/M4-042.md),
-[M4-043](tasks/M4-043.md), and [M4-044](tasks/M4-044.md)), 2 are BLOCKED ([M4-036](tasks/M4-036.md), [M4-041](tasks/M4-041.md)),
-1 remains DRAFT ([M4-038](tasks/M4-038.md)), and 0 are ACTIVE or READY.
+[TASKS](TASKS.md), 42 are complete ([M4-001](tasks/M4-001.md) through [M4-035](tasks/M4-035.md),
+[M4-037](tasks/M4-037.md) through [M4-040](tasks/M4-040.md), and [M4-042](tasks/M4-042.md) through
+[M4-044](tasks/M4-044.md)), 2 are BLOCKED ([M4-036](tasks/M4-036.md), [M4-041](tasks/M4-041.md)),
+0 remain DRAFT, 0 are ACTIVE, and 0 are READY.
 
-[M4-037](tasks/M4-037.md) is closed DONE (reviewer PASS `ses_ef7cd9695ffeUzlGtXwqYLJ5XD`).
-Its claim audit aligned `M4-COMPATIBILITY.md` with deterministic local proof and bounded compatible-endpoint
-observations (M4-040 text-stream success under test-only override; M4-041 local unversioned tool extraction
-failure with endpoint tool cycles unknown). Official live verification ([M4-036](tasks/M4-036.md)) remains
-deferred per accepted DEC-008/D18 and retained strictly BLOCKED as a mandatory pre-production release gate.
-[M4-038](tasks/M4-038.md) remains DRAFT pending scoped commit verification.
+[M4-038](tasks/M4-038.md) is closed DONE with reviewer explicit PASS `ses_ef7c003eaffeNmXuKoJsAITFUV`.
+Offline M4 milestone acceptance is fully verified: offline conformance, Core protocol
+neutrality, native byte preservation, SSE stream lifecycle, and fail-closed translation
+without silent semantic loss.
+
+Official Anthropic live verification ([M4-036](tasks/M4-036.md)) remains deferred per
+accepted DEC-008/D18 and retained strictly BLOCKED as a mandatory pre-production release gate.
+No tool cycles passed, compatible endpoint tools remain unknown, and [M4-041](tasks/M4-041.md)
+remains BLOCKED. The 5 uncommitted M4-041 harness files are preserved in the working tree.
+The custom endpoint model (`cc/claude-sonnet-5-5`) is strictly a test-only override, not a
+production custom model.
+
+The autonomous finite offline batch is complete. Next step is bounded M5.1 Codex translation
+research and scoping only; no M5 tasks or code are implemented.
 
 [M4-041](tasks/M4-041.md) is settled as BLOCKED. Its authorized live batch stopped after
 one direct Messages request: actual HTTP 200, turn 1, terminal `tool_use`, safe tool class `other`,
@@ -59,7 +67,9 @@ fixtures and existing M3 services support development without real credentials.
 Live capture is a separate later gate. [Tooling](TOOLING.md#m4-tooling-gate) retains
 Context7, gopls and existing shell/Git checks without a new MCP installation.
 
-Roadmap order remains unchanged: Anthropic in M4, Codex in M5.1. Reuse registry,
+Immediate M5.1 planning focus is Codex translation research and scoping; no M5.1
+implementation is included in this handoff. Roadmap order remains unchanged:
+Anthropic in M4, Codex in M5.1. Reuse registry,
 scoped services, authorization/admission/accounting and dispatch. The existing
 generic translation mode is composed without provider branches in Core; request
 transformation, provider SSE/errors and token normalization remain Connector-owned.
