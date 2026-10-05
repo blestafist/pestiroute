@@ -60,6 +60,8 @@ func TestValidateResponsesProfile(t *testing.T) {
 		{"background", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"background":true}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"continuation", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"previous_response_id":"private"}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"conversation", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"conversation":"private"}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"server compaction context", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"context_management":[{"type":"compaction"}]}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"server compaction trigger", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"compaction_trigger":{"type":"threshold"}}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"output cap", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"max_output_tokens":4}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"tool type", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"web_search"}]}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"unknown tool choice", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tool_choice":"random"}`, core.ModeNative, core.CategoryUnsupportedFeature},

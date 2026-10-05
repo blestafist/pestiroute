@@ -32,7 +32,7 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 		return invalid("Invalid Responses request JSON")
 	}
 	for name := range fields {
-		for _, governed := range []string{"model", "input", "stream", "store", "tools", "tool_choice", "parallel_tool_calls", "background", "previous_response_id", "conversation", "max_output_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "text", "truncation", "modalities", "audio", "image", "video", "file_search", "attachments"} {
+		for _, governed := range []string{"model", "input", "stream", "store", "tools", "tool_choice", "parallel_tool_calls", "background", "previous_response_id", "conversation", "context_management", "compaction_trigger", "max_output_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "text", "truncation", "modalities", "audio", "image", "video", "file_search", "attachments"} {
 			if name != governed && strings.EqualFold(name, governed) {
 				return invalid("Invalid Responses request field")
 			}
@@ -69,7 +69,7 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 	} else if mode == core.ModeNative {
 		return invalid("Native Responses requests require store:false")
 	}
-	for _, name := range []string{"background", "previous_response_id", "conversation", "max_output_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "text", "truncation", "modalities", "audio", "image", "video", "file_search", "attachments"} {
+	for _, name := range []string{"background", "previous_response_id", "conversation", "context_management", "compaction_trigger", "max_output_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "text", "truncation", "modalities", "audio", "image", "video", "file_search", "attachments"} {
 		if raw, ok := fields[name]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			if name == "background" && bytes.Equal(bytes.TrimSpace(raw), []byte("false")) {
 				continue
