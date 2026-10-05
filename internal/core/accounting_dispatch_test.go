@@ -764,6 +764,7 @@ func TestDispatchAccountingStreamCancellationAndTrailingFrameOnce(t *testing.T) 
 	}{
 		{name: "cancellation", frames: []StreamFrame{head()}, close: true, want: OutcomeCancelled},
 		{name: "trailing frame", frames: []StreamFrame{head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded}}, body()}, want: OutcomeFailed},
+		{name: "duplicate Complete", frames: []StreamFrame{head(), {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded}}, {Type: FrameComplete, Complete: &CompleteFrame{Outcome: OutcomeSucceeded}}}, want: OutcomeFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			finals := 0

@@ -22,7 +22,7 @@ import (
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
-func TestCodexRealSocketStreamingAndTerminalSettlement(t *testing.T) {
+func TestCodexSettlementStreamingAndTerminalUsage(t *testing.T) {
 	_, dbPath, keyPath := protectedFixture(t)
 	ctx := context.Background()
 	db, err := sqlite.Open(dbPath)
@@ -69,7 +69,7 @@ func TestCodexRealSocketStreamingAndTerminalSettlement(t *testing.T) {
 	}
 	input, output := int64(7), int64(3)
 	cases := []outcome{
-		{name: "completed", terminal: "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}}\n\n", state: "succeeded", input: &input, output: &output, completeness: "complete"},
+		{name: "completed", terminal: "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3,\"input_tokens_details\":{\"cached_tokens\":2},\"output_tokens_details\":{\"reasoning_tokens\":1}}}}\n\n", state: "succeeded", input: &input, output: &output, completeness: "complete"},
 		{name: "incomplete", terminal: "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}}\n\n", state: "incomplete", input: &input, output: &output, completeness: "partial"},
 		{name: "failed", terminal: "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}}\n\n", state: "failed", input: &input, output: &output, completeness: "partial"},
 		{name: "error", terminal: "event: error\ndata: {\"type\":\"error\",\"response\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}}\n\n", state: "failed", input: &input, output: &output, completeness: "partial"},
@@ -205,7 +205,20 @@ func TestCodexRealSocketStreamingAndTerminalSettlement(t *testing.T) {
 			t.Fatalf("ledger request=%+v attempts=%+v", row.Request, row.Attempts)
 		}
 		usage := row.Attempts[0].Usage
+		reservation := row.Attempts[0].Reservation
+		if reservation.State != "settled" && reservation.State != "conservative" {
+			t.Errorf("request %s reservation state=%q, want durable settlement", row.Request.ID, reservation.State)
+		}
 		gotLedger[fmt.Sprintf("%s/%s/%s/%s", row.Request.State, usage.Completeness, tokenValue(usage.InputTokens), tokenValue(usage.OutputTokens))]++
+		if row.Request.State == "succeeded" {
+			if usage.CachedTokens == nil || *usage.CachedTokens != 2 || usage.ReasoningTokens == nil || *usage.ReasoningTokens != 1 || reservation.State != "settled" || reservation.ActualTokens == nil || *reservation.ActualTokens != 10 || reservation.EffectiveCharge != 10 {
+				t.Errorf("complete Codex usage was not durably settled exactly: usage=%+v reservation=%+v", usage, reservation)
+			}
+		} else if row.Request.State == "interrupted" || row.Request.State == "failed" || row.Request.State == "incomplete" {
+			if reservation.EffectiveCharge < reservation.EstimatedTokens {
+				t.Errorf("partial/unknown Codex usage undercharged reservation: %+v", reservation)
+			}
+		}
 	}
 	for key, count := range wantLedger {
 		if gotLedger[key] != count {
@@ -219,6 +232,73 @@ func TestCodexRealSocketStreamingAndTerminalSettlement(t *testing.T) {
 	}
 	if got := upstreamCalls.Load(); got != int32(len(cases)) {
 		t.Fatalf("upstream calls=%d want=%d", got, len(cases))
+	}
+}
+
+func TestCodexSettlementRestartReconcilesIntentOnce(t *testing.T) {
+	_, dbPath, _ := protectedFixture(t)
+	ctx := context.Background()
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const accountID, connectorID, model = "codex-account", "codex", "codex-model"
+	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: connectorID, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	policies := sqlite.NewKeyPolicies(db)
+	policy, err := policies.GetLatest(ctx, "policy-id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err = policies.Update(ctx, policy.ID, policy.Revision, sqlite.UpdateKeyPolicyParams{Enabled: true, Models: []string{model}, Connectors: []string{connectorID}, RPM: 20, TPM: 10000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := sqlite.NewVirtualKeys(db).Verify(ctx, issued.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := sqlite.NewLedger(db)
+	requestID, attemptID := "codex-crash-request", "codex-crash-attempt"
+	now := time.Now().UTC()
+	if err := ledger.Admit(ctx,
+		sqlite.RequestRecord{ID: requestID, VirtualKeyID: principal.KeyID, KeyRevision: principal.KeyRevision, PolicyID: principal.PolicyID, PolicyRevision: principal.PolicyRevision, Protocol: responsesProtocol, Model: model, RouteID: "codex-route", AcceptedAt: now, State: "admitted"},
+		sqlite.AttemptRecord{ID: attemptID, RequestID: requestID, Ordinal: 1, AccountID: accountID, Connector: connectorID, RouteID: "codex-route", BudgetPolicy: "reserve", EstimateTokens: 100, EstimateMethod: "conservative", State: "reserved"},
+		sqlite.ReservationRecord{AttemptID: attemptID, EstimatedTokens: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.RecordDispatchIntent(ctx, attemptID, now.Add(time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	recovered := sqlite.NewLedger(db)
+	first, err := recovered.Recover(ctx)
+	if err != nil || first.AttemptsInterrupted != 1 || first.RequestsInterrupted != 1 {
+		t.Fatalf("Codex crash recovery summary=%+v err=%v", first, err)
+	}
+	second, err := recovered.Recover(ctx)
+	if err != nil || second != first {
+		t.Fatalf("repeated Codex recovery=%+v err=%v, first=%+v", second, err, first)
+	}
+	rows, err := recovered.QueryRequests(ctx, sqlite.RequestFilter{Model: model, Limit: 2})
+	if err != nil || len(rows) != 1 || len(rows[0].Attempts) != 1 {
+		t.Fatalf("recovered Codex rows=%+v err=%v", rows, err)
+	}
+	got := rows[0].Attempts[0]
+	if rows[0].Request.State != "interrupted" || got.Attempt.State != "interrupted" || got.Usage == nil || got.Usage.Completeness != "unknown" || got.Reservation.State != "conservative" || got.Reservation.EffectiveCharge != 100 {
+		t.Fatalf("Codex recovery fabricated free work or lost conservative charge: request=%+v attempt=%+v usage=%+v reservation=%+v", rows[0].Request, got.Attempt, got.Usage, got.Reservation)
 	}
 }
 
