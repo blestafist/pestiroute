@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -300,6 +301,203 @@ func TestCodexConcurrentRefresh(t *testing.T) {
 			t.Fatalf("external CAS refresh marker lifecycle=%q reason=%q", lifecycle, reason)
 		}
 	})
+}
+
+func TestCodexAuthUncertaintyPersistenceFailureAndRestart(t *testing.T) {
+	var calls atomic.Int32
+	transport := codexAuthDoer(func(r *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		switch r.URL.Path {
+		case "/oauth/token":
+			form, _ := url.ParseQuery(readRequestBody(t, r))
+			if form.Get("grant_type") == "refresh_token" {
+				return codexRefreshResponse(r, t)
+			}
+			body := fmt.Sprintf(`{"access_token":%q,"refresh_token":"new-refresh","id_token":%q,"expires_in":3600,"token_type":"Bearer"}`, codexTestJWT("account-a"), codexTestJWT("account-a"))
+			return codexJSONResponse(r, body), nil
+		case "/api/accounts/deviceauth/usercode":
+			return codexJSONResponse(r, `{"device_code":"private-device","user_code":"SAFE-CODE","verification_uri":"https://auth.example.test/device","interval":1,"expires_in":300}`), nil
+		case "/api/accounts/deviceauth/token":
+			return codexJSONResponse(r, `{"authorization_code":"private-code","code_verifier":"private-verifier"}`), nil
+		default:
+			t.Errorf("unexpected Codex auth endpoint %s", r.URL.Path)
+			return nil, errors.New("unexpected Codex auth endpoint")
+		}
+	})
+	coordinator, dbPath, _ := newCodexRefreshRuntime(t, transport, "account-a")
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`CREATE TRIGGER fail_codex_credential BEFORE UPDATE ON credentials BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = coordinator.Refresh(context.Background(), "account-a"); !errors.Is(err, core.ErrAuthPersistence) {
+		t.Fatalf("refresh persistence error=%v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("Codex exchange calls=%d, want one", calls.Load())
+	}
+	// Reopen and run the same durable auth-session recovery performed at protected startup.
+	db, err = sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = sqlite.NewAuthSessions(db).RecoverAuthSessions(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycle, reason string
+	if err = db.QueryRow(`SELECT lifecycle, quarantine_reason FROM auth_sessions WHERE account_id='account-a' AND kind='refresh'`).Scan(&lifecycle, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle != "uncertain" || reason != "persistence_failed" {
+		t.Fatalf("refresh marker lifecycle=%q reason=%q", lifecycle, reason)
+	}
+	var revision int64
+	if err = db.QueryRow(`SELECT revision FROM credentials WHERE account_id='account-a'`).Scan(&revision); err != nil || revision != 1 {
+		t.Fatalf("unacknowledged Codex generation revision=%d err=%v", revision, err)
+	}
+	if _, err = coordinator.ResolveFreshCredentials(context.Background(), "account-a", time.Minute); !errors.Is(err, core.ErrAuthUnavailable) {
+		t.Fatalf("quarantined refresh error=%v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("restart repeated Codex exchange; calls=%d", calls.Load())
+	}
+	var quarantined int
+	failed, err := coordinator.Start(context.Background(), "account-a")
+	if err != nil {
+		t.Fatalf("failed reauthentication start: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if _, err = coordinator.Continue(context.Background(), failed.ID); err != nil {
+		t.Fatalf("failed reauthentication poll: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if _, err = coordinator.Continue(context.Background(), failed.ID); !errors.Is(err, core.ErrAuthPersistence) {
+		t.Fatalf("failed reauthentication persistence error=%v", err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE account_id='account-a' AND kind='refresh' AND lifecycle='uncertain'`).Scan(&quarantined); err != nil || quarantined != 1 {
+		t.Fatalf("failed reauthentication resolved quarantine count=%d err=%v", quarantined, err)
+	}
+	if _, err = db.Exec(`DROP TRIGGER fail_codex_credential`); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := coordinator.Start(context.Background(), "account-a")
+	if err != nil {
+		t.Fatalf("stale reauthentication start: %v", err)
+	}
+	key, err := secure.LoadMasterKey(filepath.Join(filepath.Dir(dbPath), "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := sqlite.NewCredentials(db)
+	stored, err := credentials.Get(context.Background(), "account-a", "credential-account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := secure.Seal(key, 1, "key-v1", "credentials", stored.ID, stored.AccountID, []byte(`{"version":1,"access_token":"external-generation","refresh_token":"external-refresh","account_id":"account-a"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.FormatVersion, stored.KeyVersion, stored.Nonce, stored.Ciphertext = envelope.FormatVersion, envelope.KeyVersion, envelope.Nonce, envelope.Ciphertext
+	if _, err = credentials.Update(context.Background(), stored); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = coordinator.Continue(context.Background(), stale.ID); !errors.Is(err, core.ErrAuthRevisionMismatch) {
+		t.Fatalf("stale reauthentication error=%v", err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE account_id='account-a' AND kind='refresh' AND lifecycle='uncertain'`).Scan(&quarantined); err != nil || quarantined != 1 {
+		t.Fatalf("stale reauthentication resolved quarantine count=%d err=%v", quarantined, err)
+	}
+	started, err := coordinator.Start(context.Background(), "account-a")
+	if err != nil {
+		t.Fatalf("explicit reauthentication start: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if _, err = coordinator.Continue(context.Background(), started.ID); err != nil {
+		t.Fatalf("explicit reauthentication continuation: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if _, err = coordinator.Continue(context.Background(), started.ID); err != nil {
+		t.Fatalf("explicit reauthentication exchange: %v", err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE account_id='account-a' AND kind='refresh' AND lifecycle='uncertain'`).Scan(&quarantined); err != nil || quarantined != 0 {
+		t.Fatalf("successful explicit reauthentication left %d quarantined markers, err=%v", quarantined, err)
+	}
+}
+
+func TestCodexAuthUncertaintyRestartConsumesClaimedContinuation(t *testing.T) {
+	var calls atomic.Int32
+	transport := codexAuthDoer(func(r *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		if r.URL.Path != "/api/accounts/deviceauth/usercode" {
+			t.Errorf("unexpected provider request after continuation claim: %s", r.URL.Path)
+			return nil, errors.New("unexpected provider request")
+		}
+		return codexJSONResponse(r, `{"device_code":"private-device","user_code":"SAFE-CODE","verification_uri":"https://auth.example.test/device","interval":1,"expires_in":300}`), nil
+	})
+	coordinator, dbPath, store := newCodexRefreshRuntime(t, transport, "account-a")
+	marker := core.AuthSession{ID: "in-flight-refresh", AccountID: "account-a", ConnectorID: "codex-account-a", Revision: 1}
+	if err := store.CreateRefreshMarker(context.Background(), marker.ID, marker); err != nil {
+		t.Fatal(err)
+	}
+	started, err := coordinator.Start(context.Background(), "account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := sqlite.NewAuthSessions(db)
+	var nonce []byte
+	if err = db.QueryRow(`SELECT nonce FROM auth_sessions WHERE id=?`, started.ID).Scan(&nonce); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err = sessions.ClaimInteractiveSession(context.Background(), started.ID, "account-a", "codex-account-a", 1, nonce, time.Now()); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err = sessions.RecoverAuthSessions(context.Background(), time.Now()); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	var lifecycle, reason string
+	if err = db.QueryRow(`SELECT lifecycle, quarantine_reason FROM auth_sessions WHERE id=?`, marker.ID).Scan(&lifecycle, &reason); err != nil || lifecycle != "uncertain" || reason != "restart_in_progress" {
+		db.Close()
+		t.Fatalf("recovered refresh lifecycle=%q reason=%q err=%v", lifecycle, reason, err)
+	}
+	var consumed, claims int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE id=? AND lifecycle='consumed' AND ciphertext IS NULL`, started.ID).Scan(&consumed); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_session_invocations WHERE session_id=?`, started.ID).Scan(&claims); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = coordinator.Continue(context.Background(), started.ID); !errors.Is(err, core.ErrAuthUnavailable) {
+		t.Fatalf("claimed continuation was replayable after restart: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("provider calls=%d, want only device start", calls.Load())
+	}
+	if consumed != 1 || claims != 0 {
+		t.Fatalf("claimed continuation recovery consumed=%d claims=%d", consumed, claims)
+	}
+}
+
+func codexJSONResponse(r *http.Request, body string) *http.Response {
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}
 }
 
 func assertRefreshMarkerCount(t *testing.T, dbPath string, want int) {
