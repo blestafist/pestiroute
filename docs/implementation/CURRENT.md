@@ -44,7 +44,7 @@ The new branch is `dev-m5.1`, based on that merge. The
 [M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
 [M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md),
 [M5.1-007](tasks/M5.1-007.md), [M5.1-008](tasks/M5.1-008.md),
-[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), and [M5.1-014](tasks/M5.1-014.md) are DONE,
+[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), and [M5.1-015](tasks/M5.1-015.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
@@ -57,8 +57,9 @@ bounded device-authorization continuation polling with fixed-expiry preservation
 authorized authorization code exchange for credentials with DEC-010 expiry,
 candidate-only selected-account token refresh exchange with token rotation/retention and DEC-010 expiry,
 atomic OAuth credential and expiry persistence with single-revision CAS across Core and SQLite,
-and transient Core `AuthSession.UserAction` validation and safe admin CLI presentation;
-29 dependent cards remain DRAFT pending sequential promotion (with [M5.1-015](tasks/M5.1-015.md) and independent [M5.1-019](tasks/M5.1-019.md) eligible next candidates). Downstream M5.1-015 owns RoundTripper-backed transport and account-scoped auth service composition for configured Codex accounts. The selected profile is not a live support or
+transient Core `AuthSession.UserAction` validation and safe admin CLI presentation,
+and default admin auth wiring for configured Codex accounts with redirect-refusing RoundTripper transport and account-scoped credentials;
+28 dependent cards remain DRAFT pending sequential promotion (batch complete at 15 newly DONE tasks). Downstream inference freshness resolution (M5.1-016), concurrent refresh coalescing (M5.1-017), and route composition (M5.1-027) remain future deliverables and are not implemented. The selected profile is not a live support or
 entitlement claim.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.

@@ -3,12 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -176,6 +182,173 @@ func TestAdminAuthNativeUnsupportedAndRefreshPersistenceFailure(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestAdminAuthCodexConfiguredRegistryUsesLocalRoundTripper(t *testing.T) {
+	ctx := context.Background()
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: "codex-account", Connector: "codex", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := secure.Seal(key, 1, "v1", "credentials", "oauth", "codex-account", []byte(`{"version":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: "oauth", AccountID: "codex-account", FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var polls, exchanges, refreshes int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			_, _ = fmt.Fprint(w, `{"device_code":"private-device","user_code":"SAFE-CODE","verification_uri":"https://auth.example.test/device","interval":1,"expires_in":300}`)
+		case "/api/accounts/deviceauth/token":
+			polls++
+			if polls == 1 {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_, _ = fmt.Fprint(w, `{"authorization_code":"private-code","code_verifier":"private-verifier"}`)
+		case "/oauth/token":
+			form, _ := url.ParseQuery(readRequestBody(t, r))
+			switch form.Get("grant_type") {
+			case "authorization_code":
+				exchanges++
+				_, _ = fmt.Fprintf(w, `{"access_token":%q,"refresh_token":%q,"id_token":%q,"expires_in":3600,"token_type":"Bearer"}`, codexTestJWT("codex-account"), "private-refresh", codexTestJWT("codex-account"))
+			case "refresh_token":
+				refreshes++
+				_, _ = fmt.Fprintf(w, `{"access_token":%q,"id_token":%q,"expires_in":3600,"token_type":"Bearer"}`, codexTestJWT("codex-account"), codexTestJWT("codex-account"))
+			default:
+				t.Errorf("unexpected OAuth grant")
+			}
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL, _ := url.Parse(server.URL)
+	transport := &http.Client{Transport: adminAuthRoundTripper(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL = new(url.URL)
+		*clone.URL = *req.URL
+		clone.URL.Scheme, clone.URL.Host = serverURL.Scheme, serverURL.Host
+		return server.Client().Transport.RoundTrip(clone)
+	})}
+	run := func(args ...string) (string, error) {
+		var out, stderr bytes.Buffer
+		full := append([]string{"--db", dbPath, "--master-key", keyPath}, args...)
+		services := adminAuthServicesFunc(func(core.AttemptScope) core.InvocationServices {
+			return core.InvocationServices{Transport: transport}
+		})
+		err := runAdmin(adminEnvironment{ctx: ctx, args: full, stdout: &out, stderr: &stderr, authServices: services})
+		combined := out.String() + stderr.String() + errorString(err)
+		for _, secret := range []string{"private-device", "private-code", "private-verifier", "private-refresh", "access-token"} {
+			if strings.Contains(combined, secret) {
+				t.Fatalf("credential/state leaked: %q", secret)
+			}
+		}
+		return out.String() + stderr.String(), err
+	}
+	started, err := run("auth", "start", "--account", "codex-account")
+	if err != nil || !strings.Contains(started, `user_code="SAFE-CODE"`) {
+		t.Fatalf("start=%q err=%v", started, err)
+	}
+	session := adminSessionID(started)
+	if session == "" {
+		t.Fatalf("missing session: %q", started)
+	}
+	pending, err := run("auth", "continue", "--session", session)
+	if err != nil || !strings.Contains(pending, `user_code="SAFE-CODE"`) {
+		t.Fatalf("pending=%q err=%v", pending, err)
+	}
+	if _, err := run("auth", "continue", "--session", session); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := run("auth", "continue", "--session", session)
+	if err != nil || !strings.Contains(completed, "authentication complete") {
+		t.Fatalf("exchange=%q err=%v", completed, err)
+	}
+	if _, err := run("auth", "refresh", "--account", "codex-account"); err != nil {
+		t.Fatal(err)
+	}
+	if polls != 2 || exchanges != 1 || refreshes != 1 {
+		t.Fatalf("provider calls polls=%d exchanges=%d refreshes=%d", polls, exchanges, refreshes)
+	}
+}
+
+func TestAdminAuthConfiguredAccountsFailBeforeTransport(t *testing.T) {
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range []sqlite.Account{
+		{ID: "disabled", Connector: "codex", Enabled: false},
+		{ID: "mismatch", Connector: "other", Enabled: true},
+	} {
+		if _, err := sqlite.NewAccounts(db).Create(context.Background(), account); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	transport := &http.Client{Transport: adminAuthRoundTripper(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("unexpected provider call")
+	})}
+	services := adminAuthServicesFunc(func(core.AttemptScope) core.InvocationServices { return core.InvocationServices{Transport: transport} })
+	for _, account := range []string{"missing", "disabled", "mismatch"} {
+		var out, stderr bytes.Buffer
+		err := runAdmin(adminEnvironment{ctx: context.Background(), args: []string{"--db", dbPath, "--master-key", keyPath, "auth", "start", "--account", account}, stdout: &out, stderr: &stderr, authServices: services})
+		if err == nil || out.Len() != 0 || stderr.Len() != 0 {
+			t.Fatalf("account %q output=%q/%q err=%v", account, out.String(), stderr.String(), err)
+		}
+	}
+	var out, stderr bytes.Buffer
+	err = runAdmin(adminEnvironment{ctx: context.Background(), args: []string{"--db", dbPath, "--master-key", keyPath, "auth", "start", "--account", "disabled", "--access-token", "literal-secret"}, stdout: &out, stderr: &stderr, authServices: services})
+	if err == nil || calls.Load() != 0 {
+		t.Fatalf("secret flag accepted or request sent: calls=%d err=%v", calls.Load(), err)
+	}
+}
+
+type adminAuthRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f adminAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func readRequestBody(t *testing.T, r *http.Request) string {
+	t.Helper()
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func codexTestJWT(account string) string {
+	return "e30." + base64.RawURLEncoding.EncodeToString(fmt.Appendf(nil, `{"chatgpt_account_id":%q}`, account)) + ".c2ln"
+}
+
+func adminSessionID(output string) string {
+	for _, field := range strings.Fields(output) {
+		if strings.HasPrefix(field, "session=") {
+			return strings.TrimPrefix(field, "session=")
+		}
+	}
+	return ""
 }
 
 func TestAdminAuthRefreshCommandDoesNotReportSuccessOnBadDatabase(t *testing.T) {
