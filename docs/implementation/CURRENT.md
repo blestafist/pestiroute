@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M5.1-020 closed; handoff to next planner cycle
+## Immediate focus: M5.1-021 closed; handoff to next planner cycle
 
 M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
 merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
@@ -44,7 +44,7 @@ The new branch is `dev-m5.1`, based on that merge. The
 [M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
 [M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md),
 [M5.1-007](tasks/M5.1-007.md), [M5.1-008](tasks/M5.1-008.md),
-[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), [M5.1-016](tasks/M5.1-016.md), [M5.1-017](tasks/M5.1-017.md), [M5.1-018](tasks/M5.1-018.md), [M5.1-019](tasks/M5.1-019.md), and [M5.1-020](tasks/M5.1-020.md) are DONE,
+[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), [M5.1-016](tasks/M5.1-016.md), [M5.1-017](tasks/M5.1-017.md), [M5.1-018](tasks/M5.1-018.md), [M5.1-019](tasks/M5.1-019.md), [M5.1-020](tasks/M5.1-020.md), and [M5.1-021](tasks/M5.1-021.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
@@ -63,8 +63,9 @@ generic credential freshness resolution before inference dispatch with locked ma
 concurrent refresh coalescing, cancellation safety, account isolation, independent-handle marker contention, and revision CAS quarantine under locked SQLite coordination,
 auth uncertainty persistence failure, restart recovery with in-flight refresh quarantine to uncertain, claimed continuation consumption, and explicit reauthentication recovery,
 Connector-private standard Responses profile request validation with native/translation stream/store invariants, 1 MiB body bounds, recursive duplicate JSON rejection, unsupported feature/continuation fail-closed checks, and byte-preserving fixture admission,
-and Connector-private request adaptation with byte-preserving native output, immutable inputs, injected stream/store/reasoning defaults, and raw unknown/tool/history fidelity;
-23 dependent cards remain DRAFT pending sequential promotion. Route composition (M5.1-027) remains a future deliverable. The selected profile is not a live support or
+and Connector-private request adaptation with byte-preserving native output, immutable inputs, injected stream/store/reasoning defaults, and raw unknown/tool/history fidelity,
+and trusted selected-account HTTP request header construction with OAuth credential/account binding, strict hop-by-hop/client-auth filtering, Connection nomination suppression, and fail-closed ASCII validation;
+22 dependent cards remain DRAFT pending sequential promotion. Route composition (M5.1-027) remains a future deliverable. The selected profile is not a live support or
 entitlement claim.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
