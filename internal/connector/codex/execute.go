@@ -240,7 +240,7 @@ func (s *executeStream) finish(outcome core.Outcome, failure *core.GatewayError)
 		s.stopRequest()
 	}
 	s.cleanup()
-	return core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: outcome, Error: failure, Usage: &core.UsageReport{Source: core.UsageUnknown, Completeness: core.UsageUnknownCompleteness}}}
+	return core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: outcome, Error: failure, Usage: s.observer.finalUsage(outcome)}}
 }
 
 func codexTransportError(err error) *core.GatewayError {
