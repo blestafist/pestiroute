@@ -27,6 +27,10 @@ func TestValidateResponsesProfile(t *testing.T) {
 	if ge := validateResponsesProfile(responsesValidationRequest(translation), core.ModeTranslation, "gpt-5.4-mini"); ge != nil {
 		t.Fatalf("translation defaults were not admitted: %#v", ge)
 	}
+	toolChoice := []byte(`{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"function","name":"lookup"}],"tool_choice":{"type":"function","name":"lookup"}}`)
+	if ge := validateResponsesProfile(responsesValidationRequest(toolChoice), core.ModeNative, "gpt-5.4-mini"); ge != nil {
+		t.Fatalf("valid named function choice rejected: %#v", ge)
+	}
 	connector := &Connector{state: core.HealthReady, model: "gpt-5.4-mini", accountID: "account"}
 	invalidRequest := responsesValidationRequest([]byte(`{"model":"gpt-5.4-mini","input":"x","stream":true,"store":true}`))
 	if _, ge := connector.Execute(t.Context(), invalidRequest, core.AttemptScope{Mode: core.ModeNative, AccountID: "account"}, core.InvocationServices{}); ge == nil || ge.Category != core.CategoryUnsupportedFeature {
@@ -52,7 +56,8 @@ func TestValidateResponsesProfile(t *testing.T) {
 		{"conversation", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"conversation":"private"}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"output cap", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"max_output_tokens":4}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"tool type", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"web_search"}]}`, core.ModeNative, core.CategoryUnsupportedFeature},
-		{"unverified tool choice", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tool_choice":"auto"}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"unknown tool choice", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tool_choice":"random"}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"unknown named tool choice", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"function","name":"lookup"}],"tool_choice":{"type":"function","name":"missing"}}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"unverified parallel tools", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"parallel_tool_calls":true}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"resource item", `{"model":"gpt-5.4-mini","input":[{"type":"input_image","image_url":"secret"}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"model mismatch", `{"model":"other","input":"x","stream":true,"store":false}`, core.ModeNative, core.CategoryInvalidRequest},

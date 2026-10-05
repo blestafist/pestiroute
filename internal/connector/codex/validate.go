@@ -83,9 +83,11 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 	if _, required := req.Capabilities[core.Capability("llm.tools.parallel")]; required {
 		return unsupported("Parallel tool capability is not verified for this profile")
 	}
+	toolNames := make(map[string]bool)
 	if raw, ok := fields["tools"]; ok {
 		var tools []struct {
 			Type string `json:"type"`
+			Name string `json:"name"`
 		}
 		if json.Unmarshal(raw, &tools) != nil || tools == nil {
 			return invalid("Invalid Responses tools")
@@ -94,10 +96,27 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 			if tool.Type != "function" {
 				return unsupported("Only function tools are supported")
 			}
+			toolNames[tool.Name] = true
 		}
 	}
 	if raw, ok := fields["tool_choice"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return unsupported("Responses tool choice is not verified for this profile")
+		var choice any
+		if json.Unmarshal(raw, &choice) != nil {
+			return invalid("Invalid Responses tool choice")
+		}
+		switch choice := choice.(type) {
+		case string:
+			if choice != "auto" && choice != "none" && choice != "required" {
+				return unsupported("Responses tool choice is not supported")
+			}
+		case map[string]any:
+			name, ok := choice["name"].(string)
+			if choice["type"] != "function" || !ok || name == "" || !toolNames[name] {
+				return unsupported("Responses tool choice is not supported")
+			}
+		default:
+			return unsupported("Responses tool choice is not supported")
+		}
 	}
 	if raw, ok := fields["parallel_tool_calls"]; ok {
 		var parallel bool
