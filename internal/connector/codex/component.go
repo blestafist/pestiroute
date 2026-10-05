@@ -209,7 +209,7 @@ func (c *Connector) Models(_ context.Context, query core.ModelQuery, _ core.Invo
 	return core.ModelsResult{}, nil
 }
 
-func (c *Connector) EstimateUsage(_ context.Context, query core.UsageQuery, _ core.InvocationServices) (core.EstimateResult, *core.GatewayError) {
+func (c *Connector) EstimateUsage(ctx context.Context, query core.UsageQuery, _ core.InvocationServices) (core.EstimateResult, *core.GatewayError) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.state != core.HealthReady {
@@ -223,6 +223,12 @@ func (c *Connector) EstimateUsage(_ context.Context, query core.UsageQuery, _ co
 	}
 	if query.Model != c.model || query.AccountID != c.accountID {
 		return core.EstimateResult{}, connectorError("scope_mismatch", core.CategoryPermissionDenied, "Usage estimate scope does not match configured target")
+	}
+	if err := ctx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return core.EstimateResult{}, connectorError("estimate_timeout", core.CategoryTimeout, "Usage estimation timed out")
+		}
+		return core.EstimateResult{}, connectorError("estimate_cancelled", core.CategoryCancelled, "Usage estimation cancelled")
 	}
 	return core.EstimateResult{Supported: false, Known: false}, nil
 }
