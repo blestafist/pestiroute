@@ -15,13 +15,23 @@ import (
 
 func (c *Connector) authenticateContinue(ctx context.Context, state string, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
 	var continuation deviceAuthContinuation
-	if state == "" || json.Unmarshal([]byte(state), &continuation) != nil || continuation.DeviceCode == "" ||
-		continuation.UserCode == "" || !safeUserCode(continuation.UserCode) || !safeVerificationURI(continuation.VerificationURI) ||
-		continuation.Interval < time.Second || continuation.ExpiresAt.IsZero() {
+	if state == "" || json.Unmarshal([]byte(state), &continuation) != nil ||
+		continuation.ExpiresAt.IsZero() {
 		return core.AuthResult{}, connectorError("auth_invalid_state", core.CategoryInvalidRequest, "Authentication continuation state is invalid")
 	}
 	if !time.Now().Before(continuation.ExpiresAt) {
 		return core.AuthResult{}, connectorError("auth_expired", core.CategoryUnavailable, "Authentication session has expired")
+	}
+	if continuation.AuthorizationCode != "" || continuation.CodeVerifier != "" {
+		if continuation.AuthorizationCode == "" || continuation.CodeVerifier == "" || continuation.DeviceCode != "" {
+			return core.AuthResult{}, connectorError("auth_invalid_state", core.CategoryInvalidRequest, "Authentication continuation state is invalid")
+		}
+		return c.exchangeDeviceAuthorizationCode(ctx, continuation.AuthorizationCode, continuation.CodeVerifier, services)
+	}
+	if continuation.DeviceCode == "" ||
+		continuation.UserCode == "" || !safeUserCode(continuation.UserCode) || !safeVerificationURI(continuation.VerificationURI) ||
+		continuation.Interval < time.Second {
+		return core.AuthResult{}, connectorError("auth_invalid_state", core.CategoryInvalidRequest, "Authentication continuation state is invalid")
 	}
 	if !continuation.LastPolledAt.IsZero() {
 		wait := time.Until(continuation.LastPolledAt.Add(continuation.Interval))

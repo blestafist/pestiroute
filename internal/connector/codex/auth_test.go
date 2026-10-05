@@ -383,6 +383,113 @@ func TestDeviceAuthPollRequestCancellation(t *testing.T) {
 	}
 }
 
+func TestDeviceAuthCodeExchange(t *testing.T) {
+	const code, verifier = "private-authorization-code", "private-code-verifier"
+	access := testJWT([]byte(`{"chatgpt_account_id":"account-a"}`))
+	fixture := decodeAuthFixture(t, "exchange-success.json")
+	fixture["access_token"], _ = json.Marshal(access)
+	fixture["id_token"], _ = json.Marshal(testJWT([]byte(`{"chatgpt_account_id":"account-a"}`)))
+	body, _ := json.Marshal(fixture)
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodPost || r.URL.Path != authTokenPath || r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+			t.Errorf("request method/path/content-type = %s %s %q", r.Method, r.URL.Path, r.Header.Get("Content-Type"))
+		}
+		if err := r.ParseForm(); err != nil || r.Form.Get("grant_type") != "authorization_code" || r.Form.Get("code") != code ||
+			r.Form.Get("code_verifier") != verifier || r.Form.Get("redirect_uri") != "https://auth.openai.com/deviceauth/callback" ||
+			r.Form.Get("client_id") != deviceClientID {
+			t.Errorf("unexpected OAuth form: %v err=%v", r.Form, err)
+		}
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	state, _ := json.Marshal(deviceAuthContinuation{AuthorizationCode: code, CodeVerifier: verifier, ExpiresAt: time.Now().Add(time.Minute)})
+	result, ge := readyAuthConnector(t, server.URL).Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: state}, core.InvocationServices{Transport: server.Client()})
+	if ge != nil || !result.Supported || result.NextAction != "" || result.State != "" || result.UserAction != nil || requests != 1 {
+		t.Fatalf("result=%+v error=%+v requests=%d", result, ge, requests)
+	}
+	bundle, err := decodeOAuthBundle(result.Credentials["oauth"])
+	if err != nil || bundle.AccessToken != access || bundle.AccountID != "account-a" || bundle.RefreshToken == "" || result.CredentialExpiresAt == nil || !bundle.ExpiresAt.Equal(*result.CredentialExpiresAt) || !bundle.ExpiresAt.After(time.Now()) {
+		t.Fatalf("bundle=%+v expiry=%v err=%v", bundle, result.CredentialExpiresAt, err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		body   []byte
+		status int
+		want   string
+	}{
+		{"terminal", loadAuthFixture(t, "exchange-terminal-error.json"), http.StatusBadGateway, "auth_rejected"},
+		{"no refresh", loadAuthFixture(t, "exchange-no-refresh.json"), http.StatusOK, "auth_invalid_response"},
+		{"malformed", loadAuthFixture(t, "malformed.json"), http.StatusOK, "auth_invalid_response"},
+		{"missing identity", []byte(`{"token_type":"Bearer","access_token":"` + testJWT([]byte(`{"sub":"user"}`)) + `","refresh_token":"refresh","expires_in":3600}`), http.StatusOK, "auth_invalid_response"},
+		{"wrong identity", []byte(`{"token_type":"Bearer","access_token":"` + testJWT([]byte(`{"chatgpt_account_id":"other"}`)) + `","refresh_token":"refresh","expires_in":3600}`), http.StatusOK, "scope_mismatch"},
+		{"zero expiry", []byte(`{"token_type":"Bearer","access_token":"` + access + `","refresh_token":"refresh","expires_in":0}`), http.StatusOK, "auth_invalid_response"},
+		{"negative expiry", []byte(`{"token_type":"Bearer","access_token":"` + access + `","refresh_token":"refresh","expires_in":-1}`), http.StatusOK, "auth_invalid_response"},
+		{"oversized", []byte(strings.Repeat("x", authStartLimit+1)), http.StatusOK, "auth_invalid_response"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(tc.status); _, _ = w.Write(tc.body) }))
+			defer bad.Close()
+			state, _ := json.Marshal(deviceAuthContinuation{AuthorizationCode: code, CodeVerifier: verifier, ExpiresAt: time.Now().Add(time.Minute)})
+			result, ge := readyAuthConnector(t, bad.URL).Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: state}, core.InvocationServices{Transport: bad.Client()})
+			if ge == nil || ge.Code != tc.want || result.State != "" || len(result.Credentials) != 0 || strings.Contains(ge.Message, code) || strings.Contains(ge.Message, verifier) || strings.Contains(ge.Message, access) {
+				t.Fatalf("result=%+v error=%+v", result, ge)
+			}
+		})
+	}
+
+	called := false
+	noCall := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	defer noCall.Close()
+	for _, account := range []string{"wrong", "account-a"} {
+		connector := readyAuthConnector(t, noCall.URL)
+		if account == "account-a" {
+			connector.Close(context.Background())
+		}
+		_, ge := connector.Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: account, State: state}, core.InvocationServices{Transport: noCall.Client()})
+		if ge == nil || called {
+			t.Fatalf("account=%s error=%+v contacted=%v", account, ge, called)
+		}
+	}
+	targetCalls := 0
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { targetCalls++ }))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer redirect.Close()
+	_, ge = readyAuthConnector(t, redirect.URL).Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: state}, core.InvocationServices{Transport: &http.Client{}})
+	if ge == nil || targetCalls != 0 {
+		t.Fatalf("redirect error=%+v target calls=%d", ge, targetCalls)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer blocked.Close()
+	got := make(chan *core.GatewayError, 1)
+	go func() {
+		_, ge := readyAuthConnector(t, blocked.URL).Authenticate(ctx, core.AuthRequest{Action: "continue", AccountID: "account-a", State: state}, core.InvocationServices{Transport: blocked.Client()})
+		got <- ge
+	}()
+	<-started
+	cancel()
+	close(release)
+	if ge := <-got; ge == nil || ge.Code != "auth_cancelled" {
+		t.Fatalf("cancel error=%+v", ge)
+	}
+}
+
 func jsonValue(t *testing.T, value any) string {
 	t.Helper()
 	data, err := json.Marshal(value)

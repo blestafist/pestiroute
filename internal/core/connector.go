@@ -46,11 +46,12 @@ type AuthRequest struct {
 }
 
 type AuthResult struct {
-	Supported   bool
-	State       string
-	NextAction  string
-	UserAction  *AuthUserAction
-	Credentials map[string][]byte
+	Supported           bool
+	State               string
+	NextAction          string
+	UserAction          *AuthUserAction
+	Credentials         map[string][]byte
+	CredentialExpiresAt *time.Time
 }
 
 // AuthUserAction contains safe operator-facing authentication instructions.
