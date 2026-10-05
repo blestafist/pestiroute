@@ -70,6 +70,7 @@ func TestBuildRequestHeaders(t *testing.T) {
 				"Chatgpt-Account-Id": {account},
 				"Content-Type":       {"application/json"},
 				"Accept":             {"text/event-stream"},
+				"Accept-Encoding":    {"identity"},
 				"Tracestate":         {"vendor=value"},
 				"User-Agent":         {"PestiRoute-test/1"},
 			}
@@ -131,6 +132,17 @@ func TestBuildRequestHeadersHonorsConnectionNominations(t *testing.T) {
 	}
 	if got := headers.Get("Traceparent"); got != "" {
 		t.Fatalf("Connection-nominated traceparent was forwarded: %q", got)
+	}
+}
+
+func TestBuildRequestHeadersEnforcesAggregateLimit(t *testing.T) {
+	credential := mustOAuthBundle(t, "access-token", "account-a", time.Now().Add(time.Hour))
+	values := make([]string, 70)
+	for i := range values {
+		values[i] = strings.Repeat("a", 256)
+	}
+	if _, err := buildRequestHeaders(t.Context(), map[string][]string{"Traceparent": values}, core.InvocationServices{Credentials: headerCredentials(credential)}, "account-a"); err == nil {
+		t.Fatal("oversized aggregate request headers accepted")
 	}
 }
 

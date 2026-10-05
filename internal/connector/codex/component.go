@@ -1,13 +1,16 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -26,17 +29,24 @@ type componentConfig struct {
 
 // Connector owns only non-secret target configuration and lifecycle state.
 type Connector struct {
-	mu        sync.Mutex
-	model     string
-	accountID string
-	authURL   string
-	state     core.HealthState
-	closed    bool
+	mu                sync.Mutex
+	model             string
+	accountID         string
+	authURL           string
+	endpoint          string
+	transport         *http.Transport
+	client            *http.Client
+	streamIdleTimeout time.Duration
+	state             core.HealthState
+	closed            bool
 }
 
 var _ core.Connector = (*Connector)(nil)
 
-func NewConnector() *Connector { return &Connector{state: core.HealthUnknown} }
+func NewConnector() *Connector {
+	transport, client := newHTTPTransport()
+	return &Connector{state: core.HealthUnknown, endpoint: codexResponsesEndpoint, transport: transport, client: client, streamIdleTimeout: codexStreamIdleTimeout}
+}
 
 func (c *Connector) Descriptor() core.Descriptor {
 	return core.Descriptor{
@@ -101,28 +111,84 @@ func (c *Connector) Close(context.Context) error {
 	defer c.mu.Unlock()
 	c.closed = true
 	c.state = core.HealthUnavailable
+	if c.transport != nil {
+		c.transport.CloseIdleConnections()
+	}
 	return nil
 }
 
-func (c *Connector) Execute(_ context.Context, req core.ExecutionRequest, scope core.AttemptScope, _ core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
+func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.state != core.HealthReady {
+		c.mu.Unlock()
 		return core.ExecutionResponse{}, connectorError("connector_unavailable", core.CategoryUnavailable, "Codex connector is unavailable")
 	}
 	if req.Payload.Protocol != protocol {
+		c.mu.Unlock()
 		return core.ExecutionResponse{}, connectorError("unsupported_protocol", core.CategoryUnsupportedFeature, "Unsupported response protocol")
 	}
 	if scope.Mode != core.ModeNative && scope.Mode != core.ModeTranslation {
+		c.mu.Unlock()
 		return core.ExecutionResponse{}, connectorError("unsupported_mode", core.CategoryUnsupportedFeature, "Unsupported execution mode")
 	}
 	if req.Model != c.model || scope.AccountID != c.accountID {
+		c.mu.Unlock()
 		return core.ExecutionResponse{}, connectorError("scope_mismatch", core.CategoryPermissionDenied, "Execution scope does not match configured target")
 	}
-	if ge := validateResponsesProfile(req, scope.Mode, c.model); ge != nil {
+	model, accountID, endpoint, client, idleTimeout := c.model, c.accountID, c.endpoint, c.client, c.streamIdleTimeout
+	c.mu.Unlock()
+	if ge := validateResponsesProfile(req, scope.Mode, model); ge != nil {
 		return core.ExecutionResponse{}, ge
 	}
-	return core.ExecutionResponse{}, connectorError("unsupported_operation", core.CategoryUnsupportedFeature, "Codex execution is not implemented")
+	body, ge := adaptRequest(req, scope.Mode)
+	if ge != nil {
+		return core.ExecutionResponse{}, ge
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, codexRequestTimeout)
+	headers, err := buildRequestHeaders(requestCtx, req.Metadata.Headers, services, accountID)
+	if err != nil {
+		cancel()
+		if errors.Is(err, errRequestHeaderLimit) {
+			return core.ExecutionResponse{}, connectorError("invalid_request", core.CategoryInvalidRequest, "Request headers exceed the profile limit")
+		}
+		return core.ExecutionResponse{}, connectorError("credential_unavailable", core.CategoryUnauthenticated, "Selected account credentials are unavailable")
+	}
+	httpReq, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return core.ExecutionResponse{}, connectorError("invalid_request", core.CategoryInvalidRequest, "Codex request could not be constructed")
+	}
+	httpReq.GetBody = nil
+	httpReq.ContentLength = int64(len(body))
+	httpReq.Header = headers
+	doer := services.Transport
+	if doer == nil {
+		doer = client
+	}
+	resp, closeTransport, err := doCodexRequest(doer, httpReq)
+	if err != nil {
+		closeTransport()
+		cancel()
+		return core.ExecutionResponse{}, codexTransportError(err)
+	}
+	if resp == nil || resp.Body == nil {
+		closeTransport()
+		cancel()
+		return core.ExecutionResponse{}, connectorError("upstream_unavailable", core.CategoryUnavailable, "Upstream returned an invalid response")
+	}
+	for _, value := range resp.Header.Values("Content-Encoding") {
+		for _, encoding := range strings.Split(value, ",") {
+			if !strings.EqualFold(strings.TrimSpace(encoding), "identity") {
+				_ = resp.Body.Close()
+				closeTransport()
+				cancel()
+				return core.ExecutionResponse{}, connectorError("unsupported_response_encoding", core.CategoryUnavailable, "Upstream response encoding is unsupported")
+			}
+		}
+	}
+	stream := &executeStream{body: resp.Body, cancel: cancel, head: codexResponseHead(resp), idleTimeout: idleTimeout, closeTransport: closeTransport}
+	stream.stopRequest = context.AfterFunc(requestCtx, stream.abort)
+	return core.ExecutionResponse{Stream: stream}, nil
 }
 
 func (c *Connector) Models(_ context.Context, query core.ModelQuery, _ core.InvocationServices) (core.ModelsResult, *core.GatewayError) {

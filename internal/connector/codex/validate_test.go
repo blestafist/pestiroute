@@ -33,8 +33,8 @@ func TestValidateResponsesProfile(t *testing.T) {
 		t.Fatalf("Execute did not reject profile violation before execution: %#v", ge)
 	}
 	validRequest := responsesValidationRequest(loadResponsesFixture(t, "request-positive.json"))
-	if _, ge := connector.Execute(t.Context(), validRequest, core.AttemptScope{Mode: core.ModeNative, AccountID: "account"}, core.InvocationServices{}); ge == nil || ge.Code != "unsupported_operation" {
-		t.Fatalf("valid profile request was not admitted to the unimplemented execution seam: %#v", ge)
+	if _, ge := connector.Execute(t.Context(), validRequest, core.AttemptScope{Mode: core.ModeNative, AccountID: "account"}, core.InvocationServices{}); ge == nil || ge.Code != "credential_unavailable" {
+		t.Fatalf("valid profile request did not fail closed without credentials: %#v", ge)
 	}
 
 	bad := []struct {

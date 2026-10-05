@@ -11,6 +11,9 @@ import (
 )
 
 var errRequestHeaders = errors.New("Codex request headers are unavailable")
+var errRequestHeaderLimit = errors.New("Codex request headers exceed the profile limit")
+
+const maxCodexRequestHeaderBytes = 16 << 10
 
 // buildRequestHeaders uses only the selected account's runtime credential and
 // explicitly allowlisted client metadata. The returned headers own the bearer
@@ -44,6 +47,7 @@ func buildRequestHeaders(ctx context.Context, inbound map[string][]string, servi
 	headers.Set("ChatGPT-Account-Id", bundle.AccountID)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("Accept", "text/event-stream")
+	headers.Set("Accept-Encoding", "identity")
 	for name, values := range inbound {
 		canonical := http.CanonicalHeaderKey(name)
 		if blocked[strings.ToLower(name)] || (canonical != "Traceparent" && canonical != "Tracestate" && canonical != "User-Agent") {
@@ -61,6 +65,16 @@ func buildRequestHeaders(ctx context.Context, inbound map[string][]string, servi
 				continue
 			}
 			headers[canonical] = append(headers[canonical], value)
+		}
+	}
+	// Reserve room for Transport-generated Host/User-Agent fields.
+	headerBytes := 64
+	for name, values := range headers {
+		for _, value := range values {
+			headerBytes += len(name) + len(value) + 4
+			if headerBytes > maxCodexRequestHeaderBytes {
+				return nil, errRequestHeaderLimit
+			}
 		}
 	}
 	return headers, nil
