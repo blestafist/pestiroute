@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M5.1-016 closed; handoff to next planner cycle
+## Immediate focus: M5.1-017 closed; handoff to next planner cycle
 
 M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
 merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
@@ -44,7 +44,7 @@ The new branch is `dev-m5.1`, based on that merge. The
 [M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
 [M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md),
 [M5.1-007](tasks/M5.1-007.md), [M5.1-008](tasks/M5.1-008.md),
-[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), and [M5.1-016](tasks/M5.1-016.md) are DONE,
+[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), [M5.1-016](tasks/M5.1-016.md), and [M5.1-017](tasks/M5.1-017.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
@@ -59,8 +59,9 @@ candidate-only selected-account token refresh exchange with token rotation/reten
 atomic OAuth credential and expiry persistence with single-revision CAS across Core and SQLite,
 transient Core `AuthSession.UserAction` validation and safe admin CLI presentation,
 default admin auth wiring for configured Codex accounts with redirect-refusing RoundTripper transport and account-scoped credentials,
-and generic credential freshness resolution before inference dispatch with locked margin rechecks and refresh-scoped credential access while preserving interactive reauthentication from quarantine;
-27 dependent cards remain DRAFT pending sequential promotion. Concurrent refresh coalescing (M5.1-017) and route composition (M5.1-027) remain future deliverables. The selected profile is not a live support or
+generic credential freshness resolution before inference dispatch with locked margin rechecks and refresh-scoped credential access while preserving interactive reauthentication from quarantine,
+and concurrent refresh coalescing, cancellation safety, account isolation, independent-handle marker contention, and revision CAS quarantine under locked SQLite coordination;
+26 dependent cards remain DRAFT pending sequential promotion. Restart recovery / auth uncertainty (M5.1-018) and route composition (M5.1-027) remain future deliverables. The selected profile is not a live support or
 entitlement claim.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
