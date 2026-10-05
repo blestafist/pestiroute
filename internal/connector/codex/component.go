@@ -119,6 +119,9 @@ func (c *Connector) Execute(_ context.Context, req core.ExecutionRequest, scope 
 	if req.Model != c.model || scope.AccountID != c.accountID {
 		return core.ExecutionResponse{}, connectorError("scope_mismatch", core.CategoryPermissionDenied, "Execution scope does not match configured target")
 	}
+	if ge := validateResponsesProfile(req, scope.Mode, c.model); ge != nil {
+		return core.ExecutionResponse{}, ge
+	}
 	return core.ExecutionResponse{}, connectorError("unsupported_operation", core.CategoryUnsupportedFeature, "Codex execution is not implemented")
 }
 
