@@ -41,9 +41,9 @@ Each connector mapping has exactly:
 | --- | --- |
 | `id` | Non-empty unique instance ID. |
 | `kind` | String, exactly `connector`. |
-| `implementation` | String; `pestiroute.responses.native` or `pestiroute.anthropic.messages`. |
-| `protocols` | Non-empty sequence of unique declared protocol strings; currently exactly `openai.responses.v1` for either supported implementation. |
-| `settings` | Mapping owned and validated by the selected Connector implementation. Native Responses accepts `base_url`, `upstream_protocol`, `mode`, `credential_env`, positive request byte limits, and positive transport durations as detailed below. Anthropic Messages accepts non-empty `model` (configured client-side route model), `account_id` (selected SQLite account ID), and `credential_id` (selected SQLite credential record ID scoped to that account); credential values remain in protected SQLite and are never YAML fields. Reject settings belonging to another implementation or unknown fields. |
+| `implementation` | String; `pestiroute.responses.native`, `pestiroute.anthropic.messages`, or `pestiroute.codex.responses`. |
+| `protocols` | Non-empty sequence of unique declared protocol strings; currently exactly `openai.responses.v1`. |
+| `settings` | Mapping owned and validated by the selected Connector implementation. Native Responses accepts `base_url`, `upstream_protocol`, `mode`, `credential_env`, positive request byte limits, and positive transport durations as detailed below. Anthropic Messages accepts non-empty `model` (configured client-side route model), `account_id` (selected SQLite account ID), and `credential_id` (selected SQLite credential record ID scoped to that account); credential values remain in protected SQLite and are never YAML fields. Codex Responses accepts exact `profile: codex-responses-http-sse-v1`, non-empty `model`, and `account_id`; its fixed OAuth bundle name is `oauth` and credential bytes remain in protected SQLite. Reject settings belonging to another implementation or unknown fields. |
 
 Connector-specific endpoint, authentication, transport, and size settings
 stay inside `settings`; Core does not interpret URLs, provider protocols,
@@ -52,8 +52,9 @@ identity/kind and declared protocol compatibility. A future implementation
 may define its own settings schema; it does not gain support merely by being
 named in YAML. Adapter identity is the implemented
 `pestiroute.responses.native`; route protocol/mode spellings are
-`openai.responses.v1` and `native` for native routes or `translation` for
-Anthropic Messages routes (not the draft example's `openai.responses/v1`).
+`openai.responses.v1` and `native` for native Responses/Codex routes or
+`translation` for Anthropic Messages/Codex routes (not the draft example's
+`openai.responses/v1`).
 Unsupported implementations and modes fail startup.
 
 ### Route entries
@@ -64,7 +65,7 @@ Each route mapping has exactly:
 | --- | --- |
 | `id` | Non-empty unique route ID. |
 | `protocol` | String, `openai.responses.v1`. |
-| `mode` | String, `native` for native routes or `translation` for Anthropic Messages routes. |
+| `mode` | String, `native` for native Responses/Codex routes or `translation` for Anthropic Messages/Codex routes. |
 | `model` | Non-empty exact model ID; native mode does not substitute aliases. |
 | `adapter` | Adapter implementation identifier; initially exactly `pestiroute.responses.native`, resolved by the composition root to the built-in Adapter. |
 | `policy` | Name resolving through top-level `policies` to an existing SQLite key-policy ID. This controls principal authorization and RPM/TPM limits; it is not the route's estimate budget. |

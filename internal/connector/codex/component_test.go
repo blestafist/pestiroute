@@ -65,8 +65,8 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 	}
 	for _, mode := range []string{core.ModeNative, core.ModeTranslation} {
 		result := c.Capabilities(ctx, core.CapabilityScope{Protocol: protocol, Mode: mode, Model: "gpt-5.4-mini", AccountID: "account-a"})
-		if len(result.Values) != 0 || result.State("llm.streaming") != core.Unknown {
-			t.Fatalf("unproven capabilities advertised for %s: %+v", mode, result.Values)
+		if result.State("llm.streaming") != core.Supported || result.State("llm.tools") != core.Unknown || result.State("llm.reasoning") != core.Unknown || result.State("llm.tools.parallel") != core.Unknown {
+			t.Fatalf("unexpected capabilities for %s: %+v", mode, result.Values)
 		}
 	}
 	for _, scope := range []core.CapabilityScope{

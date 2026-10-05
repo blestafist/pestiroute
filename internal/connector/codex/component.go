@@ -96,8 +96,9 @@ func (c *Connector) Capabilities(_ context.Context, scope core.CapabilityScope) 
 	if !c.matches(scope.Protocol, scope.Mode, scope.Model, scope.AccountID) {
 		return core.CapabilityResult{}
 	}
-	// The profile and synthetic fixtures do not yet prove provider capability.
-	return core.CapabilityResult{}
+	return core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{
+		"llm.streaming": core.Supported,
+	}}
 }
 
 func (c *Connector) matches(requestProtocol, mode, model, accountID string) bool {
@@ -116,6 +117,9 @@ func (c *Connector) Close(context.Context) error {
 	}
 	return nil
 }
+
+// HTTPDoer exposes the connector's policy-configured client to invocation-scoped services.
+func (c *Connector) HTTPDoer() core.HTTPDoer { return c.client }
 
 func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
 	c.mu.Lock()
