@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,170 @@ func TestDeviceAuthStartExchange(t *testing.T) {
 			}
 		})
 	}
+}
+
+type authCredentials []byte
+
+func (credential authCredentials) Get(context.Context, string) ([]byte, error) {
+	return append([]byte(nil), credential...), nil
+}
+
+func TestSelectedAccountRefreshExchange(t *testing.T) {
+	prior, err := encodeOAuthBundle(oauthBundle{Version: oauthBundleVersion, AccessToken: "prior-access-secret", RefreshToken: "prior-refresh-secret", AccountID: "account-a", ExpiresAt: time.Now().Add(-time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		fixture, wantRefresh string
+	}{
+		{"refresh-success.json", "synthetic-rotated-refresh-token-not-valid"},
+		{"refresh-no-rotation.json", "prior-refresh-secret"},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			data := loadAuthFixture(t, tc.fixture)
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				body, _ := io.ReadAll(r.Body)
+				form, err := url.ParseQuery(string(body))
+				if err != nil || r.Method != http.MethodPost || r.URL.Path != authTokenPath || r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" ||
+					form.Get("grant_type") != "refresh_token" || form.Get("refresh_token") != "prior-refresh-secret" || form.Get("client_id") != deviceClientID {
+					t.Errorf("unexpected refresh request: %s %s %q form=%v err=%v", r.Method, r.URL.Path, r.Header.Get("Content-Type"), form, err)
+				}
+				w.Write(data)
+			}))
+			defer server.Close()
+			c := readyAuthConnector(t, server.URL)
+			result, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "refresh", AccountID: "account-a"}, core.InvocationServices{Transport: server.Client(), Credentials: authCredentials(prior)})
+			if ge != nil || !result.Supported || result.NextAction != "" || result.State != "" || result.UserAction != nil || calls != 1 {
+				t.Fatalf("result=%+v error=%+v calls=%d", result, ge, calls)
+			}
+			got, err := decodeOAuthBundle(result.Credentials["oauth"])
+			if err != nil || got.RefreshToken != tc.wantRefresh || got.AccountID != "account-a" || got.AccessToken != "synthetic-refreshed-access-token-not-valid" {
+				t.Fatalf("bundle=%+v err=%v", got, err)
+			}
+			if result.CredentialExpiresAt == nil || !result.CredentialExpiresAt.Equal(got.ExpiresAt) || !got.ExpiresAt.After(time.Now()) {
+				t.Fatalf("expiry metadata=%v bundle expiry=%v", result.CredentialExpiresAt, got.ExpiresAt)
+			}
+		})
+	}
+}
+
+func TestSelectedAccountRefreshExchangeFailures(t *testing.T) {
+	prior, err := encodeOAuthBundle(oauthBundle{Version: oauthBundleVersion, AccessToken: "private-access", RefreshToken: "private-refresh", AccountID: "account-a", ExpiresAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, body string
+		status     int
+	}{
+		{"terminal", string(loadAuthFixture(t, "refresh-terminal-error.json")), http.StatusBadRequest},
+		{"malformed", `{`, http.StatusOK},
+		{"missing access", `{"refresh_token":"rotated","expires_in":30,"token_type":"Bearer"}`, http.StatusOK},
+		{"zero expiry", `{"access_token":"new","expires_in":0,"token_type":"Bearer"}`, http.StatusOK},
+		{"negative expiry", `{"access_token":"new","expires_in":-1,"token_type":"Bearer"}`, http.StatusOK},
+		{"oversized", strings.Repeat("x", authStartLimit+1), http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.WriteHeader(tc.status)
+				io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			result, ge := readyAuthConnector(t, server.URL).Authenticate(context.Background(), core.AuthRequest{Action: "refresh", AccountID: "account-a"}, core.InvocationServices{Transport: server.Client(), Credentials: authCredentials(prior)})
+			if ge == nil || len(result.Credentials) != 0 || calls != 1 || strings.Contains(ge.Error(), "private-") {
+				t.Fatalf("result=%+v error=%+v calls=%d", result, ge, calls)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		cred core.CredentialAccess
+		acct string
+	}{
+		{"missing credentials", nil, "account-a"},
+		{"missing refresh", authCredentials(mustBundle(t, oauthBundle{Version: oauthBundleVersion, AccessToken: "access", AccountID: "account-a", ExpiresAt: time.Now()})), "account-a"},
+		{"bundle account mismatch", authCredentials(mustBundle(t, oauthBundle{Version: oauthBundleVersion, AccessToken: "access", RefreshToken: "refresh", AccountID: "account-b", ExpiresAt: time.Now()})), "account-a"},
+		{"request account mismatch", authCredentials(prior), "account-b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+			defer server.Close()
+			result, ge := readyAuthConnector(t, server.URL).Authenticate(context.Background(), core.AuthRequest{Action: "refresh", AccountID: tc.acct}, core.InvocationServices{Transport: server.Client(), Credentials: tc.cred})
+			if ge == nil || len(result.Credentials) != 0 || called {
+				t.Fatalf("result=%+v error=%+v outbound=%v", result, ge, called)
+			}
+		})
+	}
+}
+
+func TestSelectedAccountRefreshExchangeBoundaries(t *testing.T) {
+	prior := mustBundle(t, oauthBundle{Version: oauthBundleVersion, AccessToken: "prior", RefreshToken: "prior-refresh", AccountID: "account-a", ExpiresAt: time.Now()})
+	wrongIdentity := `{"access_token":"` + testJWT([]byte(`{"chatgpt_account_id":"account-b"}`)) + `","expires_in":3600,"token_type":"Bearer"}`
+	for _, tc := range []struct{ name, body string }{{"identity mismatch", wrongIdentity}} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, tc.body) }))
+			defer server.Close()
+			result, ge := readyAuthConnector(t, server.URL).Authenticate(context.Background(), core.AuthRequest{Action: "refresh", AccountID: "account-a"}, core.InvocationServices{Transport: server.Client(), Credentials: authCredentials(prior)})
+			if ge == nil || ge.Code != "scope_mismatch" || len(result.Credentials) != 0 || strings.Contains(ge.Error(), "account-b") {
+				t.Fatalf("result=%+v error=%+v", result, ge)
+			}
+		})
+	}
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { called = true; w.WriteHeader(http.StatusOK) }))
+	defer server.Close()
+	if _, ge := NewConnector().Authenticate(context.Background(), core.AuthRequest{Action: "refresh", AccountID: "account-a"}, core.InvocationServices{}); ge == nil || ge.Code != "connector_unavailable" {
+		t.Fatalf("unready connector error=%+v", ge)
+	}
+	if called {
+		t.Fatal("unready connector contacted upstream")
+	}
+
+	var targetCalls int
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { targetCalls++; w.Write([]byte(`{}`)) }))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer redirect.Close()
+	result, ge := readyAuthConnector(t, redirect.URL).Authenticate(context.Background(), core.AuthRequest{Action: "refresh", AccountID: "account-a"}, core.InvocationServices{Transport: &http.Client{}, Credentials: authCredentials(prior)})
+	if ge == nil || len(result.Credentials) != 0 || targetCalls != 0 {
+		t.Fatalf("redirect result=%+v error=%+v target calls=%d", result, ge, targetCalls)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	cancelServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { close(started); <-release }))
+	defer cancelServer.Close()
+	defer close(release)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *core.GatewayError, 1)
+	cancelConnector := readyAuthConnector(t, cancelServer.URL)
+	go func() {
+		_, ge := cancelConnector.Authenticate(ctx, core.AuthRequest{Action: "refresh", AccountID: "account-a"}, core.InvocationServices{Transport: cancelServer.Client(), Credentials: authCredentials(prior)})
+		done <- ge
+	}()
+	<-started
+	cancel()
+	if ge := <-done; ge == nil || ge.Code != "auth_cancelled" {
+		t.Fatalf("cancellation error=%+v", ge)
+	}
+}
+
+func mustBundle(t *testing.T, bundle oauthBundle) []byte {
+	t.Helper()
+	data, err := encodeOAuthBundle(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestDeviceAuthStartFailuresAndScope(t *testing.T) {

@@ -44,7 +44,7 @@ The new branch is `dev-m5.1`, based on that merge. The
 [M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
 [M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md),
 [M5.1-007](tasks/M5.1-007.md), [M5.1-008](tasks/M5.1-008.md),
-[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), and [M5.1-011](tasks/M5.1-011.md) are DONE,
+[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), and [M5.1-012](tasks/M5.1-012.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
@@ -54,8 +54,9 @@ the scoped Codex component lifecycle and descriptor with conservative Unknown ca
 bounded token metadata / credential bundle codec with strict secret sanitation,
 one device-authorization start exchange with fail-closed direct RoundTrip redirect prevention,
 bounded device-authorization continuation polling with fixed-expiry preservation and authorized transition,
-and authorized authorization code exchange for credentials with DEC-010 expiry;
-32 dependent cards remain DRAFT pending sequential promotion (with [M5.1-012](tasks/M5.1-012.md) and independent [M5.1-019](tasks/M5.1-019.md) eligible next candidates). Downstream M5.1-014 retains
+authorized authorization code exchange for credentials with DEC-010 expiry,
+and candidate-only selected-account token refresh exchange with token rotation/retention and DEC-010 expiry;
+31 dependent cards remain DRAFT pending sequential promotion (with [M5.1-013](tasks/M5.1-013.md) and independent [M5.1-019](tasks/M5.1-019.md) eligible next candidates). Downstream M5.1-014 retains
 the requirement to wire a RoundTripper-backed transport and Core projection validation. The selected profile is not a live support or
 entitlement claim.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked

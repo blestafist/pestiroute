@@ -174,6 +174,8 @@ func (c *Connector) Authenticate(ctx context.Context, request core.AuthRequest, 
 		return c.authenticateStart(ctx, services)
 	case "continue":
 		return c.authenticateContinue(ctx, string(request.State), services)
+	case "refresh":
+		return c.authenticateRefresh(ctx, services)
 	default:
 		return core.AuthResult{Supported: false}, nil
 	}
