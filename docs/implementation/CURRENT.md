@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M5.1-038 closed
+## Immediate focus: M5.1-039 closed; live evidence gate pending authority
 
 M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
 merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
@@ -44,7 +44,7 @@ The new branch is `dev-m5.1`, based on that merge. The
 [M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
 [M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md),
 [M5.1-007](tasks/M5.1-007.md), [M5.1-008](tasks/M5.1-008.md),
-[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), [M5.1-016](tasks/M5.1-016.md), [M5.1-017](tasks/M5.1-017.md), [M5.1-018](tasks/M5.1-018.md), [M5.1-019](tasks/M5.1-019.md), [M5.1-020](tasks/M5.1-020.md), [M5.1-021](tasks/M5.1-021.md), [M5.1-022](tasks/M5.1-022.md), [M5.1-023](tasks/M5.1-023.md), [M5.1-024](tasks/M5.1-024.md), [M5.1-025](tasks/M5.1-025.md), [M5.1-026](tasks/M5.1-026.md), [M5.1-027](tasks/M5.1-027.md), [M5.1-028](tasks/M5.1-028.md), [M5.1-029](tasks/M5.1-029.md), [M5.1-030](tasks/M5.1-030.md), [M5.1-031](tasks/M5.1-031.md), [M5.1-032](tasks/M5.1-032.md), [M5.1-033](tasks/M5.1-033.md), [M5.1-034](tasks/M5.1-034.md), [M5.1-035](tasks/M5.1-035.md), [M5.1-036](tasks/M5.1-036.md), [M5.1-037](tasks/M5.1-037.md), and [M5.1-038](tasks/M5.1-038.md) are DONE,
+[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), [M5.1-016](tasks/M5.1-016.md), [M5.1-017](tasks/M5.1-017.md), [M5.1-018](tasks/M5.1-018.md), [M5.1-019](tasks/M5.1-019.md), [M5.1-020](tasks/M5.1-020.md), [M5.1-021](tasks/M5.1-021.md), [M5.1-022](tasks/M5.1-022.md), [M5.1-023](tasks/M5.1-023.md), [M5.1-024](tasks/M5.1-024.md), [M5.1-025](tasks/M5.1-025.md), [M5.1-026](tasks/M5.1-026.md), [M5.1-027](tasks/M5.1-027.md), [M5.1-028](tasks/M5.1-028.md), [M5.1-029](tasks/M5.1-029.md), [M5.1-030](tasks/M5.1-030.md), [M5.1-031](tasks/M5.1-031.md), [M5.1-032](tasks/M5.1-032.md), [M5.1-033](tasks/M5.1-033.md), [M5.1-034](tasks/M5.1-034.md), [M5.1-035](tasks/M5.1-035.md), [M5.1-036](tasks/M5.1-036.md), [M5.1-037](tasks/M5.1-037.md), [M5.1-038](tasks/M5.1-038.md), and [M5.1-039](tasks/M5.1-039.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
@@ -80,8 +80,9 @@ and delivery-safe retry and opaque replay affinity boundaries proving unknown-af
 and assembled real-socket Codex durable settlement proving exactly-once terminal accounting across success, incomplete, failed, error, and EOF streams, conservative reservations, crash-intent restart reconciliation without duplicate charges or free work, auth/storage failure fail-closed readiness withdrawal, and duplicate Complete frame idempotency (M5.1-035),
 and offline Codex conformance and scoped capability matrix audit proving participation in shared opacity, incremental, cancellation, backpressure, and terminal fixtures, published M5.1-COMPATIBILITY.md separating local deterministic evidence from unverified live entitlement, truthful capability declarations with llm.streaming Supported and unproven capabilities Unknown, and honest Models scope enforcement (M5.1-036),
 and synthetic local Codex operations guide and test daemon proving real CLI TLS loopback auth start/continue/refresh without secret leakage, same-DB YAML protected streaming, proactive refresh, quarantine restart and interactive recovery, account disablement, native/Anthropic coexistence, and populated WAL-safe SQLite backup/restore integrity (M5.1-037),
-and bounded smoke capture and privacy validation proving paired direct/gateway inference and auth schema enforcement, strict secret/token/prompt redaction, operational bounds, and offline loopback self-testing across all scenarios without external provider calls (M5.1-038).
-All 38 tasks (M5.1-001..038) are DONE and verified on local deterministic fixtures; 5 dependent cards (M5.1-039..043) remain DRAFT pending sequential promotion. Production Codex reports llm.tools, llm.tools.parallel and llm.reasoning Unknown: these capabilities are not usable in production. No live authentication, inference, or tool support is claimed.
+and bounded smoke capture and privacy validation proving paired direct/gateway inference and auth schema enforcement, strict secret/token/prompt redaction, operational bounds, and offline loopback self-testing across all scenarios without external provider calls (M5.1-038),
+and exact live auth and paired inference procedure with explicit CPython client/profile/model selection, harmless function/parallel/reasoning probes, zero-dispatch rejection expectations, and bounded auth/refresh dry-runs with zero external calls (M5.1-039).
+All 39 tasks (M5.1-001..039) are DONE and verified on local deterministic fixtures; 4 downstream cards (M5.1-040..043) remain DRAFT pending operator authority for live credentials. Production Codex reports llm.tools, llm.tools.parallel and llm.reasoning Unknown: these capabilities are not usable in production. No live authentication, inference, or tool support is claimed.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
 
