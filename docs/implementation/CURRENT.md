@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M5.1-022 closed; handoff to next planner cycle
+## Immediate focus: M5.1-023 closed; handoff to next planner cycle
 
 M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
 merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
@@ -44,7 +44,7 @@ The new branch is `dev-m5.1`, based on that merge. The
 [M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
 [M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md),
 [M5.1-007](tasks/M5.1-007.md), [M5.1-008](tasks/M5.1-008.md),
-[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), [M5.1-016](tasks/M5.1-016.md), [M5.1-017](tasks/M5.1-017.md), [M5.1-018](tasks/M5.1-018.md), [M5.1-019](tasks/M5.1-019.md), [M5.1-020](tasks/M5.1-020.md), [M5.1-021](tasks/M5.1-021.md), and [M5.1-022](tasks/M5.1-022.md) are DONE,
+[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), [M5.1-016](tasks/M5.1-016.md), [M5.1-017](tasks/M5.1-017.md), [M5.1-018](tasks/M5.1-018.md), [M5.1-019](tasks/M5.1-019.md), [M5.1-020](tasks/M5.1-020.md), [M5.1-021](tasks/M5.1-021.md), [M5.1-022](tasks/M5.1-022.md), and [M5.1-023](tasks/M5.1-023.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
@@ -65,8 +65,9 @@ auth uncertainty persistence failure, restart recovery with in-flight refresh qu
 Connector-private standard Responses profile request validation with native/translation stream/store invariants, 1 MiB body bounds, recursive duplicate JSON rejection, unsupported feature/continuation fail-closed checks, and byte-preserving fixture admission,
 Connector-private request adaptation with byte-preserving native output, immutable inputs, injected stream/store/reasoning defaults, and raw unknown/tool/history fidelity,
 trusted selected-account HTTP request header construction with OAuth credential/account binding, strict hop-by-hop/client-auth filtering, Connection nomination suppression, and fail-closed ASCII validation,
-and invocation-scoped managed HTTP transport hardening with non-replayable POST, redirect/compression refusal, phase deadlines, 16 KiB header and 64 MiB response bounds, incremental <= 4 KiB Body chunks, cancellation/idle cleanup, and provisional completion;
-21 dependent cards remain DRAFT pending sequential promotion. Route composition (M5.1-027) remains a future deliverable. The selected profile is not a live support or
+and invocation-scoped managed HTTP transport hardening with non-replayable POST, redirect/compression refusal, phase deadlines, 16 KiB header and 64 MiB response bounds, incremental <= 4 KiB Body chunks, cancellation/idle cleanup, and provisional completion,
+and Connector-private inline SSE framing observation with exact-byte preservation, arbitrary split and CRLF/multiline tolerance, 1 MiB event and 4 KiB scalar limits, fail-closed malformed handling, and non-2xx rejection bypass;
+20 dependent cards remain DRAFT pending sequential promotion. Route composition (M5.1-027) remains a future deliverable. The selected profile is not a live support or
 entitlement claim.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.

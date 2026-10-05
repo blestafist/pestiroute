@@ -76,6 +76,7 @@ type executeStream struct {
 	cleanupErr     error
 	closeTransport func()
 	stopRequest    func() bool
+	observer       sseObserver
 }
 
 func (s *executeStream) Close() error {
@@ -196,12 +197,18 @@ func (s *executeStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if s.phase == 3 {
 		return core.StreamFrame{}, context.Canceled
 	}
+	if s.head.Error == nil && s.observer.err != nil {
+		return s.finish(core.OutcomeIncomplete, connectorError("invalid_sse", core.CategoryUnavailable, "Upstream response contained invalid SSE framing")), nil
+	}
 	if n > 0 {
 		if tooLarge {
 			s.tooLarge = true
 		}
 		s.readBytes += int64(n)
 		s.pending = err
+		if s.head.Error == nil {
+			s.observer.feed(readBuf[:n])
+		}
 		return s.bodyFrame(readBuf[:n]), nil
 	}
 	if s.tooLarge {
@@ -212,6 +219,9 @@ func (s *executeStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	}
 	if err != io.EOF {
 		return s.finish(core.OutcomeIncomplete, codexTransportError(err)), nil
+	}
+	if s.head.Error == nil && s.observer.finish() != nil {
+		return s.finish(core.OutcomeIncomplete, connectorError("invalid_sse", core.CategoryUnavailable, "Upstream response contained invalid SSE framing")), nil
 	}
 	return s.finish(core.OutcomeIncomplete, connectorError("incomplete_response", core.CategoryUnavailable, "Upstream response ended without terminal SSE verification")), nil
 }

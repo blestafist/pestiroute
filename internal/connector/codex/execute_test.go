@@ -8,6 +8,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -199,6 +200,43 @@ func TestExecuteHTTPRejectionIsFailedAndClosesBody(t *testing.T) {
 	}
 	if sends.Load() != 1 {
 		t.Fatalf("sends=%d", sends.Load())
+	}
+}
+
+func TestExecuteHTTPRejectionLongJSONBodyBypassesSSEObserver(t *testing.T) {
+	body := []byte(`{"error":"` + strings.Repeat("x", 5000) + `"}`)
+	c, services, _ := executeFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write(body)
+	})
+	response, ge := c.Execute(t.Context(), executeRequest(loadResponsesFixture(t, "request-positive.json")), core.AttemptScope{Mode: core.ModeNative, AccountID: "account-a"}, services)
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer response.Stream.Close()
+	head, err := response.Stream.Next(t.Context())
+	if err != nil || head.Type != core.FrameHead || head.Head.Error == nil || head.Head.Error.Category != core.CategoryInvalidRequest {
+		t.Fatalf("rejection Head=%+v err=%v", head, err)
+	}
+	var output []byte
+	for {
+		frame, err := response.Stream.Next(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameComplete {
+			if frame.Complete.Outcome != core.OutcomeFailed || frame.Complete.Error == nil || frame.Complete.Error.Code != "upstream_rejection" {
+				t.Fatalf("rejection completion=%+v", frame.Complete)
+			}
+			break
+		}
+		if frame.Type != core.FrameBody {
+			t.Fatalf("unexpected rejection frame: %+v", frame)
+		}
+		output = append(output, frame.Body.Data...)
+	}
+	if !bytes.Equal(output, body) {
+		t.Fatalf("rejection body changed: got %d bytes, want %d", len(output), len(body))
 	}
 }
 
