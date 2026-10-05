@@ -216,6 +216,173 @@ func TestDeviceAuthStartCancellation(t *testing.T) {
 	}
 }
 
+func TestDeviceAuthPollExchange(t *testing.T) {
+	for _, tc := range []struct {
+		fixture string
+		status  int
+	}{
+		{"poll-pending.json", http.StatusOK},
+		{"poll-pending-403.json", http.StatusForbidden},
+		{"poll-pending-404.json", http.StatusNotFound},
+		{"poll-slow-down.json", http.StatusOK},
+		{"poll-authorized.json", http.StatusOK},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			originalExpiry := time.Now().Add(10 * time.Minute).Truncate(time.Second)
+			continuation := deviceAuthContinuation{DeviceCode: "synthetic-device-code-not-valid", UserCode: "SYNTHETIC-CODE-1234", VerificationURI: "https://auth.openai.com/codex/device", Interval: time.Second, ExpiresAt: originalExpiry}
+			state, _ := json.Marshal(continuation)
+			fixture := loadAuthFixture(t, tc.fixture)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != authPollPath || r.Header.Get("Content-Type") != "application/json" {
+					t.Errorf("request method/path/content-type = %s %s %q", r.Method, r.URL.Path, r.Header.Get("Content-Type"))
+				}
+				body, _ := io.ReadAll(r.Body)
+				if string(body) != `{"device_auth_id":"synthetic-device-code-not-valid","user_code":"SYNTHETIC-CODE-1234"}` {
+					t.Errorf("request body = %s", body)
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write(fixture)
+			}))
+			defer server.Close()
+			result, ge := readyAuthConnector(t, server.URL).Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: state}, core.InvocationServices{Transport: server.Client()})
+			if ge != nil || !result.Supported || result.NextAction != "continue" || len(result.Credentials) != 0 {
+				t.Fatalf("result=%+v error=%+v", result, ge)
+			}
+			var next deviceAuthContinuation
+			if err := json.Unmarshal([]byte(result.State), &next); err != nil || !next.ExpiresAt.Equal(originalExpiry) {
+				t.Fatalf("continuation expiry changed: %+v, err=%v", next, err)
+			}
+			if tc.fixture == "poll-authorized.json" {
+				if result.UserAction != nil || next.AuthorizationCode != "synthetic-authorization-code" || next.CodeVerifier != "synthetic-code-verifier" || next.DeviceCode != "" {
+					t.Fatalf("authorized transition result=%+v state=%+v", result, next)
+				}
+				return
+			}
+			if result.UserAction == nil || result.UserAction.UserCode != continuation.UserCode || result.UserAction.VerificationURI != continuation.VerificationURI || next.LastPolledAt.IsZero() {
+				t.Fatalf("pending projection/state result=%+v state=%+v", result, next)
+			}
+			wantInterval := time.Second
+			if tc.fixture == "poll-slow-down.json" {
+				wantInterval = 10 * time.Second
+			}
+			if result.UserAction.PollInterval != wantInterval || next.Interval != wantInterval {
+				t.Fatalf("interval action=%s state=%s want=%s", result.UserAction.PollInterval, next.Interval, wantInterval)
+			}
+		})
+	}
+}
+
+func TestDeviceAuthPollFailuresAndTiming(t *testing.T) {
+	makeState := func(expiry, last time.Time, interval time.Duration) []byte {
+		data, _ := json.Marshal(deviceAuthContinuation{DeviceCode: "private-device", UserCode: "SAFE-CODE", VerificationURI: "https://auth.openai.com/codex/device", Interval: interval, LastPolledAt: last, ExpiresAt: expiry})
+		return data
+	}
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { called = true; w.WriteHeader(http.StatusBadGateway) }))
+	defer server.Close()
+	c := readyAuthConnector(t, server.URL)
+	_, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: makeState(time.Now().Add(-time.Second), time.Time{}, time.Second)}, core.InvocationServices{Transport: server.Client()})
+	if ge == nil || ge.Code != "auth_expired" || called {
+		t.Fatalf("expired poll error=%+v transport=%v", ge, called)
+	}
+	if _, ge = c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: []byte("{")}, core.InvocationServices{Transport: server.Client()}); ge == nil || ge.Code != "auth_invalid_state" {
+		t.Fatalf("malformed state error=%+v", ge)
+	}
+	_, ge = c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: makeState(time.Now().Add(time.Minute), time.Time{}, time.Second)}, core.InvocationServices{Transport: failingAuthTransport{}})
+	if ge == nil || ge.Code != "auth_request_failed" || strings.Contains(ge.Message, "private") {
+		t.Fatalf("transport failure error=%+v", ge)
+	}
+	for _, tc := range []struct {
+		name      string
+		account   string
+		connector *Connector
+	}{
+		{"scope", "wrong", c}, {"unready", "account-a", NewConnector()},
+	} {
+		called = false
+		_, ge := tc.connector.Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: tc.account, State: makeState(time.Now().Add(time.Minute), time.Time{}, time.Second)}, core.InvocationServices{Transport: server.Client()})
+		if ge == nil || called {
+			t.Errorf("%s error=%+v transport=%v", tc.name, ge, called)
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"terminal status", http.StatusBadGateway, `{}`}, {"malformed", http.StatusOK, `{`}, {"unexpected", http.StatusOK, `{"error":"access_denied","secret":"hidden"}`}, {"oversized", http.StatusOK, strings.Repeat("x", authStartLimit+1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer bad.Close()
+			result, ge := readyAuthConnector(t, bad.URL).Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: makeState(time.Now().Add(time.Minute), time.Time{}, time.Second)}, core.InvocationServices{Transport: bad.Client()})
+			if ge == nil || result.State != "" || strings.Contains(ge.Message, "hidden") {
+				t.Fatalf("result=%+v error=%+v", result, ge)
+			}
+		})
+	}
+	started := time.Now()
+	waitState := makeState(time.Now().Add(time.Minute), time.Now().Add(-900*time.Millisecond), time.Second)
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(loadAuthFixture(t, "poll-pending.json")) })
+	_, ge = c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: waitState}, core.InvocationServices{Transport: server.Client()})
+	if ge != nil || time.Since(started) < 80*time.Millisecond {
+		t.Fatalf("interval wait elapsed=%s error=%+v", time.Since(started), ge)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cancelState := makeState(time.Now().Add(time.Minute), time.Now().Add(-900*time.Millisecond), time.Second)
+	_, ge = c.Authenticate(ctx, core.AuthRequest{Action: "continue", AccountID: "account-a", State: cancelState}, core.InvocationServices{Transport: server.Client()})
+	if ge == nil || ge.Code != "auth_cancelled" {
+		t.Fatalf("wait cancellation error=%+v", ge)
+	}
+}
+
+func TestDeviceAuthPollRejectsRedirect(t *testing.T) {
+	targetCalls := 0
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { targetCalls++ }))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer redirect.Close()
+	state, _ := json.Marshal(deviceAuthContinuation{DeviceCode: "private", UserCode: "SAFE", VerificationURI: "https://auth.openai.com/codex/device", Interval: time.Second, ExpiresAt: time.Now().Add(time.Minute)})
+	result, ge := readyAuthConnector(t, redirect.URL).Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: state}, core.InvocationServices{Transport: &http.Client{}})
+	if ge == nil || result.State != "" || targetCalls != 0 {
+		t.Fatalf("redirect result=%+v error=%+v target calls=%d", result, ge, targetCalls)
+	}
+}
+
+func TestDeviceAuthPollRequestCancellation(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	state, _ := json.Marshal(deviceAuthContinuation{DeviceCode: "private", UserCode: "SAFE", VerificationURI: "https://auth.openai.com/codex/device", Interval: time.Second, ExpiresAt: time.Now().Add(time.Minute)})
+	c := readyAuthConnector(t, server.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan *core.GatewayError, 1)
+	go func() {
+		_, ge := c.Authenticate(ctx, core.AuthRequest{Action: "continue", AccountID: "account-a", State: state}, core.InvocationServices{Transport: server.Client()})
+		result <- ge
+	}()
+	<-started
+	cancel()
+	if ge := <-result; ge == nil || ge.Code != "auth_cancelled" {
+		t.Fatalf("request cancellation error=%+v", ge)
+	}
+}
+
 func jsonValue(t *testing.T, value any) string {
 	t.Helper()
 	data, err := json.Marshal(value)

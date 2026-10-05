@@ -21,6 +21,7 @@ import (
 const (
 	defaultAuthURL   = "https://auth.openai.com"
 	authStartPath    = "/api/accounts/deviceauth/usercode"
+	authPollPath     = "/api/accounts/deviceauth/token"
 	authStartLimit   = 64 << 10
 	authStartTimeout = 30 * time.Second
 	deviceClientID   = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -29,9 +30,15 @@ const (
 var decimalSeconds = regexp.MustCompile(`^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
 
 type deviceAuthContinuation struct {
-	DeviceCode   string    `json:"device_code"`
-	DeviceAuthID string    `json:"device_auth_id,omitempty"`
-	ExpiresAt    time.Time `json:"expires_at"`
+	DeviceCode        string        `json:"device_code"`
+	DeviceAuthID      string        `json:"device_auth_id,omitempty"`
+	UserCode          string        `json:"user_code,omitempty"`
+	VerificationURI   string        `json:"verification_uri,omitempty"`
+	Interval          time.Duration `json:"interval,omitempty"`
+	LastPolledAt      time.Time     `json:"last_polled_at"`
+	AuthorizationCode string        `json:"authorization_code,omitempty"`
+	CodeVerifier      string        `json:"code_verifier,omitempty"`
+	ExpiresAt         time.Time     `json:"expires_at"`
 }
 
 type deviceAuthStartResponse struct {
@@ -105,7 +112,9 @@ func (c *Connector) authenticateStart(ctx context.Context, services core.Invocat
 		return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
 	}
 	continuation, err := json.Marshal(deviceAuthContinuation{
-		DeviceCode: deviceCode, DeviceAuthID: provider.DeviceAuthID, ExpiresAt: time.Now().Add(time.Duration(provider.ExpiresIn) * time.Second),
+		DeviceCode: deviceCode, DeviceAuthID: provider.DeviceAuthID, UserCode: provider.UserCode,
+		VerificationURI: provider.VerificationURI, Interval: interval,
+		ExpiresAt: time.Now().Add(time.Duration(provider.ExpiresIn) * time.Second),
 	})
 	if err != nil {
 		return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")

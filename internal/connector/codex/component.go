@@ -169,10 +169,14 @@ func (c *Connector) Authenticate(ctx context.Context, request core.AuthRequest, 
 		return core.AuthResult{}, connectorError("scope_mismatch", core.CategoryPermissionDenied, "Authentication scope does not match configured target")
 	}
 	c.mu.Unlock()
-	if request.Action != "start" {
+	switch request.Action {
+	case "start":
+		return c.authenticateStart(ctx, services)
+	case "continue":
+		return c.authenticateContinue(ctx, string(request.State), services)
+	default:
 		return core.AuthResult{Supported: false}, nil
 	}
-	return c.authenticateStart(ctx, services)
 }
 
 func connectorError(code string, category core.ErrorCategory, message string) *core.GatewayError {
