@@ -124,7 +124,7 @@ func (s *authCoordinatorTestStore) ConsumeAuthSession(_ context.Context, v AuthS
 	delete(s.states, v.ID)
 	return nil
 }
-func (s *authCoordinatorTestStore) FinishAuthSession(_ context.Context, v AuthSession, candidates map[string][]byte) error {
+func (s *authCoordinatorTestStore) FinishAuthSession(_ context.Context, v AuthSession, candidates AuthCredentials) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.credentials[v.AccountID].Revision != v.Revision {
@@ -132,8 +132,8 @@ func (s *authCoordinatorTestStore) FinishAuthSession(_ context.Context, v AuthSe
 		delete(s.states, v.ID)
 		return ErrAuthRevisionMismatch
 	}
-	if len(candidates) > 0 {
-		creds := AuthCredentials{Revision: v.Revision + 1, Valid: true, Values: cloneSecretMap(candidates)}
+	if len(candidates.Values) > 0 {
+		creds := AuthCredentials{Revision: v.Revision + 1, Valid: true, Values: cloneSecretMap(candidates.Values), ExpiresAt: cloneTime(candidates.ExpiresAt)}
 		s.credentials[v.AccountID] = creds
 	}
 	delete(s.sessions, v.ID)
@@ -312,6 +312,60 @@ func TestAuthCoordinatorInteractiveSessionUsesOpaqueStoredState(t *testing.T) {
 	}
 	if _, ok := s.sessions[session.ID]; ok {
 		t.Fatal("completed session was not consumed")
+	}
+}
+
+func TestAuthCoordinatorPersistsCredentialExpiry(t *testing.T) {
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, flow := range []string{"start", "continue", "refresh"} {
+		for _, expiryKind := range []string{"future", "zero", "past"} {
+			t.Run(flow+"/"+expiryKind, func(t *testing.T) {
+				expiry := now.Add(time.Hour)
+				if expiryKind == "zero" {
+					expiry = time.Time{}
+				} else if expiryKind == "past" {
+					expiry = now.Add(-time.Second)
+				}
+				connector := &authCoordinatorTestConnector{respond: func(req AuthRequest) (AuthResult, *GatewayError) {
+					if flow == "continue" && req.Action == "start" {
+						return AuthResult{Supported: true, State: "state", NextAction: "continue"}, nil
+					}
+					return AuthResult{Supported: true, CredentialExpiresAt: &expiry, Credentials: map[string][]byte{"token": []byte("new")}}, nil
+				}}
+				c, store := newAuthCoordinatorTest(t, connector, "a")
+				c.clock = func() time.Time { return now }
+				var err error
+				switch flow {
+				case "start":
+					_, err = c.Start(context.Background(), "a")
+				case "continue":
+					var session AuthSession
+					session, err = c.Start(context.Background(), "a")
+					if err == nil {
+						_, err = c.Continue(context.Background(), session.ID)
+					}
+				case "refresh":
+					_, err = c.Refresh(context.Background(), "a")
+				}
+				if expiryKind == "future" {
+					if err != nil {
+						t.Fatal(err)
+					}
+					got := store.credentials["a"]
+					if got.Revision != 2 || got.ExpiresAt == nil || !got.ExpiresAt.Equal(expiry) {
+						t.Fatalf("stored credentials %#v", got)
+					}
+					return
+				}
+				if !errors.Is(err, ErrAuthUnavailable) {
+					t.Fatalf("error=%v, want invalid expiry rejection", err)
+				}
+				got := store.credentials["a"]
+				if got.Revision != 1 || got.ExpiresAt != nil || string(got.Values["token"]) != "old" {
+					t.Fatalf("invalid expiry mutated credentials: %#v", got)
+				}
+			})
+		}
 	}
 }
 

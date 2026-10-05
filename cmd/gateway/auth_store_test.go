@@ -80,6 +80,12 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	initialRow, err := credentials.Get(ctx, "account", "credential")
+	if err != nil || initialRow.ExpiresAt != nil {
+		t.Fatalf("legacy credential expiry=%#v err=%v", initialRow.ExpiresAt, err)
+	}
+	interactiveExpiry := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Millisecond)
+	refreshExpiry := time.Now().Add(3 * time.Hour).UTC().Truncate(time.Millisecond)
 	connector := &integratedAuthConnector{call: func(r core.AuthRequest) core.AuthResult {
 		if r.Action == "start" {
 			return core.AuthResult{Supported: true, State: "private-opaque-state", NextAction: "continue"}
@@ -87,7 +93,10 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 		if string(r.State) == "private-opaque-state" {
 			return core.AuthResult{Supported: true, State: "private-next-state", NextAction: "continue"}
 		}
-		return core.AuthResult{Supported: true, Credentials: map[string][]byte{"bearer": []byte("interactive-next-token")}}
+		if r.Action == "refresh" {
+			return core.AuthResult{Supported: true, Credentials: map[string][]byte{"bearer": []byte("rotated-token")}, CredentialExpiresAt: &refreshExpiry}
+		}
+		return core.AuthResult{Supported: true, Credentials: map[string][]byte{"bearer": []byte("interactive-next-token")}, CredentialExpiresAt: &interactiveExpiry}
 	}}
 	registry, err := core.NewRegistry(map[core.ComponentKind]core.APIVersion{core.ComponentConnector: {Major: 1}}, nil)
 	if err != nil {
@@ -134,9 +143,17 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 	if err != nil || string(got) != "interactive-next-token" {
 		t.Fatalf("credential=%q err=%v", got, err)
 	}
+	interactiveRow, err := credentials.Get(ctx, "account", "credential")
+	if err != nil || interactiveRow.ExpiresAt == nil || !interactiveRow.ExpiresAt.Equal(interactiveExpiry) {
+		t.Fatalf("interactive expiry %#v err=%v", interactiveRow.ExpiresAt, err)
+	}
 	refreshed, err := coordinator.Refresh(ctx, "account")
-	if err != nil || refreshed.Revision != 3 || string(refreshed.Values["bearer"]) != "interactive-next-token" {
+	if err != nil || refreshed.Revision != 3 || string(refreshed.Values["bearer"]) != "rotated-token" || refreshed.ExpiresAt == nil || !refreshed.ExpiresAt.Equal(refreshExpiry) {
 		t.Fatalf("SQLite refresh result=%#v err=%v", refreshed, err)
+	}
+	stored, err := credentials.Get(ctx, "account", "credential")
+	if err != nil || stored.ExpiresAt == nil || !stored.ExpiresAt.Equal(*refreshed.ExpiresAt) {
+		t.Fatalf("refresh expiry %#v runtime=%#v err=%v", stored.ExpiresAt, refreshed.ExpiresAt, err)
 	}
 	var rowCount int
 	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE account_id='account' AND kind='refresh'`).Scan(&rowCount); err != nil || rowCount != 0 {
@@ -166,6 +183,19 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 	}
 	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE id=? AND lifecycle='consumed' AND ciphertext IS NULL`, staleSession.ID).Scan(&rowCount); err != nil || rowCount != 1 {
 		t.Fatalf("stale session cleanup count=%d err=%v", rowCount, err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials = sqlite.NewCredentials(db)
+	got, err = credentials.GetDecrypted(ctx, "account", "credential", key)
+	stored, rowErr := credentials.Get(ctx, "account", "credential")
+	if err != nil || rowErr != nil || string(got) != "external-update" || stored.ExpiresAt == nil || !stored.ExpiresAt.Equal(*refreshed.ExpiresAt) {
+		t.Fatalf("restart round trip credential=%q expiry=%#v errors=%v/%v", got, stored.ExpiresAt, err, rowErr)
 	}
 }
 

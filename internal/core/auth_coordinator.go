@@ -25,9 +25,10 @@ type AuthAccount struct {
 }
 
 type AuthCredentials struct {
-	Revision int64
-	Values   map[string][]byte
-	Valid    bool
+	Revision  int64
+	Values    map[string][]byte
+	ExpiresAt *time.Time
+	Valid     bool
 }
 
 type AuthSession struct {
@@ -50,7 +51,7 @@ type AuthCoordinatorStore interface {
 	ClaimAuthSession(context.Context, AuthSession) error
 	AdvanceAuthSession(context.Context, AuthSession, []byte) error
 	ConsumeAuthSession(context.Context, AuthSession) error
-	FinishAuthSession(context.Context, AuthSession, map[string][]byte) error
+	FinishAuthSession(context.Context, AuthSession, AuthCredentials) error
 	// CreateRefreshMarker maps storage uniqueness collisions to ErrRefreshMarkerConflict.
 	CreateRefreshMarker(context.Context, string, AuthSession) error
 	ClearRefreshMarker(context.Context, string, AuthSession) error
@@ -94,7 +95,10 @@ func (c *AuthCoordinator) Start(ctx context.Context, accountID string) (AuthSess
 	}
 	if result.NextAction == "" {
 		if len(result.Credentials) > 0 {
-			if _, err := c.replaceCredentials(ctx, account.ID, creds, result.Credentials); err != nil {
+			if !validCredentialExpiry(result.CredentialExpiresAt, c.clock()) {
+				return AuthSession{}, ErrAuthUnavailable
+			}
+			if _, err := c.replaceCredentials(ctx, account.ID, creds, result.Credentials, result.CredentialExpiresAt); err != nil {
 				return AuthSession{}, err
 			}
 		}
@@ -168,8 +172,14 @@ func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthS
 		}
 		return AuthSession{}, authCallError(ctx, callErr)
 	}
+	if !validCredentialExpiry(result.CredentialExpiresAt, c.clock()) {
+		if c.discardSession(session) != nil {
+			return AuthSession{}, ErrAuthPersistence
+		}
+		return AuthSession{}, ErrAuthUnavailable
+	}
 	if result.NextAction == "" {
-		if err := c.store.FinishAuthSession(ctx, session, result.Credentials); err != nil {
+		if err := c.store.FinishAuthSession(ctx, session, AuthCredentials{Values: cloneSecretMap(result.Credentials), ExpiresAt: cloneTime(result.CredentialExpiresAt)}); err != nil {
 			if errors.Is(err, ErrAuthRevisionMismatch) {
 				_ = c.discardSession(session)
 				return AuthSession{}, ErrAuthRevisionMismatch
@@ -242,13 +252,19 @@ func (c *AuthCoordinator) Refresh(ctx context.Context, accountID string) (AuthCr
 		}
 		return AuthCredentials{}, authCallError(ctx, callErr)
 	}
+	if !validCredentialExpiry(result.CredentialExpiresAt, c.clock()) {
+		if err := c.store.QuarantineRefreshMarker(context.Background(), marker.ID, marker, "ambiguous_result", creds.Revision); err != nil {
+			return AuthCredentials{}, authPersistence(err)
+		}
+		return AuthCredentials{}, ErrAuthUnavailable
+	}
 	if len(result.Credentials) == 0 {
 		if err := c.store.QuarantineRefreshMarker(context.Background(), marker.ID, marker, "ambiguous_result", creds.Revision); err != nil {
 			return AuthCredentials{}, authPersistence(err)
 		}
 		return AuthCredentials{}, ErrAuthUnavailable
 	}
-	replacement := AuthCredentials{Revision: creds.Revision, Values: cloneSecretMap(result.Credentials)}
+	replacement := AuthCredentials{Revision: creds.Revision, Values: cloneSecretMap(result.Credentials), ExpiresAt: cloneTime(result.CredentialExpiresAt)}
 	resolved, err := c.store.ResolveRefresh(ctx, marker.ID, marker, replacement)
 	if err != nil {
 		reason := "persistence_failed"
@@ -294,8 +310,8 @@ func (c *AuthCoordinator) prepare(ctx context.Context, accountID string) (AuthAc
 	return account, connector, c.services.ForAttempt(AttemptScope{AccountID: accountID}), cloneAuthCredentials(creds), nil
 }
 
-func (c *AuthCoordinator) replaceCredentials(ctx context.Context, accountID string, before AuthCredentials, candidates map[string][]byte) (AuthCredentials, error) {
-	updated, err := c.store.ReplaceAuthCredentials(ctx, accountID, before.Revision, AuthCredentials{Revision: before.Revision, Values: cloneSecretMap(candidates)})
+func (c *AuthCoordinator) replaceCredentials(ctx context.Context, accountID string, before AuthCredentials, candidates map[string][]byte, expiresAt *time.Time) (AuthCredentials, error) {
+	updated, err := c.store.ReplaceAuthCredentials(ctx, accountID, before.Revision, AuthCredentials{Revision: before.Revision, Values: cloneSecretMap(candidates), ExpiresAt: cloneTime(expiresAt)})
 	if err != nil {
 		if errors.Is(err, ErrAuthRevisionMismatch) {
 			return AuthCredentials{}, ErrAuthRevisionMismatch
@@ -347,7 +363,20 @@ func cloneSecretMap(in map[string][]byte) map[string][]byte {
 }
 func cloneAuthCredentials(in AuthCredentials) AuthCredentials {
 	in.Values = cloneSecretMap(in.Values)
+	in.ExpiresAt = cloneTime(in.ExpiresAt)
 	return in
+}
+
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func validCredentialExpiry(value *time.Time, now time.Time) bool {
+	return value == nil || (!value.IsZero() && value.After(now))
 }
 func clear(values []byte) {
 	for i := range values {
