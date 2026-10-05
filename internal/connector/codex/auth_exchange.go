@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -63,9 +62,10 @@ func (c *Connector) exchangeDeviceAuthorizationCode(ctx context.Context, code, v
 		return core.AuthResult{}, connectorError("auth_cancelled", core.CategoryUnavailable, "Authentication request was cancelled")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return core.AuthResult{}, connectorError("auth_rejected", core.CategoryUnavailable, "Authentication provider rejected the request")
+		return core.AuthResult{}, authRejectedError(resp.StatusCode)
 	}
-	if _, err := scanJSONObject(data, "access_token", "refresh_token", "id_token", "expires_in", "token_type"); err != nil {
+	fields, err := scanJSONObject(data, "access_token", "refresh_token", "id_token", "expires_in", "token_type")
+	if err != nil {
 		return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
 	}
 	var provider struct {
@@ -75,21 +75,15 @@ func (c *Connector) exchangeDeviceAuthorizationCode(ctx context.Context, code, v
 		ExpiresIn    int64  `json:"expires_in"`
 		TokenType    string `json:"token_type"`
 	}
-	if err := json.Unmarshal(data, &provider); err != nil || provider.AccessToken == "" || provider.RefreshToken == "" ||
-		!strings.EqualFold(provider.TokenType, "Bearer") || provider.ExpiresIn <= 0 || provider.ExpiresIn > math.MaxInt64/int64(time.Second) {
+	expiresIn, lifetimeErr := tokenLifetime(fields)
+	if err := json.Unmarshal(data, &provider); err != nil || provider.AccessToken == "" || provider.RefreshToken == "" || lifetimeErr != nil {
 		return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
 	}
 	accountID, err := accountIDFromTokens(provider.IDToken, provider.AccessToken)
 	if err != nil || accountID == "" {
 		return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
 	}
-	c.mu.Lock()
-	configuredAccount := c.accountID
-	c.mu.Unlock()
-	if accountID != configuredAccount {
-		return core.AuthResult{}, connectorError("scope_mismatch", core.CategoryPermissionDenied, "Authentication identity does not match configured target")
-	}
-	expiresAt := time.Now().Add(time.Duration(provider.ExpiresIn) * time.Second).UTC()
+	expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second).UTC()
 	encoded, err := encodeOAuthBundle(oauthBundle{
 		Version: oauthBundleVersion, AccessToken: provider.AccessToken, RefreshToken: provider.RefreshToken,
 		AccountID: accountID, ExpiresAt: expiresAt,

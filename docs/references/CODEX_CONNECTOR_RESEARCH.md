@@ -178,13 +178,25 @@ expires   = now + (expires_in or 3600) seconds
 metadata.accountID = extracted account, when present
 ```
 
+In pinned [V2-OAUTH], `TokenResponse` declares optional `expires_in` and does
+not declare `token_type`; `credential()` uses `expires_in ?? 3600`, and the
+Codex request path uses the access token as a Bearer credential. This records
+the pinned client's accepted response shape, not an RFC 6749 compliance claim.
+
 `extractAccountID` and `claim`, lines 416–429, first inspect the ID token, then the access token. Within a parsed JWT payload, precedence is:
 
 1. `chatgpt_account_id`;
-2. `https://api.openai.com/auth.chatgpt_account_id`;
+2. `https://api.openai.com/auth.chatgpt_account_id` inside the
+   `https://api.openai.com/auth` object;
 3. `organizations[0].id`.
 
 The JWT payload is decoded here, not cryptographically verified by these helper functions. Treat the result as metadata obtained from the trusted token exchange, not as an authorization proof accepted from arbitrary client input. A gateway's selected account must never be chosen by an inbound account header.
+
+PestiRoute rejects conflicting nonempty account-ID claims within either token
+and between ID/access tokens rather than applying the reference client's
+first-match precedence. `organizations[0].id` remains a final fallback only
+when those account-ID claims are absent; it is not equated with a conflicting
+explicit account-ID claim.
 
 The organization fallback is an observed client heuristic. Verify it for the accounts PestiRoute actually supports; do not silently select a different organization when identity is ambiguous.
 

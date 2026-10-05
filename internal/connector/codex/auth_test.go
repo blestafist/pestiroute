@@ -66,6 +66,34 @@ func TestDeviceAuthStartExchange(t *testing.T) {
 			}
 		})
 	}
+	testDeviceAuthStartDocumentedResponseDefaults(t)
+}
+
+func testDeviceAuthStartDocumentedResponseDefaults(t *testing.T) {
+	t.Helper()
+	transport := authRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://auth.openai.com"+authStartPath {
+			t.Fatalf("request URL = %s", req.URL)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"device_auth_id":"synthetic-device-code-not-valid","user_code":"SYNTHETIC-CODE-1234","interval":"5"}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})
+	started := time.Now()
+	result, ge := readyAuthConnector(t, "https://auth.openai.com").Authenticate(context.Background(), core.AuthRequest{Action: "start", AccountID: "account-a"}, core.InvocationServices{Transport: transport})
+	if ge != nil || !result.Supported || result.UserAction == nil {
+		t.Fatalf("result=%+v error=%+v", result, ge)
+	}
+	if result.UserAction.VerificationURI != "https://auth.openai.com/codex/device" || result.UserAction.UserCode != "SYNTHETIC-CODE-1234" || result.UserAction.PollInterval != 5*time.Second {
+		t.Fatalf("unexpected safe action: %+v", result.UserAction)
+	}
+	var continuation deviceAuthContinuation
+	if err := json.Unmarshal([]byte(result.State), &continuation); err != nil || continuation.ExpiresAt.Before(started.Add(14*time.Minute)) || continuation.ExpiresAt.After(started.Add(maxDeviceAuthLifetime+time.Second)) {
+		t.Fatalf("default continuation expiry=%v err=%v", continuation.ExpiresAt, err)
+	}
 }
 
 type authCredentials []byte
@@ -75,7 +103,7 @@ func (credential authCredentials) Get(context.Context, string) ([]byte, error) {
 }
 
 func TestSelectedAccountRefreshExchange(t *testing.T) {
-	prior, err := encodeOAuthBundle(oauthBundle{Version: oauthBundleVersion, AccessToken: "prior-access-secret", RefreshToken: "prior-refresh-secret", AccountID: "account-a", ExpiresAt: time.Now().Add(-time.Hour)})
+	prior, err := encodeOAuthBundle(oauthBundle{Version: oauthBundleVersion, AccessToken: "prior-access-secret", RefreshToken: "prior-refresh-secret", AccountID: "provider-b", ExpiresAt: time.Now().Add(-time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +115,12 @@ func TestSelectedAccountRefreshExchange(t *testing.T) {
 	} {
 		t.Run(tc.fixture, func(t *testing.T) {
 			data := loadAuthFixture(t, tc.fixture)
+			var tokenResponse map[string]json.RawMessage
+			if err := json.Unmarshal(data, &tokenResponse); err != nil {
+				t.Fatal("invalid synthetic refresh fixture")
+			}
+			tokenResponse["id_token"], _ = json.Marshal(testJWT([]byte(`{"chatgpt_account_id":"provider-b"}`)))
+			data, _ = json.Marshal(tokenResponse)
 			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
@@ -105,13 +139,28 @@ func TestSelectedAccountRefreshExchange(t *testing.T) {
 				t.Fatalf("result=%+v error=%+v calls=%d", result, ge, calls)
 			}
 			got, err := decodeOAuthBundle(result.Credentials["oauth"])
-			if err != nil || got.RefreshToken != tc.wantRefresh || got.AccountID != "account-a" || got.AccessToken != "synthetic-refreshed-access-token-not-valid" {
+			if err != nil || got.RefreshToken != tc.wantRefresh || got.AccountID != "provider-b" || got.AccessToken != "synthetic-refreshed-access-token-not-valid" {
 				t.Fatalf("bundle=%+v err=%v", got, err)
 			}
 			if result.CredentialExpiresAt == nil || !result.CredentialExpiresAt.Equal(got.ExpiresAt) || !got.ExpiresAt.After(time.Now()) {
 				t.Fatalf("expiry metadata=%v bundle expiry=%v", result.CredentialExpiresAt, got.ExpiresAt)
 			}
 		})
+	}
+}
+
+func TestSelectedAccountRefreshDocumentedTokenShape(t *testing.T) {
+	prior := mustBundle(t, oauthBundle{Version: oauthBundleVersion, AccessToken: "prior", RefreshToken: "prior-refresh", AccountID: "account-a", ExpiresAt: time.Now()})
+	body := `{"access_token":"opaque-refreshed-access","id_token":"` + testJWT([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"account-a"}}`)) + `"}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, body) }))
+	defer server.Close()
+	result, ge := readyAuthConnector(t, server.URL).Authenticate(context.Background(), core.AuthRequest{Action: "refresh", AccountID: "account-a"}, core.InvocationServices{Transport: server.Client(), Credentials: authCredentials(prior)})
+	if ge != nil || !result.Supported {
+		t.Fatalf("refresh result=%+v error=%+v", result, ge)
+	}
+	bundle, err := decodeOAuthBundle(result.Credentials["oauth"])
+	if err != nil || bundle.AccessToken != "opaque-refreshed-access" || bundle.RefreshToken != "prior-refresh" || bundle.AccountID != "account-a" || time.Until(bundle.ExpiresAt) < 59*time.Minute || time.Until(bundle.ExpiresAt) > 61*time.Minute {
+		t.Fatalf("refresh bundle=%+v err=%v", bundle, err)
 	}
 }
 
@@ -129,6 +178,7 @@ func TestSelectedAccountRefreshExchangeFailures(t *testing.T) {
 		{"missing access", `{"refresh_token":"rotated","expires_in":30,"token_type":"Bearer"}`, http.StatusOK},
 		{"zero expiry", `{"access_token":"new","expires_in":0,"token_type":"Bearer"}`, http.StatusOK},
 		{"negative expiry", `{"access_token":"new","expires_in":-1,"token_type":"Bearer"}`, http.StatusOK},
+		{"null expiry", `{"access_token":"new","expires_in":null,"token_type":"Bearer"}`, http.StatusOK},
 		{"oversized", strings.Repeat("x", authStartLimit+1), http.StatusOK},
 	}
 	for _, tc := range cases {
@@ -153,7 +203,6 @@ func TestSelectedAccountRefreshExchangeFailures(t *testing.T) {
 	}{
 		{"missing credentials", nil, "account-a"},
 		{"missing refresh", authCredentials(mustBundle(t, oauthBundle{Version: oauthBundleVersion, AccessToken: "access", AccountID: "account-a", ExpiresAt: time.Now()})), "account-a"},
-		{"bundle account mismatch", authCredentials(mustBundle(t, oauthBundle{Version: oauthBundleVersion, AccessToken: "access", RefreshToken: "refresh", AccountID: "account-b", ExpiresAt: time.Now()})), "account-a"},
 		{"request account mismatch", authCredentials(prior), "account-b"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,8 +218,8 @@ func TestSelectedAccountRefreshExchangeFailures(t *testing.T) {
 }
 
 func TestSelectedAccountRefreshExchangeBoundaries(t *testing.T) {
-	prior := mustBundle(t, oauthBundle{Version: oauthBundleVersion, AccessToken: "prior", RefreshToken: "prior-refresh", AccountID: "account-a", ExpiresAt: time.Now()})
-	wrongIdentity := `{"access_token":"` + testJWT([]byte(`{"chatgpt_account_id":"account-b"}`)) + `","expires_in":3600,"token_type":"Bearer"}`
+	prior := mustBundle(t, oauthBundle{Version: oauthBundleVersion, AccessToken: "prior", RefreshToken: "prior-refresh", AccountID: "provider-b", ExpiresAt: time.Now()})
+	wrongIdentity := `{"access_token":"` + testJWT([]byte(`{"chatgpt_account_id":"provider-c"}`)) + `","expires_in":3600,"token_type":"Bearer"}`
 	for _, tc := range []struct{ name, body string }{{"identity mismatch", wrongIdentity}} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, tc.body) }))
@@ -241,6 +290,9 @@ func TestDeviceAuthStartFailuresAndScope(t *testing.T) {
 		{"status", http.StatusBadGateway, `{}`},
 		{"malformed", http.StatusOK, `{`},
 		{"invalid interval", http.StatusOK, string(loadAuthFixture(t, "start-invalid-interval.json"))},
+		{"negative omitted-shape interval", http.StatusOK, `{"device_auth_id":"synthetic-device","user_code":"SAFE-CODE","interval":-1}`},
+		{"negative omitted-shape expiry", http.StatusOK, `{"device_auth_id":"synthetic-device","user_code":"SAFE-CODE","expires_in":-1}`},
+		{"empty explicit URI", http.StatusOK, strings.Replace(string(loadAuthFixture(t, "start-success.json")), `"https://auth.openai.com/codex/device"`, `""`, 1)},
 		{"oversized", http.StatusOK, strings.Repeat("x", authStartLimit+1)},
 		{"empty user code", http.StatusOK, strings.Replace(string(loadAuthFixture(t, "start-success.json")), `"SYNTHETIC-CODE-1234"`, `""`, 1)},
 		{"user code space", http.StatusOK, strings.Replace(string(loadAuthFixture(t, "start-success.json")), `"SYNTHETIC-CODE-1234"`, `"BAD CODE"`, 1)},
@@ -550,10 +602,10 @@ func TestDeviceAuthPollRequestCancellation(t *testing.T) {
 
 func TestDeviceAuthCodeExchange(t *testing.T) {
 	const code, verifier = "private-authorization-code", "private-code-verifier"
-	access := testJWT([]byte(`{"chatgpt_account_id":"account-a"}`))
+	access := testJWT([]byte(`{"chatgpt_account_id":"provider-b"}`))
 	fixture := decodeAuthFixture(t, "exchange-success.json")
 	fixture["access_token"], _ = json.Marshal(access)
-	fixture["id_token"], _ = json.Marshal(testJWT([]byte(`{"chatgpt_account_id":"account-a"}`)))
+	fixture["id_token"], _ = json.Marshal(testJWT([]byte(`{"chatgpt_account_id":"provider-b"}`)))
 	body, _ := json.Marshal(fixture)
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -575,7 +627,7 @@ func TestDeviceAuthCodeExchange(t *testing.T) {
 		t.Fatalf("result=%+v error=%+v requests=%d", result, ge, requests)
 	}
 	bundle, err := decodeOAuthBundle(result.Credentials["oauth"])
-	if err != nil || bundle.AccessToken != access || bundle.AccountID != "account-a" || bundle.RefreshToken == "" || result.CredentialExpiresAt == nil || !bundle.ExpiresAt.Equal(*result.CredentialExpiresAt) || !bundle.ExpiresAt.After(time.Now()) {
+	if err != nil || bundle.AccessToken != access || bundle.AccountID != "provider-b" || bundle.RefreshToken == "" || result.CredentialExpiresAt == nil || !bundle.ExpiresAt.Equal(*result.CredentialExpiresAt) || !bundle.ExpiresAt.After(time.Now()) {
 		t.Fatalf("bundle=%+v expiry=%v err=%v", bundle, result.CredentialExpiresAt, err)
 	}
 
@@ -589,7 +641,6 @@ func TestDeviceAuthCodeExchange(t *testing.T) {
 		{"no refresh", loadAuthFixture(t, "exchange-no-refresh.json"), http.StatusOK, "auth_invalid_response"},
 		{"malformed", loadAuthFixture(t, "malformed.json"), http.StatusOK, "auth_invalid_response"},
 		{"missing identity", []byte(`{"token_type":"Bearer","access_token":"` + testJWT([]byte(`{"sub":"user"}`)) + `","refresh_token":"refresh","expires_in":3600}`), http.StatusOK, "auth_invalid_response"},
-		{"wrong identity", []byte(`{"token_type":"Bearer","access_token":"` + testJWT([]byte(`{"chatgpt_account_id":"other"}`)) + `","refresh_token":"refresh","expires_in":3600}`), http.StatusOK, "scope_mismatch"},
 		{"zero expiry", []byte(`{"token_type":"Bearer","access_token":"` + access + `","refresh_token":"refresh","expires_in":0}`), http.StatusOK, "auth_invalid_response"},
 		{"negative expiry", []byte(`{"token_type":"Bearer","access_token":"` + access + `","refresh_token":"refresh","expires_in":-1}`), http.StatusOK, "auth_invalid_response"},
 		{"oversized", []byte(strings.Repeat("x", authStartLimit+1)), http.StatusOK, "auth_invalid_response"},
@@ -652,6 +703,45 @@ func TestDeviceAuthCodeExchange(t *testing.T) {
 	close(release)
 	if ge := <-got; ge == nil || ge.Code != "auth_cancelled" {
 		t.Fatalf("cancel error=%+v", ge)
+	}
+}
+
+func TestDeviceAuthCodeExchangeDocumentedTokenShape(t *testing.T) {
+	access := "opaque-access-token"
+	idToken := testJWT([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"account-a"}}`))
+	response := func(tokenType, expires string) string {
+		body := `{"access_token":"` + access + `","id_token":"` + idToken + `","refresh_token":"refresh"`
+		if tokenType != "" {
+			body += `,"token_type":` + tokenType
+		}
+		if expires != "" {
+			body += `,"expires_in":` + expires
+		}
+		return body + `}`
+	}
+	for _, tc := range []struct {
+		name, body string
+		wantOK     bool
+	}{
+		{"omitted optional response fields", response("", ""), true},
+		{"invalid explicit token type", response(`"MAC"`, "3600"), false},
+		{"invalid explicit expiry", response(`"Bearer"`, `"3600"`), false},
+		{"null explicit expiry", response(`"Bearer"`, `null`), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, tc.body) }))
+			defer server.Close()
+			state, _ := json.Marshal(deviceAuthContinuation{AuthorizationCode: "synthetic-code", CodeVerifier: "synthetic-verifier", ExpiresAt: time.Now().Add(time.Minute)})
+			result, ge := readyAuthConnector(t, server.URL).Authenticate(context.Background(), core.AuthRequest{Action: "continue", AccountID: "account-a", State: state}, core.InvocationServices{Transport: server.Client()})
+			if tc.wantOK {
+				bundle, err := decodeOAuthBundle(result.Credentials["oauth"])
+				if ge != nil || err != nil || bundle.AccessToken != access || bundle.AccountID != "account-a" || time.Until(bundle.ExpiresAt) < 59*time.Minute || time.Until(bundle.ExpiresAt) > 61*time.Minute {
+					t.Fatalf("exchange bundle=%+v err=%v provider_error=%+v", bundle, err, ge)
+				}
+			} else if ge == nil || ge.Code != "auth_invalid_response" || len(result.Credentials) != 0 {
+				t.Fatalf("exchange result=%+v error=%+v", result, ge)
+			}
+		})
 	}
 }
 

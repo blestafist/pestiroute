@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -432,11 +433,47 @@ func cloneAuthUserAction(value *AuthUserAction) *AuthUserAction {
 	copy := *value
 	return &copy
 }
-func authCallError(ctx context.Context, _ *GatewayError) error {
+func authCallError(ctx context.Context, cause *GatewayError) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return ErrAuthUnavailable
+	if cause == nil {
+		return ErrAuthUnavailable
+	}
+	// Connector diagnostics are retained only for explicit administrative
+	// debugging; callers still see the generic unavailable error by default.
+	diagnostic := &GatewayError{Code: safeAuthDiagnosticCode(cause.Code), Category: cause.Category}
+	if status, ok := safeAuthHTTPStatus(cause.OriginalError); ok {
+		diagnostic.OriginalError = status
+	}
+	return authCallFailure{diagnostic: diagnostic}
+}
+
+type authCallFailure struct{ diagnostic *GatewayError }
+
+func (authCallFailure) Error() string        { return ErrAuthUnavailable.Error() }
+func (authCallFailure) Is(target error) bool { return target == ErrAuthUnavailable }
+func (e authCallFailure) Unwrap() []error    { return []error{ErrAuthUnavailable, e.diagnostic} }
+
+func safeAuthDiagnosticCode(code string) string {
+	switch code {
+	case "auth_rejected", "auth_invalid_response", "scope_mismatch", "auth_transport_unavailable", "auth_request_failed", "auth_cancelled", "auth_expired", "auth_invalid_state":
+		return code
+	default:
+		return "auth_unavailable"
+	}
+}
+
+func safeAuthHTTPStatus(value string) (string, bool) {
+	const prefix = "HTTP status "
+	if !strings.HasPrefix(value, prefix) {
+		return "", false
+	}
+	status := strings.TrimPrefix(value, prefix)
+	if len(status) != 3 || status[0] < '1' || status[0] > '5' || status[1] < '0' || status[1] > '9' || status[2] < '0' || status[2] > '9' {
+		return "", false
+	}
+	return prefix + status, true
 }
 func authPersistence(error) error { return ErrAuthPersistence }
 func cloneSecretMap(in map[string][]byte) map[string][]byte {

@@ -169,6 +169,26 @@ def validate_auth(path):
     print("PASS paired direct/gateway auth schema and redaction valid")
 
 
+def validate_gateway_auth(path):
+    data = json_file(path)
+    require(type(data) is dict and set(data) == AUTH_KEYS | {"comparison", "auth_source", "local_validation"}, "invalid gateway-only auth artifact fields")
+    require(type(data["schema_version"]) is int and data["schema_version"] == 1, "schema_version must be 1")
+    require(type(data["endpoint_profile"]) is str and data["endpoint_profile"] in PROFILES, "invalid auth endpoint profile")
+    valid_stamp(data["captured_at_utc"])
+    comparison = data["comparison"]
+    require(type(comparison) is dict and set(comparison) == {"status", "reason"} and comparison == {"status": "deferred", "reason": "operator_approved_duplicate_direct_login_deferred"}, "direct auth comparison must be explicitly deferred by operator approval")
+    require(data["auth_source"] == "operator_reported_cli_authentication_complete", "auth source must be identified as operator-reported")
+    require(data["local_validation"] == "read_only_database_decryption_verified", "local validation must identify the measured read-only probe")
+    records = data["artifacts"]
+    require(type(records) is list and len(records) == 1, "gateway-only auth artifact must contain exactly one record")
+    record = records[0]
+    require(type(record) is dict and set(record) == AUTH_RECORD_KEYS and record["leg"] == "gateway_auth", "gateway-only artifact requires only a gateway_auth record")
+    require(record["flow"] == "device_continue" and type(record["status"]) is int and record["status"] == 200, "gateway auth must record successful device continuation")
+    require(type(record["token_present"]) is bool and record["token_present"] is True and type(record["expiry_preserved"]) is bool and record["expiry_preserved"] is True, "successful gateway continuation requires token and expiry presence")
+    redact(data)
+    print("PASS gateway-only auth schema, deferred comparison and redaction valid")
+
+
 class Fake(http.server.BaseHTTPRequestHandler):
     hits = []
     gate = None
@@ -287,6 +307,17 @@ def self_test(outdir):
         auth_path.chmod(0o600)
         validate_pair(outdir / "direct.json", outdir / "gateway.json")
         validate_auth(auth_path)
+        gateway_auth = {
+            **{key: value for key, value in auth.items() if key != "artifacts"},
+            "artifacts": [auth_records[1]],
+            "comparison": {"status": "deferred", "reason": "operator_approved_duplicate_direct_login_deferred"},
+            "auth_source": "operator_reported_cli_authentication_complete",
+            "local_validation": "read_only_database_decryption_verified",
+        }
+        gateway_auth_path = outdir / "gateway-only-auth.json"
+        gateway_auth_path.write_text(json.dumps(gateway_auth), encoding="utf-8")
+        validate_gateway_auth(gateway_auth_path)
+        must_reject(lambda: validate_auth(gateway_auth_path), "gateway-only artifact in strict paired mode")
         direct = json.loads((outdir / "direct.json").read_text())
         gateway = json.loads((outdir / "gateway.json").read_text())
         scenario_values = {
@@ -382,7 +413,24 @@ def self_test(outdir):
         auth_status_mismatch["artifacts"][1].update({"status": 202, "token_present": False, "expiry_preserved": False})
         auth_bad_path.write_text(json.dumps(auth_status_mismatch), encoding="utf-8")
         must_reject(lambda: validate_auth(auth_bad_path), "paired auth status mismatch")
-        print("PASS independently counted direct/gateway SSE; all scenario schemas; pair/auth mismatches; missing links/reasoning; secret, prompt, cap, retry and malformed negatives; no provider calls")
+        gateway_bad = json.loads(json.dumps(gateway_auth))
+        gateway_bad.pop("comparison")
+        gateway_bad_path = outdir / "invalid-gateway-auth.json"
+        gateway_bad_path.write_text(json.dumps(gateway_bad), encoding="utf-8")
+        must_reject(lambda: validate_gateway_auth(gateway_bad_path), "missing comparison deferral")
+        gateway_bad = json.loads(json.dumps(gateway_auth))
+        gateway_bad["artifacts"][0]["refresh_token"] = "rt_aaaaaaaaaaaaaaaa"
+        gateway_bad_path.write_text(json.dumps(gateway_bad), encoding="utf-8")
+        must_reject(lambda: validate_gateway_auth(gateway_bad_path), "gateway auth secret field")
+        gateway_bad = json.loads(json.dumps(gateway_auth))
+        gateway_bad["comparison"]["reason"] = ""
+        gateway_bad_path.write_text(json.dumps(gateway_bad), encoding="utf-8")
+        must_reject(lambda: validate_gateway_auth(gateway_bad_path), "unbounded comparison reason")
+        gateway_bad = json.loads(json.dumps(gateway_auth))
+        gateway_bad["artifacts"].append(auth_records[0])
+        gateway_bad_path.write_text(json.dumps(gateway_bad), encoding="utf-8")
+        must_reject(lambda: validate_gateway_auth(gateway_bad_path), "paired record in gateway-only artifact")
+        print("PASS independently counted direct/gateway SSE; paired and gateway-only auth schemas; missing deferral; pair/auth mismatches; missing links/reasoning; secret, prompt, cap, retry and malformed negatives; no provider calls")
     finally:
         Fake.gate.set()
         server.shutdown()
@@ -395,16 +443,18 @@ def main():
     parser.add_argument("direct", nargs="?")
     parser.add_argument("gateway", nargs="?")
     parser.add_argument("--auth", type=Path)
+    parser.add_argument("--gateway-only", action="store_true", help="validate one gateway auth record with an explicit operator-approved direct-comparison deferral")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     if args.self_test:
-        require(args.output_dir is not None and not args.direct and not args.gateway and args.auth is None, "--self-test requires only --output-dir")
+        require(args.output_dir is not None and not args.direct and not args.gateway and args.auth is None and not args.gateway_only, "--self-test requires only --output-dir")
         self_test(args.output_dir)
     elif args.auth:
         require(not args.direct and not args.gateway, "--auth cannot be combined with inference artifacts")
-        validate_auth(args.auth)
+        (validate_gateway_auth if args.gateway_only else validate_auth)(args.auth)
     else:
+        require(not args.gateway_only, "--gateway-only requires --auth")
         require(args.direct and args.gateway, "supply paired direct and gateway artifacts")
         validate_pair(args.direct, args.gateway)
 

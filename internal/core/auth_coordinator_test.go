@@ -472,6 +472,25 @@ func TestAuthCoordinatorPersistsCredentialExpiry(t *testing.T) {
 	}
 }
 
+func TestAuthCallErrorPreservesOnlySafeDiagnosticMetadata(t *testing.T) {
+	secret := "private-token-marker"
+	err := authCallError(context.Background(), &GatewayError{
+		Code: secret, Message: secret, Provider: secret,
+		OriginalError: "HTTP status 403 " + secret,
+	})
+	if !errors.Is(err, ErrAuthUnavailable) || err.Error() != ErrAuthUnavailable.Error() {
+		t.Fatalf("error=%q; unavailable identity/default text not preserved", err)
+	}
+	var diagnostic *GatewayError
+	if !errors.As(err, &diagnostic) || diagnostic.Code != "auth_unavailable" || diagnostic.OriginalError != "" || strings.Contains(diagnostic.Code+diagnostic.Message+diagnostic.Provider+diagnostic.OriginalError, secret) {
+		t.Fatalf("unsafe diagnostic: %#v", diagnostic)
+	}
+	err = authCallError(context.Background(), &GatewayError{Code: "auth_rejected", OriginalError: "HTTP status 403"})
+	if !errors.As(err, &diagnostic) || diagnostic.Code != "auth_rejected" || diagnostic.OriginalError != "HTTP status 403" {
+		t.Fatalf("safe diagnostic lost: %#v", diagnostic)
+	}
+}
+
 func TestAuthCoordinatorCredentialFreshnessResolution(t *testing.T) {
 	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {

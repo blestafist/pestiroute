@@ -263,3 +263,11 @@ func (c *Connector) Authenticate(ctx context.Context, request core.AuthRequest, 
 func connectorError(code string, category core.ErrorCategory, message string) *core.GatewayError {
 	return &core.GatewayError{Code: code, Category: category, Message: message}
 }
+
+func authRejectedError(status int) *core.GatewayError {
+	err := connectorError("auth_rejected", core.CategoryUnavailable, "Authentication provider rejected the request")
+	if status >= 100 && status <= 599 {
+		err.OriginalError = fmt.Sprintf("HTTP status %d", status)
+	}
+	return err
+}

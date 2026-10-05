@@ -112,7 +112,7 @@ func (c *Connector) authenticateContinue(ctx context.Context, state string, serv
 		return pendingPollResult(continuation, pollStartedAt), nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return core.AuthResult{}, connectorError("auth_rejected", core.CategoryUnavailable, "Authentication provider rejected the request")
+		return core.AuthResult{}, authRejectedError(resp.StatusCode)
 	}
 	var provider struct {
 		Error             string          `json:"error"`

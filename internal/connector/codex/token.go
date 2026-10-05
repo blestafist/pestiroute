@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"strings"
 	"time"
 )
@@ -60,9 +61,12 @@ func validateOAuthBundle(bundle oauthBundle) error {
 }
 
 type jwtClaims struct {
-	AccountID         string          `json:"chatgpt_account_id"`
-	NamespacedAccount string          `json:"https://api.openai.com/auth.chatgpt_account_id"`
-	Organizations     json.RawMessage `json:"organizations"`
+	AccountID         string `json:"chatgpt_account_id"`
+	NamespacedAccount string `json:"https://api.openai.com/auth.chatgpt_account_id"`
+	Auth              struct {
+		AccountID string `json:"chatgpt_account_id"`
+	} `json:"https://api.openai.com/auth"`
+	Organizations json.RawMessage `json:"organizations"`
 }
 
 // scanJSONObject rejects duplicate keys and case-folded aliases of relevant
@@ -112,12 +116,33 @@ func scanJSONObject(data []byte, fields ...string) (map[string]json.RawMessage, 
 	return values, nil
 }
 
+// OpenCode V2's pinned openai.ts (0bef0eab) omits token_type and reads
+// expires_in ?? 3600; explicit malformed values remain rejected here.
+func tokenLifetime(fields map[string]json.RawMessage) (int64, error) {
+	if raw, ok := fields["token_type"]; ok {
+		var explicit string
+		if err := json.Unmarshal(raw, &explicit); err != nil || explicit == "" || !strings.EqualFold(explicit, "Bearer") {
+			return 0, errors.New("invalid OAuth token type")
+		}
+	}
+	seconds := int64(3600)
+	if raw, ok := fields["expires_in"]; ok {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &seconds) != nil || seconds <= 0 {
+			return 0, errors.New("invalid OAuth token lifetime")
+		}
+	}
+	if seconds > math.MaxInt64/int64(time.Second) {
+		return 0, errors.New("invalid OAuth token lifetime")
+	}
+	return seconds, nil
+}
+
 func accountIDFromTokens(idToken, accessToken string) (string, error) {
 	idAccount, err := accountIDFromToken(idToken)
 	if err != nil {
 		return "", err
 	}
-	accessAccount, err := accountIDFromToken(accessToken)
+	accessAccount, err := accountIDFromAccessToken(accessToken)
 	if err != nil {
 		return "", err
 	}
@@ -134,11 +159,25 @@ func accountIDFromTokens(idToken, accessToken string) (string, error) {
 }
 
 func accountIDFromToken(token string) (string, error) {
+	return accountIDFromJWT(token, false)
+}
+
+func accountIDFromAccessToken(token string) (string, error) {
+	return accountIDFromJWT(token, true)
+}
+
+func accountIDFromJWT(token string, allowOpaque bool) (string, error) {
 	if token == "" {
 		return "", nil
 	}
 	parts := strings.Split(token, ".")
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+	if len(parts) != 3 {
+		if allowOpaque {
+			return "", nil
+		}
+		return "", errors.New("malformed OAuth token")
+	}
+	if parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return "", errors.New("malformed OAuth token")
 	}
 	if len(parts[1]) > (maxJWTClaimsBytes+2)/3*4 {
@@ -155,18 +194,30 @@ func accountIDFromToken(token string) (string, error) {
 		return "", errors.New("invalid OAuth token claims")
 	}
 	var claims jwtClaims
-	objects, err := scanJSONObject(payload, "chatgpt_account_id", "https://api.openai.com/auth.chatgpt_account_id", "organizations")
+	objects, err := scanJSONObject(payload, "chatgpt_account_id", "https://api.openai.com/auth.chatgpt_account_id", "https://api.openai.com/auth", "organizations")
 	if err != nil {
 		return "", errors.New("invalid OAuth token claims")
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return "", errors.New("invalid OAuth token claims")
 	}
-	if claims.AccountID != "" {
-		return claims.AccountID, nil
+	if raw, ok := objects["https://api.openai.com/auth"]; ok {
+		if _, err := scanJSONObject(raw, "chatgpt_account_id"); err != nil {
+			return "", errors.New("invalid OAuth token claims")
+		}
 	}
-	if claims.NamespacedAccount != "" {
-		return claims.NamespacedAccount, nil
+	accountID := ""
+	for _, candidate := range []string{claims.AccountID, claims.Auth.AccountID, claims.NamespacedAccount} {
+		if candidate == "" {
+			continue
+		}
+		if accountID != "" && accountID != candidate {
+			return "", errors.New("conflicting OAuth account identity claims")
+		}
+		accountID = candidate
+	}
+	if accountID != "" {
+		return accountID, nil
 	}
 	if raw, ok := objects["organizations"]; ok {
 		var organizations []json.RawMessage

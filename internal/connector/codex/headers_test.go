@@ -101,10 +101,10 @@ func TestBuildRequestHeadersRejectsInvalidCredential(t *testing.T) {
 		credential []byte
 		account    string
 	}{
-		"missing":   {nil, "account-a"},
-		"malformed": {[]byte(secret), "account-a"},
-		"expired":   {mustOAuthBundle(t, secret, "account-a", time.Now().Add(-time.Second)), "account-a"},
-		"mismatch":  {valid, "account-b"},
+		"missing":                  {nil, "account-a"},
+		"malformed":                {[]byte(secret), "account-a"},
+		"expired":                  {mustOAuthBundle(t, secret, "account-a", time.Now().Add(-time.Second)), "account-a"},
+		"missing selected account": {valid, ""},
 		"token control character": {
 			mustOAuthBundle(t, "token\r\nInjected: value", "account-a", time.Now().Add(time.Hour)), "account-a",
 		},
@@ -118,6 +118,16 @@ func TestBuildRequestHeadersRejectsInvalidCredential(t *testing.T) {
 				t.Fatalf("expected opaque credential failure, got %v", err)
 			}
 		})
+	}
+}
+
+func TestBuildRequestHeadersUsesProviderIdentityFromSelectedCredential(t *testing.T) {
+	credential := mustOAuthBundle(t, "selected-token", "provider-b", time.Now().Add(time.Hour))
+	headers, err := buildRequestHeaders(t.Context(), map[string][]string{
+		"ChatGPT-Account-Id": {"spoofed-provider"},
+	}, core.InvocationServices{Credentials: headerCredentials(credential)}, "selected-a")
+	if err != nil || headers.Get("Authorization") != "Bearer selected-token" || headers.Get("ChatGPT-Account-Id") != "provider-b" {
+		t.Fatalf("headers=%v err=%v", headers, err)
 	}
 }
 

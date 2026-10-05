@@ -73,11 +73,16 @@ disproves parallel support.
 ## Separate auth leg
 
 M5.1-040 performs this only after its own authorization and readiness check.
-Capture direct and gateway device-start/continue results for the same selected
-account, at most one start and one continuation per leg, without recording
-device/user codes or tokens. Verify authorization
-scope, selected account binding, persistence acknowledgement, expiry metadata,
-and usability after restart using sanitized boolean/status observations only.
+Normally capture direct and gateway device-start/continue results for the same
+selected account, at most one start and one continuation per leg, without
+recording device/user codes or tokens. The operator-approved M5.1-040 exception
+defers the duplicate independent direct browser login: retain only the truthful
+single gateway record and explicitly mark the comparison deferred; never create
+a synthetic direct record. Identify CLI completion as operator-reported and
+read-only offline decrypt/restart verification as locally measured. Verify
+authorization scope, selected account binding, persistence acknowledgement,
+expiry metadata, and usability after restart using sanitized boolean/status
+observations only.
 Refresh is a separate selected-account operation: do not expire/revoke/delete a
 valid credential or manufacture a refresh failure. Exercise refresh only when
 the selected account's normal proactive-refresh condition is met and the
@@ -85,9 +90,10 @@ credential is still valid; verify successful persistence/expiry and retain the
 rotated credential. Otherwise mark live refresh unrun and cite synthetic local
 refresh/concurrency/recovery tests separately. Stop on account mismatch,
 unexpected auth redirect, ambiguous continuation, failed persistence, or any
-need to expose opaque auth state. Run `scripts/smoke-m5.1-artifacts.py --auth`
-on the redacted paired auth artifact; no secret-bearing output or raw auth
-transcript is retained.
+need to expose opaque auth state. Validate a regular redacted pair with
+`scripts/smoke-m5.1-artifacts.py --auth`; validate the approved single-leg
+exception with `scripts/smoke-m5.1-artifacts.py --auth <path> --gateway-only`.
+No secret-bearing output or raw auth transcript is retained.
 
 ## Paired inference leg
 

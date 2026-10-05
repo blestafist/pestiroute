@@ -184,6 +184,63 @@ func TestAdminAuthNativeUnsupportedAndRefreshPersistenceFailure(t *testing.T) {
 	}
 }
 
+type diagnosticAdminAuthConnector struct {
+	integratedAuthConnector
+	failure *core.GatewayError
+}
+
+func (c *diagnosticAdminAuthConnector) Authenticate(context.Context, core.AuthRequest, core.InvocationServices) (core.AuthResult, *core.GatewayError) {
+	return core.AuthResult{}, c.failure
+}
+
+func TestAdminAuthDebugAllowsOnlySanitizedDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, code, original, want string
+	}{
+		{name: "status", code: "auth_rejected", original: "HTTP status 403", want: "reason=auth_rejected HTTP status 403"},
+		{name: "poisoned fields", code: "private-code-marker", original: "private-body-marker", want: "reason=auth_unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath, keyPath := adminTestFiles(t, t.TempDir())
+			db, err := sqlite.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = sqlite.NewAccounts(db).Create(context.Background(), sqlite.Account{ID: "acct", Connector: "auth-connector", Enabled: true}); err != nil {
+				t.Fatal(err)
+			}
+			key, _ := secure.LoadMasterKey(keyPath)
+			sealed, err := secure.Seal(key, 1, "v1", "credentials", "primary", "acct", []byte("credential-marker"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = sqlite.NewCredentials(db).Create(context.Background(), sqlite.Credential{ID: "primary", AccountID: "acct", FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+				t.Fatal(err)
+			}
+			_ = db.Close()
+			failure := &core.GatewayError{Code: tc.code, Message: "private-message-marker", Provider: "private-provider-marker", OriginalError: tc.original + " private-tail-marker"}
+			if tc.name == "status" {
+				failure.OriginalError = tc.original
+			}
+			connector := &diagnosticAdminAuthConnector{failure: failure}
+			registry := newAdminAuthRegistry(t, "auth-connector", connector)
+			out, err := runAdminAuthWithRegistry(t, dbPath, keyPath, registry, "auth", "--debug", "start", "--account", "acct")
+			if err == nil || err.Error() != "admin: authentication unsupported or unavailable" || !strings.Contains(out, tc.want) {
+				t.Fatalf("debug output=%q err=%v", out, err)
+			}
+			for _, secret := range []string{"private-code-marker", "private-body-marker", "private-message-marker", "private-provider-marker", "private-tail-marker", "credential-marker"} {
+				if strings.Contains(out+errorString(err), secret) {
+					t.Fatalf("diagnostic leaked %q: %q", secret, out)
+				}
+			}
+			plain, err := runAdminAuthWithRegistry(t, dbPath, keyPath, registry, "auth", "start", "--account", "acct")
+			if err == nil || plain != "" {
+				t.Fatalf("default output=%q err=%v", plain, err)
+			}
+		})
+	}
+}
+
 func TestAdminAuthCodexConfiguredRegistryUsesLocalRoundTripper(t *testing.T) {
 	ctx := context.Background()
 	dbPath, keyPath := adminTestFiles(t, t.TempDir())

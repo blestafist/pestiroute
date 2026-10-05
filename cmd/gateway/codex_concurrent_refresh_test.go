@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -154,12 +155,12 @@ func TestCodexConcurrentRefresh(t *testing.T) {
 			accountID := ""
 			switch form.Get("refresh_token") {
 			case "refresh-account-a":
-				accountID = "account-a"
+				accountID = "provider-account-a"
 				callsA.Add(1)
 				stalled <- struct{}{}
 				<-release
 			case "refresh-account-b":
-				accountID = "account-b"
+				accountID = "provider-account-b"
 				callsB.Add(1)
 			default:
 				t.Errorf("unexpected scoped refresh token %q", form.Get("refresh_token"))
@@ -182,7 +183,7 @@ func TestCodexConcurrentRefresh(t *testing.T) {
 			t.Fatalf("account b blocked by a: %v", err)
 		}
 		var bBundle map[string]any
-		if err = json.Unmarshal(bCredentials.Values["oauth"], &bBundle); err != nil || bBundle["account_id"] != "account-b" || bBundle["access_token"] != "synthetic-account-b-access" {
+		if err = json.Unmarshal(bCredentials.Values["oauth"], &bBundle); err != nil || bBundle["account_id"] != "provider-account-b" || bBundle["access_token"] != "synthetic-provider-account-b-access" {
 			t.Fatalf("account b received another account's refresh result: bundle=%v err=%v", bBundle, err)
 		}
 		if callsB.Load() != 1 {
@@ -194,7 +195,7 @@ func TestCodexConcurrentRefresh(t *testing.T) {
 			t.Fatal(aResult.err)
 		}
 		var aBundle map[string]any
-		if err := json.Unmarshal(aResult.credentials.Values["oauth"], &aBundle); err != nil || aBundle["account_id"] != "account-a" || aBundle["access_token"] != "synthetic-account-a-access" {
+		if err := json.Unmarshal(aResult.credentials.Values["oauth"], &aBundle); err != nil || aBundle["account_id"] != "provider-account-a" || aBundle["access_token"] != "synthetic-provider-account-a-access" {
 			t.Fatalf("account a received another account's refresh result: bundle=%v err=%v", aBundle, err)
 		}
 		if callsA.Load() != 1 {
@@ -301,6 +302,51 @@ func TestCodexConcurrentRefresh(t *testing.T) {
 			t.Fatalf("external CAS refresh marker lifecycle=%q reason=%q", lifecycle, reason)
 		}
 	})
+
+	t.Run("changed provider identity is rejected without credential replacement", func(t *testing.T) {
+		var authCalls, inferenceCalls atomic.Int32
+		transport := codexAuthDoer(func(r *http.Request) (*http.Response, error) {
+			if r.URL.Path != "/oauth/token" {
+				inferenceCalls.Add(1)
+				return nil, errors.New("unexpected provider request")
+			}
+			authCalls.Add(1)
+			body := fmt.Sprintf(`{"access_token":%q,"id_token":%q,"expires_in":3600,"token_type":"Bearer"}`, codexTestJWT("provider-other"), codexTestJWT("provider-other"))
+			return codexJSONResponse(r, body), nil
+		})
+		coordinator, dbPath, _ := newCodexRefreshRuntime(t, transport, "account-a")
+		db, err := sqlite.Open(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, err := sqlite.NewCredentials(db).Get(context.Background(), "account-a", "credential-account-a")
+		if err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		beforeCiphertext := append([]byte(nil), before.Ciphertext...)
+		if err = db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = coordinator.ResolveFreshCredentials(context.Background(), "account-a", time.Minute); err == nil {
+			t.Fatal("changed provider identity unexpectedly refreshed credentials")
+		}
+		afterDB, err := sqlite.Open(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer afterDB.Close()
+		after, err := sqlite.NewCredentials(afterDB).Get(context.Background(), "account-a", "credential-account-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Revision != before.Revision || !bytes.Equal(after.Ciphertext, beforeCiphertext) {
+			t.Fatalf("failed refresh replaced credential generation: revisions %d -> %d", before.Revision, after.Revision)
+		}
+		if authCalls.Load() != 1 || inferenceCalls.Load() != 0 {
+			t.Fatalf("provider calls: refresh=%d inference=%d", authCalls.Load(), inferenceCalls.Load())
+		}
+	})
 }
 
 func TestCodexAuthUncertaintyPersistenceFailureAndRestart(t *testing.T) {
@@ -313,7 +359,7 @@ func TestCodexAuthUncertaintyPersistenceFailureAndRestart(t *testing.T) {
 			if form.Get("grant_type") == "refresh_token" {
 				return codexRefreshResponse(r, t)
 			}
-			body := fmt.Sprintf(`{"access_token":%q,"refresh_token":"new-refresh","id_token":%q,"expires_in":3600,"token_type":"Bearer"}`, codexTestJWT("account-a"), codexTestJWT("account-a"))
+			body := fmt.Sprintf(`{"access_token":%q,"refresh_token":"new-refresh","id_token":%q,"expires_in":3600,"token_type":"Bearer"}`, codexTestJWT("provider-account-a"), codexTestJWT("provider-account-a"))
 			return codexJSONResponse(r, body), nil
 		case "/api/accounts/deviceauth/usercode":
 			return codexJSONResponse(r, `{"device_code":"private-device","user_code":"SAFE-CODE","verification_uri":"https://auth.example.test/device","interval":1,"expires_in":300}`), nil
@@ -523,13 +569,21 @@ func codexRefreshResponse(r *http.Request, t *testing.T) (*http.Response, error)
 func codexRefreshResponseToken(r *http.Request, t *testing.T, accessToken string) (*http.Response, error) {
 	t.Helper()
 	body, _ := io.ReadAll(r.Body)
+	accountID := ""
 	if len(body) > 0 {
 		form, err := url.ParseQuery(string(body))
 		if err != nil || r.Method != http.MethodPost || form.Get("grant_type") != "refresh_token" {
 			t.Errorf("invalid Codex refresh request")
 		}
+		accountID = "provider-" + strings.TrimPrefix(form.Get("refresh_token"), "refresh-")
 	}
-	response, _ := json.Marshal(map[string]any{"access_token": accessToken, "expires_in": 3600, "token_type": "Bearer"})
+	if accountID == "" {
+		accountID = strings.TrimSuffix(strings.TrimPrefix(accessToken, "synthetic-"), "-access")
+		if accountID == accessToken || accountID == "access-not-jwt" {
+			accountID = "provider-account-a"
+		}
+	}
+	response, _ := json.Marshal(map[string]any{"access_token": accessToken, "id_token": codexTestJWT(accountID), "expires_in": 3600, "token_type": "Bearer"})
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(stringsReader(string(response))), Request: r}, nil
 }
 
@@ -566,7 +620,7 @@ func newCodexRefreshRuntime(t *testing.T, transport core.HTTPDoer, accountIDs ..
 		if _, err = accounts.Create(ctx, sqlite.Account{ID: accountID, Connector: "codex-" + accountID, Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
-		plain, _ := json.Marshal(map[string]any{"version": 1, "access_token": "expired-access", "refresh_token": "refresh-" + accountID, "account_id": accountID, "expires_at": time.Now().Add(-time.Hour)})
+		plain, _ := json.Marshal(map[string]any{"version": 1, "access_token": "expired-access", "refresh_token": "refresh-" + accountID, "account_id": "provider-" + accountID, "expires_at": time.Now().Add(-time.Hour)})
 		envelope, sealErr := secure.Seal(key, 1, "key-v1", "credentials", "credential-"+accountID, accountID, plain)
 		if sealErr != nil {
 			t.Fatal(sealErr)

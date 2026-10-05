@@ -19,12 +19,14 @@ import (
 )
 
 const (
-	defaultAuthURL   = "https://auth.openai.com"
-	authStartPath    = "/api/accounts/deviceauth/usercode"
-	authPollPath     = "/api/accounts/deviceauth/token"
-	authStartLimit   = 64 << 10
-	authStartTimeout = 30 * time.Second
-	deviceClientID   = "app_EMoamEEZ73f0CkXaXp7hrann"
+	defaultAuthURL        = "https://auth.openai.com"
+	authStartPath         = "/api/accounts/deviceauth/usercode"
+	authPollPath          = "/api/accounts/deviceauth/token"
+	authStartLimit        = 64 << 10
+	authStartTimeout      = 30 * time.Second
+	deviceClientID        = "app_EMoamEEZ73f0CkXaXp7hrann"
+	defaultPollInterval   = 5 * time.Second
+	maxDeviceAuthLifetime = 15 * time.Minute
 )
 
 var decimalSeconds = regexp.MustCompile(`^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
@@ -45,9 +47,9 @@ type deviceAuthStartResponse struct {
 	DeviceCode      string          `json:"device_code"`
 	DeviceAuthID    string          `json:"device_auth_id"`
 	UserCode        string          `json:"user_code"`
-	VerificationURI string          `json:"verification_uri"`
+	VerificationURI json.RawMessage `json:"verification_uri"`
 	Interval        json.RawMessage `json:"interval"`
-	ExpiresIn       int64           `json:"expires_in"`
+	ExpiresIn       json.RawMessage `json:"expires_in"`
 }
 
 func (c *Connector) authenticateStart(ctx context.Context, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
@@ -64,6 +66,7 @@ func (c *Connector) authenticateStart(ctx context.Context, services core.Invocat
 	if err != nil || !validAuthBaseURL(base) {
 		return core.AuthResult{}, connectorError("auth_transport_unavailable", core.CategoryUnavailable, "Authentication endpoint is invalid")
 	}
+	authBase := *base
 	base.Path = strings.TrimRight(base.Path, "/") + authStartPath
 	body, _ := json.Marshal(struct {
 		ClientID string `json:"client_id"`
@@ -107,14 +110,43 @@ func (c *Connector) authenticateStart(ctx context.Context, services core.Invocat
 	if deviceCode == "" {
 		deviceCode = provider.DeviceAuthID
 	}
-	interval, err := parseDevicePollInterval(provider.Interval)
-	if err != nil || provider.ExpiresIn <= 0 || provider.ExpiresIn > int64((time.Duration(1<<63-1))/time.Second) || deviceCode == "" || !safeUserCode(provider.UserCode) || !safeVerificationURI(provider.VerificationURI) {
+	interval := defaultPollInterval
+	if len(provider.Interval) != 0 {
+		interval, err = parseDevicePollInterval(provider.Interval)
+		if err != nil {
+			return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
+		}
+	}
+	expiresIn := maxDeviceAuthLifetime
+	if len(provider.ExpiresIn) != 0 {
+		var seconds int64
+		if err := json.Unmarshal(provider.ExpiresIn, &seconds); err != nil || seconds <= 0 {
+			return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
+		}
+		if seconds > int64(maxDeviceAuthLifetime/time.Second) {
+			expiresIn = maxDeviceAuthLifetime
+		} else {
+			expiresIn = time.Duration(seconds) * time.Second
+		}
+	}
+	verificationURI := ""
+	if len(provider.VerificationURI) != 0 {
+		if err := json.Unmarshal(provider.VerificationURI, &verificationURI); err != nil || !strings.HasPrefix(strings.TrimSpace(string(provider.VerificationURI)), `"`) {
+			return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
+		}
+	} else {
+		verificationBase := authBase
+		verificationBase.Path = strings.TrimRight(verificationBase.Path, "/") + "/codex/device"
+		verificationBase.RawPath = ""
+		verificationURI = verificationBase.String()
+	}
+	if deviceCode == "" || !safeUserCode(provider.UserCode) || !safeVerificationURI(verificationURI) {
 		return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
 	}
 	continuation, err := json.Marshal(deviceAuthContinuation{
 		DeviceCode: deviceCode, DeviceAuthID: provider.DeviceAuthID, UserCode: provider.UserCode,
-		VerificationURI: provider.VerificationURI, Interval: interval,
-		ExpiresAt: time.Now().Add(time.Duration(provider.ExpiresIn) * time.Second),
+		VerificationURI: verificationURI, Interval: interval,
+		ExpiresAt: time.Now().Add(expiresIn),
 	})
 	if err != nil {
 		return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
@@ -123,7 +155,7 @@ func (c *Connector) authenticateStart(ctx context.Context, services core.Invocat
 		Supported:  true,
 		State:      string(continuation),
 		NextAction: "continue",
-		UserAction: &core.AuthUserAction{VerificationURI: provider.VerificationURI, UserCode: provider.UserCode, PollInterval: interval},
+		UserAction: &core.AuthUserAction{VerificationURI: verificationURI, UserCode: provider.UserCode, PollInterval: interval},
 	}, nil
 }
 

@@ -33,10 +33,10 @@ func TestCodexAuthorizationAndCredentialIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	type accountFixture struct{ account, connector, model, credential, token string }
+	type accountFixture struct{ account, provider, connector, model, credential, token string }
 	fixtures := []accountFixture{
-		{account: "codex-account-a", connector: "codex-a", model: "model-a", credential: "codex-cred-1", token: "synthetic-a-token"},
-		{account: "codex-account-b", connector: "codex-b", model: "model-b", credential: "codex-cred-2", token: "synthetic-b-token"},
+		{account: "codex-account-a", provider: "provider-a", connector: "codex-a", model: "model-a", credential: "codex-cred-1", token: "synthetic-a-token"},
+		{account: "codex-account-b", provider: "provider-b", connector: "codex-b", model: "model-b", credential: "codex-cred-2", token: "synthetic-b-token"},
 	}
 	accounts, credentialStore := sqlite.NewAccounts(db), sqlite.NewCredentials(db)
 	for _, fixture := range fixtures {
@@ -44,7 +44,7 @@ func TestCodexAuthorizationAndCredentialIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 		expires := time.Now().Add(time.Hour).UTC().Truncate(time.Millisecond)
-		bundle := fmt.Sprintf(`{"version":1,"access_token":%q,"refresh_token":"refresh-%s","account_id":%q,"expires_at":%q}`, fixture.token, fixture.account, fixture.account, expires.Format(time.RFC3339Nano))
+		bundle := fmt.Sprintf(`{"version":1,"access_token":%q,"refresh_token":"refresh-%s","account_id":%q,"expires_at":%q}`, fixture.token, fixture.account, fixture.provider, expires.Format(time.RFC3339Nano))
 		sealed, err := secure.Seal(master, 1, "v1", "credentials", fixture.credential, fixture.account, []byte(bundle))
 		if err != nil {
 			t.Fatal(err)
@@ -83,14 +83,14 @@ func TestCodexAuthorizationAndCredentialIsolation(t *testing.T) {
 	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sends.Add(1)
 		fixture := fixtures[0]
-		if r.Header.Get("ChatGPT-Account-Id") == fixtures[1].account {
+		if r.Header.Get("ChatGPT-Account-Id") == fixtures[1].provider {
 			fixture = fixtures[1]
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer "+fixture.token {
 			t.Errorf("provider received wrong scoped authorization for %s", fixture.account)
 		}
-		if got := r.Header.Get("ChatGPT-Account-Id"); got != fixture.account {
-			t.Errorf("provider account = %q, want selected %q", got, fixture.account)
+		if got := r.Header.Get("ChatGPT-Account-Id"); got != fixture.provider {
+			t.Errorf("provider account = %q, want credential-bound %q", got, fixture.provider)
 		}
 		for _, name := range []string{"Cookie", "Cookie2", "Session-Id", "X-Session-Id", "X-Account-Id", "X-Api-Key", "X-Private-Hop"} {
 			if r.Header.Get(name) != "" {

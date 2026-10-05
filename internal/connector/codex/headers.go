@@ -27,7 +27,7 @@ func buildRequestHeaders(ctx context.Context, inbound map[string][]string, servi
 		return nil, errRequestHeaders
 	}
 	bundle, err := decodeOAuthBundle(credential)
-	if err != nil || bundle.AccountID != accountID || !bundle.ExpiresAt.After(time.Now()) || !safeHeaderValue(bundle.AccessToken) || !safeHeaderValue(bundle.AccountID) {
+	if err != nil || !bundle.ExpiresAt.After(time.Now()) || !safeHeaderValue(bundle.AccessToken) || !safeHeaderValue(bundle.AccountID) {
 		return nil, errRequestHeaders
 	}
 

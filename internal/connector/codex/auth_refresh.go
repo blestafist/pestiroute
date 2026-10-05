@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -32,11 +31,8 @@ func (c *Connector) authenticateRefresh(ctx context.Context, services core.Invoc
 		return core.AuthResult{}, connectorError("auth_missing_refresh_token", core.CategoryPermissionDenied, "Refresh credential is unavailable")
 	}
 	c.mu.Lock()
-	baseURL, accountID := c.authURL, c.accountID
+	baseURL := c.authURL
 	c.mu.Unlock()
-	if bundle.AccountID != accountID {
-		return core.AuthResult{}, connectorError("scope_mismatch", core.CategoryPermissionDenied, "Authentication identity does not match configured target")
-	}
 	if services.Transport == nil {
 		return core.AuthResult{}, connectorError("auth_transport_unavailable", core.CategoryUnavailable, "Authentication transport is unavailable")
 	}
@@ -79,7 +75,7 @@ func (c *Connector) authenticateRefresh(ctx context.Context, services core.Invoc
 		return core.AuthResult{}, connectorError("auth_cancelled", core.CategoryUnavailable, "Authentication request was cancelled")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return core.AuthResult{}, connectorError("auth_rejected", core.CategoryUnavailable, "Authentication provider rejected the request")
+		return core.AuthResult{}, authRejectedError(resp.StatusCode)
 	}
 	fields, err := scanJSONObject(data, "access_token", "refresh_token", "id_token", "expires_in", "token_type")
 	if err != nil {
@@ -92,30 +88,22 @@ func (c *Connector) authenticateRefresh(ctx context.Context, services core.Invoc
 		ExpiresIn    int64  `json:"expires_in"`
 		TokenType    string `json:"token_type"`
 	}
-	if err := json.Unmarshal(data, &provider); err != nil || provider.AccessToken == "" || !strings.EqualFold(provider.TokenType, "Bearer") || provider.ExpiresIn <= 0 ||
-		provider.ExpiresIn > math.MaxInt64/int64(time.Second) || (fields["refresh_token"] != nil && provider.RefreshToken == "") {
+	expiresIn, lifetimeErr := tokenLifetime(fields)
+	if err := json.Unmarshal(data, &provider); err != nil || provider.AccessToken == "" || lifetimeErr != nil || (fields["refresh_token"] != nil && provider.RefreshToken == "") {
 		return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
 	}
-	for i, token := range []string{provider.IDToken, provider.AccessToken} {
-		if token == "" || (i == 1 && strings.Count(token, ".") != 2) {
-			continue
-		}
-		identity, err := accountIDFromToken(token)
-		if err != nil {
-			return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
-		}
-		if identity == "" {
-			return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
-		}
-		if identity != accountID {
-			return core.AuthResult{}, connectorError("scope_mismatch", core.CategoryPermissionDenied, "Authentication identity does not match configured target")
-		}
+	identity, err := accountIDFromTokens(provider.IDToken, provider.AccessToken)
+	if err != nil || identity == "" {
+		return core.AuthResult{}, connectorError("auth_invalid_response", core.CategoryUnavailable, "Authentication provider response was invalid")
+	}
+	if identity != bundle.AccountID {
+		return core.AuthResult{}, connectorError("scope_mismatch", core.CategoryPermissionDenied, "Authentication identity does not match configured target")
 	}
 	refreshToken := bundle.RefreshToken
 	if fields["refresh_token"] != nil {
 		refreshToken = provider.RefreshToken
 	}
-	expiresAt := time.Now().Add(time.Duration(provider.ExpiresIn) * time.Second).UTC()
+	expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second).UTC()
 	encoded, err := encodeOAuthBundle(oauthBundle{
 		Version: oauthBundleVersion, AccessToken: provider.AccessToken, RefreshToken: refreshToken,
 		AccountID: bundle.AccountID, ExpiresAt: expiresAt,

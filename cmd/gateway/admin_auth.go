@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/connector/codex"
@@ -17,8 +18,13 @@ import (
 )
 
 func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args []string) error {
+	debug := false
+	if len(args) > 0 && args[0] == "--debug" {
+		debug = true
+		args = args[1:]
+	}
 	if len(args) == 0 || isHelp(args[0]) {
-		_, _ = io.WriteString(env.stdout, "usage: gateway admin [--db PATH] [--master-key PATH] auth <start --account ID|continue --session ID|refresh --account ID>\n")
+		_, _ = io.WriteString(env.stdout, "usage: gateway admin [--db PATH] [--master-key PATH] auth [--debug] <start --account ID|continue --session ID|refresh --account ID>\n")
 		return nil
 	}
 	if args[0] != "start" && args[0] != "continue" && args[0] != "refresh" {
@@ -81,13 +87,41 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	}
 	if err != nil {
 		if errors.Is(err, core.ErrAuthPersistence) {
+			if debug {
+				_, _ = io.WriteString(env.stderr, "authentication diagnostic: reason=persistence_failed\n")
+			}
 			return errors.New("admin: authentication persistence failed")
 		}
 		if errors.Is(err, core.ErrAuthUnavailable) {
+			if debug {
+				var diagnostic *core.GatewayError
+				if errors.As(err, &diagnostic) {
+					status := ""
+					if strings.HasPrefix(diagnostic.OriginalError, "HTTP status ") {
+						status = " " + diagnostic.OriginalError
+					}
+					_, _ = fmt.Fprintf(env.stderr, "authentication diagnostic: reason=%s%s\n", diagnostic.Code, status)
+				}
+			}
 			return errors.New("admin: authentication unsupported or unavailable")
 		}
 		if errors.Is(err, core.ErrAuthRevisionMismatch) {
+			if debug {
+				_, _ = io.WriteString(env.stderr, "authentication diagnostic: reason=revision_mismatch\n")
+			}
 			return errors.New("admin: authentication credential revision mismatch")
+		}
+		if errors.Is(err, context.Canceled) {
+			if debug {
+				_, _ = io.WriteString(env.stderr, "authentication diagnostic: reason=cancelled\n")
+			}
+			return errors.New("admin: authentication operation failed")
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			if debug {
+				_, _ = io.WriteString(env.stderr, "authentication diagnostic: reason=deadline_exceeded\n")
+			}
+			return errors.New("admin: authentication operation failed")
 		}
 		return errors.New("admin: authentication operation failed")
 	}
