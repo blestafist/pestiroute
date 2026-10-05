@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M5.1-032 closed
+## Immediate focus: M5.1-033 closed
 
 M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
 merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
@@ -44,7 +44,7 @@ The new branch is `dev-m5.1`, based on that merge. The
 [M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
 [M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md),
 [M5.1-007](tasks/M5.1-007.md), [M5.1-008](tasks/M5.1-008.md),
-[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), [M5.1-016](tasks/M5.1-016.md), [M5.1-017](tasks/M5.1-017.md), [M5.1-018](tasks/M5.1-018.md), [M5.1-019](tasks/M5.1-019.md), [M5.1-020](tasks/M5.1-020.md), [M5.1-021](tasks/M5.1-021.md), [M5.1-022](tasks/M5.1-022.md), [M5.1-023](tasks/M5.1-023.md), [M5.1-024](tasks/M5.1-024.md), [M5.1-025](tasks/M5.1-025.md), [M5.1-026](tasks/M5.1-026.md), [M5.1-027](tasks/M5.1-027.md), [M5.1-028](tasks/M5.1-028.md), [M5.1-029](tasks/M5.1-029.md), [M5.1-030](tasks/M5.1-030.md), [M5.1-031](tasks/M5.1-031.md), and [M5.1-032](tasks/M5.1-032.md) are DONE,
+[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), [M5.1-016](tasks/M5.1-016.md), [M5.1-017](tasks/M5.1-017.md), [M5.1-018](tasks/M5.1-018.md), [M5.1-019](tasks/M5.1-019.md), [M5.1-020](tasks/M5.1-020.md), [M5.1-021](tasks/M5.1-021.md), [M5.1-022](tasks/M5.1-022.md), [M5.1-023](tasks/M5.1-023.md), [M5.1-024](tasks/M5.1-024.md), [M5.1-025](tasks/M5.1-025.md), [M5.1-026](tasks/M5.1-026.md), [M5.1-027](tasks/M5.1-027.md), [M5.1-028](tasks/M5.1-028.md), [M5.1-029](tasks/M5.1-029.md), [M5.1-030](tasks/M5.1-030.md), [M5.1-031](tasks/M5.1-031.md), [M5.1-032](tasks/M5.1-032.md), and [M5.1-033](tasks/M5.1-033.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
@@ -74,8 +74,9 @@ and protected real-socket Codex text streaming with early delta delivery before 
 and two client-owned function-tool rounds with exact ordered history passthrough, distinct item/call IDs, linked function results, named and standard string tool-choice validation, unknown message/call extension preservation, and fail-closed zero-send rejection of unsupported resource history, with production Codex capabilities truthfully retaining llm.tools Unknown (M5.1-029),
 and explicit boolean parallel_tool_calls preservation and interleaved SSE deltas with distinct item and call IDs, ordered argument streaming, and linked tool results in subsequent rounds, with production Codex capabilities truthfully retaining llm.tools and llm.tools.parallel as Unknown (not usable in production; requests requiring them are rejected without provider sends) (M5.1-030),
 and chronological full-history item replay with verbatim encrypted reasoning ciphertext, summary fragments, item IDs, message phases, opaque extensions, and initial instructions across rounds, with fail-closed zero-send rejection of unsupported previous responses, resources, and server compaction, while production Codex capabilities truthfully retain llm.reasoning as Unknown (M5.1-031),
-and assembled two-account authorization credential and cache-header isolation proving spoofed client header stripping, virtual-key privacy, independent credential isolation across accounts, zero-send denials on out-of-policy/revoked/disabled requests, safe cache affinity without cross-account resource reuse, and secret redaction in responses and logs (M5.1-032).
-All 17 tasks (M5.1-001..032) are DONE and verified on local deterministic fixtures; 11 dependent cards remain DRAFT pending sequential promotion. Production Codex reports llm.tools, llm.tools.parallel and llm.reasoning Unknown: these capabilities are not usable in production. No live authentication, inference, or tool support is claimed.
+and assembled two-account authorization credential and cache-header isolation proving spoofed client header stripping, virtual-key privacy, independent credential isolation across accounts, zero-send denials on out-of-policy/revoked/disabled requests, safe cache affinity without cross-account resource reuse, and secret redaction in responses and logs (M5.1-032),
+and real client-socket disconnect upstream cancellation without wait, 48 MiB stalled-reader bounded transport backpressure with ordered intact resumption, graceful stream drain and forced drain deadline expiry cancellation, zero post-commit fallback, and unobservable remote-compute cancellation preserved as unknown (M5.1-033).
+All 33 tasks (M5.1-001..033) are DONE and verified on local deterministic fixtures; 10 dependent cards remain DRAFT pending sequential promotion. Production Codex reports llm.tools, llm.tools.parallel and llm.reasoning Unknown: these capabilities are not usable in production. No live authentication, inference, or tool support is claimed.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
 
