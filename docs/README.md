@@ -24,6 +24,7 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | [M5.1 Codex brief](implementation/M5.1-CODEX.md) | Current-code seams, first-profile decision gates, task groups and local/live acceptance for the Codex slice |
 | [Codex connector research](references/CODEX_CONNECTOR_RESEARCH.md) | Supplied pinned-source research, preserved with trailing EOF whitespace normalized; proposals and unknowns remain distinct from implemented support |
 | [M4 compatibility matrix](implementation/M4-COMPATIBILITY.md) | Evidence-backed scope, capabilities, field policy, and local/live proof boundary for Anthropic translation |
+| [M5.1 Codex compatibility matrix](implementation/M5.1-COMPATIBILITY.md) | Evidence-backed Codex profile, scoped capabilities, field policy, and local/live proof boundary |
 | [Contract](implementation/CONTRACT.md) | Normative v1 Adapter–Core Runtime–Connector boundary, frames, capabilities, errors and lifecycle |
 | [Configuration](implementation/CONFIGURATION.md) | Target configuration schema, persistent state, access and accounting |
 | [Testing](implementation/TESTING.md) | Behavioral verification, conformance, fixtures, smoke tests |
