@@ -239,6 +239,20 @@ func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.Execution
 // classifyAffinity consumes only recognized routing/resource references. Other
 // request fields remain opaque and cannot be used by Core for route selection.
 func classifyAffinity(fields map[string]json.RawMessage) (known, sessionBound bool) {
+	if raw, ok := fields["input"]; ok {
+		var items []json.RawMessage
+		if json.Unmarshal(raw, &items) == nil {
+			for _, item := range items {
+				var value struct {
+					Type             string          `json:"type"`
+					EncryptedContent json.RawMessage `json:"encrypted_content"`
+				}
+				if json.Unmarshal(item, &value) == nil && value.Type == "reasoning" && len(value.EncryptedContent) != 0 && string(value.EncryptedContent) != "null" {
+					return false, false
+				}
+			}
+		}
+	}
 	for _, field := range []string{"previous_response_id", "conversation"} {
 		if raw, ok := fields[field]; ok {
 			var id *string

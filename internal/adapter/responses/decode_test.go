@@ -111,6 +111,7 @@ func TestDecodeMarksTrustedAffinityWithoutRewritingBody(t *testing.T) {
 		stateful bool
 	}{
 		{name: "stateless", body: base, known: true},
+		{name: "encrypted reasoning has unknown account affinity", body: `{"model":"gpt-5.4-mini","input":[{"type":"reasoning","encrypted_content":"opaque"}]}`},
 		{name: "previous response and forged metadata", body: `{"model":"gpt-5.4-mini","previous_response_id":"resp_123","session_bound":false,"affinity_known":true}`, known: true, stateful: true},
 		{name: "null previous response reference", body: `{"model":"gpt-5.4-mini","previous_response_id":null}`, known: true},
 		{name: "conversation resource", body: `{"model":"gpt-5.4-mini","conversation":"conv_123"}`, known: true, stateful: true},
