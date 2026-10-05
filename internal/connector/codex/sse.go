@@ -1,8 +1,11 @@
 package codex
 
 import (
+	"encoding/json"
 	"errors"
 	"unicode/utf8"
+
+	"github.com/blestafist/pestiroute/internal/core"
 )
 
 const (
@@ -19,8 +22,10 @@ type sseObserver struct {
 	eventBytes int
 	dataLines  int
 	eventName  string
+	data       []byte
 	lastEvent  string
 	events     uint64
+	terminal   *core.CompleteFrame
 	cr         bool
 	err        error
 }
@@ -85,8 +90,13 @@ func (o *sseObserver) endLine() {
 	}
 	switch string(field) {
 	case "data":
-		// SSE data may be large, but remains bounded by the enclosing event.
 		o.dataLines++
+		if len(o.data)+len(value)+1 > maxSSEEventBytes {
+			o.err = errInvalidSSE
+			return
+		}
+		o.data = append(o.data, value...)
+		o.data = append(o.data, '\n')
 	case "event":
 		if len(value) > maxSSEScalarBytes {
 			o.err = errInvalidSSE
@@ -110,10 +120,53 @@ func (o *sseObserver) endEvent() {
 	if o.dataLines > 0 {
 		o.events++
 		o.lastEvent = o.eventName
+		if o.terminal != nil {
+			o.terminal = incompleteTerminal("Upstream sent data after its terminal event")
+		} else if terminal := observeTerminal(o.eventName, o.data); terminal != nil {
+			o.terminal = terminal
+		}
 	}
 	o.dataLines = 0
 	o.eventName = ""
+	o.data = nil
 	o.eventBytes = 0
+}
+
+func incompleteTerminal(message string) *core.CompleteFrame {
+	return &core.CompleteFrame{Outcome: core.OutcomeIncomplete, Error: connectorError("invalid_response", core.CategoryUnavailable, message)}
+}
+
+func observeTerminal(event string, data []byte) *core.CompleteFrame {
+	var payload struct {
+		Type     string `json:"type"`
+		Response struct {
+			Status string `json:"status"`
+		} `json:"response"`
+	}
+	validJSON := json.Unmarshal(data, &payload) == nil
+	kind := event
+	if kind == "" && validJSON {
+		kind = payload.Type
+	}
+	switch kind {
+	case "response.completed", "response.failed", "response.incomplete", "error":
+	default:
+		return nil
+	}
+	if !validJSON || payload.Type != kind || event != "" && payload.Type != event {
+		return incompleteTerminal("Upstream terminal event was invalid")
+	}
+	switch kind {
+	case "response.completed":
+		if payload.Response.Status != "completed" {
+			return incompleteTerminal("Upstream terminal event was invalid")
+		}
+		return &core.CompleteFrame{Outcome: core.OutcomeSucceeded}
+	case "response.failed", "error":
+		return &core.CompleteFrame{Outcome: core.OutcomeFailed, Error: connectorError("provider_failure", core.CategoryUnavailable, "Upstream reported a failure")}
+	default:
+		return &core.CompleteFrame{Outcome: core.OutcomeIncomplete, Error: connectorError("incomplete_response", core.CategoryUnavailable, "Upstream response was incomplete")}
+	}
 }
 
 func (o *sseObserver) finish() error {

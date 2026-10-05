@@ -223,6 +223,10 @@ func (s *executeStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if s.head.Error == nil && s.observer.finish() != nil {
 		return s.finish(core.OutcomeIncomplete, connectorError("invalid_sse", core.CategoryUnavailable, "Upstream response contained invalid SSE framing")), nil
 	}
+	if s.observer.terminal != nil {
+		terminal := s.observer.terminal
+		return s.finish(terminal.Outcome, terminal.Error), nil
+	}
 	return s.finish(core.OutcomeIncomplete, connectorError("incomplete_response", core.CategoryUnavailable, "Upstream response ended without terminal SSE verification")), nil
 }
 
