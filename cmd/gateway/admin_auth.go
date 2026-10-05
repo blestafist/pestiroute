@@ -87,6 +87,9 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 		return nil
 	}
 	_, _ = fmt.Fprintf(env.stdout, "authentication requires continuation session=%s expires_at=%s\n", session.ID, session.ExpiresAt.UTC().Format(time.RFC3339))
+	if action := session.UserAction; action != nil {
+		_, _ = fmt.Fprintf(env.stdout, "verification_uri=%q user_code=%q interval_seconds=%g\n", action.VerificationURI, action.UserCode, action.PollInterval.Seconds())
+	}
 	return nil
 }
 

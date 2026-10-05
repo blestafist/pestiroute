@@ -232,6 +232,99 @@ func newAuthCoordinatorTest(t *testing.T, connector *authCoordinatorTestConnecto
 	return c, store
 }
 
+func TestAuthCoordinatorUserActionProjectionAndRejection(t *testing.T) {
+	valid := &AuthUserAction{VerificationURI: "https://example.test/device", UserCode: "AB CD", PollInterval: 5 * time.Second}
+	t.Run("start projects transient action", func(t *testing.T) {
+		connector := &authCoordinatorTestConnector{respond: func(AuthRequest) (AuthResult, *GatewayError) {
+			return AuthResult{Supported: true, State: "opaque", NextAction: "continue", UserAction: valid}, nil
+		}}
+		c, store := newAuthCoordinatorTest(t, connector, "a")
+		session, err := c.Start(context.Background(), "a")
+		if err != nil || session.UserAction == nil || *session.UserAction != *valid {
+			t.Fatalf("session=%+v err=%v", session, err)
+		}
+		if stored := store.sessions[session.ID]; stored.UserAction != nil {
+			t.Fatalf("presentation was persisted: %+v", stored.UserAction)
+		}
+	})
+	for name, action := range map[string]*AuthUserAction{
+		"scheme":       {VerificationURI: "http://example.test", UserCode: "code", PollInterval: time.Second},
+		"userinfo":     {VerificationURI: "https://user@example.test", UserCode: "code", PollInterval: time.Second},
+		"space":        {VerificationURI: "https://example.test/a b", UserCode: "code", PollInterval: time.Second},
+		"long URI":     {VerificationURI: "https://example.test/" + strings.Repeat("x", 2049), UserCode: "code", PollInterval: time.Second},
+		"code control": {VerificationURI: "https://example.test", UserCode: "bad\ncode", PollInterval: time.Second},
+		"long code":    {VerificationURI: "https://example.test", UserCode: strings.Repeat("x", 257), PollInterval: time.Second},
+		"interval":     {VerificationURI: "https://example.test", UserCode: "code", PollInterval: 0},
+	} {
+		t.Run("start rejects "+name, func(t *testing.T) {
+			connector := &authCoordinatorTestConnector{respond: func(AuthRequest) (AuthResult, *GatewayError) {
+				return AuthResult{Supported: true, State: "secret-state", NextAction: "continue", UserAction: action}, nil
+			}}
+			c, store := newAuthCoordinatorTest(t, connector, "a")
+			if session, err := c.Start(context.Background(), "a"); err == nil || session.ID != "" || len(store.sessions) != 0 {
+				t.Fatalf("session=%+v err=%v stored=%d", session, err, len(store.sessions))
+			}
+		})
+	}
+	for name, result := range map[string]AuthResult{
+		"completed":   {Supported: true, UserAction: valid},
+		"unsupported": {UserAction: valid, NextAction: "continue"},
+	} {
+		t.Run("rejects action on "+name, func(t *testing.T) {
+			connector := &authCoordinatorTestConnector{respond: func(AuthRequest) (AuthResult, *GatewayError) { return result, nil }}
+			c, store := newAuthCoordinatorTest(t, connector, "a")
+			if session, err := c.Start(context.Background(), "a"); err == nil || session.ID != "" || len(store.sessions) != 0 {
+				t.Fatalf("session=%+v err=%v stored=%d", session, err, len(store.sessions))
+			}
+		})
+	}
+	t.Run("continue consumes malformed claimed result", func(t *testing.T) {
+		connector := &authCoordinatorTestConnector{respond: func(req AuthRequest) (AuthResult, *GatewayError) {
+			if req.Action == "start" {
+				return AuthResult{Supported: true, State: "opaque", NextAction: "continue"}, nil
+			}
+			return AuthResult{Supported: true, State: "next-secret", NextAction: "continue", UserAction: &AuthUserAction{VerificationURI: "https://example.test", UserCode: "code", PollInterval: -time.Second}}, nil
+		}}
+		c, store := newAuthCoordinatorTest(t, connector, "a")
+		session, err := c.Start(context.Background(), "a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := c.Continue(context.Background(), session.ID); err == nil || got.ID != "" || len(store.sessions) != 0 || len(store.states) != 0 {
+			t.Fatalf("session=%+v err=%v remaining=%d", got, err, len(store.sessions))
+		}
+	})
+	t.Run("continue projects pending action", func(t *testing.T) {
+		connector := &authCoordinatorTestConnector{respond: func(req AuthRequest) (AuthResult, *GatewayError) {
+			if req.Action == "start" {
+				return AuthResult{Supported: true, State: "opaque", NextAction: "continue"}, nil
+			}
+			return AuthResult{Supported: true, State: "next", NextAction: "continue", UserAction: valid}, nil
+		}}
+		c, store := newAuthCoordinatorTest(t, connector, "a")
+		started, err := c.Start(context.Background(), "a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		continued, err := c.Continue(context.Background(), started.ID)
+		if err != nil || continued.UserAction == nil || *continued.UserAction != *valid {
+			t.Fatalf("session=%+v err=%v", continued, err)
+		}
+		if store.sessions[started.ID].UserAction != nil {
+			t.Fatal("presentation was persisted on continuation")
+		}
+	})
+	t.Run("refresh quarantines action result", func(t *testing.T) {
+		connector := &authCoordinatorTestConnector{respond: func(AuthRequest) (AuthResult, *GatewayError) {
+			return AuthResult{Supported: true, Credentials: map[string][]byte{"token": []byte("candidate")}, UserAction: valid}, nil
+		}}
+		c, store := newAuthCoordinatorTest(t, connector, "a")
+		if _, err := c.Refresh(context.Background(), "a"); err == nil || store.quarantine != "ambiguous_result" {
+			t.Fatalf("err=%v quarantine=%q", err, store.quarantine)
+		}
+	})
+}
+
 func TestAuthCoordinatorRefreshCoalescesSameAccount(t *testing.T) {
 	connector := &authCoordinatorTestConnector{entered: make(chan struct{}, 1), finish: make(chan struct{})}
 	c, s := newAuthCoordinatorTest(t, connector, "a")

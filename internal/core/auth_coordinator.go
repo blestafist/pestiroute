@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -38,6 +39,8 @@ type AuthSession struct {
 	ExpiresAt     time.Time
 	// ContinuationVersion is an opaque store-owned CAS token for the loaded state.
 	ContinuationVersion string
+	// UserAction is transient safe presentation data; it is never persisted.
+	UserAction *AuthUserAction
 }
 
 // AuthCoordinatorStore is the runtime persistence seam. Implementations protect
@@ -93,6 +96,9 @@ func (c *AuthCoordinator) Start(ctx context.Context, accountID string) (AuthSess
 	if callErr != nil || !result.Supported || !validNextAction(result.NextAction) {
 		return AuthSession{}, authCallError(ctx, callErr)
 	}
+	if result.UserAction != nil && !validAuthUserAction(result) {
+		return AuthSession{}, ErrAuthUnavailable
+	}
 	if result.NextAction == "" {
 		if len(result.Credentials) > 0 {
 			if !validCredentialExpiry(result.CredentialExpiresAt, c.clock()) {
@@ -111,6 +117,7 @@ func (c *AuthCoordinator) Start(ctx context.Context, accountID string) (AuthSess
 	if err := c.store.CreateAuthSession(ctx, session, []byte(result.State)); err != nil {
 		return AuthSession{}, authPersistence(err)
 	}
+	session.UserAction = cloneAuthUserAction(result.UserAction)
 	return session, nil
 }
 
@@ -172,6 +179,12 @@ func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthS
 		}
 		return AuthSession{}, authCallError(ctx, callErr)
 	}
+	if result.UserAction != nil && !validAuthUserAction(result) {
+		if c.discardSession(session) != nil {
+			return AuthSession{}, ErrAuthPersistence
+		}
+		return AuthSession{}, ErrAuthUnavailable
+	}
 	if !validCredentialExpiry(result.CredentialExpiresAt, c.clock()) {
 		if c.discardSession(session) != nil {
 			return AuthSession{}, ErrAuthPersistence
@@ -197,6 +210,7 @@ func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthS
 		_ = c.discardSession(session)
 		return AuthSession{}, authPersistence(err)
 	}
+	session.UserAction = cloneAuthUserAction(result.UserAction)
 	return session, nil
 }
 
@@ -242,7 +256,7 @@ func (c *AuthCoordinator) Refresh(ctx context.Context, accountID string) (AuthCr
 		return AuthCredentials{}, err
 	}
 	result, callErr := connector.Authenticate(ctx, AuthRequest{AccountID: account.ID, Action: "refresh"}, services)
-	if callErr != nil || !result.Supported || result.NextAction != "" || result.State != "" || !validCredentialCandidates(result.Credentials) {
+	if callErr != nil || !result.Supported || result.NextAction != "" || result.State != "" || result.UserAction != nil || !validCredentialCandidates(result.Credentials) {
 		reason := "ambiguous_result"
 		if ctx.Err() != nil {
 			reason = "cancelled_after_call"
@@ -347,6 +361,33 @@ func (c *AuthCoordinator) lockAccount(ctx context.Context, id string) (func(), e
 }
 
 func validNextAction(action string) bool { return action == "" || action == "continue" }
+func validAuthUserAction(result AuthResult) bool {
+	action := result.UserAction
+	if action == nil || !result.Supported || result.NextAction != "continue" || action.PollInterval <= 0 ||
+		!printableASCII(action.VerificationURI, 1, 2048, false) || !printableASCII(action.UserCode, 1, 256, true) {
+		return false
+	}
+	u, err := url.Parse(action.VerificationURI)
+	return err == nil && u.IsAbs() && u.Scheme == "https" && u.Host != "" && u.User == nil
+}
+func printableASCII(value string, min, max int, spaces bool) bool {
+	if len(value) < min || len(value) > max {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x20 || value[i] > 0x7e || !spaces && value[i] == ' ' {
+			return false
+		}
+	}
+	return true
+}
+func cloneAuthUserAction(value *AuthUserAction) *AuthUserAction {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
 func authCallError(ctx context.Context, _ *GatewayError) error {
 	if ctx.Err() != nil {
 		return ctx.Err()

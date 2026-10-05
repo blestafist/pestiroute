@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
@@ -43,10 +44,10 @@ func TestAdminAuthScriptedCLIAndRestart(t *testing.T) {
 	connector := &integratedAuthConnector{call: func(req core.AuthRequest) core.AuthResult {
 		switch req.Action {
 		case "start":
-			return core.AuthResult{Supported: true, State: "opaque-state-marker", NextAction: "continue"}
+			return core.AuthResult{Supported: true, State: "opaque-state-marker", NextAction: "continue", UserAction: &core.AuthUserAction{VerificationURI: "https://auth.example.test/device", UserCode: "ABCD-EFGH", PollInterval: 5 * time.Second}}
 		case "continue":
 			if string(req.State) == "opaque-state-marker" {
-				return core.AuthResult{Supported: true, State: "opaque-next-marker", NextAction: "continue"}
+				return core.AuthResult{Supported: true, State: "opaque-next-marker", NextAction: "continue", UserAction: &core.AuthUserAction{VerificationURI: "https://auth.example.test/device", UserCode: "IJKL-MNOP", PollInterval: 2500 * time.Millisecond}}
 			}
 			return core.AuthResult{Supported: true, Credentials: map[string][]byte{"bearer": []byte("rotated-secret-marker")}}
 		case "refresh":
@@ -77,11 +78,11 @@ func TestAdminAuthScriptedCLIAndRestart(t *testing.T) {
 			session = strings.TrimPrefix(field, "session=")
 		}
 	}
-	if session == "" || !strings.Contains(started, "expires_at=") {
+	if session == "" || !strings.Contains(started, "expires_at=") || !strings.Contains(started, `verification_uri="https://auth.example.test/device" user_code="ABCD-EFGH" interval_seconds=5`) {
 		t.Fatalf("start guidance: %q", started)
 	}
 	advanced, err := run("auth", "continue", "--session", session)
-	if err != nil || !strings.Contains(advanced, "session="+session) {
+	if err != nil || !strings.Contains(advanced, "session="+session) || !strings.Contains(advanced, `user_code="IJKL-MNOP" interval_seconds=2.5`) {
 		t.Fatalf("continue=%q err=%v", advanced, err)
 	}
 	completed, err := run("auth", "continue", "--session", session)
