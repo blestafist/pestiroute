@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"sync"
 	"time"
@@ -48,6 +49,7 @@ type AuthSession struct {
 type AuthCoordinatorStore interface {
 	AuthAccount(context.Context, string) (AuthAccount, error)
 	AuthCredentials(context.Context, string) (AuthCredentials, error)
+	HasQuarantinedRefresh(context.Context, string) (bool, error)
 	CreateAuthSession(context.Context, AuthSession, []byte) error
 	GetAuthSession(context.Context, string, time.Time) (AuthSession, []byte, error)
 	// ClaimAuthSession durably excludes another continuation before provider exchange.
@@ -78,6 +80,19 @@ type AuthCoordinator struct {
 	sessionTTL time.Duration
 	locksMu    sync.Mutex
 	locks      map[string]chan struct{}
+}
+
+type authCredentialAccess struct{ values map[string][]byte }
+
+func (a authCredentialAccess) Get(ctx context.Context, name string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	value, ok := a.values[name]
+	if !ok {
+		return nil, ErrCredentialUnavailable
+	}
+	return append([]byte(nil), value...), nil
 }
 
 func NewAuthCoordinator(registry *Registry, store AuthCoordinatorStore, services AuthServicesFactory, sessionTTL time.Duration) (*AuthCoordinator, error) {
@@ -215,6 +230,19 @@ func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthS
 }
 
 func (c *AuthCoordinator) Refresh(ctx context.Context, accountID string) (AuthCredentials, error) {
+	return c.resolveCredentials(ctx, accountID, 0, false)
+}
+
+// ResolveFreshCredentials reloads the selected account under its lock and
+// refreshes credentials unless the persisted expiry exceeds the supplied margin.
+func (c *AuthCoordinator) ResolveFreshCredentials(ctx context.Context, accountID string, margin time.Duration) (AuthCredentials, error) {
+	if margin < 0 {
+		return AuthCredentials{}, ErrAuthUnavailable
+	}
+	return c.resolveCredentials(ctx, accountID, margin, true)
+}
+
+func (c *AuthCoordinator) resolveCredentials(ctx context.Context, accountID string, margin time.Duration, requireFresh bool) (AuthCredentials, error) {
 	account, err := c.store.AuthAccount(ctx, accountID)
 	if err != nil || !account.Enabled || account.ID != accountID || account.ConnectorID == "" {
 		return AuthCredentials{}, ErrAccountUnavailable
@@ -228,11 +256,19 @@ func (c *AuthCoordinator) Refresh(ctx context.Context, accountID string) (AuthCr
 		return AuthCredentials{}, err
 	}
 	defer unlock()
+	quarantined, err := c.store.HasQuarantinedRefresh(ctx, accountID)
+	if err != nil {
+		return AuthCredentials{}, authPersistence(err)
+	}
+	if quarantined {
+		return AuthCredentials{}, ErrAuthUnavailable
+	}
 	account, connector, services, creds, err := c.prepare(ctx, accountID)
 	if err != nil {
 		return AuthCredentials{}, err
 	}
-	if creds.Revision != observed.Revision && creds.Valid {
+	if (requireFresh && credentialFresh(creds, c.clock(), margin)) ||
+		(!requireFresh && creds.Revision != observed.Revision && creds.Valid) {
 		return cloneAuthCredentials(creds), nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -254,6 +290,14 @@ func (c *AuthCoordinator) Refresh(ctx context.Context, accountID string) (AuthCr
 			return AuthCredentials{}, authPersistence(clearErr)
 		}
 		return AuthCredentials{}, err
+	}
+	services.Credentials = authCredentialAccess{values: cloneSecretMap(creds.Values)}
+	if services.Logger != nil {
+		secrets := newSecretSet(nil)
+		for _, value := range creds.Values {
+			secrets.add(value)
+		}
+		services.Logger = slog.New(redactingHandler{next: services.Logger.Handler(), secrets: secrets})
 	}
 	result, callErr := connector.Authenticate(ctx, AuthRequest{AccountID: account.ID, Action: "refresh"}, services)
 	if callErr != nil || !result.Supported || result.NextAction != "" || result.State != "" || result.UserAction != nil || !validCredentialCandidates(result.Credentials) {
@@ -418,6 +462,12 @@ func cloneTime(value *time.Time) *time.Time {
 
 func validCredentialExpiry(value *time.Time, now time.Time) bool {
 	return value == nil || (!value.IsZero() && value.After(now))
+}
+func credentialFresh(credentials AuthCredentials, now time.Time, margin time.Duration) bool {
+	if !credentials.Valid || credentials.ExpiresAt == nil {
+		return false
+	}
+	return credentials.ExpiresAt.After(now.Add(margin))
 }
 func clear(values []byte) {
 	for i := range values {

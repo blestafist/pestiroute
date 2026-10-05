@@ -157,11 +157,17 @@ func TestAuthSessionAtomicCredentialResolutionAndStaleCAS(t *testing.T) {
 	if err := sessions.CreateRefreshMarker(ctx, "refresh", "account", "test", base.Revision, now); err != nil {
 		t.Fatal(err)
 	}
+	if quarantined, err := sessions.HasQuarantinedRefresh(ctx, "account"); err != nil || quarantined {
+		t.Fatalf("in-progress refresh quarantined=%v err=%v", quarantined, err)
+	}
 	replacement := sealCredential(t, key, base.ID, base.AccountID, []byte("new-token"))
 	replacement.Revision = base.Revision
 	updated, err := sessions.ResolveRefreshAndReplaceCredentials(ctx, "refresh", replacement, now)
 	if err != nil || updated.Revision != 2 {
 		t.Fatalf("resolve %#v %v", updated, err)
+	}
+	if quarantined, err := sessions.HasQuarantinedRefresh(ctx, "account"); err != nil || quarantined {
+		t.Fatalf("resolved refresh quarantined=%v err=%v", quarantined, err)
 	}
 	if _, err := credentials.GetDecrypted(ctx, "account", base.ID, key); err != nil {
 		t.Fatal(err)
@@ -197,6 +203,9 @@ func TestAuthSessionAtomicCredentialResolutionAndStaleCAS(t *testing.T) {
 	}
 	if lifecycle != "uncertain" || reason != "ambiguous_result" || current != 3 {
 		t.Fatalf("stale marker state %q %q %d", lifecycle, reason, current)
+	}
+	if quarantined, err := sessions.HasQuarantinedRefresh(ctx, "account"); err != nil || !quarantined {
+		t.Fatalf("stale refresh quarantined=%v err=%v", quarantined, err)
 	}
 }
 

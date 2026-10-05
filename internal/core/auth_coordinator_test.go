@@ -12,11 +12,12 @@ import (
 
 type authCoordinatorTestConnector struct {
 	minimalConnector
-	mu      sync.Mutex
-	calls   int
-	entered chan struct{}
-	finish  chan struct{}
-	respond func(AuthRequest) (AuthResult, *GatewayError)
+	mu            sync.Mutex
+	calls         int
+	entered       chan struct{}
+	finish        chan struct{}
+	respond       func(AuthRequest) (AuthResult, *GatewayError)
+	checkServices func(InvocationServices)
 }
 
 func (c *authCoordinatorTestConnector) Descriptor() Descriptor {
@@ -25,10 +26,13 @@ func (c *authCoordinatorTestConnector) Descriptor() Descriptor {
 func (c *authCoordinatorTestConnector) Health(context.Context) Health {
 	return Health{State: HealthReady}
 }
-func (c *authCoordinatorTestConnector) Authenticate(ctx context.Context, req AuthRequest, _ InvocationServices) (AuthResult, *GatewayError) {
+func (c *authCoordinatorTestConnector) Authenticate(ctx context.Context, req AuthRequest, services InvocationServices) (AuthResult, *GatewayError) {
 	c.mu.Lock()
 	c.calls++
 	c.mu.Unlock()
+	if c.checkServices != nil {
+		c.checkServices(services)
+	}
 	if c.respond != nil {
 		return c.respond(req)
 	}
@@ -64,6 +68,7 @@ type authCoordinatorTestStore struct {
 	markers       map[string]bool
 	readNotify    chan struct{}
 	quarantine    string
+	quarantined   bool
 	failResolve   bool
 	staleResolve  bool
 	afterMarker   func()
@@ -89,6 +94,11 @@ func (s *authCoordinatorTestStore) AuthCredentials(_ context.Context, id string)
 		}
 	}
 	return cloneAuthCredentials(s.credentials[id]), nil
+}
+func (s *authCoordinatorTestStore) HasQuarantinedRefresh(_ context.Context, _ string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.quarantined, nil
 }
 func (s *authCoordinatorTestStore) CreateAuthSession(_ context.Context, v AuthSession, state []byte) error {
 	s.mu.Lock()
@@ -459,6 +469,161 @@ func TestAuthCoordinatorPersistsCredentialExpiry(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAuthCoordinatorCredentialFreshnessResolution(t *testing.T) {
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name      string
+		expiresIn time.Duration
+		wantCalls int
+		wantToken string
+	}{
+		{name: "fresh", expiresIn: 2 * time.Minute, wantToken: "old"},
+		{name: "near expiry", expiresIn: time.Minute, wantCalls: 1, wantToken: "new"},
+		{name: "expired", expiresIn: -time.Second, wantCalls: 1, wantToken: "new"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expiry := now.Add(tc.expiresIn)
+			connector := &authCoordinatorTestConnector{respond: func(req AuthRequest) (AuthResult, *GatewayError) {
+				if req.Action != "refresh" {
+					t.Fatalf("unexpected auth action %q", req.Action)
+				}
+				freshExpiry := now.Add(10 * time.Minute)
+				return AuthResult{Supported: true, Credentials: map[string][]byte{"token": []byte("new")}, CredentialExpiresAt: &freshExpiry}, nil
+			}}
+			connector.checkServices = func(services InvocationServices) {
+				got, err := services.Credentials.Get(context.Background(), "token")
+				if err != nil || string(got) != "old" {
+					t.Errorf("refresh scoped credential=%q err=%v", got, err)
+				}
+			}
+			c, store := newAuthCoordinatorTest(t, connector, "a")
+			c.clock = func() time.Time { return now }
+			store.credentials["a"] = AuthCredentials{Revision: 4, Valid: true, ExpiresAt: &expiry, Values: map[string][]byte{"token": []byte("old")}}
+			resolved, err := c.ResolveFreshCredentials(context.Background(), "a", time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			connector.mu.Lock()
+			calls := connector.calls
+			connector.mu.Unlock()
+			if calls != tc.wantCalls {
+				t.Fatalf("refresh calls=%d, want %d", calls, tc.wantCalls)
+			}
+			if string(resolved.Values["token"]) != tc.wantToken || resolved.Revision != int64(4+tc.wantCalls) {
+				t.Fatalf("resolved generation revision=%d token=%q", resolved.Revision, resolved.Values["token"])
+			}
+			inferenceCalls := 0
+			inferenceStub := func(generation AuthCredentials) {
+				inferenceCalls++
+				persisted := store.credentials["a"]
+				if persisted.Revision != generation.Revision || string(persisted.Values["token"]) != string(generation.Values["token"]) {
+					t.Errorf("inference received non-persisted generation: got=%+v persisted=%+v", generation, persisted)
+				}
+			}
+			inferenceStub(resolved)
+			if inferenceCalls != 1 {
+				t.Fatalf("inference calls=%d, want one", inferenceCalls)
+			}
+		})
+	}
+}
+
+func TestAuthCoordinatorFreshnessWaiterUsesCommittedGeneration(t *testing.T) {
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	expiry := now.Add(time.Second)
+	entered, finish := make(chan struct{}, 1), make(chan struct{})
+	connector := &authCoordinatorTestConnector{respond: func(req AuthRequest) (AuthResult, *GatewayError) {
+		if req.Action != "refresh" {
+			t.Fatalf("unexpected auth action %q", req.Action)
+		}
+		entered <- struct{}{}
+		<-finish
+		freshExpiry := now.Add(10 * time.Minute)
+		return AuthResult{Supported: true, Credentials: map[string][]byte{"token": []byte("new")}, CredentialExpiresAt: &freshExpiry}, nil
+	}}
+	c, store := newAuthCoordinatorTest(t, connector, "a")
+	c.clock = func() time.Time { return now }
+	store.credentials["a"] = AuthCredentials{Revision: 1, Valid: true, ExpiresAt: &expiry, Values: map[string][]byte{"token": []byte("old")}}
+	store.readNotify = make(chan struct{}, 8)
+	results := make(chan AuthCredentials, 2)
+	errors := make(chan error, 2)
+	resolve := func() {
+		creds, err := c.ResolveFreshCredentials(context.Background(), "a", time.Minute)
+		results <- creds
+		errors <- err
+	}
+	go resolve()
+	<-entered
+	for {
+		select {
+		case <-store.readNotify:
+		default:
+			goto drained
+		}
+	}
+drained:
+	go resolve()
+	<-store.readNotify // second caller read the pre-refresh generation before locking
+	close(finish)
+	for range 2 {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
+		if got := <-results; got.Revision != 2 || string(got.Values["token"]) != "new" {
+			t.Fatalf("waiter got generation %+v", got)
+		}
+	}
+	connector.mu.Lock()
+	calls := connector.calls
+	connector.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("refresh calls=%d, want 1", calls)
+	}
+}
+
+func TestAuthCoordinatorFreshnessRejectsUnsafeAccounts(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		setup         func(*authCoordinatorTestStore)
+		wantErr       error
+		wantAuthCalls int
+	}{
+		{name: "quarantined", setup: func(s *authCoordinatorTestStore) { s.quarantined = true }, wantErr: ErrAuthUnavailable},
+		{name: "disabled", setup: func(s *authCoordinatorTestStore) {
+			s.accounts["a"] = AuthAccount{ID: "a", ConnectorID: "test", Enabled: false}
+		}, wantErr: ErrAccountUnavailable},
+		{name: "persistence failure", setup: func(s *authCoordinatorTestStore) { s.failResolve = true }, wantErr: ErrAuthPersistence, wantAuthCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+			expiry := now.Add(-time.Second)
+			freshExpiry := now.Add(10 * time.Minute)
+			connector := &authCoordinatorTestConnector{respond: func(AuthRequest) (AuthResult, *GatewayError) {
+				return AuthResult{Supported: true, Credentials: map[string][]byte{"token": []byte("new")}, CredentialExpiresAt: &freshExpiry}, nil
+			}}
+			c, store := newAuthCoordinatorTest(t, connector, "a")
+			c.clock = func() time.Time { return now }
+			store.credentials["a"] = AuthCredentials{Revision: 1, ExpiresAt: &expiry, Values: map[string][]byte{"token": []byte("old")}}
+			tc.setup(store)
+			inferenceCalls := 0
+			resolved, err := c.ResolveFreshCredentials(context.Background(), "a", time.Minute)
+			if err == nil {
+				inferenceCalls++ // The inference stub is reachable only after successful resolution.
+				_ = resolved
+			}
+			if !errors.Is(err, tc.wantErr) || inferenceCalls != 0 {
+				t.Fatalf("resolution error=%v inference calls=%d", err, inferenceCalls)
+			}
+			connector.mu.Lock()
+			calls := connector.calls
+			connector.mu.Unlock()
+			if calls != tc.wantAuthCalls {
+				t.Fatalf("auth calls=%d, want %d", calls, tc.wantAuthCalls)
+			}
+		})
 	}
 }
 

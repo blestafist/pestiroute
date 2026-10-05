@@ -76,6 +76,9 @@ func (s *sqliteAuthCoordinatorStore) AuthCredentials(ctx context.Context, accoun
 	}
 	return core.AuthCredentials{Revision: revision, Values: values, ExpiresAt: cloneAuthExpiry(expiresAt), Valid: valid}, nil
 }
+func (s *sqliteAuthCoordinatorStore) HasQuarantinedRefresh(ctx context.Context, account string) (bool, error) {
+	return s.sessions.HasQuarantinedRefresh(ctx, account)
+}
 func (s *sqliteAuthCoordinatorStore) CreateAuthSession(ctx context.Context, v core.AuthSession, state []byte) error {
 	_, err := s.sessions.CreateInteractiveSession(ctx, v.ID, v.AccountID, string(v.ConnectorID), v.Revision, v.ExpiresAt, state, s.key, s.keyVersion, s.clock())
 	return err
