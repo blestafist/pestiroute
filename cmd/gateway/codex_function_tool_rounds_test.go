@@ -23,12 +23,11 @@ import (
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
-type codexFunctionRoundsConnector struct{ codexCompositionConnector }
+type codexParallelTestConnector struct{ codexCompositionConnector }
 
-func (codexFunctionRoundsConnector) Capabilities(context.Context, core.CapabilityScope) core.CapabilityResult {
+func (codexParallelTestConnector) Capabilities(context.Context, core.CapabilityScope) core.CapabilityResult {
 	return core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{
-		"llm.streaming": core.Supported,
-		"llm.tools":     core.Supported,
+		"llm.streaming": core.Supported, "llm.tools": core.Supported, "llm.tools.parallel": core.Supported,
 	}}
 }
 
@@ -72,17 +71,25 @@ func TestCodexFunctionToolRoundsClientOwnedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const firstSSE = "event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_item_round1\",\"type\":\"function_call\",\"call_id\":\"call_round1\",\"name\":\"lookup\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\nevent: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_item_round1\",\"output_index\":0,\"delta\":\"{\\\"key\\\":\\\"alpha\\\"}\"}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"working\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n"
+	// Deterministic interleaving fixture: it proves transport identity preservation, not model behavior.
+	const firstSSE = "event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_item_1\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"lookup\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\nevent: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_item_1\",\"output_index\":0,\"delta\":\"{\\\"key\\\":\"}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"fc_item_2\",\"type\":\"function_call\",\"call_id\":\"call_2\",\"name\":\"lookup\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\nevent: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_item_2\",\"output_index\":1,\"delta\":\"{\\\"key\\\":\\\"beta\\\"}\"}\n\nevent: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_item_1\",\"output_index\":0,\"delta\":\"alpha\\\"}\n\nevent: response.function_call_arguments.done\ndata: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_item_2\",\"output_index\":1,\"arguments\":\"{\\\"key\\\":\\\"beta\\\"}\"}\n\nevent: response.function_call_arguments.done\ndata: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_item_1\",\"output_index\":0,\"arguments\":\"{\\\"key\\\":\\\"alpha\\\"}\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n"
 	const secondSSE = "event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"usage\":{\"input_tokens\":9,\"output_tokens\":0}}}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"finished\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":9,\"output_tokens\":2}}}\n\n"
 	prefixes := []string{
-		"event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_item_round1\",\"type\":\"function_call\",\"call_id\":\"call_round1\",\"name\":\"lookup\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n",
+		"event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_item_1\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"lookup\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n",
 		"event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"usage\":{\"input_tokens\":9,\"output_tokens\":0}}}\n\n",
 	}
 	requests := make(chan string, 2)
 	started := []chan struct{}{make(chan struct{}), make(chan struct{})}
 	release := []chan struct{}{make(chan struct{}), make(chan struct{})}
 	var upstreamCalls atomic.Int32
+	var productionProbe atomic.Bool
+	var productionCalls atomic.Int32
 	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if productionProbe.Load() {
+			productionCalls.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("read upstream request: %v", err)
@@ -128,6 +135,56 @@ func TestCodexFunctionToolRoundsClientOwnedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Exercise the production connector's scoped capabilities, not a test override.
+	productionConfig := prepared
+	productionConfig.runtimeDB, productionConfig.runtimeKey = nil, secure.MasterKey{}
+	productionConfig.keyStore, productionConfig.policyStore = nil, nil
+	productionConfig.accountAuthorizer, productionConfig.accounting = nil, nil
+	productionConfig.processLock = nil
+	productionReady, productionDraining := atomic.Bool{}, atomic.Bool{}
+	productionReady.Store(true)
+	productionHandler, closeProduction, err := composeHandlerWithFactory(productionConfig, &productionReady, &productionDraining, nil, func(item topologyComponent) core.Component {
+		if item.Kind == core.ComponentAdapter {
+			return adapter.NewAdapter()
+		}
+		if item.Implementation == "pestiroute.codex.responses" {
+			return codexCompositionConnector{Connector: codex.NewConnector(), doer: doer}
+		}
+		return responses.NewConnector()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeProduction(context.Background()) })
+	productionGateway := httptest.NewServer(productionHandler)
+	t.Cleanup(productionGateway.Close)
+	productionProbe.Store(true)
+	productionRequest, err := http.NewRequest(http.MethodPost, productionGateway.URL+"/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":%q,"stream":true,"store":false,"parallel_tool_calls":true,"tools":[{"type":"function","name":"lookup"}],"input":"Require parallel calls."}`, model)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	productionRequest.Header.Set("Authorization", "Bearer "+issued.Secret)
+	productionRequest.Header.Set("Content-Type", "application/json")
+	productionResponse, err := productionGateway.Client().Do(productionRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	productionBody, _ := io.ReadAll(productionResponse.Body)
+	_ = productionResponse.Body.Close()
+	var productionResult struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(productionBody, &productionResult) != nil || productionResponse.StatusCode != http.StatusBadRequest || productionResult.Error.Code != "unsupported_capability" || productionCalls.Load() != 0 {
+		t.Fatalf("production Codex parallel request status=%d code=%q upstream sends=%d, want Unknown rejection before send", productionResponse.StatusCode, productionResult.Error.Code, productionCalls.Load())
+	}
+	productionProbe.Store(false)
+	productionGateway.Close()
+	if err := closeProduction(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
 	ready, draining := atomic.Bool{}, atomic.Bool{}
 	ready.Store(true)
 	h, closeComponents, err := composeHandlerWithFactory(prepared, &ready, &draining, nil, func(item topologyComponent) core.Component {
@@ -135,7 +192,7 @@ func TestCodexFunctionToolRoundsClientOwnedHistory(t *testing.T) {
 			return adapter.NewAdapter()
 		}
 		if item.Implementation == "pestiroute.codex.responses" {
-			return codexFunctionRoundsConnector{codexCompositionConnector{Connector: codex.NewConnector(), doer: doer}}
+			return codexParallelTestConnector{codexCompositionConnector{Connector: codex.NewConnector(), doer: doer}}
 		}
 		return responses.NewConnector()
 	})
@@ -147,8 +204,8 @@ func TestCodexFunctionToolRoundsClientOwnedHistory(t *testing.T) {
 	defer gateway.Close()
 	client := gateway.Client()
 	const tools = `"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}}]`
-	firstRequest := fmt.Sprintf(`{"model":%q,"stream":true,"store":false,%s,"tool_choice":{"type":"function","name":"lookup"},"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find alpha."}]}]}`, model, tools)
-	secondRequest := fmt.Sprintf(`{"model":%q,"stream":true,"store":false,%s,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find alpha."}]},{"type":"function_call","id":"fc_item_round1","call_id":"call_round1","name":"lookup","arguments":"{  \"key\" : \"alpha \\\"quoted\\\" \\\\ path\" }","client_extension":{"trace":[1,{"label":"preserve"}]}},{"type":"function_call_output","call_id":"call_round1","output":"alpha-result"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"working"}],"client_message_extension":{"revision":7}},{"type":"message","role":"user","content":[{"type":"input_text","text":"Now finish."}]}]}`, model, tools)
+	firstRequest := fmt.Sprintf(`{"model":%q,"stream":true,"store":false,"parallel_tool_calls":true,%s,"tool_choice":{"type":"function","name":"lookup"},"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find alpha and beta."}]}]}`, model, tools)
+	secondRequest := fmt.Sprintf(`{"model":%q,"stream":true,"store":false,"parallel_tool_calls":false,%s,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find alpha and beta."}]},{"type":"function_call","id":"fc_item_1","call_id":"call_1","name":"lookup","arguments":"{  \"key\" : \"alpha \\\"quoted\\\" \\\\ path\" }","client_extension":{"trace":[1,{"label":"preserve"}]}},{"type":"function_call_output","call_id":"call_1","output":"alpha-result"},{"type":"function_call","id":"fc_item_2","call_id":"call_2","name":"lookup","arguments":"{\"key\":\"beta\"}"},{"type":"function_call_output","call_id":"call_2","output":"beta-result"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"working"}],"client_message_extension":{"revision":7}},{"type":"message","role":"user","content":[{"type":"input_text","text":"Now finish."}]}]}`, model, tools)
 	for i, body := range []string{firstRequest, secondRequest} {
 		req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(body))
 		if err != nil {
@@ -211,15 +268,17 @@ func TestCodexFunctionToolRoundsClientOwnedHistory(t *testing.T) {
 		Tools []struct {
 			Name string `json:"name"`
 		} `json:"tools"`
-		ToolChoice json.RawMessage   `json:"tool_choice"`
-		Input      []json.RawMessage `json:"input"`
+		ToolChoice        json.RawMessage   `json:"tool_choice"`
+		ParallelToolCalls *bool             `json:"parallel_tool_calls"`
+		Input             []json.RawMessage `json:"input"`
 	}, error) {
 		var round struct {
 			Tools []struct {
 				Name string `json:"name"`
 			} `json:"tools"`
-			ToolChoice json.RawMessage   `json:"tool_choice"`
-			Input      []json.RawMessage `json:"input"`
+			ToolChoice        json.RawMessage   `json:"tool_choice"`
+			ParallelToolCalls *bool             `json:"parallel_tool_calls"`
+			Input             []json.RawMessage `json:"input"`
 		}
 		err := json.Unmarshal([]byte(encoded), &round)
 		return round, err
@@ -231,6 +290,9 @@ func TestCodexFunctionToolRoundsClientOwnedHistory(t *testing.T) {
 	upstreamFirst, err := decodeRound(firstCaptured)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if clientFirst.ParallelToolCalls == nil || !*clientFirst.ParallelToolCalls || upstreamFirst.ParallelToolCalls == nil || !*upstreamFirst.ParallelToolCalls {
+		t.Fatalf("parallel_tool_calls=true was not forwarded: client=%v upstream=%v", clientFirst.ParallelToolCalls, upstreamFirst.ParallelToolCalls)
 	}
 	if len(clientFirst.Tools) != 1 || clientFirst.Tools[0].Name != "lookup" || len(upstreamFirst.Tools) != 1 || upstreamFirst.Tools[0].Name != clientFirst.Tools[0].Name {
 		t.Fatalf("tool definition changed: client=%+v upstream=%+v", clientFirst.Tools, upstreamFirst.Tools)
@@ -250,39 +312,44 @@ func TestCodexFunctionToolRoundsClientOwnedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if upstreamSecond.ToolChoice != nil || len(clientSecond.Input) != 5 || len(upstreamSecond.Input) != len(clientSecond.Input) {
-		t.Fatalf("second-round input shape/choice changed: client=%d upstream=%d choice=%s", len(clientSecond.Input), len(upstreamSecond.Input), upstreamSecond.ToolChoice)
+	if upstreamSecond.ToolChoice != nil || len(clientSecond.Input) != 7 || len(upstreamSecond.Input) != len(clientSecond.Input) || clientSecond.ParallelToolCalls == nil || *clientSecond.ParallelToolCalls || upstreamSecond.ParallelToolCalls == nil || *upstreamSecond.ParallelToolCalls {
+		t.Fatalf("second-round input shape/options changed: client=%d upstream=%d choice=%s parallel client=%v upstream=%v", len(clientSecond.Input), len(upstreamSecond.Input), upstreamSecond.ToolChoice, clientSecond.ParallelToolCalls, upstreamSecond.ParallelToolCalls)
 	}
 	for i := range clientSecond.Input {
 		if !bytes.Equal(clientSecond.Input[i], upstreamSecond.Input[i]) {
 			t.Fatalf("second-round history item %d changed or reordered: got %s want %s", i, upstreamSecond.Input[i], clientSecond.Input[i])
 		}
 	}
-	var call struct {
-		Type      string          `json:"type"`
-		ID        string          `json:"id"`
-		CallID    string          `json:"call_id"`
-		Name      string          `json:"name"`
-		Arguments string          `json:"arguments"`
-		Extension json.RawMessage `json:"client_extension"`
-	}
-	var result struct {
-		Type   string `json:"type"`
-		CallID string `json:"call_id"`
-		Output string `json:"output"`
-	}
-	if json.Unmarshal(upstreamSecond.Input[1], &call) != nil || json.Unmarshal(upstreamSecond.Input[2], &result) != nil {
-		t.Fatal("could not decode captured call/result history")
-	}
 	const wantArguments = `{  "key" : "alpha \"quoted\" \\ path" }`
-	if call.Type != "function_call" || call.ID != "fc_item_round1" || call.CallID != "call_round1" || call.ID == call.CallID || call.Name != clientFirst.Tools[0].Name || call.Arguments != wantArguments {
-		t.Fatalf("captured function call lost identity/name/raw argument fidelity: %+v", call)
+	for index, want := range []struct{ item, call, args, output string }{
+		{"fc_item_1", "call_1", wantArguments, "alpha-result"},
+		{"fc_item_2", "call_2", `{"key":"beta"}`, "beta-result"},
+	} {
+		var call struct {
+			Type      string          `json:"type"`
+			ID        string          `json:"id"`
+			CallID    string          `json:"call_id"`
+			Name      string          `json:"name"`
+			Arguments string          `json:"arguments"`
+			Extension json.RawMessage `json:"client_extension"`
+		}
+		var result struct {
+			Type   string `json:"type"`
+			CallID string `json:"call_id"`
+			Output string `json:"output"`
+		}
+		if json.Unmarshal(upstreamSecond.Input[1+index*2], &call) != nil || json.Unmarshal(upstreamSecond.Input[2+index*2], &result) != nil {
+			t.Fatalf("could not decode call/result pair %d", index)
+		}
+		if call.Type != "function_call" || call.ID != want.item || call.CallID != want.call || call.ID == call.CallID || call.Name != "lookup" || call.Arguments != want.args || result.Type != "function_call_output" || result.CallID != want.call || result.Output != want.output {
+			t.Fatalf("call/result pair %d lost identity, arguments or result: call=%+v result=%+v", index, call, result)
+		}
+		if index == 0 && len(call.Extension) == 0 {
+			t.Fatal("unknown function-call extension lost")
+		}
 	}
-	if result.Type != "function_call_output" || result.CallID != call.CallID || result.Output != "alpha-result" || len(call.Extension) == 0 {
-		t.Fatalf("captured result is not linked to call or history extension lost: call=%+v result=%+v", call, result)
-	}
-	if !bytes.Contains(upstreamSecond.Input[3], []byte(`"client_message_extension":{"revision":7}`)) {
-		t.Fatalf("unknown message-history extension lost: %s", upstreamSecond.Input[3])
+	if !bytes.Contains(upstreamSecond.Input[5], []byte(`"client_message_extension":{"revision":7}`)) {
+		t.Fatalf("unknown message-history extension lost: %s", upstreamSecond.Input[5])
 	}
 	unsupportedHistory := fmt.Sprintf(`{"model":%q,"stream":true,"store":false,"input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"offline-fixture"}]}]}`, model)
 	badReq, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(unsupportedHistory))

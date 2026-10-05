@@ -97,28 +97,32 @@ func TestAdaptRequestTranslationRejectsMalformedIncludeEntries(t *testing.T) {
 }
 
 func TestAdaptRequestTranslationPreservesExplicitControlsAndCacheKey(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.4-mini","input":[{"type":"function_call","call_id":"call-1","arguments":"{}"}],"stream":true,"store":false,"include":["existing","reasoning.encrypted_content"],"tool_choice":{"type":"function","name":"lookup"},"parallel_tool_calls":true,"max_output_tokens":123,"prompt_cache_key":"cache-key"}`)
-	got, ge := adaptRequest(core.ExecutionRequest{Payload: core.RawPayload{Body: body}}, core.ModeTranslation)
-	if ge != nil {
-		t.Fatal(ge)
-	}
-	var before, after map[string]json.RawMessage
-	if err := json.Unmarshal(body, &before); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(got, &after); err != nil {
-		t.Fatal(err)
-	}
-	for _, field := range []string{"input", "tool_choice", "parallel_tool_calls", "max_output_tokens", "prompt_cache_key"} {
-		if !bytes.Equal(after[field], before[field]) {
-			t.Errorf("field %q changed: got %s, want %s", field, after[field], before[field])
-		}
-	}
-	var include []string
-	if err := json.Unmarshal(after["include"], &include); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(include, []string{"existing", encryptedReasoningInclude}) {
-		t.Errorf("include changed or duplicated: %v", include)
+	for _, parallel := range []string{"true", "false"} {
+		t.Run(parallel, func(t *testing.T) {
+			body := []byte(`{"model":"gpt-5.4-mini","input":[{"type":"function_call","call_id":"call-1","arguments":"{}"}],"stream":true,"store":false,"include":["existing","reasoning.encrypted_content"],"tool_choice":{"type":"function","name":"lookup"},"parallel_tool_calls":` + parallel + `,"max_output_tokens":123,"prompt_cache_key":"cache-key"}`)
+			got, ge := adaptRequest(core.ExecutionRequest{Payload: core.RawPayload{Body: body}}, core.ModeTranslation)
+			if ge != nil {
+				t.Fatal(ge)
+			}
+			var before, after map[string]json.RawMessage
+			if err := json.Unmarshal(body, &before); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(got, &after); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"input", "tool_choice", "parallel_tool_calls", "max_output_tokens", "prompt_cache_key"} {
+				if !bytes.Equal(after[field], before[field]) {
+					t.Errorf("field %q changed: got %s, want %s", field, after[field], before[field])
+				}
+			}
+			var include []string
+			if err := json.Unmarshal(after["include"], &include); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(include, []string{"existing", encryptedReasoningInclude}) {
+				t.Errorf("include changed or duplicated: %v", include)
+			}
+		})
 	}
 }

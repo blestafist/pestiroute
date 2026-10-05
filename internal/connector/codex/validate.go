@@ -80,9 +80,6 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 	if unsupportedInputType(fields["input"]) {
 		return unsupported("Responses request uses an unsupported resource or modality")
 	}
-	if _, required := req.Capabilities[core.Capability("llm.tools.parallel")]; required {
-		return unsupported("Parallel tool capability is not verified for this profile")
-	}
 	toolNames := make(map[string]bool)
 	if raw, ok := fields["tools"]; ok {
 		var tools []struct {
@@ -122,9 +119,6 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 		var parallel bool
 		if json.Unmarshal(raw, &parallel) != nil {
 			return invalid("Invalid Responses parallel tool preference")
-		}
-		if parallel {
-			return unsupported("Parallel tool calls are not verified for this profile")
 		}
 	}
 	return nil
