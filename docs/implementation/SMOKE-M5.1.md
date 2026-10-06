@@ -1,8 +1,10 @@
 # M5.1 Codex live smoke procedure
 
-**Prepared only; not executed against a provider.** M5.1-040/041 own the
-separately authorized live gates. This procedure uses the selected subscription
-Codex endpoint, never the public OpenAI API or a compatible proxy.
+This is the bounded live-smoke procedure. M5.1-040/041 record its executed
+auth/inference evidence and limits; see the [compatibility matrix](M5.1-COMPATIBILITY.md).
+This procedure uses the selected subscription Codex endpoint, never the public
+OpenAI API or a compatible proxy. It is not evidence of broader capability or
+account entitlement.
 
 Normative context: [candidate profile and dialect policy](M5.1-BINDING.md#candidate-profile-codex-responses-http-sse-v1),
 [live acceptance gate](M5.1-CODEX.md#local-versus-live-acceptance),
@@ -130,8 +132,9 @@ This DEC-011 smoke scope is the matched `plain_text` request only. It does not
 run tool or parallel-tool scenarios under Lite; keep `llm.tools` and
 `llm.tools.parallel` `Unknown` for both profiles and reject requests requiring
 them before dispatch. The Lite body retains `reasoning.context: all_turns`;
-the direct proof used `reasoning.effort: high`. Standard-profile reasoning
-remains `Unknown`. Direct POST path is
+the direct proof used `reasoning.effort: high`. The narrowly scoped Lite native
+reasoning capability is supported by the direct completion and matched pair;
+standard-profile reasoning remains `Unknown`. Direct POST path is
 `/backend-api/codex/responses`; gateway client POST path is `/v1/responses`.
 Both legs use the same native Responses body, without Lite conversion.
 `max_output_tokens` is deliberately absent:
@@ -140,13 +143,13 @@ The caller forms the Lite-shaped body, including its `additional_tools` input
 prefix and any instruction items in `input` where applicable; the Connector
 does not synthesize, move, or strip these fields. The old preflight that omitted
 reasoning was rejected with field `reasoning.context`; this does not show the
-model is unsupported. The later sanitized direct capture
+model is unsupported. The sanitized direct capture
 `/tmp/opencode/pestiroute-live-evidence/luna-7-completion.json` records HTTP 200,
 completed through EOF, one reasoning item, and 27 reasoning tokens, with effort
 `high` and context `all_turns` (reviewer PASS `ses_eeff1a4c6ffex6A3uqMCHiJXCp`).
 The official catalog default is medium, but high is the observed proof setting;
-do not substitute a different effort into that evidence. This remains direct
-evidence only.
+do not substitute a different effort into that evidence. The matched pair in
+M5.1-041 additionally verifies one direct and one gateway plain-text response.
 
 ```json
 {"model":"gpt-6-luna","stream":true,"store":false,"instructions":"","reasoning":{"effort":"high","context":"all_turns"},"include":["reasoning.encrypted_content"],"input":[{"type":"additional_tools","id":"at_<caller-formed-uuid>","role":"developer","tools":[]},{"type":"message","role":"user","content":[{"type":"input_text","text":"What is 137 × 293? Reply with only the number."}]}],"tool_choice":"auto","parallel_tool_calls":false}
@@ -159,11 +162,11 @@ caller-owned prefix value once and send the exact same constant request body in
 both legs; it is distinct from each leg's fresh header-correlation UUID. The
 Connector must forward the caller's body byte-for-byte. For each leg, share that
 attempt's one UUID across its three correlation headers, but generate separate
-UUIDs for the separate direct and gateway attempts. Do not enable gateway admission by bypassing the current
-`Unknown` capability gate: first verify direct evidence plus offline scoped
-passthrough, event-order, and usage tests before declaring Lite
-`llm.reasoning: Supported`. A matched gateway pair is still required to claim
-a working route; until then, publish no Lite route support claim. This does not
+UUIDs for the separate direct and gateway attempts. Do not bypass capability
+gates. M5.1-041 records the direct completion, matched gateway pair, and offline
+scoped passthrough/event-order/usage evidence supporting `llm.reasoning:
+Supported` only for the exact native Lite model and account scope. This does not
+promote tools/parallel, standard reasoning, or other Lite options, and does not
 close M5.1-043.
 
 The artifact validator retains the existing `subscription_codex` profile and
@@ -228,14 +231,14 @@ describe observed calls, not intended calls.
    explicitly sends `parallel_tool_calls:true` and compares any returned
    interleaved IDs/deltas/results. Rejection is not permission to drop the
    field. A single emitted call is not evidence of parallel support.
-4. **Encrypted reasoning follow-up (out of this Lite scope):** production `llm.reasoning` is `Unknown`;
-   expect gateway HTTP 400 `unsupported_capability` before dispatch and zero
-   upstream dispatches.
-   Record only sanitized rejection evidence. A separately authorized direct
-   probe uses the exact `include` and history item shapes above, retaining each
-   leg's ciphertext only in ephemeral memory. If content is omitted/denied or
-   safe replay is inaccessible, mark the scenario `unrun/Unknown`; never
-   fabricate a follow-up or infer support. No ciphertext is logged or captured.
+4. **Encrypted reasoning follow-up (not covered by the completed pair):** the
+    scoped Lite `llm.reasoning` capability does not establish multi-round
+    encrypted-history continuation. Any separately authorized probe must use
+    the exact `include` and history item shapes above, retain ciphertext only in
+    ephemeral memory, and record only sanitized outcomes. If unrun, keep this
+    scenario unverified; never fabricate a follow-up. No ciphertext is logged or
+    captured. Standard-profile reasoning remains `Unknown` and its production
+    zero-send rejection is covered by the local regression.
 
 The following standard-profile reasoning shape is outside this DEC-011 Lite
 smoke scope; standard-profile reasoning remains `Unknown`, and no such request

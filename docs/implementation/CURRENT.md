@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M5.1-041 DONE; matched Codex pair verified; commit pending
+## Immediate focus: M5.1-042 DONE; batch stopping boundary reached (12/12 complete)
 
 M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
 merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
@@ -82,7 +82,7 @@ and offline Codex conformance and scoped capability matrix audit proving partici
 and synthetic local Codex operations guide and test daemon proving real CLI TLS loopback auth start/continue/refresh without secret leakage, same-DB YAML protected streaming, proactive refresh, quarantine restart and interactive recovery, account disablement, native/Anthropic coexistence, and populated WAL-safe SQLite backup/restore integrity (M5.1-037),
 and bounded smoke capture and privacy validation proving paired direct/gateway inference and auth schema enforcement, strict secret/token/prompt redaction, operational bounds, and offline loopback self-testing across all scenarios without external provider calls (M5.1-038),
 and exact live auth and paired inference procedure with explicit CPython client/profile/model selection, harmless function/parallel/reasoning probes, zero-dispatch rejection expectations, and bounded auth/refresh dry-runs with zero external calls (M5.1-039).
-M5.1-040 is DONE and pushed to origin/dev-m5.1 as single verified commit `b7199389ba0e6f43d100089b6346e579d8abcb72` (tree-identical to original local `5cbad7d`). M5.1-041 is DONE; matched plain-text Codex inference pair completed HTTP 200 on both direct and gateway legs under DEC-011 opt-in `codex-responses-http-sse-lite-v1` profile, verified by strict artifact validation (`pair-final-direct.json`, `pair-final-gateway.json`). Cumulative Luna Lite requests: 10/200 used (190 remain); generic diagnostics: 4/50 (46 remain); historical standard HTTP 400s remain 2; retries/fallbacks 0. M5.1-042 is unblocked and next; M5.1-043 remains dependency-blocked. Standard profile reasoning and all tools/parallel capabilities remain strictly Unknown.
+M5.1-040 is DONE and pushed to origin/dev-m5.1 as single verified commit `b7199389ba0e6f43d100089b6346e579d8abcb72` (tree-identical to original local `5cbad7d`). M5.1-041 is DONE; matched plain-text Codex inference pair completed HTTP 200 on both direct and gateway legs under DEC-011 opt-in `codex-responses-http-sse-lite-v1` profile, verified by strict artifact validation (`pair-final-direct.json`, `pair-final-gateway.json`). Cumulative Luna Lite requests: 10/200 used (190 remain); generic diagnostics: 4/50 (46 remain); historical standard HTTP 400s remain 2; retries/fallbacks 0. Native Lite `gpt-6-luna` reasoning is Supported only for its exact configured scope; standard-profile reasoning and all tools/parallel capabilities remain Unknown. M5.1-042 is DONE; M5.1-043 is DRAFT (deferred beyond batch). Authorized 12-task stopping boundary reached (M5.1-031..039 + 040 + 041 + 042).
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
 
@@ -92,10 +92,12 @@ protected accounting. Auth user presentation is bound by DEC-009; M5.1-003
 specifies credential expiry/bootstrap and proactive refresh. Core remains
 provider-neutral. M5.1-040 records one operator-reported device login and locally
 measured read-only persistence/decryption; duplicate direct login comparison is
-operator-deferred. No live inference is claimed.
+operator-deferred, and refresh was not due/run. M5.1-041 separately verifies one
+matched Lite plain-text direct/gateway inference pair; it does not establish
+standard-profile live success or general account entitlement.
 Claude Code, Gemini CLI, ACP, WebSockets and Lite implementation stay outside
-this plan. No live auth/inference was performed in planning. M5.1-040/041 own
-the separate live evidence gates; the M4 deferral does not apply to them.
+this plan. No live auth/inference was performed in planning. The M4 deferral
+does not apply to M5.1-040/041.
 
 Keep the checked-in Context7/gopls configuration, shell/Git and Go checks;
 [M5.1 tooling](TOOLING.md#m51-tooling-gate) requires no new MCP/plugin. This
@@ -133,10 +135,11 @@ remain loopback development compatibility modes; see [LOCAL-M2](LOCAL-M2.md).
 - Native transport failures retain unknown delivery; safe fallback is proven
   with explicit deterministic fixtures, not a broader real-provider retry claim.
   Remaining translation gates/live compatibility, stateful cross-target affinity,
-  live OAuth and IPC remain M4/M5/M6. Codex is planned, not implemented.
-- Historical live evidence remains OpenCode 2.0.6 / OpenAI Responses /
-  `gpt-5.4-mini`, with parallel tools unknown. M3 adds no live inference claim.
-  Remote provider compute cancellation remains unverified.
+  broader live OAuth verification and IPC remain M4/M5/M6. M5.1 has only the
+  narrowly scoped auth and Lite evidence summarized above; M5.1-043 review remains.
+- Historical M1 live evidence remains OpenCode 2.0.6 / public OpenAI Responses /
+  `gpt-5.4-mini`, with parallel tools unknown; it is distinct from ChatGPT
+  subscription Codex. Remote provider compute cancellation remains unverified.
 - [References](REFERENCES.md#migration-from-9router) retains source maps; upstream
   provenance and code-reuse licenses must be resolved before copying source.
   Other unresolved design choices remain in [DECISIONS](../project/DECISIONS.md).
