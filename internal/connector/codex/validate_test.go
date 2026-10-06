@@ -133,6 +133,105 @@ func TestValidateResponsesProfile(t *testing.T) {
 	}
 }
 
+func TestValidateLiteCustomToolNamespaceAndHistory(t *testing.T) {
+	const custom = `{"type":"custom","name":"synthetic_echo","description":"Echo a marker","format":{"type":"grammar","syntax":"lark","definition":"start: \"marker\""}}`
+	const function = `{"type":"function","name":"lookup","description":"Lookup","parameters":{"type":"object"}}`
+	const prefix = `{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","description":"","tools":[` + function + `,` + custom + `]}]}`
+	body := []byte(`{"model":"gpt-6-luna","stream":true,"store":false,"parallel_tool_calls":false,"tool_choice":"auto","input":[` + prefix + `,{"type":"reasoning","id":"r","encrypted_content":"opaque<>&é","vendor":{"keep":true}},{"type":"function_call","call_id":"f1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"f1","output":"done"},{"type":"custom_tool_call","call_id":"c1","name":"synthetic_echo","input":"marker","extension":{"keep":"<>&é"}},{"type":"custom_tool_call_output","call_id":"c1","output":"echoed"}]}`)
+	before := bytes.Clone(body)
+	req := responsesValidationRequest(body)
+	req.Model = liteModel
+	if ge := validateResponsesProfileForProfile(req, core.ModeNative, liteModel, liteProfile); ge != nil {
+		t.Fatalf("scoped Lite function/custom namespace and history rejected: %s/%s", ge.Code, ge.Message)
+	}
+	if !bytes.Equal(body, before) {
+		t.Fatal("custom request validation changed native bytes")
+	}
+
+	tests := []struct {
+		name, profile, mode, model, tools, choice string
+	}{
+		{"standard profile", profile, core.ModeNative, liteModel, custom, `"auto"`},
+		{"translation mode", liteProfile, core.ModeTranslation, liteModel, custom, `"auto"`},
+		{"other model", liteProfile, core.ModeNative, "gpt-5.4-mini", custom, `"auto"`},
+		{"grammar text type", liteProfile, core.ModeNative, liteModel, strings.Replace(custom, `"grammar"`, `"text"`, 1), `"auto"`},
+		{"unproven regex syntax", liteProfile, core.ModeNative, liteModel, strings.Replace(custom, `"lark"`, `"regex"`, 1), `"auto"`},
+		{"function parameters on custom", liteProfile, core.ModeNative, liteModel, strings.Replace(custom, `,"format"`, `,"parameters":{"type":"object"},"format"`, 1), `"auto"`},
+		{"forced custom choice", liteProfile, core.ModeNative, liteModel, custom, `{"type":"custom","name":"synthetic_echo"}`},
+		{"forced function choice with custom", liteProfile, core.ModeNative, liteModel, function + `,` + custom, `{"type":"function","name":"lookup"}`},
+		{"custom without explicit auto", liteProfile, core.ModeNative, liteModel, custom, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := `[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[` + tc.tools + `]}]}]`
+			request := []byte(`{"model":` + fmt.Sprintf("%q", tc.model) + `,"stream":true,"store":false,"parallel_tool_calls":false,`)
+			if tc.choice != "" {
+				request = append(request, []byte(`"tool_choice":`+tc.choice+`,`)...)
+			}
+			request = append(request, []byte(`"input":`+input+`}`)...)
+			before := bytes.Clone(request)
+			validation := responsesValidationRequest(request)
+			validation.Model = tc.model
+			ge := validateResponsesProfileForProfile(validation, tc.mode, tc.model, tc.profile)
+			if ge == nil || ge.Category != core.CategoryUnsupportedFeature {
+				t.Fatalf("unsupported custom scope/shape accepted: %#v", ge)
+			}
+			if !bytes.Equal(request, before) {
+				t.Fatal("validation mutated custom request")
+			}
+		})
+	}
+
+	badFormats := []string{
+		`{"type":"custom","name":"x","description":null,"format":{"type":"grammar","syntax":"lark","definition":"d"}}`,
+		`{"type":"custom","name":"x","description":"x","format":{"type":"grammar","syntax":"lark","definition":""}}`,
+		`{"type":"custom","name":"x","description":"x","format":{"type":"grammar","syntax":"lark"}}`,
+		`{"type":"custom","name":"x","description":"x","format":{"type":"grammar","syntax":"lark","definition":"d"},"defer_loading":"true"}`,
+	}
+	for _, invalidCustom := range badFormats {
+		request := []byte(`{"model":"gpt-6-luna","stream":true,"store":false,"parallel_tool_calls":false,"tool_choice":"auto","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[` + invalidCustom + `]}]}]}`)
+		validation := responsesValidationRequest(request)
+		validation.Model = liteModel
+		if ge := validateResponsesProfileForProfile(validation, core.ModeNative, liteModel, liteProfile); ge == nil {
+			t.Fatalf("malformed custom format accepted: %s", invalidCustom)
+		}
+	}
+	topLevelCustom := []byte(`{"model":"gpt-6-luna","stream":true,"store":false,"tool_choice":"auto","tools":[{"type":"namespace","name":"functions","tools":[` + custom + `]}],"input":"Use tools."}`)
+	topLevelRequest := responsesValidationRequest(topLevelCustom)
+	topLevelRequest.Model = liteModel
+	if ge := validateResponsesProfileForProfile(topLevelRequest, core.ModeNative, liteModel, liteProfile); ge == nil || ge.Category != core.CategoryUnsupportedFeature {
+		t.Fatalf("top-level custom namespace accepted outside the official additional_tools prefix: %#v", ge)
+	}
+	opaqueDefinition := strings.Replace(custom, `start: \"marker\"`, `not parsed by the gateway`, 1)
+	opaqueRequest := []byte(`{"model":"gpt-6-luna","stream":true,"store":false,"tool_choice":"auto","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[` + opaqueDefinition + `]}]}]}`)
+	opaqueValidation := responsesValidationRequest(opaqueRequest)
+	opaqueValidation.Model = liteModel
+	if ge := validateResponsesProfileForProfile(opaqueValidation, core.ModeNative, liteModel, liteProfile); ge != nil {
+		t.Fatalf("opaque nonempty official grammar definition was parsed/rejected: %#v", ge)
+	}
+}
+
+func TestCustomToolAdmissionFollowsSelectedProfile(t *testing.T) {
+	body := []byte(`{"model":"gpt-6-luna","stream":true,"store":false,"parallel_tool_calls":false,"tool_choice":"auto","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"synthetic_echo","description":"Echo","format":{"type":"grammar","syntax":"lark","definition":"start: \"marker\""}}]}]}]}`)
+	for _, tc := range []struct {
+		name, selectedProfile string
+		want                  string
+	}{
+		{"standard profile", profile, "unsupported_feature"},
+		{"Lite profile", liteProfile, "credential_unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Connector{state: core.HealthReady, model: liteModel, accountID: "account", profile: tc.selectedProfile}
+			req := responsesValidationRequest(body)
+			req.Model = liteModel
+			_, ge := c.Execute(t.Context(), req, core.AttemptScope{Mode: core.ModeNative, AccountID: "account"}, core.InvocationServices{})
+			if ge == nil || ge.Code != tc.want {
+				t.Fatalf("profile %q custom request code=%v, want %s", tc.selectedProfile, ge, tc.want)
+			}
+		})
+	}
+}
+
 func TestUnsupportedResourcePreflightMessageForms(t *testing.T) {
 	reject := func(t *testing.T, body []byte) {
 		t.Helper()

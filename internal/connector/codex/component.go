@@ -155,7 +155,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if selectedProfile == liteProfile && scope.Mode != core.ModeNative {
 		return core.ExecutionResponse{}, connectorError("unsupported_mode", core.CategoryUnsupportedFeature, "Codex Lite profile requires native mode")
 	}
-	if ge := validateResponsesProfile(req, scope.Mode, model); ge != nil {
+	if ge := validateResponsesProfileForProfile(req, scope.Mode, model, selectedProfile); ge != nil {
 		return core.ExecutionResponse{}, ge
 	}
 	body, ge := adaptRequest(req, scope.Mode)

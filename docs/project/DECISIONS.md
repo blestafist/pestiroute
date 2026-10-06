@@ -183,8 +183,9 @@ These accepted ADRs explain the existing constraints and establish the internal 
 
 ### DEC-011 — Opt-in Codex Responses Lite Text Profile
 
-- **Status:** Accepted. Scoped offline gateway support is verified; live tool
-  behavior remains limited to the M5.1-044 direct evidence.
+- **Status:** Accepted, amended by M5.1-047 after direct custom-tool evidence
+  and protected offline gateway verification. Scope remains profile-, model-,
+  and account-specific; this is not global Codex CLI compatibility.
 - **Context:** The pinned official Codex source declares `gpt-6-luna` as using
   Responses Lite, while the existing standard Codex profile remains the default.
   The authorized direct Luna Lite capture `luna-7-completion.json` records HTTP
@@ -197,7 +198,11 @@ These accepted ADRs explain the existing constraints and establish the internal 
   emission and a fresh two-request function roundtrip (HTTP 200/200); its
   explicit parallel request was rejected (HTTP 400). The direct capture
   observed one emitted call only; it did not test or impose an output-call
-  count ceiling. This is not parallel support or a general entitlement claim.
+  count ceiling. M5.1-047 directly completed one harmless custom-tool
+  roundtrip in two HTTP 200 requests, with completed terminals and usage
+  observed. This is limited to the observed custom Lark shape; it does not
+  establish live gateway behavior, other grammars, parallel support, or general
+  entitlement.
 - **Decision:** Specify one opt-in connector profile, with the exact literal
   `codex-responses-http-sse-lite-v1`, selected only through the existing
   `componentConfig.Profile` setting. It is restricted to configured model
@@ -229,18 +234,25 @@ These accepted ADRs explain the existing constraints and establish the internal 
   A matched gateway pair is additionally required before publishing a working
   support claim for the route.
   `llm.tools: Supported` is permitted only for exact `openai.responses.v1` /
-  `native` / `gpt-6-luna` / configured account scope using client-owned function
-  tools; this capability classifies tool kind, not an artificial one-call
-  emission limit. With `parallel_tool_calls: false`, any emitted function calls
-  are still forwarded and retained in client-owned history; client execution
-  policy/concurrency is distinct from the provider's explicit parallel-tool
-  capability. Lite `additional_tools` admits direct function definitions
-  and the official `functions` namespace containing only function definitions.
-  Custom, hosted, other namespace and otherwise unproven tool kinds remain
-  rejected before provider send; this is not a global unsupported claim. A true
-  `parallel_tool_calls` requires `llm.tools.parallel`, which remains `Unknown`
-  in every Codex scope and is rejected before send. Standard-profile `llm.tools`
-  and `llm.reasoning` remain `Unknown`. No
+  `native` / `gpt-6-luna` / configured account scope, and covers client-owned
+  function tools in their established Lite forms (direct definitions or the
+  official `functions` namespace) plus custom tools only in that namespace
+  inside a Lite `additional_tools` developer input item. The admitted custom
+  envelope is `type:"custom"`
+  with name, description, and
+  `format:{type:"grammar",syntax:"lark",definition:<non-empty string>}`;
+  function `parameters` are not accepted on custom definitions. The Connector
+  checks this envelope but does not parse/compile the grammar, execute tools, or
+  alter native body bytes. Custom definitions require `tool_choice:"auto"`;
+  top-level custom definitions, forced choices with custom definitions,
+  unproven grammar forms/syntaxes, hosted tools, and other namespaces fail
+  before send. Custom call items, input deltas, linked outputs, and encrypted
+  reasoning history remain opaque and are forwarded without a tool-item count
+  ceiling. With `parallel_tool_calls:false`, emitted function/custom call items
+  remain client-owned; this does not establish provider-side parallel support.
+  A true `parallel_tool_calls` requires `llm.tools.parallel`, which remains
+  `Unknown` in every Codex scope and is rejected before send. Standard-profile
+  `llm.tools` and `llm.reasoning` remain `Unknown`. No
   capability gate may be bypassed. The
   existing standard literal `codex-responses-http-sse-v1` and its default
   behavior remain unchanged.
@@ -254,9 +266,9 @@ These accepted ADRs explain the existing constraints and establish the internal 
   credential format/storage, public API, or Core contract changes. The
   profile-scoped declaration follows the existing exact-scope capability model.
   The opt-in profile literal is additive; the existing standard literal/default
-  and its upstream header set are unchanged. Offline checks establish local
-  behavior only: no live gateway tool round was run, and this does not close
-  M5.1-043.
+  and its upstream header set are unchanged. Protected fake-TLS tests establish
+  local gateway preservation and zero-send rejection only; no live gateway tool
+  round was run, and this does not close M5.1-043.
 - **Bounds and limitations:** The scoped smoke flow uses a 30-second deadline,
   1 MiB response-byte ceiling, and 256 UTF-8 output-text-byte client observation
   cap. These bound local observation only; they do not guarantee an upstream
@@ -265,9 +277,11 @@ These accepted ADRs explain the existing constraints and establish the internal 
   synchronized M5.1 binding/configuration/smoke text. Before implementation
   claims, verify exact header isolation, byte-preserving native request behavior,
   rejection of unsupported required semantics before send, and bounded
-  incremental streaming. The direct artifact is limited to the exact model,
-  profile, reasoning effort/context, and observed response; it does not establish
-  other Lite options, live gateway tool behavior, or M5.1-043 completion.
+  incremental streaming. The direct custom artifact is limited to the exact
+  model/profile and observed Lark custom shape. Offline protected-gateway
+  evidence is separate and is not live gateway/provider evidence. Neither
+  establishes other grammars, hosted/parallel tools, general entitlement, or
+  M5.1-043 completion.
 
 ## Questions Before Implementation
 

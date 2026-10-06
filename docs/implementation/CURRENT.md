@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M5.1-046 DONE; review Codex slice and handoff (M5.1-043)
+## Immediate focus: M5.1-047 DONE; review Codex slice and handoff (M5.1-043)
 
 M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
 merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
@@ -39,8 +39,8 @@ and compatible-endpoint tools [M4-041](tasks/M4-041.md). The compatible harness
 and final review fixes are committed; [M4-045](tasks/M4-045.md) retains evidence.
 
 The new branch is `dev-m5.1`, based on that merge. The
-[Codex plan](TASKS.md#m51--codex-subscription-connector) has 45 small cards:
-[M5.1-001](tasks/M5.1-001.md) through [M5.1-042](tasks/M5.1-042.md), and [M5.1-044](tasks/M5.1-044.md) are DONE,
+[Codex plan](TASKS.md#m51--codex-subscription-connector) has 47 small cards:
+[M5.1-001](tasks/M5.1-001.md) through [M5.1-042](tasks/M5.1-042.md), and [M5.1-044](tasks/M5.1-044.md) through [M5.1-047](tasks/M5.1-047.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
@@ -78,7 +78,7 @@ and offline Codex conformance and scoped capability matrix audit proving partici
 and synthetic local Codex operations guide and test daemon proving real CLI TLS loopback auth start/continue/refresh without secret leakage, same-DB YAML protected streaming, proactive refresh, quarantine restart and interactive recovery, account disablement, native/Anthropic coexistence, and populated WAL-safe SQLite backup/restore integrity (M5.1-037),
 and bounded smoke capture and privacy validation proving paired direct/gateway inference and auth schema enforcement, strict secret/token/prompt redaction, operational bounds, and offline loopback self-testing across all scenarios without external provider calls (M5.1-038),
 and exact live auth and paired inference procedure with explicit CPython client/profile/model selection, harmless function/parallel/reasoning probes, zero-dispatch rejection expectations, and bounded auth/refresh dry-runs with zero external calls (M5.1-039).
-M5.1-040–042 are DONE; see their cards for the auth and paired plain-text evidence. M5.1-044's direct single-tool probe and roundtrip are recorded in [its card](tasks/M5.1-044.md); 186 authorized Lite requests remain unused. M5.1-045 is DONE: native Lite `gpt-6-luna` function-kind capability and offline fake-backend gateway coverage are verified with DEC-011 and owning specs synchronized; standard-profile tools and explicit parallel requests remain fail-closed Unknown without provider sends. [M5.1-046](tasks/M5.1-046.md) is ACTIVE for deterministic two-call forwarding/replay and opaque-validation false-positive audit; no live probe is planned before offline review. M5.1-043 remains DRAFT.
+M5.1-040–042 are DONE; see their cards for the auth and paired plain-text evidence. M5.1-044's direct single-tool probe and roundtrip are recorded in [its card](tasks/M5.1-044.md); 184 authorized Lite requests remain unused after M5.1-047's two-request probe. M5.1-045–047 are DONE: native Lite `gpt-6-luna` function-kind and custom Lark grammar tool support, multi-call forwarding/replay, and offline protected fake-TLS roundtrips are verified; standard-profile tools and explicit parallel requests remain fail-closed Unknown with zero-send gates. [M5.1-047](tasks/M5.1-047.md) is DONE (direct two-request roundtrip passed HTTP 200/200; scoped native Lite custom Lark grammar in functions namespace admitted; offline mixed-history, incremental/cancellation, and zero-send coverage verified; reviewer PASS). No live gateway custom round or broad CLI compatibility is claimed. M5.1-043 remains DRAFT.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
 

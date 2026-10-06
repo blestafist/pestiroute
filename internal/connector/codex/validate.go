@@ -14,6 +14,10 @@ const maxResponsesBodyBytes = 1 << 20
 // validateResponsesProfile only inspects fields whose semantics this profile owns.
 // It never returns or edits the body, which remains opaque to Core and unchanged in native mode.
 func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel string) *core.GatewayError {
+	return validateResponsesProfileForProfile(req, mode, configuredModel, profile)
+}
+
+func validateResponsesProfileForProfile(req core.ExecutionRequest, mode, configuredModel, selectedProfile string) *core.GatewayError {
 	invalid := func(message string) *core.GatewayError {
 		return connectorError("invalid_request", core.CategoryInvalidRequest, message)
 	}
@@ -81,8 +85,10 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 		return unsupported("Responses request uses an unsupported resource or modality")
 	}
 	toolNames := make(map[string]bool)
+	customToolNames := make(map[string]bool)
+	allowCustom := selectedProfile == liteProfile && mode == core.ModeNative && configuredModel == liteModel
 	if raw, ok := fields["tools"]; ok {
-		if ge := collectFunctionToolNames(raw, toolNames, invalid, unsupported); ge != nil {
+		if ge := collectFunctionToolNames(raw, toolNames, customToolNames, false, invalid, unsupported); ge != nil {
 			return ge
 		}
 	}
@@ -102,7 +108,7 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 				if json.Unmarshal(value["role"], &role) != nil || role != "developer" {
 					return invalid("Invalid additional_tools role")
 				}
-				if ge := collectFunctionToolNames(value["tools"], toolNames, invalid, unsupported); ge != nil {
+				if ge := collectFunctionToolNames(value["tools"], toolNames, customToolNames, allowCustom, invalid, unsupported); ge != nil {
 					return ge
 				}
 			}
@@ -127,6 +133,12 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 			return unsupported("Responses tool choice is not supported")
 		}
 	}
+	if len(customToolNames) > 0 {
+		var choice string
+		if raw, ok := fields["tool_choice"]; !ok || json.Unmarshal(raw, &choice) != nil || choice != "auto" {
+			return unsupported("Custom tools require tool_choice auto")
+		}
+	}
 	if raw, ok := fields["parallel_tool_calls"]; ok {
 		var parallel bool
 		if json.Unmarshal(raw, &parallel) != nil {
@@ -139,7 +151,7 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 	return nil
 }
 
-func collectFunctionToolNames(raw json.RawMessage, names map[string]bool, invalid, unsupported func(string) *core.GatewayError) *core.GatewayError {
+func collectFunctionToolNames(raw json.RawMessage, names, customNames map[string]bool, allowCustom bool, invalid, unsupported func(string) *core.GatewayError) *core.GatewayError {
 	var tools []json.RawMessage
 	if json.Unmarshal(raw, &tools) != nil || tools == nil {
 		return invalid("Invalid Responses tools")
@@ -161,7 +173,7 @@ func collectFunctionToolNames(raw json.RawMessage, names map[string]bool, invali
 			if namespace != "functions" {
 				return unsupported("Only the functions tool namespace is supported")
 			}
-			if ge := collectNamespaceFunctionNames(tool["tools"], names, invalid, unsupported); ge != nil {
+			if ge := collectNamespaceFunctionNames(tool["tools"], names, customNames, allowCustom, invalid, unsupported); ge != nil {
 				return ge
 			}
 			continue
@@ -169,14 +181,14 @@ func collectFunctionToolNames(raw json.RawMessage, names map[string]bool, invali
 		if kind != "function" {
 			return unsupported("Only function tools are supported")
 		}
-		if ge := addFunctionToolName(tool, names, invalid); ge != nil {
+		if ge := addFunctionToolName(tool, names, customNames, invalid); ge != nil {
 			return ge
 		}
 	}
 	return nil
 }
 
-func collectNamespaceFunctionNames(raw json.RawMessage, names map[string]bool, invalid, unsupported func(string) *core.GatewayError) *core.GatewayError {
+func collectNamespaceFunctionNames(raw json.RawMessage, names, customNames map[string]bool, allowCustom bool, invalid, unsupported func(string) *core.GatewayError) *core.GatewayError {
 	var tools []json.RawMessage
 	if json.Unmarshal(raw, &tools) != nil || tools == nil {
 		return invalid("Invalid functions namespace tools")
@@ -187,17 +199,26 @@ func collectNamespaceFunctionNames(raw json.RawMessage, names map[string]bool, i
 		if json.Unmarshal(rawTool, &tool) != nil || tool == nil || json.Unmarshal(tool["type"], &kind) != nil || kind == "" {
 			return invalid("Invalid functions namespace tool")
 		}
-		if kind != "function" {
-			return unsupported("Only function tools are supported in the functions namespace")
-		}
-		if ge := addFunctionToolName(tool, names, invalid); ge != nil {
-			return ge
+		switch kind {
+		case "function":
+			if ge := addFunctionToolName(tool, names, customNames, invalid); ge != nil {
+				return ge
+			}
+		case "custom":
+			if !allowCustom {
+				return unsupported("Custom tools are supported only in the Codex Lite functions namespace")
+			}
+			if ge := addCustomToolName(tool, names, customNames, invalid, unsupported); ge != nil {
+				return ge
+			}
+		default:
+			return unsupported("Only function and custom tools are supported in the functions namespace")
 		}
 	}
 	return nil
 }
 
-func addFunctionToolName(tool map[string]json.RawMessage, names map[string]bool, invalid func(string) *core.GatewayError) *core.GatewayError {
+func addFunctionToolName(tool map[string]json.RawMessage, names, customNames map[string]bool, invalid func(string) *core.GatewayError) *core.GatewayError {
 	var name string
 	if json.Unmarshal(tool["name"], &name) != nil || strings.TrimSpace(name) == "" {
 		return invalid("Invalid function tool name")
@@ -208,10 +229,44 @@ func addFunctionToolName(tool map[string]json.RawMessage, names map[string]bool,
 			return invalid("Invalid function tool parameters")
 		}
 	}
-	if names[name] {
+	if names[name] || customNames[name] {
 		return invalid("Duplicate function tool name")
 	}
 	names[name] = true
+	return nil
+}
+
+func addCustomToolName(tool map[string]json.RawMessage, names, customNames map[string]bool, invalid, unsupported func(string) *core.GatewayError) *core.GatewayError {
+	// Treat a non-empty official grammar as opaque; do not become a grammar compiler.
+	var name, description string
+	descriptionRaw, hasDescription := tool["description"]
+	if json.Unmarshal(tool["name"], &name) != nil || strings.TrimSpace(name) == "" || !hasDescription || bytes.Equal(bytes.TrimSpace(descriptionRaw), []byte("null")) || json.Unmarshal(descriptionRaw, &description) != nil {
+		return invalid("Invalid custom tool name or description")
+	}
+	if names[name] || customNames[name] {
+		return invalid("Duplicate tool name")
+	}
+	if _, exists := tool["parameters"]; exists {
+		return unsupported("Custom tools do not use function parameters")
+	}
+	if raw, exists := tool["defer_loading"]; exists && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		var deferred bool
+		if json.Unmarshal(raw, &deferred) != nil {
+			return invalid("Invalid custom tool defer_loading")
+		}
+	}
+	var format map[string]json.RawMessage
+	if json.Unmarshal(tool["format"], &format) != nil || format == nil {
+		return invalid("Invalid custom tool format")
+	}
+	var formatType, syntax, definition string
+	if json.Unmarshal(format["type"], &formatType) != nil || json.Unmarshal(format["syntax"], &syntax) != nil || json.Unmarshal(format["definition"], &definition) != nil || definition == "" {
+		return invalid("Invalid custom tool format")
+	}
+	if formatType != "grammar" || syntax != "lark" {
+		return unsupported("Only the proven Codex Lark grammar custom format is supported")
+	}
+	customNames[name] = true
 	return nil
 }
 

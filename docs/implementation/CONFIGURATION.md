@@ -40,9 +40,14 @@ model `gpt-6-luna` and the bounded plain-text smoke flow; it does not change the
 standard profile or credential configuration. Protected configuration rejects
 other models and non-native routes. Lite advertises `llm.reasoning: Supported`
 only at its exact native protocol/model/account scope after offline
-byte-preservation tests and the reviewed direct evidence; tools/parallel and
-standard-profile reasoning remain `Unknown`. No working gateway route is
-claimed until a matched pair is reviewed. See [DEC-011](../project/DECISIONS.md#dec-011--opt-in-codex-responses-lite-text-profile) and the [M5.1 binding](M5.1-BINDING.md#opt-in-responses-lite-text-profile-dec-011).
+byte-preservation tests and direct evidence. `llm.tools: Supported` is scoped
+the same way for client-owned functions and the observed custom grammar/Lark
+form in the `functions` namespace; custom definitions require
+`tool_choice:"auto"` and are neither compiled nor executed by the gateway.
+The protected offline gateway proof is not a live gateway/provider tool round.
+Parallel and standard-profile tools/reasoning remain `Unknown`. See
+[DEC-011](../project/DECISIONS.md#dec-011--opt-in-codex-responses-lite-text-profile)
+and the [M5.1 binding](M5.1-BINDING.md#opt-in-responses-lite-text-profile-dec-011).
 Lite-only originator, honest user-agent, and per-attempt correlation UUIDs are
 Connector-generated ephemeral headers, not persisted sessions; client spoofing
 is suppressed and the standard profile's header set stays unchanged.
