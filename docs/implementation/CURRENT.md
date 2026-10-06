@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M5.1-042 DONE; batch stopping boundary reached (12/12 complete)
+## Immediate focus: M5.1-044 DONE; direct tool probe batch boundary reached
 
 M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
 merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
@@ -39,12 +39,8 @@ and compatible-endpoint tools [M4-041](tasks/M4-041.md). The compatible harness
 and final review fixes are committed; [M4-045](tasks/M4-045.md) retains evidence.
 
 The new branch is `dev-m5.1`, based on that merge. The
-[Codex plan](TASKS.md#m51--codex-subscription-connector) has 43 small cards:
-[M5.1-001](tasks/M5.1-001.md), [M5.1-002](tasks/M5.1-002.md),
-[M5.1-003](tasks/M5.1-003.md), [M5.1-004](tasks/M5.1-004.md),
-[M5.1-005](tasks/M5.1-005.md), [M5.1-006](tasks/M5.1-006.md),
-[M5.1-007](tasks/M5.1-007.md), [M5.1-008](tasks/M5.1-008.md),
-[M5.1-009](tasks/M5.1-009.md), [M5.1-010](tasks/M5.1-010.md), [M5.1-011](tasks/M5.1-011.md), [M5.1-012](tasks/M5.1-012.md), [M5.1-013](tasks/M5.1-013.md), [M5.1-014](tasks/M5.1-014.md), [M5.1-015](tasks/M5.1-015.md), [M5.1-016](tasks/M5.1-016.md), [M5.1-017](tasks/M5.1-017.md), [M5.1-018](tasks/M5.1-018.md), [M5.1-019](tasks/M5.1-019.md), [M5.1-020](tasks/M5.1-020.md), [M5.1-021](tasks/M5.1-021.md), [M5.1-022](tasks/M5.1-022.md), [M5.1-023](tasks/M5.1-023.md), [M5.1-024](tasks/M5.1-024.md), [M5.1-025](tasks/M5.1-025.md), [M5.1-026](tasks/M5.1-026.md), [M5.1-027](tasks/M5.1-027.md), [M5.1-028](tasks/M5.1-028.md), [M5.1-029](tasks/M5.1-029.md), [M5.1-030](tasks/M5.1-030.md), [M5.1-031](tasks/M5.1-031.md), [M5.1-032](tasks/M5.1-032.md), [M5.1-033](tasks/M5.1-033.md), [M5.1-034](tasks/M5.1-034.md), [M5.1-035](tasks/M5.1-035.md), [M5.1-036](tasks/M5.1-036.md), [M5.1-037](tasks/M5.1-037.md), [M5.1-038](tasks/M5.1-038.md), [M5.1-039](tasks/M5.1-039.md), [M5.1-040](tasks/M5.1-040.md), and [M5.1-041](tasks/M5.1-041.md) are DONE,
+[Codex plan](TASKS.md#m51--codex-subscription-connector) has 45 small cards:
+[M5.1-001](tasks/M5.1-001.md) through [M5.1-042](tasks/M5.1-042.md), and [M5.1-044](tasks/M5.1-044.md) are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
@@ -82,7 +78,7 @@ and offline Codex conformance and scoped capability matrix audit proving partici
 and synthetic local Codex operations guide and test daemon proving real CLI TLS loopback auth start/continue/refresh without secret leakage, same-DB YAML protected streaming, proactive refresh, quarantine restart and interactive recovery, account disablement, native/Anthropic coexistence, and populated WAL-safe SQLite backup/restore integrity (M5.1-037),
 and bounded smoke capture and privacy validation proving paired direct/gateway inference and auth schema enforcement, strict secret/token/prompt redaction, operational bounds, and offline loopback self-testing across all scenarios without external provider calls (M5.1-038),
 and exact live auth and paired inference procedure with explicit CPython client/profile/model selection, harmless function/parallel/reasoning probes, zero-dispatch rejection expectations, and bounded auth/refresh dry-runs with zero external calls (M5.1-039).
-M5.1-040 is DONE and pushed to origin/dev-m5.1 as single verified commit `b7199389ba0e6f43d100089b6346e579d8abcb72` (tree-identical to original local `5cbad7d`). M5.1-041 is DONE; matched plain-text Codex inference pair completed HTTP 200 on both direct and gateway legs under DEC-011 opt-in `codex-responses-http-sse-lite-v1` profile, verified by strict artifact validation (`pair-final-direct.json`, `pair-final-gateway.json`). Cumulative Luna Lite requests: 10/200 used (190 remain); generic diagnostics: 4/50 (46 remain); historical standard HTTP 400s remain 2; retries/fallbacks 0. Native Lite `gpt-6-luna` reasoning is Supported only for its exact configured scope; standard-profile reasoning and all tools/parallel capabilities remain Unknown. M5.1-042 is DONE; M5.1-043 is DRAFT (deferred beyond batch). Authorized 12-task stopping boundary reached (M5.1-031..039 + 040 + 041 + 042).
+M5.1-040 is DONE and pushed to origin/dev-m5.1 as single verified commit `b7199389ba0e6f43d100089b6346e579d8abcb72` (tree-identical to original local `5cbad7d`). M5.1-041 is DONE; matched plain-text Codex inference pair completed HTTP 200 on both direct and gateway legs under DEC-011 opt-in `codex-responses-http-sse-lite-v1` profile, verified by strict artifact validation (`pair-final-direct.json`, `pair-final-gateway.json`). M5.1-042 is DONE. Under newly authorized direct test scope, M5.1-044 is DONE: Stage 1 empirically proved single function tool emission (HTTP 200) and explicit rejection of `parallel_tool_calls: true` (HTTP 400 `unsupported_value`; prefix ID mismatch does not invalidate provider-accepted call), expending 2 calls (12/200 used, 188 remain at that point); Stage 2 executed a fresh two-request direct tool roundtrip (HTTP 200/200, completed) validating linked local-result replay, expected plain-text answer, and usage on both legs (mode-0600 `single-tool-roundtrip.json`). Cumulative Luna Lite requests: 14/200 used (186 remain); generic diagnostics: 4/50 (46 remain); historical standard HTTP 400s remain 2; retries/fallbacks/forced refreshes 0. Production `llm.tools` and `llm.tools.parallel` remain truthfully Unknown. Bounded single-task test batch complete; M5.1-045 remains DRAFT (gateway capability promotion deferred pending owning DEC) and M5.1-043 remains DRAFT for milestone handoff.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
 

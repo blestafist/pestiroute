@@ -151,7 +151,7 @@ func classifyDiagnosticError(body []byte) (reason, code, field string) {
 		code = e.Error.Code
 	}
 	switch e.Error.Param {
-	case "model", "input", "instructions", "stream", "store", "max_output_tokens", "reasoning", "reasoning.effort", "reasoning.context", "include", "tool_choice", "parallel_tool_calls":
+	case "model", "input", "instructions", "stream", "store", "max_output_tokens", "reasoning", "reasoning.effort", "reasoning.context", "include", "tools", "tool_choice", "parallel_tool_calls":
 		field = e.Error.Param
 	}
 	message := strings.ToLower(e.Error.Message)
@@ -1084,7 +1084,7 @@ func TestDiagnosticLunaLiteProfileShapeOffline(t *testing.T) {
 			t.Fatal("fixed diagnostic profile was not accepted")
 		}
 	}
-	for _, param := range []string{"reasoning", "reasoning.effort", "reasoning.context", "include", "tool_choice", "parallel_tool_calls"} {
+	for _, param := range []string{"reasoning", "reasoning.effort", "reasoning.context", "include", "tools", "tool_choice", "parallel_tool_calls"} {
 		body, err := json.Marshal(map[string]any{"error": map[string]string{"message": "unsupported value", "code": "unsupported_value", "param": param}})
 		if err != nil {
 			t.Fatal("synthetic diagnostic error did not encode")
