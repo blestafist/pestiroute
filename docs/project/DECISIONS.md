@@ -183,9 +183,8 @@ These accepted ADRs explain the existing constraints and establish the internal 
 
 ### DEC-011 — Opt-in Codex Responses Lite Text Profile
 
-- **Status:** Accepted for specification and independent review under the explicit
-  user authorization for GPT-6 Luna; implementation and live support remain
-  unverified.
+- **Status:** Accepted. Scoped offline gateway support is verified; live tool
+  behavior remains limited to the M5.1-044 direct evidence.
 - **Context:** The pinned official Codex source declares `gpt-6-luna` as using
   Responses Lite, while the existing standard Codex profile remains the default.
   The authorized direct Luna Lite capture `luna-7-completion.json` records HTTP
@@ -194,8 +193,10 @@ These accepted ADRs explain the existing constraints and establish the internal 
   by `ses_eeff1a4c6ffex6A3uqMCHiJXCp`. This is scoped direct evidence only, not
   gateway-pair or full M5.1-043 evidence. The earlier plain request omitting
   reasoning was rejected with field `reasoning.context`; that rejects the
-  omission, not the model. Tools and parallel tools remain `Unknown` for both
-  profiles; standard-profile reasoning remains `Unknown`.
+  omission, not the model. M5.1-044 directly verified one function tool
+  emission and a fresh two-request function roundtrip (HTTP 200/200); its
+  explicit parallel request was rejected (HTTP 400). This is narrow single
+  function evidence, not parallel support or a general entitlement claim.
 - **Decision:** Specify one opt-in connector profile, with the exact literal
   `codex-responses-http-sse-lite-v1`, selected only through the existing
   `componentConfig.Profile` setting. It is restricted to configured model
@@ -226,9 +227,15 @@ These accepted ADRs explain the existing constraints and establish the internal 
   `medium` default is not required and must not be substituted into that proof.
   A matched gateway pair is additionally required before publishing a working
   support claim for the route.
-  Until implementation and those checks are complete, no production reasoning
-  support is claimed. `llm.tools` and `llm.tools.parallel` remain `Unknown` on
-  both profiles; standard-profile `llm.reasoning` remains `Unknown`. No
+  `llm.tools: Supported` is permitted only for exact `openai.responses.v1` /
+  `native` / `gpt-6-luna` / configured account scope using client-owned single
+  function tools. Lite `additional_tools` admits direct function definitions
+  and the official `functions` namespace containing only function definitions.
+  Custom, hosted, other namespace and otherwise unproven tool kinds remain
+  rejected before provider send; this is not a global unsupported claim. A true
+  `parallel_tool_calls` requires `llm.tools.parallel`, which remains `Unknown`
+  in every Codex scope and is rejected before send. Standard-profile `llm.tools`
+  and `llm.reasoning` remain `Unknown`. No
   capability gate may be bypassed. The
   existing standard literal `codex-responses-http-sse-v1` and its default
   behavior remain unchanged.
@@ -236,15 +243,15 @@ These accepted ADRs explain the existing constraints and establish the internal 
   profile selection with routing); changing the standard profile (breaks its
   established default); normalizing arbitrary Responses bodies into a universal
   Lite shape (violates native opacity); and inferring production support from
-  direct-only evidence as proof of a working gateway route (insufficient).
+  direct-only evidence as proof of live gateway/provider behavior (insufficient).
 - **Compatibility / impact:** Additive, explicit configuration opt-in only.
   Existing standard-profile configurations and behavior are unchanged. No
-  credential format/storage, public API, internal contract, or capability
-  declaration changes. The new opt-in profile literal is additive; the existing
-  standard literal/default and its upstream header set are unchanged. Lite is
-  not claimed working or ready until separately implemented and tested; the
-  direct capture is not a
-  matched-pair acceptance and does not close M5.1-043.
+  credential format/storage, public API, or Core contract changes. The
+  profile-scoped declaration follows the existing exact-scope capability model.
+  The opt-in profile literal is additive; the existing standard literal/default
+  and its upstream header set are unchanged. Offline checks establish local
+  behavior only: no live gateway tool round was run, and this does not close
+  M5.1-043.
 - **Bounds and limitations:** The scoped smoke flow uses a 30-second deadline,
   1 MiB response-byte ceiling, and 256 UTF-8 output-text-byte client observation
   cap. These bound local observation only; they do not guarantee an upstream
@@ -255,7 +262,7 @@ These accepted ADRs explain the existing constraints and establish the internal 
   rejection of unsupported required semantics before send, and bounded
   incremental streaming. The direct artifact is limited to the exact model,
   profile, reasoning effort/context, and observed response; it does not establish
-  other Lite options, a gateway route, or M5.1-043 completion.
+  other Lite options, live gateway tool behavior, or M5.1-043 completion.
 
 ## Questions Before Implementation
 

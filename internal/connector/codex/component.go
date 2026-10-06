@@ -107,6 +107,7 @@ func (c *Connector) Capabilities(_ context.Context, scope core.CapabilityScope) 
 	}
 	if c.profile == liteProfile && scope.Mode == core.ModeNative && scope.Model == liteModel {
 		values["llm.reasoning"] = core.Supported
+		values["llm.tools"] = core.Supported
 	}
 	return core.CapabilityResult{Values: values}
 }

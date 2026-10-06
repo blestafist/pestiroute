@@ -90,7 +90,7 @@ func TestExecuteStreamingSingleSendAndOpaqueFrames(t *testing.T) {
 }
 
 func TestLiteExecutePreservesCallerBytesAndOwnsProfileHeader(t *testing.T) {
-	body := []byte(`{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[]},{"type":"reasoning","effort":"high","context":"all_turns","encrypted_content":"opaque"}],"stream":true,"store":false,"unknown":{"keep":true}}`)
+	body := []byte(`{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"without_parameters"},{"type":"function","name":"null_parameters","parameters":null}]},{"type":"reasoning","effort":"high","context":"all_turns","encrypted_content":"opaque"}],"stream":true,"store":false,"tool_choice":{"type":"function","name":"without_parameters"},"unknown":{"keep":true}}`)
 	var received []byte
 	var identity string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

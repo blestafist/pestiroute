@@ -130,13 +130,11 @@ func TestLiteProfileIsOptInAndScopeBound(t *testing.T) {
 	}
 	defer c.Close(t.Context())
 	got := c.Capabilities(t.Context(), core.CapabilityScope{Protocol: protocol, Mode: core.ModeNative, Model: liteModel, AccountID: "account-a"})
-	if got.State("llm.streaming") != core.Supported || got.State("llm.reasoning") != core.Supported {
+	if got.State("llm.streaming") != core.Supported || got.State("llm.reasoning") != core.Supported || got.State("llm.tools") != core.Supported {
 		t.Fatalf("Lite capabilities = %+v", got.Values)
 	}
-	for _, capability := range []core.Capability{"llm.tools", "llm.tools.parallel"} {
-		if got.State(capability) != core.Unknown {
-			t.Errorf("%s = %q, want unknown", capability, got.State(capability))
-		}
+	if got.State("llm.tools.parallel") != core.Unknown {
+		t.Errorf("llm.tools.parallel = %q, want unknown", got.State("llm.tools.parallel"))
 	}
 	for _, scope := range []core.CapabilityScope{
 		{Protocol: protocol, Mode: core.ModeTranslation, Model: liteModel, AccountID: "account-a"},
@@ -144,8 +142,8 @@ func TestLiteProfileIsOptInAndScopeBound(t *testing.T) {
 		{Protocol: protocol, Mode: core.ModeNative, Model: "other", AccountID: "account-a"},
 	} {
 		got := c.Capabilities(t.Context(), scope)
-		if got.State("llm.reasoning") != core.Unknown {
-			t.Errorf("out-of-scope reasoning = %q", got.State("llm.reasoning"))
+		if got.State("llm.reasoning") != core.Unknown || got.State("llm.tools") != core.Unknown {
+			t.Errorf("out-of-scope reasoning/tools = %q/%q", got.State("llm.reasoning"), got.State("llm.tools"))
 		}
 	}
 }

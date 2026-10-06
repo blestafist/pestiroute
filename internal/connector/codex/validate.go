@@ -82,18 +82,30 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 	}
 	toolNames := make(map[string]bool)
 	if raw, ok := fields["tools"]; ok {
-		var tools []struct {
-			Type string `json:"type"`
-			Name string `json:"name"`
+		if ge := collectFunctionToolNames(raw, toolNames, invalid, unsupported); ge != nil {
+			return ge
 		}
-		if json.Unmarshal(raw, &tools) != nil || tools == nil {
-			return invalid("Invalid Responses tools")
-		}
-		for _, tool := range tools {
-			if tool.Type != "function" {
-				return unsupported("Only function tools are supported")
+	}
+	if raw, ok := fields["input"]; ok {
+		var items []json.RawMessage
+		if json.Unmarshal(raw, &items) == nil {
+			for _, item := range items {
+				var value map[string]json.RawMessage
+				if json.Unmarshal(item, &value) != nil {
+					continue
+				}
+				var kind string
+				if json.Unmarshal(value["type"], &kind) != nil || kind != "additional_tools" {
+					continue
+				}
+				var role string
+				if json.Unmarshal(value["role"], &role) != nil || role != "developer" {
+					return invalid("Invalid additional_tools role")
+				}
+				if ge := collectFunctionToolNames(value["tools"], toolNames, invalid, unsupported); ge != nil {
+					return ge
+				}
 			}
-			toolNames[tool.Name] = true
 		}
 	}
 	if raw, ok := fields["tool_choice"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
@@ -120,7 +132,86 @@ func validateResponsesProfile(req core.ExecutionRequest, mode, configuredModel s
 		if json.Unmarshal(raw, &parallel) != nil {
 			return invalid("Invalid Responses parallel tool preference")
 		}
+		if parallel {
+			return unsupported("Parallel function calls are unsupported")
+		}
 	}
+	return nil
+}
+
+func collectFunctionToolNames(raw json.RawMessage, names map[string]bool, invalid, unsupported func(string) *core.GatewayError) *core.GatewayError {
+	var tools []json.RawMessage
+	if json.Unmarshal(raw, &tools) != nil || tools == nil {
+		return invalid("Invalid Responses tools")
+	}
+	for _, rawTool := range tools {
+		var tool map[string]json.RawMessage
+		if json.Unmarshal(rawTool, &tool) != nil || tool == nil {
+			return invalid("Invalid Responses tool definition")
+		}
+		var kind string
+		if json.Unmarshal(tool["type"], &kind) != nil || kind == "" {
+			return invalid("Invalid Responses tool type")
+		}
+		if kind == "namespace" {
+			var namespace string
+			if json.Unmarshal(tool["name"], &namespace) != nil || namespace == "" {
+				return invalid("Invalid Responses tool namespace")
+			}
+			if namespace != "functions" {
+				return unsupported("Only the functions tool namespace is supported")
+			}
+			if ge := collectNamespaceFunctionNames(tool["tools"], names, invalid, unsupported); ge != nil {
+				return ge
+			}
+			continue
+		}
+		if kind != "function" {
+			return unsupported("Only function tools are supported")
+		}
+		if ge := addFunctionToolName(tool, names, invalid); ge != nil {
+			return ge
+		}
+	}
+	return nil
+}
+
+func collectNamespaceFunctionNames(raw json.RawMessage, names map[string]bool, invalid, unsupported func(string) *core.GatewayError) *core.GatewayError {
+	var tools []json.RawMessage
+	if json.Unmarshal(raw, &tools) != nil || tools == nil {
+		return invalid("Invalid functions namespace tools")
+	}
+	for _, rawTool := range tools {
+		var tool map[string]json.RawMessage
+		var kind string
+		if json.Unmarshal(rawTool, &tool) != nil || tool == nil || json.Unmarshal(tool["type"], &kind) != nil || kind == "" {
+			return invalid("Invalid functions namespace tool")
+		}
+		if kind != "function" {
+			return unsupported("Only function tools are supported in the functions namespace")
+		}
+		if ge := addFunctionToolName(tool, names, invalid); ge != nil {
+			return ge
+		}
+	}
+	return nil
+}
+
+func addFunctionToolName(tool map[string]json.RawMessage, names map[string]bool, invalid func(string) *core.GatewayError) *core.GatewayError {
+	var name string
+	if json.Unmarshal(tool["name"], &name) != nil || strings.TrimSpace(name) == "" {
+		return invalid("Invalid function tool name")
+	}
+	if rawParameters, exists := tool["parameters"]; exists && !bytes.Equal(bytes.TrimSpace(rawParameters), []byte("null")) {
+		var parameters map[string]json.RawMessage
+		if json.Unmarshal(rawParameters, &parameters) != nil || parameters == nil {
+			return invalid("Invalid function tool parameters")
+		}
+	}
+	if names[name] {
+		return invalid("Duplicate function tool name")
+	}
+	names[name] = true
 	return nil
 }
 

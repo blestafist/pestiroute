@@ -27,15 +27,27 @@ func TestValidateResponsesProfile(t *testing.T) {
 	if ge := validateResponsesProfile(responsesValidationRequest(translation), core.ModeTranslation, "gpt-5.4-mini"); ge != nil {
 		t.Fatalf("translation defaults were not admitted: %#v", ge)
 	}
-	toolChoice := []byte(`{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"function","name":"lookup"}],"tool_choice":{"type":"function","name":"lookup"}}`)
+	toolChoice := []byte(`{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"lookup"}}`)
 	if ge := validateResponsesProfile(responsesValidationRequest(toolChoice), core.ModeNative, "gpt-5.4-mini"); ge != nil {
 		t.Fatalf("valid named function choice rejected: %#v", ge)
 	}
-	for _, parallel := range []string{"true", "false"} {
-		body := []byte(`{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"function","name":"lookup"}],"parallel_tool_calls":` + parallel + `}`)
+	for _, parallel := range []string{"false"} {
+		body := []byte(`{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"parallel_tool_calls":` + parallel + `}`)
 		if ge := validateResponsesProfile(responsesValidationRequest(body), core.ModeNative, "gpt-5.4-mini"); ge != nil {
 			t.Errorf("explicit parallel_tool_calls=%s rejected: %#v", parallel, ge)
 		}
+	}
+	liteFunction := `{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}],"stream":true,"store":false,"tool_choice":{"type":"function","name":"lookup"}}`
+	liteRequest := responsesValidationRequest([]byte(liteFunction))
+	liteRequest.Model = liteModel
+	if ge := validateResponsesProfile(liteRequest, core.ModeNative, liteModel); ge != nil {
+		t.Fatalf("direct Lite function tool rejected: %#v", ge)
+	}
+	liteNamespace := `{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","description":"","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}]}, {"type":"function_call_output","call_id":"c1","output":"done"}],"stream":true,"store":false,"tool_choice":{"type":"function","name":"lookup"}}`
+	liteNamespaceRequest := responsesValidationRequest([]byte(liteNamespace))
+	liteNamespaceRequest.Model = liteModel
+	if ge := validateResponsesProfile(liteNamespaceRequest, core.ModeNative, liteModel); ge != nil {
+		t.Fatalf("Lite functions namespace rejected: %s/%s", ge.Code, ge.Message)
 	}
 	connector := &Connector{state: core.HealthReady, model: "gpt-5.4-mini", accountID: "account"}
 	invalidRequest := responsesValidationRequest([]byte(`{"model":"gpt-5.4-mini","input":"x","stream":true,"store":true}`))
@@ -65,7 +77,14 @@ func TestValidateResponsesProfile(t *testing.T) {
 		{"output cap", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"max_output_tokens":4}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"tool type", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"web_search"}]}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"unknown tool choice", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tool_choice":"random"}`, core.ModeNative, core.CategoryUnsupportedFeature},
-		{"unknown named tool choice", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"function","name":"lookup"}],"tool_choice":{"type":"function","name":"missing"}}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"unknown named tool choice", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"missing"}}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"parallel tools", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"parallel_tool_calls":true}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"malformed additional tools role", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"user","tools":[]}],"stream":true,"store":false}`, core.ModeNative, core.CategoryInvalidRequest},
+		{"unsupported namespace", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"other","tools":[]}]}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"custom namespace tool", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"shell"}]}]}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"invalid function definition", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","parameters":{"type":"object"}}]}],"stream":true,"store":false}`, core.ModeNative, core.CategoryInvalidRequest},
+		{"array function parameters", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"lookup","parameters":[]}]}],"stream":true,"store":false}`, core.ModeNative, core.CategoryInvalidRequest},
+		{"scalar function parameters", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"lookup","parameters":"schema"}]}],"stream":true,"store":false}`, core.ModeNative, core.CategoryInvalidRequest},
 		{"invalid parallel tools", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"parallel_tool_calls":"true"}`, core.ModeNative, core.CategoryInvalidRequest},
 		{"resource item", `{"model":"gpt-5.4-mini","input":[{"type":"input_image","image_url":"secret"}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"model mismatch", `{"model":"other","input":"x","stream":true,"store":false}`, core.ModeNative, core.CategoryInvalidRequest},
@@ -78,7 +97,13 @@ func TestValidateResponsesProfile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			body := []byte(tc.body)
 			before := bytes.Clone(body)
-			ge := validateResponsesProfile(responsesValidationRequest(body), tc.mode, "gpt-5.4-mini")
+			requestModel, configuredModel := "gpt-5.4-mini", "gpt-5.4-mini"
+			if strings.Contains(tc.body, liteModel) {
+				requestModel, configuredModel = liteModel, liteModel
+			}
+			request := responsesValidationRequest(body)
+			request.Model = requestModel
+			ge := validateResponsesProfile(request, tc.mode, configuredModel)
 			if ge == nil || ge.Category != tc.category {
 				t.Fatalf("got %#v, want category %q", ge, tc.category)
 			}
