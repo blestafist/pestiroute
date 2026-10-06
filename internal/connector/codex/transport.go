@@ -29,6 +29,15 @@ func newHTTPTransport() (*http.Transport, *http.Client) {
 }
 
 func configureCodexTransport(transport *http.Transport) {
+	// Keep advertised ALPN aligned with the disabled HTTP/2 dispatcher; cloned
+	// transports may otherwise negotiate h2 and parse its frames as HTTP/1.
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	} else {
+		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	}
+	transport.TLSClientConfig.NextProtos = []string{"http/1.1"}
+
 	dialContext := transport.DialContext
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		dialCtx, cancel := context.WithTimeout(ctx, codexConnectTimeout)
@@ -42,7 +51,15 @@ func configureCodexTransport(transport *http.Transport) {
 		transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 			tlsCtx, cancel := context.WithTimeout(ctx, codexTLSHandshakeTimeout)
 			defer cancel()
-			return dialTLSContext(tlsCtx, network, address)
+			conn, err := dialTLSContext(tlsCtx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			if err := requireCodexHTTP1ALPN(conn); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			return conn, nil
 		}
 	}
 	transport.TLSHandshakeTimeout = codexTLSHandshakeTimeout
@@ -50,6 +67,20 @@ func configureCodexTransport(transport *http.Transport) {
 	transport.DisableCompression = true
 	transport.ForceAttemptHTTP2 = false
 	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+}
+
+// Custom TLS dialers own their ClientHello, so reject connections that did not
+// negotiate the HTTP/1.1 protocol required by this non-replayable transport.
+func requireCodexHTTP1ALPN(conn net.Conn) error {
+	tlsConn, ok := conn.(interface{ ConnectionState() tls.ConnectionState })
+	if !ok {
+		return errors.New("Codex TLS dialer cannot verify negotiated HTTP/1.1")
+	}
+	state := tlsConn.ConnectionState()
+	if !state.HandshakeComplete || state.NegotiatedProtocol != "http/1.1" {
+		return errors.New("Codex TLS dialer must negotiate HTTP/1.1")
+	}
+	return nil
 }
 
 // doCodexRequest preserves the runtime client's proxy/TLS policy while

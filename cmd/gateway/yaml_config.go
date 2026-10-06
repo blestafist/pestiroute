@@ -399,6 +399,9 @@ func validateProtectedConfig(c protectedConfig) error {
 					if connector.Settings.Model != route.Model || connector.Settings.AccountID != target.Account {
 						return fmt.Errorf("%s target %q does not match Codex model and account settings", prefix, target.Connector)
 					}
+					if connector.Settings.Profile == "codex-responses-http-sse-lite-v1" && route.Mode != "native" {
+						return fmt.Errorf("%s target %q Lite profile requires native mode", prefix, target.Connector)
+					}
 				} else if route.Mode == "translation" {
 					return fmt.Errorf("%s target %q implementation does not match translation mode", prefix, target.Connector)
 				}
@@ -446,8 +449,14 @@ func validateCodexSettings(prefix string, s nativeSettings) error {
 	if strings.TrimSpace(s.Model) == "" || strings.TrimSpace(s.AccountID) == "" {
 		return fmt.Errorf("%s requires non-empty model, account_id, and profile", prefix)
 	}
-	if s.Profile != "codex-responses-http-sse-v1" {
-		return fmt.Errorf("%s.profile must be codex-responses-http-sse-v1", prefix)
+	switch s.Profile {
+	case "codex-responses-http-sse-v1":
+	case "codex-responses-http-sse-lite-v1":
+		if s.Model != "gpt-6-luna" {
+			return fmt.Errorf("%s.profile codex-responses-http-sse-lite-v1 requires model gpt-6-luna", prefix)
+		}
+	default:
+		return fmt.Errorf("%s.profile must be codex-responses-http-sse-v1 or codex-responses-http-sse-lite-v1", prefix)
 	}
 	if s.BaseURL != "" || s.UpstreamProtocol != "" || s.Mode != "" || s.CredentialEnv != "" || s.CredentialID != "" || s.MaxRequestBodyBytes != 0 || s.MaxRequestHeaderBytes != 0 || s.ConnectTimeout != "" || s.TLSHandshakeTimeout != "" || s.ResponseHeaderTimeout != "" || s.StreamIdleTimeout != "" {
 		return fmt.Errorf("%s has fields not supported by Codex connector", prefix)

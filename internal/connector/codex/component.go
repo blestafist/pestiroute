@@ -19,6 +19,8 @@ const (
 	componentID = "pestiroute.codex.responses"
 	protocol    = "openai.responses.v1"
 	profile     = "codex-responses-http-sse-v1"
+	liteProfile = "codex-responses-http-sse-lite-v1"
+	liteModel   = "gpt-6-luna"
 )
 
 type componentConfig struct {
@@ -32,6 +34,7 @@ type Connector struct {
 	mu                sync.Mutex
 	model             string
 	accountID         string
+	profile           string
 	authURL           string
 	endpoint          string
 	transport         *http.Transport
@@ -76,10 +79,13 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 	if strings.TrimSpace(cfg.Model) == "" || strings.TrimSpace(cfg.AccountID) == "" {
 		return errors.New("Codex connector model and account_id are required")
 	}
-	if cfg.Profile != profile {
-		return fmt.Errorf("Codex connector profile must be %q", profile)
+	if cfg.Profile != profile && cfg.Profile != liteProfile {
+		return fmt.Errorf("Codex connector profile must be %q or %q", profile, liteProfile)
 	}
-	c.model, c.accountID = cfg.Model, cfg.AccountID
+	if cfg.Profile == liteProfile && cfg.Model != liteModel {
+		return fmt.Errorf("Codex Lite profile requires model %q", liteModel)
+	}
+	c.model, c.accountID, c.profile = cfg.Model, cfg.AccountID, cfg.Profile
 	c.state = core.HealthReady
 	return nil
 }
@@ -96,14 +102,18 @@ func (c *Connector) Capabilities(_ context.Context, scope core.CapabilityScope) 
 	if !c.matches(scope.Protocol, scope.Mode, scope.Model, scope.AccountID) {
 		return core.CapabilityResult{}
 	}
-	return core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{
+	values := map[core.Capability]core.CapabilityState{
 		"llm.streaming": core.Supported,
-	}}
+	}
+	if c.profile == liteProfile && scope.Mode == core.ModeNative && scope.Model == liteModel {
+		values["llm.reasoning"] = core.Supported
+	}
+	return core.CapabilityResult{Values: values}
 }
 
 func (c *Connector) matches(requestProtocol, mode, model, accountID string) bool {
 	return c.state == core.HealthReady && requestProtocol == protocol &&
-		(mode == core.ModeNative || mode == core.ModeTranslation) &&
+		(mode == core.ModeNative || (mode == core.ModeTranslation && c.profile != liteProfile)) &&
 		model == c.model && accountID == c.accountID
 }
 
@@ -139,8 +149,11 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		c.mu.Unlock()
 		return core.ExecutionResponse{}, connectorError("scope_mismatch", core.CategoryPermissionDenied, "Execution scope does not match configured target")
 	}
-	model, accountID, endpoint, client, idleTimeout := c.model, c.accountID, c.endpoint, c.client, c.streamIdleTimeout
+	model, accountID, selectedProfile, endpoint, client, idleTimeout := c.model, c.accountID, c.profile, c.endpoint, c.client, c.streamIdleTimeout
 	c.mu.Unlock()
+	if selectedProfile == liteProfile && scope.Mode != core.ModeNative {
+		return core.ExecutionResponse{}, connectorError("unsupported_mode", core.CategoryUnsupportedFeature, "Codex Lite profile requires native mode")
+	}
 	if ge := validateResponsesProfile(req, scope.Mode, model); ge != nil {
 		return core.ExecutionResponse{}, ge
 	}
@@ -165,6 +178,16 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	httpReq.GetBody = nil
 	httpReq.ContentLength = int64(len(body))
 	httpReq.Header = headers
+	if selectedProfile == liteProfile {
+		if applyLiteIdentity(httpReq.Header) != nil {
+			cancel()
+			return core.ExecutionResponse{}, connectorError("credential_unavailable", core.CategoryUnauthenticated, "Selected account credentials are unavailable")
+		}
+		if !codexHeadersWithinLimit(httpReq.Header) {
+			cancel()
+			return core.ExecutionResponse{}, connectorError("invalid_request", core.CategoryInvalidRequest, "Request headers exceed the profile limit")
+		}
+	}
 	doer := services.Transport
 	if doer == nil {
 		doer = client

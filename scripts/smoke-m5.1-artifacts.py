@@ -21,8 +21,10 @@ BAD_VALUE = re.compile(
     r"synthetic-(?:codex|client)-key)"
 )
 MODEL = "gpt-5.4-mini"
+PROFILE_MODELS = {"offline_fixture": {MODEL}, "subscription_codex": {MODEL, "gpt-6-luna"}}
 CLIENTS = {"Codex CLI", "OpenAI SDK", "Python http.client", "Go http.Client", "curl"}
 ROOT_KEYS = {"schema_version", "leg", "endpoint_profile", "captured_at_utc", "client", "model", "scenario", "fixture_id", "limits", "requests", "outcome", "observations"}
+# max_output_tokens in artifact metadata is the client-side observation cap, never a wire field.
 LIMIT_KEYS = {"timeout_seconds", "max_output_tokens", "client_runs"}
 REQUEST_KEYS = {"run", "attempt", "timeout_seconds", "max_output_tokens", "status", "stream", "api_path"}
 OBS_KEYS = {"early_delivery", "event_order", "tool_links", "usage", "target_dispatches", "retries", "client_status", "reasoning_observation"}
@@ -68,7 +70,9 @@ def load_inference(path, leg):
     require(type(data["schema_version"]) is int and data["schema_version"] == 1, "schema_version must be 1")
     require(data["leg"] == leg and type(data["endpoint_profile"]) is str and data["endpoint_profile"] in PROFILES, "invalid leg or endpoint profile")
     valid_stamp(data["captured_at_utc"])
-    require(data["model"] == MODEL and type(data["scenario"]) is str and data["scenario"] in SCENARIOS, "model or scenario mismatch")
+    require(data["model"] in PROFILE_MODELS[data["endpoint_profile"]] and type(data["scenario"]) is str and data["scenario"] in SCENARIOS, "model or scenario mismatch")
+    if data["model"] == "gpt-6-luna":
+        require(data["scenario"] == "plain_text", "Lite profile only permits the plain_text scenario")
     expected_fixture = "m51-" + data["scenario"].replace("_", "-") + "-v1"
     require(data["fixture_id"] == expected_fixture, "fixture_id must be the scenario's sanitized fixture label")
     client = data["client"]
@@ -86,12 +90,13 @@ def load_inference(path, leg):
         require(type(req["timeout_seconds"]) is int and 0 < req["timeout_seconds"] <= min(30, limits["timeout_seconds"]), "request timeout exceeds cap")
         require(type(req["max_output_tokens"]) is int and 0 < req["max_output_tokens"] <= limits["max_output_tokens"] <= 4096, "request token cap exceeded")
         require(type(req["status"]) is int and type(req["stream"]) is bool, "invalid request status/stream")
-        require(req["api_path"] == "/v1/responses", "invalid API path")
+        expected_path = "/backend-api/codex/responses" if leg == "direct_codex" else "/v1/responses"
+        require(req["api_path"] == expected_path, "invalid API path for leg")
         require(req["run"] not in runs, "duplicate client run")
         runs.add(req["run"])
     obs = data["observations"]
     require(type(obs) is dict and set(obs) == OBS_KEYS, "invalid observation fields")
-    event_types = {"response.created", "response.output_text.delta", "response.function_call_arguments.delta", "response.output_item.done", "response.completed"}
+    event_types = {"response.created", "response.in_progress", "response.output_item.added", "response.output_item.done", "response.content_part.added", "response.content_part.done", "response.output_text.delta", "response.output_text.done", "response.function_call_arguments.delta", "response.completed"}
     require(type(obs["early_delivery"]) is bool and type(obs["event_order"]) is list and all(type(x) is str and x in event_types for x in obs["event_order"]), "malformed event observations")
     require(type(obs["tool_links"]) is list and all(type(x) is str and re.fullmatch(r"(?:call|result_for_call)_\d+", x) for x in obs["tool_links"]), "invalid sanitized tool links")
     require(type(obs["usage"]) is str and obs["usage"] in {"reported", "unknown"}, "invalid usage observation")
@@ -112,8 +117,12 @@ def load_inference(path, leg):
             "two_rounds": [["response.created", "response.function_call_arguments.delta", "response.completed"], ["response.created", "response.function_call_arguments.delta", "response.completed"]],
             "encrypted_reasoning": [["response.created", "response.output_item.done", "response.completed"]],
         }
-        expected_events = [event for cycle in cycles[data["scenario"]] for event in cycle]
-        require(obs["event_order"] == expected_events, "event categories/order do not prove the declared scenario")
+        if data["model"] == "gpt-6-luna":
+            require(data["scenario"] == "plain_text" and obs["event_order"][0] == "response.created" and obs["event_order"][-1] == "response.completed" and "response.output_text.delta" in obs["event_order"] and "response.output_item.added" in obs["event_order"] and "response.output_item.done" in obs["event_order"] and obs["reasoning_observation"] == "encrypted_content_present_redacted", "Lite text pair lacks ordered reasoning and text evidence")
+            require(obs["usage"] == "reported", "Lite text pair requires reported usage")
+        else:
+            expected_events = [event for cycle in cycles[data["scenario"]] for event in cycle]
+            require(obs["event_order"] == expected_events, "event categories/order do not prove the declared scenario")
         require(len(data["requests"]) == len(cycles[data["scenario"]]) and [req["run"] for req in data["requests"]] == list(range(1, len(cycles[data["scenario"]]) + 1)), "scenario run count/order mismatch")
         expected_links = {
             "plain_text": [],
@@ -123,7 +132,7 @@ def load_inference(path, leg):
             "encrypted_reasoning": [],
         }[data["scenario"]]
         require(obs["tool_links"] == expected_links, "scenario requires complete ordered call/result links")
-        expected_reasoning = "encrypted_content_present_redacted" if data["scenario"] == "encrypted_reasoning" else "not_applicable"
+        expected_reasoning = "encrypted_content_present_redacted" if data["scenario"] == "encrypted_reasoning" or data["model"] == "gpt-6-luna" else "not_applicable"
         require(obs["reasoning_observation"] == expected_reasoning, "encrypted reasoning must be explicitly marked present but redacted")
     redact(data)
     return data
@@ -132,9 +141,11 @@ def load_inference(path, leg):
 def validate_pair(direct_path, gateway_path):
     direct = load_inference(direct_path, "direct_codex")
     gateway = load_inference(gateway_path, "gateway_responses_to_codex")
-    # Only leg identity and capture time legitimately differ between paired artifacts.
+    # Leg identity, capture time, and the documented direct/gateway paths differ.
     comparable_direct = {k: v for k, v in direct.items() if k not in {"leg", "captured_at_utc"}}
     comparable_gateway = {k: v for k, v in gateway.items() if k not in {"leg", "captured_at_utc"}}
+    for comparable in (comparable_direct, comparable_gateway):
+        comparable["requests"] = [{k: v for k, v in request.items() if k != "api_path"} for request in comparable["requests"]]
     require(comparable_direct == comparable_gateway, "paired artifacts differ in client, outcome, event order, tool links, usage, counters or limits")
     require(direct["observations"]["target_dispatches"] + gateway["observations"]["target_dispatches"] <= 4, "paired provider dispatch cap exceeded")
     print(f"PASS paired {direct['scenario']} fixture={direct['fixture_id']} direct/gateway schemas, limits, counters and redaction valid")
@@ -210,7 +221,9 @@ class Fake(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
-        if self.path != "/v1/responses" or request != {"model": MODEL, "stream": True, "max_output_tokens": 64} or leg not in {"direct_codex", "gateway_responses_to_codex"}:
+        expected_path = "/backend-api/codex/responses" if leg == "direct_codex" else "/v1/responses"
+        expected_request = {"model": MODEL, "stream": True, "store": False, "instructions": "", "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Reply with the word OK."}]}]}
+        if self.path != expected_path or request != expected_request or leg not in {"direct_codex", "gateway_responses_to_codex"}:
             self.send_error(400)
             return
         events = [b'event: response.created\ndata: {"type":"response.created"}\n\n', b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"ok"}\n\n', b'event: response.completed\ndata: {"type":"response.completed"}\n\n']
@@ -237,7 +250,9 @@ class Fake(http.server.BaseHTTPRequestHandler):
 
 def request_fixture(port, leg):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-    conn.request("POST", "/v1/responses", body=json.dumps({"model": MODEL, "stream": True, "max_output_tokens": 64}), headers={"Content-Type": "application/json", "X-Smoke-Leg": leg})
+    path = "/backend-api/codex/responses" if leg == "direct_codex" else "/v1/responses"
+    body = {"model": MODEL, "stream": True, "store": False, "instructions": "", "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Reply with the word OK."}]}]}
+    conn.request("POST", path, body=json.dumps(body), headers={"Content-Type": "application/json", "X-Smoke-Leg": leg})
     response = conn.getresponse()
     require(response.status == 200 and response.getheader("Content-Type") == "text/event-stream", "loopback SSE request failed")
     first = response.readline() + response.readline() + response.readline()
@@ -288,10 +303,11 @@ def self_test(outdir):
             conn.close()
             events = re.findall(rb"event: ([^\r\n]+)", first + rest)
             require(early and events == [b"response.created", b"response.output_text.delta", b"response.completed"], "incremental SSE/order invariant failed")
-            legs.append({"schema_version": 1, "leg": leg, "endpoint_profile": "offline_fixture", "captured_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "client": {"name": "Python http.client", "version": "3"}, "model": MODEL, "scenario": "plain_text", "fixture_id": "m51-plain-text-v1", "limits": {"timeout_seconds": 5, "max_output_tokens": 64, "client_runs": 1}, "requests": [{"run": 1, "attempt": 1, "timeout_seconds": 5, "max_output_tokens": 64, "status": 200, "stream": True, "api_path": "/v1/responses"}], "outcome": "completed", "observations": {"early_delivery": early, "event_order": [x.decode() for x in events], "tool_links": [], "usage": "reported", "target_dispatches": 1, "retries": 0, "client_status": 200, "reasoning_observation": "not_applicable"}})
+            api_path = "/backend-api/codex/responses" if leg == "direct_codex" else "/v1/responses"
+            legs.append({"schema_version": 1, "leg": leg, "endpoint_profile": "offline_fixture", "captured_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "client": {"name": "Python http.client", "version": "3"}, "model": MODEL, "scenario": "plain_text", "fixture_id": "m51-plain-text-v1", "limits": {"timeout_seconds": 5, "max_output_tokens": 64, "client_runs": 1}, "requests": [{"run": 1, "attempt": 1, "timeout_seconds": 5, "max_output_tokens": 64, "status": 200, "stream": True, "api_path": api_path}], "outcome": "completed", "observations": {"early_delivery": early, "event_order": [x.decode() for x in events], "tool_links": [], "usage": "reported", "target_dispatches": 1, "retries": 0, "client_status": 200, "reasoning_observation": "not_applicable"}})
             Fake.gate.clear()
             Fake.sent.clear()
-        require(len(Fake.hits) == 2 and [(hit[0], hit[2]) for hit in Fake.hits] == [("/v1/responses", leg) for leg in ("direct_codex", "gateway_responses_to_codex")], "direct/gateway SSE captures were not independently counted")
+        require(len(Fake.hits) == 2 and [(hit[0], hit[2]) for hit in Fake.hits] == [("/backend-api/codex/responses", "direct_codex"), ("/v1/responses", "gateway_responses_to_codex")], "direct/gateway SSE captures were not independently counted")
         for artifact, name in zip(legs, ("direct.json", "gateway.json")):
             path = outdir / name
             path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
@@ -306,6 +322,33 @@ def self_test(outdir):
         auth_path.write_text(json.dumps(auth, indent=2) + "\n", encoding="utf-8")
         auth_path.chmod(0o600)
         validate_pair(outdir / "direct.json", outdir / "gateway.json")
+        lite_legs = []
+        for leg in legs:
+            lite = json.loads(json.dumps(leg))
+            lite["endpoint_profile"] = "subscription_codex"
+            lite["model"] = "gpt-6-luna"
+            lite["observations"]["event_order"] = ["response.created", "response.output_item.added", "response.output_text.delta", "response.output_item.done", "response.completed"]
+            lite["observations"]["reasoning_observation"] = "encrypted_content_present_redacted"
+            lite_legs.append(lite)
+        lite_direct, lite_gateway = outdir / "lite-direct.json", outdir / "lite-gateway.json"
+        lite_direct.write_text(json.dumps(lite_legs[0]), encoding="utf-8")
+        lite_gateway.write_text(json.dumps(lite_legs[1]), encoding="utf-8")
+        validate_pair(lite_direct, lite_gateway)
+        bad_usage = json.loads(lite_direct.read_text())
+        bad_usage["observations"]["usage"] = "unknown"
+        bad_usage_path = outdir / "lite-usage-unknown.json"
+        bad_usage_path.write_text(json.dumps(bad_usage), encoding="utf-8")
+        must_reject(lambda: load_inference(bad_usage_path, "direct_codex"), "Lite pair with unknown usage")
+        bad_usage["observations"].pop("usage")
+        bad_usage_path.write_text(json.dumps(bad_usage), encoding="utf-8")
+        must_reject(lambda: load_inference(bad_usage_path, "direct_codex"), "Lite pair with absent usage")
+        bad_lite = json.loads(lite_direct.read_text())
+        bad_lite_path = outdir / "lite-tool-scenario.json"
+        bad_lite["scenario"] = "single_tool"
+        bad_lite["fixture_id"] = "m51-single-tool-v1"
+        bad_lite["observations"].update({"event_order": ["response.created", "response.function_call_arguments.delta", "response.completed"], "tool_links": ["call_1", "result_for_call_1"]})
+        bad_lite_path.write_text(json.dumps(bad_lite), encoding="utf-8")
+        must_reject(lambda: validate_pair(bad_lite_path, lite_gateway), "Lite profile with non-text scenario")
         validate_auth(auth_path)
         gateway_auth = {
             **{key: value for key, value in auth.items() if key != "artifacts"},
@@ -332,7 +375,8 @@ def self_test(outdir):
                 artifact["fixture_id"] = "m51-" + scenario.replace("_", "-") + "-v1"
                 artifact["observations"].update({"event_order": [event for cycle in cycles for event in cycle], "tool_links": links, "target_dispatches": request_count, "reasoning_observation": reasoning})
                 artifact["limits"]["client_runs"] = request_count
-                artifact["requests"] = [{"run": run, "attempt": 1, "timeout_seconds": 5, "max_output_tokens": 64, "status": 200, "stream": True, "api_path": "/v1/responses"} for run in range(1, request_count + 1)]
+                api_path = "/backend-api/codex/responses" if artifact["leg"] == "direct_codex" else "/v1/responses"
+                artifact["requests"] = [{"run": run, "attempt": 1, "timeout_seconds": 5, "max_output_tokens": 64, "status": 200, "stream": True, "api_path": api_path} for run in range(1, request_count + 1)]
             direct_path, gateway_path = outdir / f"{scenario}-direct.json", outdir / f"{scenario}-gateway.json"
             direct_path.write_text(json.dumps(direct), encoding="utf-8")
             gateway_path.write_text(json.dumps(gateway), encoding="utf-8")

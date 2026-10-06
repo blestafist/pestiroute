@@ -33,6 +33,20 @@ Protected YAML describes the listener, connector instances, routes, per-route es
 
 The detailed entity keys, relations, migrations, durable accounting boundary, and crash recovery policy are specified in [M3-STORAGE.md](M3-STORAGE.md).
 
+The Codex Connector's existing `componentConfig.Profile` accepts the standard
+`codex-responses-http-sse-v1` profile by default. The opt-in
+`codex-responses-http-sse-lite-v1` profile is specified only for configured
+model `gpt-6-luna` and the bounded plain-text smoke flow; it does not change the
+standard profile or credential configuration. Protected configuration rejects
+other models and non-native routes. Lite advertises `llm.reasoning: Supported`
+only at its exact native protocol/model/account scope after offline
+byte-preservation tests and the reviewed direct evidence; tools/parallel and
+standard-profile reasoning remain `Unknown`. No working gateway route is
+claimed until a matched pair is reviewed. See [DEC-011](../project/DECISIONS.md#dec-011--opt-in-codex-responses-lite-text-profile) and the [M5.1 binding](M5.1-BINDING.md#opt-in-responses-lite-text-profile-dec-011).
+Lite-only originator, honest user-agent, and per-attempt correlation UUIDs are
+Connector-generated ephemeral headers, not persisted sessions; client spoofing
+is suppressed and the standard profile's header set stays unchanged.
+
 Hot reload is not required for the initial MVP. Configuration is applied in full at startup; administrative operations on keys and accounts use storage and runtime services. The initial management interface is local CLI commands; a separate admin API may be added later.
 
 ## Proposed YAML

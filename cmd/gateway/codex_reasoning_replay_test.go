@@ -23,14 +23,6 @@ import (
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
-type codexReasoningTestConnector struct{ codexCompositionConnector }
-
-func (codexReasoningTestConnector) Capabilities(context.Context, core.CapabilityScope) core.CapabilityResult {
-	return core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{
-		"llm.streaming": core.Supported, "llm.reasoning": core.Supported,
-	}}
-}
-
 func TestCodexEncryptedReasoningAndHistoryReplay(t *testing.T) {
 	_, dbPath, keyPath := protectedFixture(t)
 	ctx := context.Background()
@@ -38,7 +30,7 @@ func TestCodexEncryptedReasoningAndHistoryReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const accountID, connectorID, model = "reasoning-account", "codex-reasoning", "reasoning-model"
+	const accountID, connectorID, model, liteModel = "reasoning-account", "codex-reasoning", "reasoning-model", "gpt-6-luna"
 	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: connectorID, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +51,7 @@ func TestCodexEncryptedReasoningAndHistoryReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err = sqlite.NewKeyPolicies(db).Update(ctx, policy.ID, policy.Revision, sqlite.UpdateKeyPolicyParams{Enabled: true, Models: []string{model, "model-a"}, Connectors: []string{connectorID, "upstream"}, RPM: 20, TPM: 10000})
+	policy, err = sqlite.NewKeyPolicies(db).Update(ctx, policy.ID, policy.Revision, sqlite.UpdateKeyPolicyParams{Enabled: true, Models: []string{model, liteModel, "model-a"}, Connectors: []string{connectorID, "upstream"}, RPM: 20, TPM: 10000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,10 +74,13 @@ func TestCodexEncryptedReasoningAndHistoryReplay(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer "+codexTestJWT(accountID) || r.Header.Get("ChatGPT-Account-Id") != accountID {
 			t.Errorf("Codex credential scope mismatch")
 		}
+		if r.Header.Get("x-openai-internal-codex-responses-lite") != "true" {
+			t.Errorf("trusted Lite header missing")
+		}
 		sends.Add(1)
 		requests <- body
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":8,\"output_tokens\":2}}}\n\n")
+		_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\",\"id\":\"rs_synthetic\",\"encrypted_content\":\"synthetic-ciphertext\"}}\n\nevent: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"id\":\"rs_synthetic\",\"encrypted_content\":\"synthetic-ciphertext\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":8,\"output_tokens\":2,\"output_tokens_details\":{\"reasoning_tokens\":1}}}}\n\n")
 	}))
 	defer backend.Close()
 	addr := backend.Listener.Addr().String()
@@ -101,7 +96,7 @@ func TestCodexEncryptedReasoningAndHistoryReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newHandler := func(testReasoning bool) (http.Handler, func()) {
+	newHandler := func() (http.Handler, func()) {
 		ready, draining := atomic.Bool{}, atomic.Bool{}
 		ready.Store(true)
 		h, closeComponents, err := composeHandlerWithFactory(prepared, &ready, &draining, nil, func(item topologyComponent) core.Component {
@@ -110,9 +105,6 @@ func TestCodexEncryptedReasoningAndHistoryReplay(t *testing.T) {
 			}
 			if item.Implementation == "pestiroute.codex.responses" {
 				c := codexCompositionConnector{Connector: codex.NewConnector(), doer: doer}
-				if testReasoning {
-					return codexReasoningTestConnector{c}
-				}
 				return c
 			}
 			return responses.NewConnector()
@@ -141,7 +133,7 @@ func TestCodexEncryptedReasoningAndHistoryReplay(t *testing.T) {
 		return resp
 	}
 
-	productionHandler, closeProduction := newHandler(false)
+	productionHandler, closeProduction := newHandler()
 	production := httptest.NewServer(productionHandler)
 	defer production.Close()
 	resp := post(production, "{"+modelPrefix+reasoning+"}")
@@ -152,17 +144,22 @@ func TestCodexEncryptedReasoningAndHistoryReplay(t *testing.T) {
 		t.Fatalf("production reasoning request status=%d sends=%d body=%s; want Unknown capability rejection before send", resp.StatusCode, sends.Load(), productionBody)
 	}
 	closeProduction()
+	p.Connectors[len(p.Connectors)-1].Settings.Profile = "codex-responses-http-sse-lite-v1"
+	p.Connectors[len(p.Connectors)-1].Settings.Model = liteModel
+	p.Routes[len(p.Routes)-1].Model = liteModel
 	prepared, err = prepareProtectedConfig(ctx, config{protected: p, DatabasePath: dbPath, MasterKeyFile: keyPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	h, closeTest := newHandler(true)
+	h, closeTest := newHandler()
 	t.Cleanup(closeTest)
 	gateway := httptest.NewServer(h)
 	defer gateway.Close()
-	first := "{" + modelPrefix + reasoning + "}"
-	second := "{" + modelPrefix + `"instructions":"Initial instruction.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Begin."}]},{"type":"message","role":"developer","phase":"commentary","content":[{"type":"input_text","text":"Update one."}],"extension":{"v":1}},{"type":"reasoning","id":"rs_opaque","summary":[{"type":"summary_text","text":"Fragment one."},{"type":"summary_text","text":"Fragment two."}],"encrypted_content":"ciphertext/opaque+==","vendor_extension":{"keep":[1,2]}},{"type":"message","role":"developer","phase":"final_approval","content":[{"type":"input_text","text":"Update two."}],"future_field":"preserve"},{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue."}]}]}`
+	litePrefix := `"model":"gpt-6-luna","stream":true,"store":false,"reasoning":{"effort":"high","context":"all_turns"},`
+	liteInput := `"instructions":"Initial instruction.","input":[{"type":"additional_tools","tools":[]},{"type":"message","role":"user","content":[{"type":"input_text","text":"Begin."}]},{"type":"message","role":"developer","phase":"commentary","content":[{"type":"input_text","text":"Update one."}],"extension":{"v":1}},{"type":"reasoning","id":"rs_opaque","summary":[{"type":"summary_text","text":"Fragment one."},{"type":"summary_text","text":"Fragment two."}],"encrypted_content":"ciphertext/opaque+==","vendor_extension":{"keep":[1,2]}},{"type":"message","role":"developer","phase":"final_approval","content":[{"type":"input_text","text":"Update two."}],"future_field":"preserve"}`
+	first := "{" + litePrefix + liteInput + "]}"
+	second := "{" + litePrefix + liteInput + `,{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue."}]}]}`
 	for i, body := range []string{first, second} {
 		response := post(gateway, body)
 		responseBody, _ := io.ReadAll(response.Body)
@@ -170,7 +167,21 @@ func TestCodexEncryptedReasoningAndHistoryReplay(t *testing.T) {
 		if response.StatusCode != http.StatusOK {
 			t.Fatalf("round %d status=%d body=%s", i+1, response.StatusCode, responseBody)
 		}
+		if !bytes.Contains(responseBody, []byte(`"encrypted_content":"synthetic-ciphertext"`)) || !bytes.Contains(responseBody, []byte(`"reasoning_tokens":1`)) {
+			t.Fatalf("round %d reasoning item or separate usage metadata was not preserved: %s", i+1, responseBody)
+		}
+		previous := -1
+		for _, event := range []string{"response.created", "response.output_item.added", "response.output_item.done", "response.completed"} {
+			position := strings.Index(string(responseBody), "event: "+event)
+			if position <= previous {
+				t.Fatalf("round %d missing or reordered event %s", i+1, event)
+			}
+			previous = position
+		}
 		got := <-requests
+		if !bytes.Equal(got, []byte(body)) {
+			t.Fatalf("round %d native request bytes changed: got %s want %s", i+1, got, body)
+		}
 		var want, upstream struct {
 			Instructions string            `json:"instructions"`
 			Input        []json.RawMessage `json:"input"`

@@ -181,6 +181,82 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Acceptance condition:** Satisfied by planner arbitration assigning M5.1-003 to resolve this semantic gap and explicitly authorizing DEC-010 acceptance and specification synchronization.
 - **Verification:** M5.1-003 paper-walked bundle opacity, trusted expiry provenance, nil compatibility, atomic CAS/expiry behavior, and stale/ambiguous refresh handling; synchronized CONTRACT, M3-AUTH, and M5.1-BINDING. Local offline checks require no live provider call.
 
+### DEC-011 — Opt-in Codex Responses Lite Text Profile
+
+- **Status:** Accepted for specification and independent review under the explicit
+  user authorization for GPT-6 Luna; implementation and live support remain
+  unverified.
+- **Context:** The pinned official Codex source declares `gpt-6-luna` as using
+  Responses Lite, while the existing standard Codex profile remains the default.
+  The authorized direct Luna Lite capture `luna-7-completion.json` records HTTP
+  200, completed stream drained to EOF, one reasoning item, and 27 reasoning
+  tokens with `effort: high` and `context: all_turns`; reviewer PASS is recorded
+  by `ses_eeff1a4c6ffex6A3uqMCHiJXCp`. This is scoped direct evidence only, not
+  gateway-pair or full M5.1-043 evidence. The earlier plain request omitting
+  reasoning was rejected with field `reasoning.context`; that rejects the
+  omission, not the model. Tools and parallel tools remain `Unknown` for both
+  profiles; standard-profile reasoning remains `Unknown`.
+- **Decision:** Specify one opt-in connector profile, with the exact literal
+  `codex-responses-http-sse-lite-v1`, selected only through the existing
+  `componentConfig.Profile` setting. It is restricted to configured model
+  `gpt-6-luna` and the `plain_text` scenario. The Connector adds exactly
+  `x-openai-internal-codex-responses-lite: true` from trusted profile
+  configuration; caller headers cannot select or override it. It uses scoped
+  credentials and native Responses payload bytes. For this opt-in profile only,
+  the Connector sends honest identity metadata `originator: pestiroute` and
+  `User-Agent: PestiRoute` (no official-client or version impersonation), plus
+  one fresh random UUID per attempt reused as `session-id`, `thread-id`, and
+  `x-client-request-id`. These values are ephemeral request correlation only;
+  they do not create persistent conversations or a Core session API. Suppress
+  caller-supplied Lite, originator, user-agent, and correlation-header values,
+  including case variants; Lite selection comes from trusted configuration and
+  account authentication remains solely scoped-credential-derived. Never log
+  the UUID or raw header values. This matches the known successful direct
+  identity shape as a compatibility recipe, not a proven provider requirement;
+  the later paired-runner mismatch does not establish that missing headers
+  caused its unknown 400. No Adapter/Core API growth,
+  automatic Lite conversion, or caller-controlled profile/header. The caller
+  forms the Lite-shaped body, including its `additional_tools` prefix and
+  `reasoning.context: all_turns`; the Connector preserves it byte-for-byte.
+  Non-native modes and all other profile/model combinations reject Lite
+  selection. The
+  Lite profile may declare `llm.reasoning: Supported` only after verified
+  direct evidence and offline profile-scoped passthrough, ordering, and usage
+  tests. The captured direct proof used `effort: high`; the official catalog's
+  `medium` default is not required and must not be substituted into that proof.
+  A matched gateway pair is additionally required before publishing a working
+  support claim for the route.
+  Until implementation and those checks are complete, no production reasoning
+  support is claimed. `llm.tools` and `llm.tools.parallel` remain `Unknown` on
+  both profiles; standard-profile `llm.reasoning` remains `Unknown`. No
+  capability gate may be bypassed. The
+  existing standard literal `codex-responses-http-sse-v1` and its default
+  behavior remain unchanged.
+- **Alternatives rejected:** Silently selecting Lite from a model name (mixes
+  profile selection with routing); changing the standard profile (breaks its
+  established default); normalizing arbitrary Responses bodies into a universal
+  Lite shape (violates native opacity); and inferring production support from
+  direct-only evidence as proof of a working gateway route (insufficient).
+- **Compatibility / impact:** Additive, explicit configuration opt-in only.
+  Existing standard-profile configurations and behavior are unchanged. No
+  credential format/storage, public API, internal contract, or capability
+  declaration changes. The new opt-in profile literal is additive; the existing
+  standard literal/default and its upstream header set are unchanged. Lite is
+  not claimed working or ready until separately implemented and tested; the
+  direct capture is not a
+  matched-pair acceptance and does not close M5.1-043.
+- **Bounds and limitations:** The scoped smoke flow uses a 30-second deadline,
+  1 MiB response-byte ceiling, and 256 UTF-8 output-text-byte client observation
+  cap. These bound local observation only; they do not guarantee an upstream
+  generation/billing ceiling or server-side cap.
+- **Verification:** Independently review source-pinned profile behavior and
+  synchronized M5.1 binding/configuration/smoke text. Before implementation
+  claims, verify exact header isolation, byte-preserving native request behavior,
+  rejection of unsupported required semantics before send, and bounded
+  incremental streaming. The direct artifact is limited to the exact model,
+  profile, reasoning effort/context, and observed response; it does not establish
+  other Lite options, a gateway route, or M5.1-043 completion.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |

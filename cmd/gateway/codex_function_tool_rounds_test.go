@@ -179,6 +179,27 @@ func TestCodexFunctionToolRoundsClientOwnedHistory(t *testing.T) {
 	if json.Unmarshal(productionBody, &productionResult) != nil || productionResponse.StatusCode != http.StatusBadRequest || productionResult.Error.Code != "unsupported_capability" || productionCalls.Load() != 0 {
 		t.Fatalf("production Codex parallel request status=%d code=%q upstream sends=%d, want Unknown rejection before send", productionResponse.StatusCode, productionResult.Error.Code, productionCalls.Load())
 	}
+	toolOnly, err := http.NewRequest(http.MethodPost, productionGateway.URL+"/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":%q,"stream":true,"store":false,"tools":[{"type":"function","name":"lookup"}],"input":"Require a tool."}`, model)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolOnly.Header.Set("Authorization", "Bearer "+issued.Secret)
+	toolOnly.Header.Set("Content-Type", "application/json")
+	productionProbe.Store(true)
+	toolResponse, err := productionGateway.Client().Do(toolOnly)
+	if err != nil {
+		t.Fatal("tool-only capability probe failed")
+	}
+	toolBody, _ := io.ReadAll(toolResponse.Body)
+	_ = toolResponse.Body.Close()
+	var toolResult struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(toolBody, &toolResult) != nil || toolResponse.StatusCode != http.StatusBadRequest || toolResult.Error.Code != "unsupported_capability" || productionCalls.Load() != 0 {
+		t.Fatalf("production Codex tool request status=%d code=%q upstream sends=%d, want Unknown rejection before send", toolResponse.StatusCode, toolResult.Error.Code, productionCalls.Load())
+	}
 	productionProbe.Store(false)
 	productionGateway.Close()
 	if err := closeProduction(context.Background()); err != nil {

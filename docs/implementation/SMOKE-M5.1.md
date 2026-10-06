@@ -15,12 +15,12 @@ Normative context: [candidate profile and dialect policy](M5.1-BINDING.md#candid
   both legs; if unavailable, stop and revise/review this procedure rather than
   silently substituting a client. Record `python3 --version` and the gateway
   source revision (`git rev-parse HEAD`) in sanitized run notes.
-- Request profile: standard, non-Lite HTTP/SSE Responses profile
-  `codex-responses-http-sse-v1` (`openai.responses.v1`); no Lite, WebSocket,
-  hosted tools, or compatible endpoint. The gateway route uses
-  `profile: codex-responses-http-sse-v1`, native mode, and configured model
-  `gpt-5.4-mini`.
-- Model: exact `gpt-5.4-mini`; do not substitute another catalog result.
+- Request profile: opt-in Lite HTTP/SSE Responses profile
+  `codex-responses-http-sse-lite-v1` (`openai.responses.v1`); no WebSocket,
+  hosted tools, or compatible endpoint. The gateway route uses this exact
+  profile, native mode, and configured model `gpt-6-luna`. The existing standard
+  `codex-responses-http-sse-v1` profile remains the default and is not changed.
+- Model: exact `gpt-6-luna`; do not substitute another catalog result.
 - Account: one operator-selected, eligible ChatGPT subscription account. Record
   only a local alias (for example `selected-A`), never its ID, email, token, or
   private account metadata. Direct and gateway must use this same account.
@@ -28,12 +28,28 @@ Normative context: [candidate profile and dialect policy](M5.1-BINDING.md#candid
   Gateway inference URL: the configured local listener at `/v1/responses`,
   routed to that same Codex profile/account. Auth legs use the configured Codex
   device-auth flow through the official auth endpoint, not inference.
-- Direct upstream header names: `Authorization: Bearer <selected-account OAuth
+- Lite flag: the gateway Connector injects exactly
+  `x-openai-internal-codex-responses-lite: true` from trusted profile config;
+  the direct harness sends the same fixed flag for parity. Caller values,
+  including case variants, cannot select or override it. For Lite only, both
+  legs use honest `originator: pestiroute` and `User-Agent: PestiRoute` values,
+  not an official client identity or version. Generate a fresh random UUID per
+  attempt and place the same UUID in `session-id`, `thread-id`, and
+  `x-client-request-id`. These are ephemeral request-correlation labels, not
+  persistent sessions or a Core session capability. Suppress caller-supplied
+  identity/correlation values including case variants; never log their values.
+  Direct upstream header names also include `Authorization: Bearer <selected-account OAuth
   access token>` and `ChatGPT-Account-Id: <selected account ID>`. The gateway
   client sends only `Authorization: Bearer <gateway virtual key>`; the gateway
   constructs the two selected-account upstream headers from its scoped
   credential. Never copy upstream credentials into the gateway client request
   or record either value.
+  These additional identity headers align the direct and gateway legs to the
+  known successful direct recipe, but their necessity is unproven. The paired
+  runner's omission does not establish the cause of its HTTP 400; provider reason
+  remains unknown. Standard-profile headers stay unchanged. Record only actual
+  harness/runtime versions; never infer or fabricate Codex-client/provider
+  versions from these headers.
 
 Before any later live authorization, confirm the operator has authorized the
 selected account and bounded requests, the subscription can incur the expected
@@ -44,19 +60,24 @@ No production claim or feature admission follows from this procedure.
 ## Bounds and non-negotiable stops
 
 Run one fresh, disposable client session per scenario, at most two client
-requests per leg (four total paired backend dispatches per scenario), one
-attempt per request, and a 30-second wall-clock deadline per request. Cancel the
-client and stop the leg on deadline or 1 MiB received response bytes. Enforce
+requests per leg, one attempt per request, and a 30-second wall-clock deadline
+per request. Cancel the client and stop the leg on deadline, 1 MiB received
+response bytes, or the client-side output-text safety limit. Enforce
 the byte ceiling in the CPython reader by counting every response-body byte
 before parsing; read no more than the remaining allowance plus one sentinel
 byte. At the first byte over the cap or deadline, close the response and
 connection, record the bound hit in run notes, and stop that scenario. Do not
-reconnect or replay the request. This operator-enforced ceiling is run-note
-evidence only; do not add it to M5.1-038's artifact schema. Use
-`stream:true`, `store:false`, and `max_output_tokens:256` only as the standard
-Responses request field; the independent time/byte/client-run bounds remain in
-force if an upstream ignores the token ceiling. Do not add dialect-specific
-fallback fields. A 4xx (including rejection of the profile, model, or any
+reconnect or replay the request. Use `stream:true` and `store:false`; the
+subscription backend rejects `max_output_tokens`, so omit it from every wire
+request. The artifact's `max_output_tokens` metadata records only the client's
+output-text safety setting, not a request field or backend-enforced limit. The
+client conservatively cancels after at most 256 UTF-8 output-text bytes (or a
+smaller explicitly selected text limit); this byte-count ceiling is the safe
+upper-bound estimator for observed output tokens, not a bound on provider
+generation or billing. The task's maximum configured client-side target is
+4096; do not claim that the backend honored it. The independent time and full
+response-byte bounds remain in force. Do not add dialect-specific fallback
+fields. A 4xx (including rejection of the profile, model, or any
 option), redirect, timeout, unexpected status, malformed SSE, or bound hit ends
 that scenario: no second attempt, payload weakening, Lite switch, API-base
 change, retrying SDK, or alternate/account fallback. Never auto-retry an
@@ -105,14 +126,52 @@ harmless synthetic text only. Do not compare generated prose across independent
 model runs. The client returns only synthetic tool results; the gateway never
 executes tools. Record no prompts, arguments, headers, or raw bodies.
 
-Use this fixed common request envelope (changing only the scenario's `input`
-and declared tool fields). Direct POST path is `/backend-api/codex/responses`;
-gateway client POST path is `/v1/responses`. Both use the same static options
-and text input:
+This DEC-011 smoke scope is the matched `plain_text` request only. It does not
+run tool or parallel-tool scenarios under Lite; keep `llm.tools` and
+`llm.tools.parallel` `Unknown` for both profiles and reject requests requiring
+them before dispatch. The Lite body retains `reasoning.context: all_turns`;
+the direct proof used `reasoning.effort: high`. Standard-profile reasoning
+remains `Unknown`. Direct POST path is
+`/backend-api/codex/responses`; gateway client POST path is `/v1/responses`.
+Both legs use the same native Responses body, without Lite conversion.
+`max_output_tokens` is deliberately absent:
+
+The caller forms the Lite-shaped body, including its `additional_tools` input
+prefix and any instruction items in `input` where applicable; the Connector
+does not synthesize, move, or strip these fields. The old preflight that omitted
+reasoning was rejected with field `reasoning.context`; this does not show the
+model is unsupported. The later sanitized direct capture
+`/tmp/opencode/pestiroute-live-evidence/luna-7-completion.json` records HTTP 200,
+completed through EOF, one reasoning item, and 27 reasoning tokens, with effort
+`high` and context `all_turns` (reviewer PASS `ses_eeff1a4c6ffex6A3uqMCHiJXCp`).
+The official catalog default is medium, but high is the observed proof setting;
+do not substitute a different effort into that evidence. This remains direct
+evidence only.
 
 ```json
-{"model":"gpt-5.4-mini","stream":true,"store":false,"max_output_tokens":256,"input":"Reply with the word OK."}
+{"model":"gpt-6-luna","stream":true,"store":false,"instructions":"","reasoning":{"effort":"high","context":"all_turns"},"include":["reasoning.encrypted_content"],"input":[{"type":"additional_tools","id":"at_<caller-formed-uuid>","role":"developer","tools":[]},{"type":"message","role":"user","content":[{"type":"input_text","text":"What is 137 × 293? Reply with only the number."}]}],"tool_choice":"auto","parallel_tool_calls":false}
 ```
+
+This pair body includes the selected reasoning fields and caller-formed
+`additional_tools` UUID prefix; it also explicitly sets automatic tool choice
+and disables parallel tool calls. It has no top-level tools. Choose the
+caller-owned prefix value once and send the exact same constant request body in
+both legs; it is distinct from each leg's fresh header-correlation UUID. The
+Connector must forward the caller's body byte-for-byte. For each leg, share that
+attempt's one UUID across its three correlation headers, but generate separate
+UUIDs for the separate direct and gateway attempts. Do not enable gateway admission by bypassing the current
+`Unknown` capability gate: first verify direct evidence plus offline scoped
+passthrough, event-order, and usage tests before declaring Lite
+`llm.reasoning: Supported`. A matched gateway pair is still required to claim
+a working route; until then, publish no Lite route support claim. This does not
+close M5.1-043.
+
+The artifact validator retains the existing `subscription_codex` profile and
+accepts its existing `gpt-5.4-mini` artifacts plus the DEC-011 `gpt-6-luna`
+plain-text pair without changing the strict artifact field schema. Luna Lite is
+limited to `plain_text`; other scenarios are rejected. This schema support and
+offline implementation do not constitute paired live evidence or a working-route
+claim. Do not fabricate or relabel artifacts.
 
 For tool scenarios use this harmless tool definition and the exact synthetic
 instructions below; parallel preservation adds the explicit
@@ -153,23 +212,23 @@ Return only `{"marker":"synthetic-alpha"}` or
 history. Do not add a second call if the model emits one; the paired artifacts
 describe observed calls, not intended calls.
 
-1. **Text:** `Reply with the word OK.` Compare status, first-event delivery before
+1. **Text (only DEC-011 Lite scenario):** `Reply with the word OK.` Compare status, first-event delivery before
    completion, ordered SSE event categories, terminal outcome, usage presence,
    and actual dispatch count.
-2. **Function round:** production `llm.tools` is `Unknown`; expect gateway HTTP
+2. **Function round (out of this Lite scope):** production `llm.tools` is `Unknown`; expect gateway HTTP
    400 `unsupported_capability` before dispatch and zero upstream dispatches. Record
    sanitized error/status plus trusted zero-dispatch evidence. A separately
    authorized direct probe can use the instruction and history shapes above;
    compare call/result identity and order there only. Do not claim a successful
    paired gateway round or enable production tools.
-3. **Parallel preservation:** production `llm.tools` and
+3. **Parallel preservation (out of this Lite scope):** production `llm.tools` and
    `llm.tools.parallel` are `Unknown`; expect gateway HTTP 400
    `unsupported_capability` before dispatch and zero upstream dispatches. A
    direct probe, if separately authorized,
    explicitly sends `parallel_tool_calls:true` and compares any returned
    interleaved IDs/deltas/results. Rejection is not permission to drop the
    field. A single emitted call is not evidence of parallel support.
-4. **Encrypted reasoning follow-up:** production `llm.reasoning` is `Unknown`;
+4. **Encrypted reasoning follow-up (out of this Lite scope):** production `llm.reasoning` is `Unknown`;
    expect gateway HTTP 400 `unsupported_capability` before dispatch and zero
    upstream dispatches.
    Record only sanitized rejection evidence. A separately authorized direct
@@ -178,13 +237,17 @@ describe observed calls, not intended calls.
    safe replay is inaccessible, mark the scenario `unrun/Unknown`; never
    fabricate a follow-up or infer support. No ciphertext is logged or captured.
 
+The following standard-profile reasoning shape is outside this DEC-011 Lite
+smoke scope; standard-profile reasoning remains `Unknown`, and no such request
+is sent as part of the Luna pair.
+
 The reasoning-only gate must actually request the capability: include the
 top-level `"reasoning":{"effort":"medium"}` object on **both** initial and
 follow-up requests, along with `include:["reasoning.encrypted_content"]`. The
 initial shape is:
 
 ```json
-{"model":"gpt-5.4-mini","stream":true,"store":false,"max_output_tokens":256,"reasoning":{"effort":"medium"},"include":["reasoning.encrypted_content"],"instructions":"Initial instruction.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Begin."}]}]}
+{"model":"gpt-5.4-mini","stream":true,"store":false,"reasoning":{"effort":"medium"},"include":["reasoning.encrypted_content"],"instructions":"Initial instruction.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Begin."}]}]}
 ```
 
 The follow-up repeats the same top-level reasoning/include fields and

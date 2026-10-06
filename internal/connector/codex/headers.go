@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
+	"github.com/google/uuid"
 )
 
 var errRequestHeaders = errors.New("Codex request headers are unavailable")
@@ -67,17 +68,40 @@ func buildRequestHeaders(ctx context.Context, inbound map[string][]string, servi
 			headers[canonical] = append(headers[canonical], value)
 		}
 	}
+	if !codexHeadersWithinLimit(headers) {
+		return nil, errRequestHeaderLimit
+	}
+	return headers, nil
+}
+
+func codexHeadersWithinLimit(headers http.Header) bool {
 	// Reserve room for Transport-generated Host/User-Agent fields.
 	headerBytes := 64
 	for name, values := range headers {
 		for _, value := range values {
 			headerBytes += len(name) + len(value) + 4
 			if headerBytes > maxCodexRequestHeaderBytes {
-				return nil, errRequestHeaderLimit
+				return false
 			}
 		}
 	}
-	return headers, nil
+	return true
+}
+
+// applyLiteIdentity adds only ephemeral, honest PestiRoute identity metadata.
+func applyLiteIdentity(headers http.Header) error {
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return errRequestHeaders
+	}
+	value := id.String()
+	headers.Set("x-openai-internal-codex-responses-lite", "true")
+	headers.Set("originator", "pestiroute")
+	headers.Set("User-Agent", "PestiRoute")
+	headers.Set("session-id", value)
+	headers.Set("thread-id", value)
+	headers.Set("x-client-request-id", value)
+	return nil
 }
 
 func safeHeaderValue(value string) bool {

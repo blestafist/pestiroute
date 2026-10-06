@@ -91,6 +91,31 @@ func TestDecodeOpaqueAndCapabilities(t *testing.T) {
 	}
 }
 
+func TestLunaLitePlainTextAdmitsWithoutToolOrReasoningCapabilities(t *testing.T) {
+	body := `{"model":"gpt-6-luna","stream":true,"store":false,"instructions":"","include":["reasoning.encrypted_content"],"tool_choice":"auto","parallel_tool_calls":false,"input":[{"type":"additional_tools","id":"at_fixed","role":"developer","tools":[]},{"type":"message","role":"user","content":[{"type":"input_text","text":"Reply with the word OK."}]}]}`
+	decoded, err := Decode(request(body), int64(len(body)), 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Capabilities) != 1 {
+		t.Fatalf("Lite plain-text request requires unexpected capabilities: %v", decoded.Capabilities)
+	}
+	if _, ok := decoded.Capabilities["llm.streaming"]; !ok {
+		t.Fatalf("Lite plain-text request omitted streaming capability: %v", decoded.Capabilities)
+	}
+	scope := core.CapabilityScope{Protocol: protocol, Mode: "native", Model: decoded.Model, AccountID: "fake-account"}
+	capabilities := core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported}}
+	candidate := core.EligibilityCandidate{
+		Scope: scope, Adapter: core.Descriptor{Kind: core.ComponentAdapter, Protocols: []string{protocol}},
+		Connector: core.Descriptor{Kind: core.ComponentConnector, Protocols: []string{protocol}}, InitializedAndReady: true,
+		AdapterCapabilityScope: scope, ConnectorCapabilityScope: scope,
+		AdapterCapabilities: capabilities, ConnectorCapabilities: capabilities,
+	}
+	if err := candidate.Eligible(scope, core.EligibilityRequirements{Request: decoded.Capabilities}); err != nil {
+		t.Fatalf("plain-text Lite request did not pass deterministic fake admission: %v", err)
+	}
+}
+
 func TestDecodeAcceptsOpaqueModelIdentifiers(t *testing.T) {
 	for _, name := range []string{"gpt-5.4-mini", "vendor/model:preview-2"} {
 		t.Run(name, func(t *testing.T) {

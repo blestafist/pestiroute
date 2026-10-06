@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
+	"github.com/google/uuid"
 )
 
 func executeFixture(t *testing.T, handler http.HandlerFunc) (*Connector, core.InvocationServices, *atomic.Int32) {
@@ -85,6 +86,65 @@ func TestExecuteStreamingSingleSendAndOpaqueFrames(t *testing.T) {
 	}
 	if !bytes.Equal(output, payload) || !bytes.Equal(received, request.Payload.Body) || sends.Load() != 1 {
 		t.Fatalf("output=%d request=%d sends=%d", len(output), len(received), sends.Load())
+	}
+}
+
+func TestLiteExecutePreservesCallerBytesAndOwnsProfileHeader(t *testing.T) {
+	body := []byte(`{"model":"gpt-6-luna","input":[{"type":"additional_tools","tools":[]},{"type":"reasoning","effort":"high","context":"all_turns","encrypted_content":"opaque"}],"stream":true,"store":false,"unknown":{"keep":true}}`)
+	var received []byte
+	var identity string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("x-openai-internal-codex-responses-lite"); got != "true" {
+			t.Errorf("Lite profile header = %q", got)
+		}
+		if got := r.Header.Values("x-openai-internal-codex-responses-lite"); len(got) != 1 {
+			t.Errorf("Lite profile header values = %q", got)
+		}
+		if r.Header.Get("originator") != "pestiroute" || r.Header.Get("User-Agent") != "PestiRoute" {
+			t.Errorf("Lite identity metadata differed")
+		}
+		for _, name := range []string{"session-id", "thread-id", "x-client-request-id"} {
+			value := r.Header.Get(name)
+			parsed, err := uuid.Parse(value)
+			if err != nil || parsed.Version() != 4 {
+				t.Errorf("%s is not a random UUID", name)
+			}
+			if identity == "" {
+				identity = value
+			} else if identity != value {
+				t.Errorf("Lite correlation IDs differ")
+			}
+		}
+		var err error
+		received, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+	}))
+	defer server.Close()
+	c := NewConnector()
+	c.endpoint = server.URL
+	if err := c.Init(t.Context(), core.ComponentConfig{Data: []byte(`{"model":"gpt-6-luna","account_id":"account-a","profile":"codex-responses-http-sse-lite-v1"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(t.Context())
+	request := executeRequest(body)
+	request.Model = liteModel
+	request.Metadata.Headers = map[string][]string{
+		"X-OpenAI-Internal-Codex-Responses-Lite": {"false"},
+		"x-openai-internal-codex-responses-lite": {"attacker"},
+		"Originator":                             {"spoofed"}, "SESSION-ID": {"spoofed"}, "Thread-Id": {"spoofed"}, "X-Client-Request-Id": {"spoofed"},
+		"User-Agent": {"spoofed"},
+	}
+	result, ge := c.Execute(t.Context(), request, core.AttemptScope{Mode: core.ModeNative, AccountID: "account-a"}, core.InvocationServices{Credentials: headerCredentials(mustOAuthBundle(t, "access-token", "account-a", time.Now().Add(time.Hour)))})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	_ = result.Stream.Close()
+	if !bytes.Equal(received, body) {
+		t.Fatalf("request body changed: got %q want %q", received, body)
 	}
 }
 

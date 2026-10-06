@@ -80,6 +80,19 @@ policies: {standard: policy-id-a}
 			}
 		})
 	}
+	lite := strings.Replace(valid, "codex-responses-http-sse-v1", "codex-responses-http-sse-lite-v1", 1)
+	lite = strings.Replace(lite, "exact-model", "gpt-6-luna", 2)
+	if err := load(lite); err != nil {
+		t.Fatalf("valid opt-in Lite config rejected: %v", err)
+	}
+	for _, bad := range []string{
+		strings.Replace(lite, "gpt-6-luna", "other-model", 1),
+		strings.Replace(lite, "mode: native", "mode: translation", 1),
+	} {
+		if err := load(bad); err == nil {
+			t.Fatalf("invalid Lite config accepted: %s", bad)
+		}
+	}
 }
 
 func TestCodexCompositionProtectedAdmissionAndDispatch(t *testing.T) {

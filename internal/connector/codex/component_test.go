@@ -109,3 +109,43 @@ func TestConnectorLifecycleScopeAndSupport(t *testing.T) {
 		t.Fatalf("closed Execute error = %v", ge)
 	}
 }
+
+func TestLiteProfileIsOptInAndScopeBound(t *testing.T) {
+	c := NewConnector()
+	config := func(model, selectedProfile string) []byte {
+		return []byte(`{"model":"` + model + `","account_id":"account-a","profile":"` + selectedProfile + `"}`)
+	}
+	for _, data := range [][]byte{
+		config("gpt-5.4-mini", liteProfile),
+		config(liteModel, "codex-responses-http-sse-v2"),
+	} {
+		failed := NewConnector()
+		if err := failed.Init(t.Context(), core.ComponentConfig{Data: data}); err == nil {
+			t.Fatalf("invalid Lite configuration accepted: %s", data)
+		}
+		_ = failed.Close(t.Context())
+	}
+	if err := c.Init(t.Context(), core.ComponentConfig{Data: config(liteModel, liteProfile)}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(t.Context())
+	got := c.Capabilities(t.Context(), core.CapabilityScope{Protocol: protocol, Mode: core.ModeNative, Model: liteModel, AccountID: "account-a"})
+	if got.State("llm.streaming") != core.Supported || got.State("llm.reasoning") != core.Supported {
+		t.Fatalf("Lite capabilities = %+v", got.Values)
+	}
+	for _, capability := range []core.Capability{"llm.tools", "llm.tools.parallel"} {
+		if got.State(capability) != core.Unknown {
+			t.Errorf("%s = %q, want unknown", capability, got.State(capability))
+		}
+	}
+	for _, scope := range []core.CapabilityScope{
+		{Protocol: protocol, Mode: core.ModeTranslation, Model: liteModel, AccountID: "account-a"},
+		{Protocol: protocol, Mode: core.ModeNative, Model: liteModel, AccountID: "other"},
+		{Protocol: protocol, Mode: core.ModeNative, Model: "other", AccountID: "account-a"},
+	} {
+		got := c.Capabilities(t.Context(), scope)
+		if got.State("llm.reasoning") != core.Unknown {
+			t.Errorf("out-of-scope reasoning = %q", got.State("llm.reasoning"))
+		}
+	}
+}
