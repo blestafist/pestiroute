@@ -216,35 +216,66 @@ func addFunctionToolName(tool map[string]json.RawMessage, names map[string]bool,
 }
 
 func unsupportedInputType(raw json.RawMessage) bool {
-	var value any
-	if json.Unmarshal(raw, &value) != nil {
-		return false
-	}
-	var visit func(any) bool
-	visit = func(v any) bool {
-		switch item := v.(type) {
-		case map[string]any:
-			if kind, ok := item["type"].(string); ok {
-				switch kind {
-				case "input_image", "input_audio", "input_video", "computer", "file_search_call", "web_search_call", "code_interpreter_call", "image_generation_call", "local_shell_call", "mcp_list_tools", "mcp_call":
-					return true
-				}
-			}
-			for _, child := range item {
-				if visit(child) {
-					return true
-				}
-			}
-		case []any:
-			for _, child := range item {
-				if visit(child) {
-					return true
-				}
-			}
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil {
+		var item map[string]json.RawMessage
+		if json.Unmarshal(raw, &item) != nil || item == nil {
+			return false
 		}
+		items = []json.RawMessage{raw}
+	}
+	for _, rawItem := range items {
+		var item map[string]json.RawMessage
+		if json.Unmarshal(rawItem, &item) != nil || item == nil {
+			continue
+		}
+		rawType, hasType := item["type"]
+		var kind string
+		if hasType && json.Unmarshal(rawType, &kind) != nil {
+			continue
+		}
+		if isUnsupportedInputType(kind) {
+			return true
+		}
+		// Typed messages and untyped shorthand messages use content regardless
+		// of role. Unknown typed items remain opaque.
+		if (kind == "message" || !hasType) && unsupportedResourceArray(item["content"]) {
+			return true
+		}
+		if kind == "function_call_output" && unsupportedResourceArray(item["output"]) {
+			return true
+		}
+	}
+	return false
+}
+
+func unsupportedResourceArray(raw json.RawMessage) bool {
+	var blocks []json.RawMessage
+	if json.Unmarshal(raw, &blocks) != nil {
 		return false
 	}
-	return visit(value)
+	return unsupportedResourceBlocks(blocks)
+}
+
+func unsupportedResourceBlocks(blocks []json.RawMessage) bool {
+	for _, rawBlock := range blocks {
+		var block struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(rawBlock, &block) == nil && isUnsupportedInputType(block.Type) {
+			return true
+		}
+	}
+	return false
+}
+
+func isUnsupportedInputType(kind string) bool {
+	switch kind {
+	case "input_image", "input_audio", "input_video", "input_file", "computer", "file_search_call", "web_search_call", "code_interpreter_call", "image_generation_call", "local_shell_call", "mcp_list_tools", "mcp_call":
+		return true
+	default:
+		return false
+	}
 }
 
 func uniqueResponsesJSON(body []byte) bool {

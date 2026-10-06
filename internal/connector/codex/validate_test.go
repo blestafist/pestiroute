@@ -2,6 +2,7 @@ package codex
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -49,6 +50,14 @@ func TestValidateResponsesProfile(t *testing.T) {
 	if ge := validateResponsesProfile(liteNamespaceRequest, core.ModeNative, liteModel); ge != nil {
 		t.Fatalf("Lite functions namespace rejected: %s/%s", ge.Code, ge.Message)
 	}
+	opaqueNested := []byte(`{"model":"gpt-5.4-mini","tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"kind":{"const":{"type":"input_image"}}}}}],"input":[{"type":"function_call","arguments":"{\"type\":\"input_audio\"}","vendor_extension":{"nested":{"type":"input_file"}}},{"type":"message","content":[{"type":"input_text","text":"ok"}],"vendor_extension":{"type":"input_image"}},{"type":"future_item","role":"developer","content":[{"type":"input_image"}],"extension":{"content":[{"type":"input_file"}]}}],"stream":true,"store":false}`)
+	opaqueBefore := bytes.Clone(opaqueNested)
+	if ge := validateResponsesProfile(responsesValidationRequest(opaqueNested), core.ModeNative, "gpt-5.4-mini"); ge != nil {
+		t.Fatalf("opaque nested extension falsely rejected: %s/%s", ge.Code, ge.Message)
+	}
+	if !bytes.Equal(opaqueNested, opaqueBefore) {
+		t.Fatal("validation mutated opaque nested values")
+	}
 	connector := &Connector{state: core.HealthReady, model: "gpt-5.4-mini", accountID: "account"}
 	invalidRequest := responsesValidationRequest([]byte(`{"model":"gpt-5.4-mini","input":"x","stream":true,"store":true}`))
 	if _, ge := connector.Execute(t.Context(), invalidRequest, core.AttemptScope{Mode: core.ModeNative, AccountID: "account"}, core.InvocationServices{}); ge == nil || ge.Category != core.CategoryUnsupportedFeature {
@@ -87,6 +96,13 @@ func TestValidateResponsesProfile(t *testing.T) {
 		{"scalar function parameters", `{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"lookup","parameters":"schema"}]}],"stream":true,"store":false}`, core.ModeNative, core.CategoryInvalidRequest},
 		{"invalid parallel tools", `{"model":"gpt-5.4-mini","input":"x","stream":true,"store":false,"parallel_tool_calls":"true"}`, core.ModeNative, core.CategoryInvalidRequest},
 		{"resource item", `{"model":"gpt-5.4-mini","input":[{"type":"input_image","image_url":"secret"}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"resource object", `{"model":"gpt-5.4-mini","input":{"type":"input_file","file_id":"secret"},"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"resource message part", `{"model":"gpt-5.4-mini","input":[{"type":"message","content":[{"type":"input_image","image_url":"secret"}]}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"shorthand user audio part", `{"model":"gpt-5.4-mini","input":[{"role":"user","content":[{"type":"input_audio","audio":"secret"}]}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"function output resource array", `{"model":"gpt-5.4-mini","input":[{"type":"function_call_output","call_id":"call","output":[{"type":"input_image","image_url":"secret"}]}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"audio item", `{"model":"gpt-5.4-mini","input":[{"type":"input_audio","audio":"secret"}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"video item", `{"model":"gpt-5.4-mini","input":[{"type":"input_video","video":"secret"}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
+		{"file item", `{"model":"gpt-5.4-mini","input":[{"type":"input_file","file_id":"secret"}],"stream":true,"store":false}`, core.ModeNative, core.CategoryUnsupportedFeature},
 		{"model mismatch", `{"model":"other","input":"x","stream":true,"store":false}`, core.ModeNative, core.CategoryInvalidRequest},
 		{"duplicate nested", `{"model":"gpt-5.4-mini","input":[{"type":"message","type":"message"}],"stream":true,"store":false}`, core.ModeNative, core.CategoryInvalidRequest},
 		{"malformed", `{"model":"private-secret`, core.ModeNative, core.CategoryInvalidRequest},
@@ -113,6 +129,45 @@ func TestValidateResponsesProfile(t *testing.T) {
 			if !bytes.Equal(body, before) {
 				t.Fatal("validation mutated request bytes")
 			}
+		})
+	}
+}
+
+func TestUnsupportedResourcePreflightMessageForms(t *testing.T) {
+	reject := func(t *testing.T, body []byte) {
+		t.Helper()
+		if ge := validateResponsesProfile(responsesValidationRequest(body), core.ModeNative, "gpt-5.4-mini"); ge == nil || ge.Category != core.CategoryUnsupportedFeature {
+			t.Fatalf("resource content not rejected: %#v", ge)
+		}
+	}
+	roles := []struct{ name, field string }{
+		{"user", `"role":"user",`},
+		{"assistant", `"role":"assistant",`},
+		{"developer", `"role":"developer",`},
+		{"system", `"role":"system",`},
+		{"role absent", ""},
+	}
+	forms := []struct{ name, field string }{
+		{"typed", `"type":"message",`},
+		{"shorthand", ""},
+	}
+	resources := []string{"input_image", "input_audio", "input_file", "input_video"}
+	for _, form := range forms {
+		for _, role := range roles {
+			for _, resource := range resources {
+				t.Run(form.name+"/"+role.name+"/"+resource, func(t *testing.T) {
+					item := fmt.Sprintf(`{%s%s"content":[{"type":%q}]}`, form.field, role.field, resource)
+					body := fmt.Appendf(nil, `{"model":"gpt-5.4-mini","input":[%s],"stream":true,"store":false}`, item)
+					reject(t, body)
+				})
+			}
+		}
+	}
+	for _, resource := range resources {
+		t.Run("function_call_output/"+resource, func(t *testing.T) {
+			input := fmt.Sprintf(`[{"type":"function_call_output","output":[{"type":%q}]}]`, resource)
+			body := fmt.Appendf(nil, `{"model":"gpt-5.4-mini","input":%s,"stream":true,"store":false}`, input)
+			reject(t, body)
 		})
 	}
 }

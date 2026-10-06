@@ -195,8 +195,9 @@ These accepted ADRs explain the existing constraints and establish the internal 
   reasoning was rejected with field `reasoning.context`; that rejects the
   omission, not the model. M5.1-044 directly verified one function tool
   emission and a fresh two-request function roundtrip (HTTP 200/200); its
-  explicit parallel request was rejected (HTTP 400). This is narrow single
-  function evidence, not parallel support or a general entitlement claim.
+  explicit parallel request was rejected (HTTP 400). The direct capture
+  observed one emitted call only; it did not test or impose an output-call
+  count ceiling. This is not parallel support or a general entitlement claim.
 - **Decision:** Specify one opt-in connector profile, with the exact literal
   `codex-responses-http-sse-lite-v1`, selected only through the existing
   `componentConfig.Profile` setting. It is restricted to configured model
@@ -228,8 +229,12 @@ These accepted ADRs explain the existing constraints and establish the internal 
   A matched gateway pair is additionally required before publishing a working
   support claim for the route.
   `llm.tools: Supported` is permitted only for exact `openai.responses.v1` /
-  `native` / `gpt-6-luna` / configured account scope using client-owned single
-  function tools. Lite `additional_tools` admits direct function definitions
+  `native` / `gpt-6-luna` / configured account scope using client-owned function
+  tools; this capability classifies tool kind, not an artificial one-call
+  emission limit. With `parallel_tool_calls: false`, any emitted function calls
+  are still forwarded and retained in client-owned history; client execution
+  policy/concurrency is distinct from the provider's explicit parallel-tool
+  capability. Lite `additional_tools` admits direct function definitions
   and the official `functions` namespace containing only function definitions.
   Custom, hosted, other namespace and otherwise unproven tool kinds remain
   rejected before provider send; this is not a global unsupported claim. A true
