@@ -128,10 +128,11 @@ harmless synthetic text only. Do not compare generated prose across independent
 model runs. The client returns only synthetic tool results; the gateway never
 executes tools. Record no prompts, arguments, headers, or raw bodies.
 
-This DEC-011 smoke scope is the matched `plain_text` request only. It does not
-run tool or parallel-tool scenarios under Lite; keep `llm.tools` and
-`llm.tools.parallel` `Unknown` for both profiles and reject requests requiring
-them before dispatch. The Lite body retains `reasoning.context: all_turns`;
+The matched direct/gateway pair in M5.1-041 is `plain_text` only. Separately,
+M5.1-048 authorizes a strictly bounded live protected-gateway single-function
+roundtrip and then a custom Lark roundtrip only after stage one succeeds. These
+are exact-scope observations, not broad entitlement or parallel-tool evidence;
+standard-profile tools and `llm.tools.parallel` remain `Unknown`. The Lite body retains `reasoning.context: all_turns`;
 the direct proof used `reasoning.effort: high`. The narrowly scoped Lite native
 reasoning capability is supported by the direct completion and matched pair;
 standard-profile reasoning remains `Unknown`. Direct POST path is
@@ -218,12 +219,11 @@ describe observed calls, not intended calls.
 1. **Text (only DEC-011 Lite scenario):** `Reply with the word OK.` Compare status, first-event delivery before
    completion, ordered SSE event categories, terminal outcome, usage presence,
    and actual dispatch count.
-2. **Function round (out of this Lite scope):** production `llm.tools` is `Unknown`; expect gateway HTTP
-   400 `unsupported_capability` before dispatch and zero upstream dispatches. Record
-   sanitized error/status plus trusted zero-dispatch evidence. A separately
-   authorized direct probe can use the instruction and history shapes above;
-   compare call/result identity and order there only. Do not claim a successful
-   paired gateway round or enable production tools.
+2. **Function round:** the staged M5.1-048 operator harness may send one function
+   call and one synthetic-result follow-up through the protected gateway, with
+   exact Lite model/profile, one call, two dispatches, and sanitized evidence.
+   It executes only a fixed in-memory map; it does not execute model-provided
+   commands or I/O. Do not infer parallel support or broader profile coverage.
 3. **Parallel preservation (out of this Lite scope):** production `llm.tools` and
    `llm.tools.parallel` are `Unknown`; expect gateway HTTP 400
    `unsupported_capability` before dispatch and zero upstream dispatches. A

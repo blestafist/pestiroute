@@ -18,10 +18,11 @@ import (
 
 	"github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
+	"github.com/blestafist/pestiroute/internal/testutil/codexfixtures"
 	"github.com/google/uuid"
 )
 
-const customToolRequestFixture = `{"model":"gpt-6-luna","stream":true,"store":false,"instructions":"","reasoning":{"effort":"high","context":"all_turns"},"include":["reasoning.encrypted_content"],"tool_choice":"auto","parallel_tool_calls":false,"input":[{"type":"additional_tools","id":"at_synthetic_custom","role":"developer","tools":[{"type":"namespace","name":"functions","description":"","tools":[{"type":"custom","name":"synthetic_echo","description":"Echo the fixed marker.","format":{"type":"grammar","syntax":"lark","definition":"start: \"pestiRoute marker\""}}]}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"Call synthetic_echo with pestiRoute marker."}]}]}`
+const customToolRequestFixture = codexfixtures.CustomInitial
 
 const customToolEvidenceDirectory = "/tmp/opencode/pestiroute-tool-evidence"
 const customToolArtifactName = "custom-tool-roundtrip.json"

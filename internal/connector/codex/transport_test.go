@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -126,6 +128,37 @@ func TestCodexTransportForcesHTTP1AndKeepsStreaming(t *testing.T) {
 	}
 	if diagnosticProtocolName(phases.tlsProtocol.Load()) != "http1" || verifierCalls.Load() == 0 {
 		t.Fatalf("TLS diagnostic=%s verifier_called=%t", diagnosticProtocolName(phases.tlsProtocol.Load()), verifierCalls.Load() != 0)
+	}
+}
+
+type genericTransportProbe struct {
+	client *http.Client
+	calls  *atomic.Int32
+}
+
+func (p genericTransportProbe) Do(req *http.Request) (*http.Response, error) {
+	p.calls.Add(1)
+	return p.client.Do(req)
+}
+
+func TestCodexRejectsGenericHTTPDoerBeforeNetwork(t *testing.T) {
+	var networkCalls atomic.Int32
+	client := &http.Client{Transport: authRoundTripperFunc(func(*http.Request) (*http.Response, error) {
+		networkCalls.Add(1)
+		return nil, errors.New("synthetic network must not run")
+	})}
+	var wrapperCalls atomic.Int32
+	req, err := http.NewRequest(http.MethodPost, "https://example.invalid/backend-api/codex/responses", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, closeFn, err := doCodexRequest(genericTransportProbe{client: client, calls: &wrapperCalls}, req)
+	if resp != nil || err == nil {
+		t.Fatal("generic Doer was not rejected")
+	}
+	closeFn()
+	if wrapperCalls.Load() != 0 || networkCalls.Load() != 0 {
+		t.Fatalf("generic wrapper reached network: do=%d network=%d", wrapperCalls.Load(), networkCalls.Load())
 	}
 }
 

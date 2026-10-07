@@ -380,7 +380,7 @@ func classifyOperatorPairFailureBody(body []byte) (reason, code, field string) {
 		return
 	}
 	switch payload.Error.Code {
-	case "invalid_request_error", "unsupported_parameter", "unsupported_value", "model_not_found", "insufficient_quota", "rate_limit_exceeded", "server_error":
+	case "invalid_request_error", "unsupported_parameter", "unsupported_value", "model_not_found", "insufficient_quota", "rate_limit_exceeded", "server_error", "upstream_unavailable":
 		code = payload.Error.Code
 	}
 	switch payload.Error.Param {
@@ -405,6 +405,8 @@ func classifyOperatorPairFailureBody(body []byte) (reason, code, field string) {
 	case "rate_limit_exceeded":
 		reason = "rate_limited"
 	case "server_error":
+		reason = "service_error"
+	case "upstream_unavailable":
 		reason = "service_error"
 	case "rate_limit_error":
 		reason = "rate_limited"
@@ -454,7 +456,7 @@ func writeOperatorPairFailureArtifact(path, leg string, observation operatorPair
 		return errors.New("invalid failure leg")
 	}
 	if !oneOperatorPairValue(observation.reason, "unknown", "invalid_request", "unsupported_field", "model_unsupported", "quota_exhausted", "rate_limited", "service_error") ||
-		!oneOperatorPairValue(observation.errorCode, "other", "invalid_request_error", "unsupported_parameter", "unsupported_value", "model_not_found", "insufficient_quota", "rate_limit_exceeded", "rate_limit_error", "server_error") ||
+		!oneOperatorPairValue(observation.errorCode, "other", "invalid_request_error", "unsupported_parameter", "unsupported_value", "model_not_found", "insufficient_quota", "rate_limit_exceeded", "rate_limit_error", "server_error", "upstream_unavailable") ||
 		!oneOperatorPairValue(observation.errorField, "other", "model", "input", "instructions", "stream", "store", "max_output_tokens", "reasoning", "reasoning.effort", "reasoning.context", "include", "tool_choice", "parallel_tool_calls") ||
 		!oneOperatorPairValue(observation.bodyReadResult, "not_observed", "complete", "read_failure", "size_limit", "stream_failure") ||
 		!oneOperatorPairValue(observation.transport, "none", "unknown") {
@@ -615,6 +617,11 @@ func consumeOperatorPairEvent(event string, data []byte, result *operatorPairObs
 }
 
 func provisionOperatorPairGateway(t *testing.T, account sqlite.Account, credential sqlite.Credential) (string, sqlite.IssuedVirtualKey) {
+	return provisionOperatorPairGatewayWithRPM(t, account, credential, 2)
+}
+
+// The tool fixture opts into four requests (two two-round trips); paired baseline stays RPM=2.
+func provisionOperatorPairGatewayWithRPM(t *testing.T, account sqlite.Account, credential sqlite.Credential, rpm int64) (string, sqlite.IssuedVirtualKey) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp/opencode", "m51-pair-gateway-")
 	if err != nil {
@@ -642,7 +649,7 @@ func provisionOperatorPairGateway(t *testing.T, account sqlite.Account, credenti
 		_ = target.Close()
 		t.Fatal("isolated encrypted credential setup failed")
 	}
-	policy, err := sqlite.NewKeyPolicies(target).Create(ctx, sqlite.CreateKeyPolicyParams{ID: "m51-pair-policy", Enabled: true, Models: []string{operatorPairModel}, Connectors: []string{"codex"}, RPM: 2, TPM: 8192})
+	policy, err := sqlite.NewKeyPolicies(target).Create(ctx, sqlite.CreateKeyPolicyParams{ID: "m51-pair-policy", Enabled: true, Models: []string{operatorPairModel}, Connectors: []string{"codex"}, RPM: rpm, TPM: 8192})
 	if err != nil {
 		_ = target.Close()
 		t.Fatal("isolated gateway policy setup failed")
@@ -1031,6 +1038,7 @@ func TestOperatorPairFailureCapturePersistsOnlyFixedLabels(t *testing.T) {
 		{`{"error":{"type":"invalid_request_error","detail":"Missing required parameter: instructions PRIVATE"}}`, "invalid_request", "invalid_request_error", "instructions"},
 		{`{"detail":"unsupported value for reasoning.context PRIVATE"}`, "unsupported_field", "unsupported_value", "reasoning.context"},
 		{`{"error":{"type":"rate_limit_error","message":"PRIVATE"}}`, "rate_limited", "rate_limit_error", "other"},
+		{`{"error":{"code":"upstream_unavailable","message":"PRIVATE"}}`, "service_error", "upstream_unavailable", "other"},
 	} {
 		reason, code, field := classifyOperatorPairFailureBody([]byte(tc.body))
 		if reason != tc.reason || code != tc.code || field != tc.field || strings.Contains(strings.Join([]string{reason, code, field}, ","), "PRIVATE") {

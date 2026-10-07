@@ -12,12 +12,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
+	"github.com/blestafist/pestiroute/internal/testutil/codexfixtures"
 	"github.com/google/uuid"
 )
 
@@ -715,6 +717,16 @@ func TestRoundtripToolDiagnosticOffline(t *testing.T) {
 	initial, err := buildRoundtripInitialBody(threadID)
 	if err != nil {
 		t.Fatal("roundtrip initial request failed to build")
+	}
+	var gotFixture, wantFixture map[string]any
+	if json.Unmarshal(initial, &gotFixture) != nil || json.Unmarshal([]byte(codexfixtures.FunctionInitial), &wantFixture) != nil {
+		t.Fatal("shared direct/gateway function fixture is invalid")
+	}
+	gotInput := gotFixture["input"].([]any)
+	wantInput := wantFixture["input"].([]any)
+	gotInput[0].(map[string]any)["id"] = wantInput[0].(map[string]any)["id"]
+	if !reflect.DeepEqual(gotFixture, wantFixture) {
+		t.Fatal("M5.1-044 direct request diverged from the shared gateway function fixture")
 	}
 	var request map[string]json.RawMessage
 	if json.Unmarshal(initial, &request) != nil {
