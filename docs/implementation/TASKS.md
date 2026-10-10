@@ -383,3 +383,38 @@ and [tooling gate](TOOLING.md#m51-tooling-gate).
 | [M5.1-049](tasks/M5.1-049.md) | BLOCKED | GPT-6 Luna (M5.1-049 worker) | M5.1-040, M5.1-048 | Verify live gateway OAuth token refresh and atomic credential rotation | DEC-012-approved deferral; read-only preflight proves credential fresh; natural refresh window is 2026-10-15 21:04:55.103 UTC; no refresh/provider calls made | [Preflight evidence](tasks/M5.1-049.md#completion-evidence); due-only procedure in card |
 | [M5.1-050](tasks/M5.1-050.md) | DONE | GPT-6 Luna worker / reviewer ses_ed88d5a84ffeDF0jQRku17RlKP / Planner closure | M5.1-040, M5.1-048 | Compare independent official Codex CLI login against gateway device auth | Pinned official CLI 0.162.1 v3 login approved; read-only comparator verified 7 predicates (same account, distinct access/refresh tokens, separate stores, unchanged gateway DB against historical M5.1-040 baseline); durable artifact validated | `python3 -B scripts/smoke-m5.1-artifacts.py --official-auth docs/implementation/evidence/M5.1-050/official-cli-auth.json; GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off go test -race -count=1 ./cmd/authcompare; ./scripts/check.sh; [evidence](tasks/M5.1-050.md#completion-evidence)` |
 | [M5.1-051](tasks/M5.1-051.md) | DRAFT | — | M5.1-041, M5.1-048 | Verify live multi-round encrypted reasoning continuation and replay | DEC-012-approved deferral; scoped two-request live gate remains unrun and is not authorized until separately READY, assigned, explicitly authorized, and independently reviewed | [Diagnostic procedure](tasks/M5.1-051.md#verification) |
+
+## M5.2 — Local Runtime Connectors
+
+Bounded plan under [ROADMAP M5.2](ROADMAP.md#m52--local-runtime-connectors) and [M5.2-LOCAL](M5.2-LOCAL.md). Only 001 is READY. Source/decision gates 002–007 precede implementation; 008–013 are DRAFT candidates to recheck/split at 006. Normal CI uses synthetic loopback fixtures. Real runtime/model gates 024–026 are independent and require their own provisioned environment and exact procedure before READY. Only DONE evidence promotes support; DEC-012's two Codex follow-ups remain open.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M5.2-001](tasks/M5.2-001.md) | READY | — | M5.1-043 | Audit the clean baseline and local-compatible reuse seams | — | [Acceptance and verification](tasks/M5.2-001.md#verification) |
+| [M5.2-002](tasks/M5.2-002.md) | DRAFT | — | M5.2-001 | Pin the Ollama Responses source baseline | — | [Acceptance and verification](tasks/M5.2-002.md#verification) |
+| [M5.2-003](tasks/M5.2-003.md) | DRAFT | — | M5.2-001 | Pin the vLLM Responses source baseline | — | [Acceptance and verification](tasks/M5.2-003.md#verification) |
+| [M5.2-004](tasks/M5.2-004.md) | DRAFT | — | M5.2-001 | Pin the llama.cpp Responses source baseline | — | [Acceptance and verification](tasks/M5.2-004.md#verification) |
+| [M5.2-005](tasks/M5.2-005.md) | DRAFT | — | M5.2-002, M5.2-003, M5.2-004 | Define per-runtime request and capability policies | — | [Acceptance and verification](tasks/M5.2-005.md#verification) |
+| [M5.2-006](tasks/M5.2-006.md) | DRAFT | — | M5.2-001, M5.2-005 | Select the smallest compatible Connector path | — | [Acceptance and verification](tasks/M5.2-006.md#verification) |
+| [M5.2-007](tasks/M5.2-007.md) | DRAFT | — | M5.2-002, M5.2-003, M5.2-004 | Define the local runtime execution environment | — | [Acceptance and verification](tasks/M5.2-007.md#verification) |
+| [M5.2-008](tasks/M5.2-008.md) | DRAFT | — | M5.2-006 | Implement explicit upstream authentication policy | — | [Acceptance and verification](tasks/M5.2-008.md#verification) |
+| [M5.2-009](tasks/M5.2-009.md) | DRAFT | — | M5.2-006 | Implement evidence-scoped model and capability declarations | — | [Acceptance and verification](tasks/M5.2-009.md#verification) |
+| [M5.2-010](tasks/M5.2-010.md) | DRAFT | — | M5.2-005, M5.2-006 | Add versioned local-runtime wire fixtures | — | [Acceptance and verification](tasks/M5.2-010.md#verification) |
+| [M5.2-011](tasks/M5.2-011.md) | DRAFT | — | M5.2-008, M5.2-009, M5.2-010 | Verify compatible transport and terminal observation | — | [Acceptance and verification](tasks/M5.2-011.md#verification) |
+| [M5.2-012](tasks/M5.2-012.md) | DRAFT | — | M5.2-005, M5.2-009, M5.2-010 | Implement unsupported-semantics preflight | — | [Acceptance and verification](tasks/M5.2-012.md#verification) |
+| [M5.2-013](tasks/M5.2-013.md) | DRAFT | — | M5.2-008, M5.2-009, M5.2-011, M5.2-012 | Compose protected compatible runtime routes | — | [Acceptance and verification](tasks/M5.2-013.md#verification) |
+| [M5.2-014](tasks/M5.2-014.md) | DRAFT | — | M5.2-013 | Prove protected text JSON and incremental SSE | — | [Acceptance and verification](tasks/M5.2-014.md#verification) |
+| [M5.2-015](tasks/M5.2-015.md) | DRAFT | — | M5.2-014 | Prove one client-owned function-tool roundtrip | — | [Acceptance and verification](tasks/M5.2-015.md#verification) |
+| [M5.2-016](tasks/M5.2-016.md) | DRAFT | — | M5.2-015 | Verify multiple-call and parallel policy boundaries | — | [Acceptance and verification](tasks/M5.2-016.md#verification) |
+| [M5.2-017](tasks/M5.2-017.md) | DRAFT | — | M5.2-012, M5.2-015 | Verify history, reasoning and resource affinity | — | [Acceptance and verification](tasks/M5.2-017.md#verification) |
+| [M5.2-018](tasks/M5.2-018.md) | DRAFT | — | M5.2-014, M5.2-017 | Prove accounting, key policy and account isolation | — | [Acceptance and verification](tasks/M5.2-018.md#verification) |
+| [M5.2-019](tasks/M5.2-019.md) | DRAFT | — | M5.2-014 | Prove cancellation, backpressure and shutdown | — | [Acceptance and verification](tasks/M5.2-019.md#verification) |
+| [M5.2-020](tasks/M5.2-020.md) | DRAFT | — | M5.2-016, M5.2-017, M5.2-018, M5.2-019 | Run shared conformance and offline capability audit | — | [Acceptance and verification](tasks/M5.2-020.md#verification) |
+| [M5.2-021](tasks/M5.2-021.md) | DRAFT | — | M5.2-018, M5.2-020 | Write and execute offline local runtime operations | — | [Acceptance and verification](tasks/M5.2-021.md#verification) |
+| [M5.2-022](tasks/M5.2-022.md) | DRAFT | — | M5.2-007, M5.2-020 | Build bounded paired-smoke evidence tooling | — | [Acceptance and verification](tasks/M5.2-022.md#verification) |
+| [M5.2-023](tasks/M5.2-023.md) | DRAFT | — | M5.2-007, M5.2-021, M5.2-022 | Prepare exact per-runtime direct/gateway smoke procedures | — | [Acceptance and verification](tasks/M5.2-023.md#verification) |
+| [M5.2-024](tasks/M5.2-024.md) | DRAFT | — | M5.2-002, M5.2-023 | Capture Ollama direct-versus-gateway evidence | — | [Acceptance and verification](tasks/M5.2-024.md#verification) |
+| [M5.2-025](tasks/M5.2-025.md) | DRAFT | — | M5.2-003, M5.2-023 | Capture vLLM direct-versus-gateway evidence | — | [Acceptance and verification](tasks/M5.2-025.md#verification) |
+| [M5.2-026](tasks/M5.2-026.md) | DRAFT | — | M5.2-004, M5.2-023 | Capture llama.cpp direct-versus-gateway evidence | — | [Acceptance and verification](tasks/M5.2-026.md#verification) |
+| [M5.2-027](tasks/M5.2-027.md) | DRAFT | — | M5.2-023 | Audit each runtime release claim | — | [Acceptance and verification](tasks/M5.2-027.md#verification) |
+| [M5.2-028](tasks/M5.2-028.md) | DRAFT | — | M5.2-020, M5.2-021, M5.2-027 | Audit M5.2 acceptance and prepare the next handoff | — | [Acceptance and verification](tasks/M5.2-028.md#verification) |

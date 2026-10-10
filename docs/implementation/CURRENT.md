@@ -2,146 +2,26 @@
 
 ## Verified baseline
 
-M0–M3 are complete. [M3-046](tasks/M3-046.md) records the final gate audit,
-review fixes and M4 handoff on source `d36a91a7e0869c286bed27e6eb525af183ad029d`.
-The closure commit updates documentation only. Local verification used pinned
-Go 1.27.1 on Linux/amd64; hosted PR CI is tracked separately in GitHub.
+M0–M4 implementation/offline gates are accepted. The normative boundary remains [CONTRACT](CONTRACT.md); [M2-BINDING](M2-BINDING.md) preserves opaque payloads, scoped services and checked Head/Body/Complete/EOF. Protected execution includes SQLite virtual-key/account/policy storage, external-master-key AES-GCM secrets, admission/reservations/usage, crash recovery, account isolation and bounded delivery-safe fallback. Core has no production imports of concrete Connectors or Adapters.
 
-[CONTRACT.md](CONTRACT.md) remains the accepted v1 semantic boundary.
-[M2-BINDING.md](M2-BINDING.md) retains managed components, scoped invocation
-services, explicit native identity routes and checked Head/Body/Complete/EOF.
-Core has no production imports of concrete Adapters, Connectors or parsers.
+M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) merged through 6002cadd226a11495cf659c7b0e7a635d5e41ba8. [M4-036](tasks/M4-036.md) official Anthropic and [M4-041](tasks/M4-041.md) compatible-endpoint tools live gates remain BLOCKED; DEC-008's production constraint remains in force.
 
-Protected version-1 YAML composes SQLite-backed virtual keys/policies/accounts,
-AES-256-GCM credentials with an external permission-checked master key, atomic
-RPM/TPM admission, per-attempt reservations/usage, durable dispatch intent,
-request closure and conservative crash recovery. Persistence failures withdraw
-readiness and block new protected requests across routes. Opt-in ordered fallback
-requires explicit safe delivery before client commit, fresh candidate eligibility
-and bounded attempts/deadline; it admits RPM once and charges each attempt.
-Stateful/unknown-affinity requests require a configured singleton target.
+## Immediate focus: M5.2 baseline and source gates
 
-Schema v6 adds durable claims for interactive auth continuation to the v5 auth
-sessions. Protected startup recovers refresh markers to uncertain and consumes
-ambiguous claimed continuations before listen. Account disable atomically
-invalidates auth state. Scripted start/continue/refresh, revision CAS and
-cross-process claims are verified; live provider auth remains M5.1.
+M5.1 source e1aca937948a8bd225367cc95c19942b3771cb93 is conditionally accepted by [M5.1-043](tasks/M5.1-043.md) and [DEC-012](../project/DECISIONS.md#dec-012--conditional-m51-codex-implementation-acceptance-with-deferred-live-gates). Portable fixture fix 4e1235257c2e955bbbd060186b45a55445a6686c replaces the synthetic gateway fixture's hard-coded /tmp/opencode parent with testing temporary storage. The planning branch dev-m5.2 starts at that fixed M5.1 head while PR merge is pending. Record the final merge commit and synchronize the planning branch with merged main before implementation; this plan does not claim the merge has happened.
 
-## Immediate focus: M5.1-043 DONE conditional Codex implementation acceptance; M5.2 handoff; M5.1-049 BLOCKED and M5.1-051 DRAFT live gates remain open
+[M5.2-LOCAL](M5.2-LOCAL.md) defines the bounded local-runtime plan. [M5.2-001](tasks/M5.2-001.md) is READY; all other new cards remain DRAFT. Recheck clean-checkout baseline and current compatible code, then pin Ollama/vLLM/llama.cpp separately. Prefer compatible Responses reuse; 006 decides the smallest implementation path and rechecks 008–013 before execution. No M5.2 functionality or installed runtime/model/hardware is claimed by planning. Use one card per Worker/Reviewer session and existing /next N; preserve Context7/gopls config, with no new MCP/plugin required.
 
-M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
-merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
-`a030ef0949711b7172f1e93947772cd59febc0b7` had successful hosted CI run 47.
-M4 has 43 DONE cards and two retained BLOCKED live gates: official Anthropic
-[M4-036](tasks/M4-036.md), mandatory before production under
-[DEC-008/D18](../project/DECISIONS.md#dec-008--accepted-narrow-deferral-of-official-anthropic-verification),
-and compatible-endpoint tools [M4-041](tasks/M4-041.md). The compatible harness
-and final review fixes are committed; [M4-045](tasks/M4-045.md) retains evidence.
+## Codex support and open live gates
 
-The new branch is `dev-m5.1`, based on that merge. The
-[Codex registry](TASKS.md#m51--codex-subscription-connector) records the current
-bounded cards and statuses; see TASKS for its current range, ownership, and
-dependencies.
-M5.1-001 through M5.1-042, and M5.1-044 through M5.1-048, are DONE,
-resolving the source/profile baseline, safe device-login presentation/continuation,
-atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
-[DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
-and [DEC-010](../project/DECISIONS.md#dec-010--carry-credential-expiry-with-auth-results),
-versioned synthetic OAuth test fixtures, versioned Responses stream/replay fixtures,
-the scoped Codex component lifecycle and descriptor with conservative Unknown capabilities,
-bounded token metadata / credential bundle codec with strict secret sanitation,
-one device-authorization start exchange with fail-closed direct RoundTrip redirect prevention,
-bounded device-authorization continuation polling with fixed-expiry preservation and authorized transition,
-authorized authorization code exchange for credentials with DEC-010 expiry,
-candidate-only selected-account token refresh exchange with token rotation/retention and DEC-010 expiry,
-atomic OAuth credential and expiry persistence with single-revision CAS across Core and SQLite,
-transient Core `AuthSession.UserAction` validation and safe admin CLI presentation,
-default admin auth wiring for configured Codex accounts with redirect-refusing RoundTripper transport and account-scoped credentials,
-generic credential freshness resolution before inference dispatch with locked margin rechecks and refresh-scoped credential access while preserving interactive reauthentication from quarantine,
-concurrent refresh coalescing, cancellation safety, account isolation, independent-handle marker contention, and revision CAS quarantine under locked SQLite coordination,
-auth uncertainty persistence failure, restart recovery with in-flight refresh quarantine to uncertain, claimed continuation consumption, and explicit reauthentication recovery,
-Connector-private standard Responses profile request validation with native/translation stream/store invariants, 1 MiB body bounds, recursive duplicate JSON rejection, unsupported feature/continuation fail-closed checks, and byte-preserving fixture admission,
-Connector-private request adaptation with byte-preserving native output, immutable inputs, injected stream/store/reasoning defaults, and raw unknown/tool/history fidelity,
-trusted selected-account HTTP request header construction with OAuth credential/account binding, strict hop-by-hop/client-auth filtering, Connection nomination suppression, and fail-closed ASCII validation,
-and invocation-scoped managed HTTP transport hardening with non-replayable POST, redirect/compression refusal, phase deadlines, 16 KiB header and 64 MiB response bounds, incremental <= 4 KiB Body chunks, cancellation/idle cleanup, and provisional completion,
-and Connector-private inline SSE framing observation with exact-byte preservation, arbitrary split and CRLF/multiline tolerance, 1 MiB event and 4 KiB scalar limits, fail-closed malformed handling, and non-2xx rejection bypass,
-and pre-head HTTP rejection classification with bounded error body forwarding and non-retryable status mapping, and Connector-private SSE terminal event observation mapping completed, failed, error, incomplete, truncated, and trailing-data cases to contract outcomes with verbatim byte preservation,
-and Connector-private inclusive token usage extraction into normative UsageReport without subset double counting, zero versus absent preservation, invalid counter fallback to unknown, partial accounting on stream failure/interruption, exactly-once completion, and verbatim SSE body preservation,
-and honest unknown usage estimation with reject versus conservative reservation enforcement, invalid/overflow budget pre-inference rejection, and zero provider sends, and protected Codex route composition with exact-scope streaming capability, proactive credential freshness before dispatch, usage accounting, invalid budget rejection, revoked/disabled fail-closed denial, and coexisting native and Anthropic routes (M5.1-027),
-and protected real-socket Codex text streaming with early delta delivery before gated upstream completion, exact-byte SSE forwarding without whole-response buffering, truthful completed/incomplete/failed/error/EOF terminal outcomes, and exactly-once ledger and accounting settlement (M5.1-028),
-and two client-owned function-tool rounds with exact ordered history passthrough, distinct item/call IDs, linked function results, named and standard string tool-choice validation, unknown message/call extension preservation, and fail-closed zero-send rejection of unsupported resource history, with production Codex capabilities truthfully retaining llm.tools Unknown (M5.1-029),
-and explicit boolean parallel_tool_calls preservation and interleaved SSE deltas with distinct item and call IDs, ordered argument streaming, and linked tool results in subsequent rounds, with production Codex capabilities truthfully retaining llm.tools and llm.tools.parallel as Unknown (not usable in production; requests requiring them are rejected without provider sends) (M5.1-030),
-and chronological full-history item replay with verbatim encrypted reasoning ciphertext, summary fragments, item IDs, message phases, opaque extensions, and initial instructions across rounds, with fail-closed zero-send rejection of unsupported previous responses, resources, and server compaction, while production Codex capabilities truthfully retain llm.reasoning as Unknown (M5.1-031),
-and assembled two-account authorization credential and cache-header isolation proving spoofed client header stripping, virtual-key privacy, independent credential isolation across accounts, zero-send denials on out-of-policy/revoked/disabled requests, safe cache affinity without cross-account resource reuse, and secret redaction in responses and logs (M5.1-032),
-and real client-socket disconnect upstream cancellation without wait, 48 MiB stalled-reader bounded transport backpressure with ordered intact resumption, graceful stream drain and forced drain deadline expiry cancellation, zero post-commit fallback, and unobservable remote-compute cancellation preserved as unknown (M5.1-033),
-and delivery-safe retry and opaque replay affinity boundaries proving unknown-affinity classification for historical Responses reasoning with encrypted_content, pre-admission zero-send fail-closed rejection on multi-candidate routes, singleton target execution without candidate cycling, advancement only on explicit safe no-send, and zero fallback on HTTP 401/403/429/500, ambiguous connection drops, committed SSE failures, and client cancellation (M5.1-034),
-and assembled real-socket Codex durable settlement proving exactly-once terminal accounting across success, incomplete, failed, error, and EOF streams, conservative reservations, crash-intent restart reconciliation without duplicate charges or free work, auth/storage failure fail-closed readiness withdrawal, and duplicate Complete frame idempotency (M5.1-035),
-and offline Codex conformance and scoped capability matrix audit proving participation in shared opacity, incremental, cancellation, backpressure, and terminal fixtures, published M5.1-COMPATIBILITY.md separating local deterministic evidence from unverified live entitlement, truthful capability declarations with llm.streaming Supported and unproven capabilities Unknown, and honest Models scope enforcement (M5.1-036),
-and synthetic local Codex operations guide and test daemon proving real CLI TLS loopback auth start/continue/refresh without secret leakage, same-DB YAML protected streaming, proactive refresh, quarantine restart and interactive recovery, account disablement, native/Anthropic coexistence, and populated WAL-safe SQLite backup/restore integrity (M5.1-037),
-and bounded smoke capture and privacy validation proving paired direct/gateway inference and auth schema enforcement, strict secret/token/prompt redaction, operational bounds, and offline loopback self-testing across all scenarios without external provider calls (M5.1-038),
-and exact live auth and paired inference procedure with explicit CPython client/profile/model selection, harmless function/parallel/reasoning probes, zero-dispatch rejection expectations, and bounded auth/refresh dry-runs with zero external calls (M5.1-039).
-M5.1-040–042 are DONE; see their cards for the auth and paired plain-text evidence. M5.1-044's direct single-tool probe and roundtrip are recorded in [its card](tasks/M5.1-044.md); 184 authorized Lite requests remained after M5.1-047's two-request probe. M5.1-045–047 are DONE: native Lite `gpt-6-luna` function-kind and custom Lark grammar tool support, multi-call forwarding/replay, and offline protected fake-TLS roundtrips are verified; standard-profile tools and explicit parallel requests remain fail-closed Unknown with zero-send gates. [M5.1-047](tasks/M5.1-047.md) is DONE (direct two-request roundtrip passed HTTP 200/200; scoped native Lite custom Lark grammar in functions namespace admitted; offline mixed-history, incremental/cancellation, and zero-send coverage verified; reviewer PASS). Its card contains no gateway-custom live claim; M5.1-048 now records that separate evidence. M5.1-043 is DONE: DEC-012 conditionally accepts implementation/audit evidence and handoff to M5.2, not M5.1 milestone DONE; both M5.1-049 refresh and M5.1-051 encrypted-reasoning replay remain open.
-M5.1-048 is DONE. Both native Lite (`gpt-6-luna`) protected gateway single-function (v4) and custom Lark grammar (v5) tool roundtrips are empirically verified: both completed HTTP 200/200, reported usage (324/26 and 391/24), snapshot/delta and normalized marker equality, 2 target dispatches, 2 network dials, and zero retries. Proof is durably mirrored in `docs/implementation/evidence/M5.1-048/` with zero secrets, tokens, or raw prompts. This evidence is limited to the exercised Lite `gpt-6-luna` function and custom Lark forms; it does not establish other grammars, namespaces, models, or standard-profile support.
-[M5.1-050](tasks/M5.1-050.md) is DONE: its one authorized read-only comparison passed all seven account/token/store checks; its official CLI comparison artifact is validated with `--official-auth`. It compares the fresh v3 CLI login against the historical M5.1-040 gateway baseline, not contemporaneous logins, token copying, or inference. [DEC-012](../project/DECISIONS.md#dec-012--conditional-m51-codex-implementation-acceptance-with-deferred-live-gates) conditionally accepts implementation/audit evidence without marking M5.1 DONE or authorizing either live follow-up. [M5.1-049](tasks/M5.1-049.md) remains BLOCKED until its natural threshold, 2026-10-15 21:04:55.103 UTC; [M5.1-051](tasks/M5.1-051.md) remains DRAFT and unrun. The prior 23/200 usage leaves a recorded ceiling of 177, not authorization. Isolated gateway credential store `/tmp/opencode/pestiroute-auth.pQ8lCE` is preserved; zero raw credentials or parallel refreshes permitted.
-The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
-in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
+The protected Codex Connector includes device OAuth, atomic credential/expiry persistence, serialized refresh/quarantine/recovery, HTTP/SSE transport, account isolation, client-owned history, conservative retry and durable accounting. [M5.1-COMPATIBILITY](M5.1-COMPATIBILITY.md) owns evidence-scoped support. Live proof is limited to the exercised Lite gpt-6-luna plain-text/function/custom-Lark forms, M5.1-040 device-auth/local decrypt and M5.1-050 official CLI 0.162.1 read-only comparison against the historical gateway baseline. It is not general entitlement, standard-profile tools, parallel-true support or comprehensive reasoning coverage.
 
-The scoped candidate is ChatGPT subscription OAuth device login plus Responses
-HTTP/SSE, ordinary tools, client-owned history and opaque encrypted reasoning
-replay; the scoped live encrypted-reasoning follow-up remains unverified in
-M5.1-051. Auth user presentation is bound by DEC-009; M5.1-003
-specifies credential expiry/bootstrap and proactive refresh. Core remains
-provider-neutral. M5.1-040 records one operator-reported device login and locally
-measured read-only persistence/decryption; M5.1-050 compared a fresh official CLI
-login against that historical gateway baseline without contemporaneous dual
-login or inference. Refresh was not due/run and remains M5.1-049. M5.1-041
-separately verifies one matched Lite plain-text direct/gateway inference pair; it
-does not establish standard-profile live success or general account entitlement.
-Claude Code, Gemini CLI, ACP, WebSockets and Lite implementation stay outside
-this plan. No live auth/inference was performed in planning. The M4 deferral
-does not apply to M5.1-040/041.
+[M5.1-049](tasks/M5.1-049.md) stays BLOCKED until the natural threshold 2026-10-15 21:04:55.103 UTC and its own current preflight, explicit authorization and independent review. Real OAuth refresh has not been verified. [M5.1-051](tasks/M5.1-051.md) stays DRAFT/unrun; live encrypted-reasoning continuation needs its own READY assignment/authorization/review. Both remain open and neither is an M5.2 research prerequisite. The previously recorded 177/200 remaining request budget is a ceiling, not authorization. Preserve the operator's isolated credential store; no credentials/raw payloads belong in repository evidence.
 
-Keep the checked-in Context7/gopls configuration, shell/Git and Go checks;
-[M5.1 tooling](TOOLING.md#m51-tooling-gate) requires no new MCP/plugin. This
-inspection does not verify the developer's running MCP connections. Use one
-card per worker/reviewer session and the existing `/next N` workflow.
+M5.1-043's local checks included operator working-tree helpers not present in clean checkout; its card preserves that limit. Claude Code, Gemini CLI, ACP, WebSockets and IPC remain future work. Lite implementation is present under DEC-011; do not repeat the obsolete original planning exclusion as current state.
 
-## Available checks
+## Checks and operations
 
-[M4-045](tasks/M4-045.md) records the final review on `9035e18` plus the
-review fixes. `./scripts/check.sh` passes formatting, vet, unit/race tests and
-offline build. The uncached Anthropic/gateway/conformance race suites, ten
-repeated new regressions, pure-Go tests/build, compatible TLS/HTTP2 harness,
-artifact validator, shell syntax, and Markdown link/dependency audit also pass.
-Hosted M4 PR CI run 47 passed on the exact merged PR head. Planning verification
-checked 205 registry rows, acyclic dependencies, all 43 new template cards,
-732 relative links/anchors across 69 documents, retained M4 blockers, and a
-content-preserving research copy; `git diff --check` passed. No Go code changed or
-runtime suite was rerun for this documentation-only plan.
+Use pinned Go 1.27.1: ./scripts/check.sh performs formatting, vet, unit/race tests and offline build. Affected uncached race and pure-Go checks are listed in each card. M5.1-043 records the earlier local review results; current hosted CI and final merge evidence must be recorded separately rather than inferred from them. For this documentation-only M5.2 plan, verify links/anchors, registry dependency acyclicity/statuses, diff whitespace and preservation of older live gates; no real backend call is part of planning.
 
-[LOCAL-M4](LOCAL-M4.md) passes offline dual native/translation protected provisioning,
-native loopback dispatch, local translation validation/rejections, rate limiting,
-usage inspection, restart, and WAL-safe backup/restore integrity.
-[LOCAL-M3](LOCAL-M3.md) passes protected provisioning, inference, limits, usage,
-restart and consistent backup/restore. For an existing older M3 database: stop
-the gateway, make a consistent backup and run `admin migrate` to v6 before
-protected startup. Retain the matching external master key. Legacy/M2 JSON
-remain loopback development compatibility modes; see [LOCAL-M2](LOCAL-M2.md).
-
-## Evidence limits and open inputs
-
-- Built-in Connectors include native Responses and protected Anthropic Messages
-  translation. A translated instance has one account/model scope; protected YAML
-  selects its SQLite credential explicitly with `credential_id`, while native
-  settings retain `credential_env`. Inference uses scoped SQLite credentials.
-- Native transport failures retain unknown delivery; safe fallback is proven
-  with explicit deterministic fixtures, not a broader real-provider retry claim.
-  Remaining translation gates/live compatibility, stateful cross-target affinity,
-  broader live OAuth verification and IPC remain M4/M5/M6. M5.1 has only the
-  narrowly scoped auth and Lite evidence summarized above; M5.1-043 conditional review is DONE.
-- Historical M1 live evidence remains OpenCode 2.0.6 / public OpenAI Responses /
-  `gpt-5.4-mini`, with parallel tools unknown; it is distinct from ChatGPT
-  subscription Codex. Remote provider compute cancellation remains unverified.
-- [References](REFERENCES.md#migration-from-9router) retains source maps; upstream
-  provenance and code-reuse licenses must be resolved before copying source.
-  Other unresolved design choices remain in [DECISIONS](../project/DECISIONS.md).
+[LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), and [LOCAL-M5.1](LOCAL-M5.1.md) retain existing protected operations; schema v6 must be migrated while stopped with a consistent SQLite backup and the matching external master key. Local runtime launch/model installation is separate from deterministic CI and remains unverified until M5.2-007 and the per-runtime smoke gates.
