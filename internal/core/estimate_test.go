@@ -43,6 +43,7 @@ func TestEstimateResolution(t *testing.T) {
 		{"missing counter reserves", EstimateResult{Supported: true, Known: true, Usage: &UsageReport{InputTokens: new(int64(3))}}, RouteBudget{UnknownEstimateReserve, 13}, ResolvedEstimate{13, ""}, ""},
 		{"negative reserves", EstimateResult{Supported: true, Known: true, Usage: known(-1, 3)}, RouteBudget{UnknownEstimateReserve, 13}, ResolvedEstimate{13, ""}, ""},
 		{"overflow reserves", EstimateResult{Supported: true, Known: true, Usage: known(math.MaxInt64, 1)}, RouteBudget{UnknownEstimateReserve, 13}, ResolvedEstimate{13, ""}, ""},
+		{"overflow rejects", EstimateResult{Supported: true, Known: true, Usage: known(math.MaxInt64, 1)}, RouteBudget{UnknownEstimateReject, 0}, ResolvedEstimate{}, "estimate_unavailable"},
 		{"zero estimate reserves", EstimateResult{Supported: true, Known: true, Usage: known(0, 0)}, RouteBudget{UnknownEstimateReserve, 13}, ResolvedEstimate{13, ""}, ""},
 		{"unknown rejects with zero reserve", EstimateResult{}, RouteBudget{UnknownEstimateReject, 0}, ResolvedEstimate{}, "estimate_unavailable"},
 		{"reject budget forbids conservative tokens", EstimateResult{Supported: true, Known: true, Usage: known(4, 6)}, RouteBudget{UnknownEstimateReject, 13}, ResolvedEstimate{}, "invalid_route_budget"},
@@ -59,6 +60,9 @@ func TestEstimateResolution(t *testing.T) {
 			if tt.code != "" {
 				if gatewayErr == nil || gatewayErr.Code != tt.code {
 					t.Fatalf("error = %#v, want code %q", gatewayErr, tt.code)
+				}
+				if tt.code == "invalid_route_budget" && connector.calls != 0 {
+					t.Fatalf("invalid budget called estimator %d times", connector.calls)
 				}
 				return
 			}

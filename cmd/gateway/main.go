@@ -23,6 +23,7 @@ import (
 
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	anthropic "github.com/blestafist/pestiroute/internal/connector/anthropic"
+	"github.com/blestafist/pestiroute/internal/connector/codex"
 	connector "github.com/blestafist/pestiroute/internal/connector/responses"
 	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
@@ -74,6 +75,7 @@ type topologyComponent struct {
 	IdleTimeout    string             `json:"stream_idle_timeout,omitempty"`
 	Model          string             `json:"-"`
 	AccountID      string             `json:"-"`
+	Profile        string             `json:"-"`
 }
 
 type topologyRoute struct {
@@ -516,6 +518,9 @@ func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.A
 		if item.Implementation == "pestiroute.anthropic.messages" {
 			return anthropic.NewConnector()
 		}
+		if item.Implementation == "pestiroute.codex.responses" {
+			return codex.NewConnector()
+		}
 		return connector.NewConnector()
 	})
 }
@@ -523,6 +528,12 @@ func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.A
 type anthropicInit struct {
 	Model     string `json:"model"`
 	AccountID string `json:"account_id"`
+}
+
+type codexInit struct {
+	Model     string `json:"model"`
+	AccountID string `json:"account_id"`
+	Profile   string `json:"profile"`
 }
 
 func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component) (http.Handler, func(context.Context) error, error) {
@@ -639,6 +650,8 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			cfg = adapterConfig{MaxBodyBytes: maxBody, MaxHeaderBytes: maxHeader}
 		} else if item.Implementation == "pestiroute.anthropic.messages" {
 			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(anthropicInit{Model: item.Model, AccountID: item.AccountID})}
+		} else if item.Implementation == "pestiroute.codex.responses" {
+			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(codexInit{Model: item.Model, AccountID: item.AccountID, Profile: item.Profile})}
 		} else {
 			connect, _ := time.ParseDuration(item.ConnectTimeout)
 			tlsHandshake, _ := time.ParseDuration(item.TLSTimeout)
@@ -706,6 +719,31 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			accounting = sqliteAccountingStore{ledger: sqlite.NewLedger(persistentDB)}
 		}
 		services = core.NewPersistentServices(sqliteAccountReader{accounts: accounts}, sqliteCredentialReader{credentials: sqlite.NewCredentials(persistentDB), key: persistentKey}, persistentRefs, transports, c.logger)
+		codexAccounts := make(map[string]struct{})
+		for _, route := range c.Routes {
+			for _, component := range c.Components {
+				if component.ID == route.Connector && component.Implementation == "pestiroute.codex.responses" {
+					codexAccounts[route.Account] = struct{}{}
+				}
+			}
+		}
+		if len(codexAccounts) > 0 {
+			credentials := sqlite.NewCredentials(persistentDB)
+			authStore, err := newSQLiteAuthCoordinatorStore(accounts, credentials, sqlite.NewAuthSessions(persistentDB), persistentKey, "v1", persistentRefs)
+			if err != nil {
+				cleanup()
+				return nil, nil, errors.New("cannot initialize Codex credential freshness")
+			}
+			authServices := adminAuthServicesFunc(func(scope core.AttemptScope) core.InvocationServices {
+				return core.InvocationServices{Credentials: adminAuthCredentialAccess{store: authStore, accountID: scope.AccountID}, Transport: transports[scope.AccountID]}
+			})
+			freshness, err := core.NewAuthCoordinator(registry, authStore, authServices, time.Minute)
+			if err != nil {
+				cleanup()
+				return nil, nil, errors.New("cannot initialize Codex credential freshness")
+			}
+			services = freshCredentialServices{next: services, resolver: freshness, accounts: codexAccounts, margin: time.Minute}
+		}
 		if policyStore == nil {
 			policyStore = sqlitePolicyStore{policies: sqlite.NewKeyPolicies(persistentDB)}
 		}
@@ -848,21 +886,70 @@ func configuredCredentialRefs(c config) (map[string]map[string]string, error) {
 	if c.DatabasePath == "" {
 		return nil, nil
 	}
-	refsByConnector := make(map[core.InstanceID]string)
+	type credentialRef struct{ name, id string }
+	refsByConnector := make(map[core.InstanceID]credentialRef)
 	for _, component := range c.Components {
 		if component.Kind == core.ComponentConnector {
-			refsByConnector[component.ID] = component.CredentialEnv
+			name := "bearer"
+			if component.Implementation == "pestiroute.codex.responses" {
+				name = "oauth"
+			}
+			refsByConnector[component.ID] = credentialRef{name: name, id: component.CredentialEnv}
 		}
 	}
 	refsByAccount := make(map[string]map[string]string)
 	for _, route := range c.Routes {
 		ref := refsByConnector[route.Connector]
-		if existing := refsByAccount[route.Account]; existing != nil && existing["bearer"] != ref {
+		if existing := refsByAccount[route.Account]; existing != nil && (len(existing) != 1 || existing[ref.name] != ref.id) {
 			return nil, errors.New("persistent credential references conflict for one account")
 		}
-		refsByAccount[route.Account] = map[string]string{"bearer": ref}
+		refsByAccount[route.Account] = map[string]string{ref.name: ref.id}
 	}
 	return refsByAccount, nil
+}
+
+type credentialFreshnessResolver interface {
+	ResolveFreshCredentials(context.Context, string, time.Duration) (core.AuthCredentials, error)
+}
+
+type freshCredentialServices struct {
+	next interface {
+		ForAttempt(core.AttemptScope) core.InvocationServices
+	}
+	resolver credentialFreshnessResolver
+	accounts map[string]struct{}
+	margin   time.Duration
+}
+
+func (s freshCredentialServices) ForAttempt(scope core.AttemptScope) core.InvocationServices {
+	services := s.next.ForAttempt(scope)
+	if _, ok := s.accounts[scope.AccountID]; ok {
+		services.Credentials = freshCredentialAccess{resolver: s.resolver, credentials: services.Credentials, accountID: scope.AccountID, margin: s.margin}
+	}
+	return services
+}
+
+type freshCredentialAccess struct {
+	resolver    credentialFreshnessResolver
+	credentials core.CredentialAccess
+	accountID   string
+	margin      time.Duration
+}
+
+func (a freshCredentialAccess) Get(ctx context.Context, name string) ([]byte, error) {
+	credentials, err := a.resolver.ResolveFreshCredentials(ctx, a.accountID, a.margin)
+	if err != nil {
+		return nil, err
+	}
+	value, ok := credentials.Values[name]
+	if !ok || len(value) == 0 || a.credentials == nil {
+		return nil, core.ErrCredentialUnavailable
+	}
+	persisted, err := a.credentials.Get(ctx, name)
+	if err != nil || !bytes.Equal(value, persisted) {
+		return nil, core.ErrCredentialUnavailable
+	}
+	return persisted, nil
 }
 
 type fixedLegacyServices struct {

@@ -66,6 +66,7 @@ type nativeSettings struct {
 	Model                 string `yaml:"model"`
 	AccountID             string `yaml:"account_id"`
 	CredentialID          string `yaml:"credential_id"`
+	Profile               string `yaml:"profile"`
 }
 
 type protectedRoute struct {
@@ -206,6 +207,8 @@ func validateConnectorSettingsFields(root *yaml.Node) error {
 			}
 		case "pestiroute.anthropic.messages":
 			allowed["model"], allowed["account_id"], allowed["credential_id"] = true, true, true
+		case "pestiroute.codex.responses":
+			allowed["profile"], allowed["model"], allowed["account_id"] = true, true, true
 		default:
 			continue // Implementation validation reports this case.
 		}
@@ -322,6 +325,10 @@ func validateProtectedConfig(c protectedConfig) error {
 			if err := validateAnthropicSettings(prefix+".settings", item.Settings); err != nil {
 				return err
 			}
+		case "pestiroute.codex.responses":
+			if err := validateCodexSettings(prefix+".settings", item.Settings); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("%s has unsupported connector implementation %q", prefix, item.Implementation)
 		}
@@ -388,6 +395,13 @@ func validateProtectedConfig(c protectedConfig) error {
 					if route.Mode != "translation" || connector.Settings.Model != route.Model || connector.Settings.AccountID != target.Account {
 						return fmt.Errorf("%s target %q does not match Anthropic translation mode, model, and account settings", prefix, target.Connector)
 					}
+				} else if connector.Implementation == "pestiroute.codex.responses" {
+					if connector.Settings.Model != route.Model || connector.Settings.AccountID != target.Account {
+						return fmt.Errorf("%s target %q does not match Codex model and account settings", prefix, target.Connector)
+					}
+					if connector.Settings.Profile == "codex-responses-http-sse-lite-v1" && route.Mode != "native" {
+						return fmt.Errorf("%s target %q Lite profile requires native mode", prefix, target.Connector)
+					}
 				} else if route.Mode == "translation" {
 					return fmt.Errorf("%s target %q implementation does not match translation mode", prefix, target.Connector)
 				}
@@ -427,6 +441,25 @@ func validateAnthropicSettings(prefix string, s nativeSettings) error {
 	}
 	if s.BaseURL != "" || s.UpstreamProtocol != "" || s.Mode != "" || s.CredentialEnv != "" || s.MaxRequestBodyBytes != 0 || s.MaxRequestHeaderBytes != 0 || s.ConnectTimeout != "" || s.TLSHandshakeTimeout != "" || s.ResponseHeaderTimeout != "" || s.StreamIdleTimeout != "" {
 		return fmt.Errorf("%s has fields not supported by Anthropic connector", prefix)
+	}
+	return nil
+}
+
+func validateCodexSettings(prefix string, s nativeSettings) error {
+	if strings.TrimSpace(s.Model) == "" || strings.TrimSpace(s.AccountID) == "" {
+		return fmt.Errorf("%s requires non-empty model, account_id, and profile", prefix)
+	}
+	switch s.Profile {
+	case "codex-responses-http-sse-v1":
+	case "codex-responses-http-sse-lite-v1":
+		if s.Model != "gpt-6-luna" {
+			return fmt.Errorf("%s.profile codex-responses-http-sse-lite-v1 requires model gpt-6-luna", prefix)
+		}
+	default:
+		return fmt.Errorf("%s.profile must be codex-responses-http-sse-v1 or codex-responses-http-sse-lite-v1", prefix)
+	}
+	if s.BaseURL != "" || s.UpstreamProtocol != "" || s.Mode != "" || s.CredentialEnv != "" || s.CredentialID != "" || s.MaxRequestBodyBytes != 0 || s.MaxRequestHeaderBytes != 0 || s.ConnectTimeout != "" || s.TLSHandshakeTimeout != "" || s.ResponseHeaderTimeout != "" || s.StreamIdleTimeout != "" {
+		return fmt.Errorf("%s has fields not supported by Codex connector", prefix)
 	}
 	return nil
 }

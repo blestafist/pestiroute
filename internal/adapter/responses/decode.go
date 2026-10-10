@@ -169,14 +169,12 @@ func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.Execution
 			req.Capabilities["llm.streaming"] = struct{}{}
 		}
 	}
-	tools := false
 	if raw, ok := fields["tools"]; ok {
 		var value []json.RawMessage
 		if json.Unmarshal(raw, &value) != nil || value == nil {
 			return empty, invalid("Invalid tools")
 		}
-		tools = len(value) > 0
-		if tools {
+		if len(value) > 0 {
 			for _, tool := range value {
 				var descriptor struct {
 					Type string `json:"type"`
@@ -193,7 +191,7 @@ func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.Execution
 		if json.Unmarshal(raw, &value) != nil || string(raw) == "null" {
 			return empty, invalid("Invalid parallel_tool_calls")
 		}
-		if value && tools {
+		if value {
 			req.Capabilities["llm.tools.parallel"] = struct{}{}
 		}
 	}
@@ -239,6 +237,20 @@ func Decode(r *http.Request, maxBodyBytes, maxHeaderBytes int64) (core.Execution
 // classifyAffinity consumes only recognized routing/resource references. Other
 // request fields remain opaque and cannot be used by Core for route selection.
 func classifyAffinity(fields map[string]json.RawMessage) (known, sessionBound bool) {
+	if raw, ok := fields["input"]; ok {
+		var items []json.RawMessage
+		if json.Unmarshal(raw, &items) == nil {
+			for _, item := range items {
+				var value struct {
+					Type             string          `json:"type"`
+					EncryptedContent json.RawMessage `json:"encrypted_content"`
+				}
+				if json.Unmarshal(item, &value) == nil && value.Type == "reasoning" && len(value.EncryptedContent) != 0 && string(value.EncryptedContent) != "null" {
+					return false, false
+				}
+			}
+		}
+	}
 	for _, field := range []string{"previous_response_id", "conversation"} {
 		if raw, ok := fields[field]; ok {
 			var id *string
@@ -370,6 +382,11 @@ func inspectInput(raw json.RawMessage, capabilities map[core.Capability]struct{}
 				capabilities["llm.vision"] = struct{}{}
 			case "input_audio", "audio":
 				capabilities["llm.audio"] = struct{}{}
+			case "additional_tools":
+				if e := validateAdditionalToolsItem(object); e != nil {
+					return e
+				}
+				capabilities["llm.tools"] = struct{}{}
 			}
 		}
 		// Tool output may carry image parts in an output array instead of content.
@@ -403,6 +420,19 @@ func inspectInput(raw json.RawMessage, capabilities map[core.Capability]struct{}
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateAdditionalToolsItem(item map[string]json.RawMessage) *core.GatewayError {
+	var role string
+	if json.Unmarshal(item["role"], &role) != nil || role != "developer" {
+		return invalid("Invalid additional_tools role")
+	}
+	raw, ok := item["tools"]
+	var tools []json.RawMessage
+	if !ok || json.Unmarshal(raw, &tools) != nil || tools == nil {
+		return invalid("Invalid additional_tools definitions")
 	}
 	return nil
 }

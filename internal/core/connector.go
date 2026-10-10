@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 type ModelQuery struct {
@@ -45,10 +46,19 @@ type AuthRequest struct {
 }
 
 type AuthResult struct {
-	Supported   bool
-	State       string
-	NextAction  string
-	Credentials map[string][]byte
+	Supported           bool
+	State               string
+	NextAction          string
+	UserAction          *AuthUserAction
+	Credentials         map[string][]byte
+	CredentialExpiresAt *time.Time
+}
+
+// AuthUserAction contains safe operator-facing authentication instructions.
+type AuthUserAction struct {
+	VerificationURI string
+	UserCode        string
+	PollInterval    time.Duration
 }
 
 // CredentialAccess exposes credentials for the selected account only.

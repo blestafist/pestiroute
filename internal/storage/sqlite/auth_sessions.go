@@ -369,6 +369,14 @@ func (r *AuthSessions) CreateRefreshMarker(ctx context.Context, id, accountID, c
 	return nil
 }
 
+// HasQuarantinedRefresh reports whether an account has an uncertain exchange
+// whose credential generation cannot be trusted.
+func (r *AuthSessions) HasQuarantinedRefresh(ctx context.Context, accountID string) (bool, error) {
+	var found bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM auth_sessions WHERE account_id=? AND kind='refresh' AND lifecycle='uncertain')`, accountID).Scan(&found)
+	return found, err
+}
+
 func (r *AuthSessions) QuarantineRefreshMarker(ctx context.Context, id, accountID, reason string, currentRevision int64, now time.Time) error {
 	if reason != "ambiguous_result" && reason != "cancelled_after_call" && reason != "persistence_failed" && reason != "restart_in_progress" {
 		return fmt.Errorf("quarantine refresh marker: invalid reason")

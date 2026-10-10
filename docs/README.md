@@ -16,12 +16,15 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | Document | Owns |
 | --- | --- |
 | [Current](implementation/CURRENT.md) | Verified state, immediate focus, blockers, available commands |
-| [Tasks](implementation/TASKS.md) | Task status, owner, dependencies, scope, result, primary check; [M2 plan](implementation/TASKS.md#m2--connector-api-and-conformance-baseline), [bounded M3 plan](implementation/TASKS.md#m3--access-accounts-and-accounting), and [bounded M4 plan](implementation/TASKS.md#m4--first-translation-connector) |
+| [Tasks](implementation/TASKS.md) | Task status, owner, dependencies, scope, result, primary check; [M2 plan](implementation/TASKS.md#m2--connector-api-and-conformance-baseline), [bounded M3 plan](implementation/TASKS.md#m3--access-accounts-and-accounting), [bounded M4 plan](implementation/TASKS.md#m4--first-translation-connector), and [M5.1 Codex plan](implementation/TASKS.md#m51--codex-subscription-connector) |
 | [Task template](implementation/tasks/TEMPLATE.md) | Planner's format for bounded task cards in `implementation/tasks/` |
 | [Roadmap](implementation/ROADMAP.md) | Milestones and acceptance gates; not a task checklist |
 | [Stack](implementation/STACK.md) | Toolchain, libraries, build and operational conventions |
 | [M4 translation brief](implementation/M4-TRANSLATION.md) | Current-code seams, first-slice policy/decision gates and official sources; planning input until reviewed by M4-001 |
+| [M5.1 Codex brief](implementation/M5.1-CODEX.md) | Current-code seams, first-profile decision gates, task groups and local/live acceptance for the Codex slice |
+| [Codex connector research](references/CODEX_CONNECTOR_RESEARCH.md) | Supplied pinned-source research, preserved with trailing EOF whitespace normalized; proposals and unknowns remain distinct from implemented support |
 | [M4 compatibility matrix](implementation/M4-COMPATIBILITY.md) | Evidence-backed scope, capabilities, field policy, and local/live proof boundary for Anthropic translation |
+| [M5.1 Codex compatibility matrix](implementation/M5.1-COMPATIBILITY.md) | Evidence-backed Codex profile, scoped capabilities, field policy, and local/live proof boundary |
 | [Contract](implementation/CONTRACT.md) | Normative v1 Adapter–Core Runtime–Connector boundary, frames, capabilities, errors and lifecycle |
 | [Configuration](implementation/CONFIGURATION.md) | Target configuration schema, persistent state, access and accounting |
 | [Testing](implementation/TESTING.md) | Behavioral verification, conformance, fixtures, smoke tests |

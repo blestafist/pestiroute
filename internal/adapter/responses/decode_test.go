@@ -91,6 +91,53 @@ func TestDecodeOpaqueAndCapabilities(t *testing.T) {
 	}
 }
 
+func TestLunaLitePlainTextAdmitsWithoutToolOrReasoningCapabilities(t *testing.T) {
+	body := `{"model":"gpt-6-luna","stream":true,"store":false,"instructions":"","include":["reasoning.encrypted_content"],"tool_choice":"auto","parallel_tool_calls":false,"input":[{"type":"additional_tools","id":"at_fixed","role":"developer","tools":[]},{"type":"message","role":"user","content":[{"type":"input_text","text":"Reply with the word OK."}]}]}`
+	decoded, err := Decode(request(body), int64(len(body)), 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range []core.Capability{"llm.streaming", "llm.tools"} {
+		if _, ok := decoded.Capabilities[capability]; !ok {
+			t.Fatalf("Lite request omitted %s capability: %v", capability, decoded.Capabilities)
+		}
+	}
+	if _, ok := decoded.Capabilities["llm.tools.parallel"]; ok {
+		t.Fatalf("false parallel preference requires capability: %v", decoded.Capabilities)
+	}
+	scope := core.CapabilityScope{Protocol: protocol, Mode: "native", Model: decoded.Model, AccountID: "fake-account"}
+	capabilities := core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported, "llm.tools": core.Supported}}
+	candidate := core.EligibilityCandidate{
+		Scope: scope, Adapter: core.Descriptor{Kind: core.ComponentAdapter, Protocols: []string{protocol}},
+		Connector: core.Descriptor{Kind: core.ComponentConnector, Protocols: []string{protocol}}, InitializedAndReady: true,
+		AdapterCapabilityScope: scope, ConnectorCapabilityScope: scope,
+		AdapterCapabilities: capabilities, ConnectorCapabilities: capabilities,
+	}
+	if err := candidate.Eligible(scope, core.EligibilityRequirements{Request: decoded.Capabilities}); err != nil {
+		t.Fatalf("plain-text Lite request did not pass deterministic fake admission: %v", err)
+	}
+}
+
+func TestAdditionalToolsShapeAndParallelRequirements(t *testing.T) {
+	for _, body := range []string{
+		`{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"user","tools":[]}]}`,
+		`{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer","tools":null}]}`,
+		`{"model":"gpt-6-luna","input":[{"type":"additional_tools","role":"developer"}]}`,
+	} {
+		if _, err := Decode(request(body), int64(len(body)), 4096); err == nil {
+			t.Errorf("malformed additional_tools accepted: %s", body)
+		}
+	}
+	body := `{"model":"gpt-6-luna","parallel_tool_calls":true,"input":[{"type":"additional_tools","role":"developer","tools":[]}]}`
+	decoded, err := Decode(request(body), int64(len(body)), 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded.Capabilities["llm.tools.parallel"]; !ok {
+		t.Fatalf("parallel request omitted capability: %v", decoded.Capabilities)
+	}
+}
+
 func TestDecodeAcceptsOpaqueModelIdentifiers(t *testing.T) {
 	for _, name := range []string{"gpt-5.4-mini", "vendor/model:preview-2"} {
 		t.Run(name, func(t *testing.T) {
@@ -111,6 +158,7 @@ func TestDecodeMarksTrustedAffinityWithoutRewritingBody(t *testing.T) {
 		stateful bool
 	}{
 		{name: "stateless", body: base, known: true},
+		{name: "encrypted reasoning has unknown account affinity", body: `{"model":"gpt-5.4-mini","input":[{"type":"reasoning","encrypted_content":"opaque"}]}`},
 		{name: "previous response and forged metadata", body: `{"model":"gpt-5.4-mini","previous_response_id":"resp_123","session_bound":false,"affinity_known":true}`, known: true, stateful: true},
 		{name: "null previous response reference", body: `{"model":"gpt-5.4-mini","previous_response_id":null}`, known: true},
 		{name: "conversation resource", body: `{"model":"gpt-5.4-mini","conversation":"conv_123"}`, known: true, stateful: true},
@@ -235,7 +283,7 @@ func TestDecodeOptionalFeatures(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	r.Header.Set("Content-Encoding", "identity")
 	got, err := Decode(r, 4096, 4096)
-	if err != nil || got.Metadata.Streaming == nil || *got.Metadata.Streaming || len(got.Capabilities) != 0 {
+	if err != nil || got.Metadata.Streaming == nil || *got.Metadata.Streaming || len(got.Capabilities) != 1 {
 		t.Fatalf("optional fields: %+v %+v", got, err)
 	}
 	r = request(base)

@@ -38,7 +38,9 @@ type fixture struct {
 	release    func()
 	close      func()
 	translated bool
+	codex      bool
 	validate   func() error
+	capture    func() []byte
 	dispatcher *core.Dispatcher
 }
 
@@ -51,11 +53,10 @@ func TestConformanceOpacity(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		new  func(*testing.T, [][]byte) (fixture, func() []byte)
-	}{{"native-loopback", nativeOpaqueFixture}, {"scripted", scriptedOpaqueFixture}} {
+	}{{"native-loopback", nativeOpaqueFixture}, {"codex", codexOpaqueFixture}, {"scripted", scriptedOpaqueFixture}} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx, captured := tc.new(t, parts)
 			t.Cleanup(fx.close)
-			fx.request.Payload.Body = append([]byte(nil), opaqueRequest...)
 			if err := fx.init(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -71,7 +72,7 @@ func TestConformanceOpacity(t *testing.T) {
 			if err := assertOpaque(body, want); err != nil {
 				t.Fatal(err)
 			}
-			if err := assertOpaque(captured(), opaqueRequest); err != nil {
+			if err := assertOpaque(captured(), fx.request.Payload.Body); err != nil {
 				t.Fatalf("request: %v", err)
 			}
 		})
@@ -83,7 +84,7 @@ func TestConformanceIncremental(t *testing.T) {
 		name     string
 		scripted bool
 		new      func(*testing.T, <-chan struct{}, chan<- struct{}) fixture
-	}{{name: "native-loopback", new: nativeGatedFixture}, {name: "scripted", scripted: true, new: scriptedGatedFixture}} {
+	}{{name: "native-loopback", new: nativeGatedFixture}, {name: "codex", new: codexGatedFixture}, {name: "scripted", scripted: true, new: scriptedGatedFixture}} {
 		t.Run(tc.name, func(t *testing.T) {
 			gate, waiting := make(chan struct{}), make(chan struct{}, 1)
 			fx := tc.new(t, gate, waiting)
@@ -139,9 +140,16 @@ func runIncrementalScenario(fx fixture, connector core.Connector, gate chan stru
 	if err != nil || frame.Type != core.FrameHead {
 		return fmt.Errorf("Head = %+v, %v", frame, err)
 	}
-	frame, err = boundedNext()
-	if err != nil || frame.Type != core.FrameBody || !bytes.Equal(frame.Body.Data, incrementalFirst) {
-		return fmt.Errorf("initial Body = %+v, %v", frame, err)
+	var first []byte
+	for len(first) < len(incrementalFirst) {
+		frame, err = boundedNext()
+		if err != nil || frame.Type != core.FrameBody || frame.Body == nil {
+			return fmt.Errorf("initial Body = %+v, %v", frame, err)
+		}
+		first = append(first, frame.Body.Data...)
+	}
+	if !bytes.Equal(first, incrementalFirst) {
+		return fmt.Errorf("initial Body bytes = %q, want %q", first, incrementalFirst)
 	}
 	if err := assertGateClosed(gate); err != nil {
 		return err
@@ -172,7 +180,7 @@ func runIncrementalScenario(fx fixture, connector core.Connector, gate chan stru
 			return errors.New("timed out waiting for gated upstream write (safety bound)")
 		}
 	}
-	body := append([]byte(nil), frame.Body.Data...)
+	body := append([]byte(nil), first...)
 	timer := time.NewTimer(2 * time.Second)
 	select {
 	case got := <-pending:
@@ -339,6 +347,7 @@ type scenario struct {
 func TestConformance(t *testing.T) {
 	factories := []factory{
 		{name: "native-loopback", new: nativeFixture},
+		{name: "codex", new: codexFixture},
 		{name: "anthropic-translation", new: translationFixture},
 		{name: "scripted", new: scriptedFixture},
 	}
@@ -379,6 +388,7 @@ func TestConformance(t *testing.T) {
 func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 	factories := []factory{
 		{name: "native-loopback", new: nativeFixture},
+		{name: "codex", new: codexFixture},
 		{name: "anthropic-translation", new: translationFixture},
 		{name: "scripted", new: scriptedFixture},
 	}
@@ -422,6 +432,10 @@ func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 			if fx.translated {
 				wrongMode.Mode = core.ModeNative
 			}
+			if fx.codex {
+				// Codex supports both declared modes; test rejection with an undeclared mode.
+				wrongMode.Mode = "unsupported-mode"
+			}
 			assertExecuteRejected(t, fx.connector, fx.request, wrongMode, services)
 			wrongModel := fx.request
 			wrongModel.Model = "other-model"
@@ -434,17 +448,26 @@ func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 				t.Fatalf("valid scoped Models result=%+v error=%v", models, err)
 			}
 			otherModels, err := fx.connector.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: fx.scope.Mode, AccountID: "other-account"}, services)
-			if err != nil || otherModels.Supported || len(otherModels.Models) != 0 {
+			if fx.codex {
+				// The Connector contract's exact-scope check classifies this as scope_mismatch.
+				if err == nil || err.Code != "scope_mismatch" || otherModels.Supported || len(otherModels.Models) != 0 {
+					t.Fatalf("cross-account Codex Models result=%+v error=%v", otherModels, err)
+				}
+			} else if err != nil || otherModels.Supported || len(otherModels.Models) != 0 {
 				t.Fatalf("cross-account Models result=%+v error=%v", otherModels, err)
 			}
 			usageQuery := core.UsageQuery{}
-			if fx.translated {
+			if fx.translated || fx.codex {
 				usageQuery = core.UsageQuery{Protocol: protocol, Mode: fx.scope.Mode, Model: fx.request.Model, AccountID: fx.scope.AccountID}
 			}
 			if result, err := fx.connector.EstimateUsage(context.Background(), usageQuery, services); err != nil || result.Supported != fx.translated || result.Known || result.Usage != nil {
 				t.Fatalf("unsupported usage estimate fabricated result=%+v error=%v", result, err)
 			}
-			if result, err := fx.connector.Authenticate(context.Background(), core.AuthRequest{}, services); err != nil || result.Supported || result.State != "" || len(result.Credentials) != 0 {
+			authRequest := core.AuthRequest{}
+			if fx.codex {
+				authRequest.AccountID = account
+			}
+			if result, err := fx.connector.Authenticate(context.Background(), authRequest, services); err != nil || result.Supported || result.State != "" || len(result.Credentials) != 0 {
 				t.Fatalf("unsupported authentication fabricated result=%+v error=%v", result, err)
 			}
 			if err := fx.connector.Close(context.Background()); err != nil {
@@ -470,7 +493,7 @@ func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 }
 
 func TestConformanceFailedInitIsUnavailable(t *testing.T) {
-	for _, f := range []factory{{name: "native-loopback", new: nativeFixture}, {name: "anthropic-translation", new: translationFixture}, {name: "scripted", new: scriptedFixture}} {
+	for _, f := range []factory{{name: "native-loopback", new: nativeFixture}, {name: "codex", new: codexFixture}, {name: "anthropic-translation", new: translationFixture}, {name: "scripted", new: scriptedFixture}} {
 		t.Run(f.name, func(t *testing.T) {
 			fx := f.new(t)
 			t.Cleanup(fx.close)

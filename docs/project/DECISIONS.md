@@ -105,6 +105,222 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Acceptance condition:** Satisfied by explicit human governance acceptance on 2026-10-04, including the reduced claim boundary, offline requirements, mandatory pre-production live obligation, and authorization to perform the bounded documentation synchronization autonomously.
 - **Verification:** On any later accepted path, audit offline conformance and negative cases separately from the exact official live evidence matrix; verify provenance, privacy, event/usage/cancellation scope, and every public support claim against evidence. This ADR itself requires documentation/link and registry/dependency checks only.
 
+### DEC-009 — Separate Safe User Actions from Opaque Auth State
+
+- **Status:** Accepted for the M5.1 Codex device-auth binding under the
+  authorized M5.1 roadmap and M5.1-002 scope.
+- **Context:** `AuthResult.State` is opaque Connector continuation state encrypted
+  by Core. Reusing it for display data or printing it can disclose device
+  identifiers, PKCE material, or tokens, while the current result has no generic
+  way to present a verification URL/code to the operator.
+- **Decision:** Add optional `AuthResult.UserAction *AuthUserAction` with
+  `VerificationURI`, `UserCode`, and `PollInterval`. This is a presentation-only
+  projection, separate from opaque `State` and credential values. The Connector
+  extracts only the safe action from provider response; the URI is absolute
+  HTTPS without embedded credentials, and the value never contains a
+  device-auth identifier, PKCE material, token, or raw response.
+  Core projects it to transient `AuthSession.UserAction` for the admin
+  presentation seam and does not persist it as continuation state. Admin output
+  may display the URI, code, poll interval, opaque runtime session handle, and
+  runtime expiry, but not `State` or credentials.
+- **Validation and discovery:** Core validates before exposing: URI is 1–2048
+  printable ASCII bytes with no spaces/control bytes, absolute HTTPS with a
+  host and no userinfo; code is 1–256 printable ASCII bytes with no controls;
+  poll interval is positive. `UserAction` is valid only with
+  `Supported=true, NextAction=continue`. Nil presence is explicit, self-
+  describing discovery; a nil action on continue is valid for legacy opaque
+  continuations that do not require operator interaction. Any Connector flow
+  that does require user interaction MUST return a valid action. Connector
+  auth-flow conformance tests enforce this obligation; Core cannot infer a
+  missing action from opaque state, and no new capability is introduced.
+- **Lifecycle and security:** Start calls Authenticate once. A continuing result
+  creates the existing encrypted opaque session with fixed runtime expiry.
+  Each explicit continuation makes at most one poll; a pending result can return
+  a new user action and provider interval, which the caller observes before its
+  next poll. There is no runtime polling loop and no provider response extends
+  expiry. Caller cancellation follows M3-AUTH: before invocation it consumes
+  the session; after invocation begins it consumes the durably claimed
+  continuation conservatively. DEC-007 claim ownership, revision checks,
+  acknowledged credential persistence, and no-SQL-during-provider-call rules
+  are unchanged. An action on a completed, unsupported, or refresh result is
+  invalid. For any malformed/inconsistent action result, discard all result
+  fields before exposure/persistence; Start creates no session, Continue
+  consumes its already-claimed session/claim, and an invoked Refresh result is
+  quarantined. If claim consumption cannot commit, expose no result and rely on
+  DEC-007 restart recovery to consume the ambiguous claim. Expired or stale
+  sessions are rejected before provider work.
+- **Alternatives:** Encode the action in opaque state, expose provider-specific
+  structures, or have Connectors print directly. Each couples presentation to
+  secrets/provider format or bypasses runtime ownership; rejected.
+- **Compatibility / impact:** Additive optional AuthResult field and one generic
+  AuthUserAction value; Core exposes the result transiently as
+  `AuthSession.UserAction`. Presence is self-describing (`nil` means absent), so
+  older producers may omit it and older consumers may ignore it. A nil action
+  remains valid for legacy continue flows that do not require user interaction;
+  interactive Connector flows are contractually required to return one and
+  conformance-tested. No new
+  operation, provider branch, database column,
+  encrypted-state format, or session-lifetime change. Existing Connectors that
+  omit the field remain valid for auth flows not requiring user presentation;
+  implementations requiring operator action must supply it. CONTRACT and
+  M3-AUTH are synchronized. This is an additive v1 semantic extension under the
+  existing Connector API version; old consumers ignore the optional value and
+  old producers yield nil. No protocol-adapter or inference contract changes.
+- **Verification:** Paper-walk start, pending poll, success, expiry/timeout,
+  cancellation, and competing/stale continuation; audit that user output never
+  contains opaque state or credentials. Verify synchronized specifications and
+  existing offline checks before dependent implementation proceeds.
+
+### DEC-010 — Carry Credential Expiry with Auth Results
+
+- **Status:** Accepted under M5.1-003 planner arbitration.
+- **Context:** The v1 `AuthResult` returns named candidate credential bytes but no expiry. The M3 SQLite credential row already has an expiry column and revision CAS, while the current composition adapter clears expiry on replacement. A Codex OAuth access token must have trusted absolute expiry persisted atomically with its encrypted access/refresh/account-identity bundle. Inferring expiry from provider JWTs or parsing the provider bundle in Core/runtime would violate Connector ownership.
+- **Decision:** Add optional absolute `CredentialExpiresAt` to `AuthResult`, produced by the Connector from a successful trusted exchange response. Core generically rejects an invalid supplied time and carries it as runtime metadata; profile conformance requires it where expiry is mandatory. The `AuthCredentials` runtime snapshot carries expiry. `ReplaceAuthCredentials`, `ResolveRefresh`, and `FinishAuthSession` atomically CAS-replace encrypted candidate bytes and expiry in the same transaction that advances revision and resolves auth state. Existing profiles may omit it and retain no-expiry behavior. For `Authenticate` with `AuthRequest.Action=refresh`, that action selects auth-scoped credential resolution, which may return the selected account's expired encrypted bundle only to refresh; ordinary inference access remains expiry-gated. Freshness margin ownership/policy belongs to the selected Connector profile, passed to generic coordination without a provider branch; waiters skip only when the latest snapshot expires strictly beyond now plus that margin. A refresh CAS mismatch after exchange discards candidates, quarantines as `ambiguous_result`, and never retries or reuses the possibly rotated token.
+- **Alternatives:** Parse JWT/provider bundle in Core or storage (rejected: provider semantics outside Connector); encode expiry as a special named credential and parse it generically (rejected: weakly typed, accidental persistence/merge hazards); infer expiry from local token timing (rejected: not authoritative).
+- **Compatibility / impact:** Additive optional field; existing producers may omit it for profiles not requiring expiry and retain current no-expiry behavior. A producer/profile relying on expiry requires a consumer that persists the field; an older consumer that ignores it is not compatible with that profile. This extends v1 auth-result and scoped credential-access semantics and is synchronized in CONTRACT.md, M3-AUTH.md, and M5.1-BINDING.md. Existing `credentials.expires_at` stores expiry; no schema change is needed. No provider-specific Core logic is permitted.
+- **Acceptance condition:** Satisfied by planner arbitration assigning M5.1-003 to resolve this semantic gap and explicitly authorizing DEC-010 acceptance and specification synchronization.
+- **Verification:** M5.1-003 paper-walked bundle opacity, trusted expiry provenance, nil compatibility, atomic CAS/expiry behavior, and stale/ambiguous refresh handling; synchronized CONTRACT, M3-AUTH, and M5.1-BINDING. Local offline checks require no live provider call.
+
+### DEC-011 — Opt-in Codex Responses Lite Text Profile
+
+- **Status:** Accepted, amended by M5.1-047 after direct custom-tool evidence
+  and protected offline gateway verification. Scope remains profile-, model-,
+  and account-specific; this is not global Codex CLI compatibility.
+- **Context:** The pinned official Codex source declares `gpt-6-luna` as using
+  Responses Lite, while the existing standard Codex profile remains the default.
+  The authorized direct Luna Lite capture `luna-7-completion.json` records HTTP
+  200, completed stream drained to EOF, one reasoning item, and 27 reasoning
+  tokens with `effort: high` and `context: all_turns`; reviewer PASS is recorded
+  by `ses_eeff1a4c6ffex6A3uqMCHiJXCp`. This is scoped direct evidence only, not
+  gateway-pair or full M5.1-043 evidence. The earlier plain request omitting
+  reasoning was rejected with field `reasoning.context`; that rejects the
+  omission, not the model. M5.1-044 directly verified one function tool
+  emission and a fresh two-request function roundtrip (HTTP 200/200); its
+  explicit parallel request was rejected (HTTP 400). The direct capture
+  observed one emitted call only; it did not test or impose an output-call
+  count ceiling. M5.1-047 directly completed one harmless custom-tool
+  roundtrip in two HTTP 200 requests, with completed terminals and usage
+  observed. This is limited to the observed custom Lark shape; it does not
+  establish live gateway behavior, other grammars, parallel support, or general
+  entitlement.
+- **Decision:** Specify one opt-in connector profile, with the exact literal
+  `codex-responses-http-sse-lite-v1`, selected only through the existing
+  `componentConfig.Profile` setting. It is restricted to configured model
+  `gpt-6-luna` and the `plain_text` scenario. The Connector adds exactly
+  `x-openai-internal-codex-responses-lite: true` from trusted profile
+  configuration; caller headers cannot select or override it. It uses scoped
+  credentials and native Responses payload bytes. For this opt-in profile only,
+  the Connector sends honest identity metadata `originator: pestiroute` and
+  `User-Agent: PestiRoute` (no official-client or version impersonation), plus
+  one fresh random UUID per attempt reused as `session-id`, `thread-id`, and
+  `x-client-request-id`. These values are ephemeral request correlation only;
+  they do not create persistent conversations or a Core session API. Suppress
+  caller-supplied Lite, originator, user-agent, and correlation-header values,
+  including case variants; Lite selection comes from trusted configuration and
+  account authentication remains solely scoped-credential-derived. Never log
+  the UUID or raw header values. This matches the known successful direct
+  identity shape as a compatibility recipe, not a proven provider requirement;
+  the later paired-runner mismatch does not establish that missing headers
+  caused its unknown 400. No Adapter/Core API growth,
+  automatic Lite conversion, or caller-controlled profile/header. The caller
+  forms the Lite-shaped body, including its `additional_tools` prefix and
+  `reasoning.context: all_turns`; the Connector preserves it byte-for-byte.
+  Non-native modes and all other profile/model combinations reject Lite
+  selection. The
+  Lite profile may declare `llm.reasoning: Supported` only after verified
+  direct evidence and offline profile-scoped passthrough, ordering, and usage
+  tests. The captured direct proof used `effort: high`; the official catalog's
+  `medium` default is not required and must not be substituted into that proof.
+  A matched gateway pair is additionally required before publishing a working
+  support claim for the route.
+  `llm.tools: Supported` is permitted only for exact `openai.responses.v1` /
+  `native` / `gpt-6-luna` / configured account scope, and covers client-owned
+  function tools in their established Lite forms (direct definitions or the
+  official `functions` namespace) plus custom tools only in that namespace
+  inside a Lite `additional_tools` developer input item. The admitted custom
+  envelope is `type:"custom"`
+  with name, description, and
+  `format:{type:"grammar",syntax:"lark",definition:<non-empty string>}`;
+  function `parameters` are not accepted on custom definitions. The Connector
+  checks this envelope but does not parse/compile the grammar, execute tools, or
+  alter native body bytes. Custom definitions require `tool_choice:"auto"`;
+  top-level custom definitions, forced choices with custom definitions,
+  unproven grammar forms/syntaxes, hosted tools, and other namespaces fail
+  before send. Custom call items, input deltas, linked outputs, and encrypted
+  reasoning history remain opaque and are forwarded without a tool-item count
+  ceiling. With `parallel_tool_calls:false`, emitted function/custom call items
+  remain client-owned; this does not establish provider-side parallel support.
+  A true `parallel_tool_calls` requires `llm.tools.parallel`, which remains
+  `Unknown` in every Codex scope and is rejected before send. Standard-profile
+  `llm.tools` and `llm.reasoning` remain `Unknown`. No
+  capability gate may be bypassed. The
+  existing standard literal `codex-responses-http-sse-v1` and its default
+  behavior remain unchanged.
+- **Alternatives rejected:** Silently selecting Lite from a model name (mixes
+  profile selection with routing); changing the standard profile (breaks its
+  established default); normalizing arbitrary Responses bodies into a universal
+  Lite shape (violates native opacity); and inferring production support from
+  direct-only evidence as proof of live gateway/provider behavior (insufficient).
+- **Compatibility / impact:** Additive, explicit configuration opt-in only.
+  Existing standard-profile configurations and behavior are unchanged. No
+  credential format/storage, public API, or Core contract changes. The
+  profile-scoped declaration follows the existing exact-scope capability model.
+  The opt-in profile literal is additive; the existing standard literal/default
+  and its upstream header set are unchanged. Protected fake-TLS tests establish
+  local gateway preservation and zero-send rejection only; no live gateway tool
+  round was run, and this does not close M5.1-043.
+- **Bounds and limitations:** The scoped smoke flow uses a 30-second deadline,
+  1 MiB response-byte ceiling, and 256 UTF-8 output-text-byte client observation
+  cap. These bound local observation only; they do not guarantee an upstream
+  generation/billing ceiling or server-side cap.
+- **Verification:** Independently review source-pinned profile behavior and
+  synchronized M5.1 binding/configuration/smoke text. Before implementation
+  claims, verify exact header isolation, byte-preserving native request behavior,
+  rejection of unsupported required semantics before send, and bounded
+  incremental streaming. The direct custom artifact is limited to the exact
+  model/profile and observed Lark custom shape. Offline protected-gateway
+  evidence is separate and is not live gateway/provider evidence. Neither
+  establishes other grammars, hosted/parallel tools, general entitlement, or
+  M5.1-043 completion.
+
+### DEC-012 — Conditional M5.1 Codex Implementation Acceptance with Deferred Live Gates
+
+- **Status:** Accepted by explicit user approval on 2026-10-10 for conditional
+  acceptance of M5.1 implementation/audit evidence while two live gates remain
+  open. This is not M5.1 milestone completion or live-gate passage.
+- **Context:** M5.1-043's audit is ready to proceed with its dependencies DONE.
+  M5.1-049's read-only preflight verified the selected gateway credential is
+  still fresh; its production one-minute freshness margin does not make refresh
+  due until 2026-10-15 21:04:55.103 UTC. Forcing expiry or refreshing early is
+  prohibited. Existing implementation and deterministic tests cover refresh
+  rotation, coalescing, cancellation, persistence, quarantine/restart recovery,
+  affinity, streaming and settlement, while actual provider refresh remains
+  unobserved.
+- **Decision:** Conditionally accept the implementation and deterministic-test
+  evidence audited by M5.1-043 without representing M5.1 as DONE or passing its
+  live gates. Retain (1) live OAuth refresh as M5.1-049, BLOCKED until its
+  natural eligibility time, and (2) scoped two-turn encrypted-reasoning replay
+  as M5.1-051, DRAFT and unrun. Both are separately tracked follow-ups; neither
+  is waived or authorized for execution by this decision. M5.1-049 requires the
+  due time, fresh read-only preflight, explicit authorization, and independent
+  review PASS of the then-current diff. M5.1-051 requires its own READY status,
+  assignment, explicit live authorization and independent review. These scoped
+  gates do not require or claim comprehensive live coverage of all
+  reasoning/history forms. Do not claim all M5.1 live acceptance or broader
+  Codex compatibility.
+- **Alternatives rejected:** Force expiration, revoke/rotate credentials, or
+  invoke refresh before eligibility; or represent the milestone as DONE while
+  either live gate remains open.
+- **Compatibility / impact:** Documentation/governance exception only. No v1
+  contract, implementation behavior, capability declaration, or follow-up
+  acceptance criteria change. This is not the M4 DEC-008 deferral and grants no
+  provider call authorization.
+- **Verification:** Audit task evidence and its exact claim boundaries; verify
+  M5.1-049 stays BLOCKED with a consistent natural due time, M5.1-051 stays
+  DRAFT and unrun, both are reflected as open in M5.1-043/current compatibility
+  claims, and links/dependencies remain valid. No live request is part of this
+  decision.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |

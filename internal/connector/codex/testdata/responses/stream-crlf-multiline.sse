@@ -1,0 +1,8 @@
+event: response.output_text.delta
+data: {"type":"response.output_text.delta",
+data: "item_id":"msg_unicode","delta":"café"}
+
+event: response.completed
+data: {"type":"response.completed",
+data: "response":{"status":"completed","usage":{"input_tokens":0,"output_tokens":0}}}
+

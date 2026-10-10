@@ -126,6 +126,39 @@ func newBackpressureFixture(t *testing.T, name string) backpressureFixture {
 	if name == "anthropic-translation" {
 		return newTranslationBackpressureFixture(t)
 	}
+	if name == "codex" {
+		const chunkSize = 32 << 10
+		chunk := []byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"" + strings.Repeat("x", chunkSize-85) + "\"}\n\n")
+		steps := []fakeupstream.Step{{Data: incrementalFirst}}
+		sent := make([]chan struct{}, 0, backpressureFrames)
+		want := make([]byte, 0, backpressureFrames*chunkSize)
+		want = append(want, incrementalFirst...)
+		for range backpressureFrames - 1 {
+			delivered := make(chan struct{})
+			sent = append(sent, delivered)
+			steps = append(steps, fakeupstream.Step{Data: chunk, Sent: delivered})
+			want = append(want, chunk...)
+		}
+		terminal := []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+		terminalSent := make(chan struct{})
+		sent = append(sent, terminalSent)
+		steps = append(steps, fakeupstream.Step{Data: terminal, Sent: terminalSent})
+		want = append(want, terminal...)
+		fx := codexFixtureWithResponse(t, fakeupstream.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: steps})
+		fx.wantBody = want
+		sentCount := 0
+		return backpressureFixture{fixture: fx, total: backpressureFrames, maxProgress: backpressureFrames - 1, runner: fx.connector, progress: func() int {
+			for sentCount < len(sent) {
+				select {
+				case <-sent[sentCount]:
+					sentCount++
+				default:
+					return sentCount
+				}
+			}
+			return sentCount
+		}}
+	}
 	if name == "scripted" {
 		steps := []scripted.Step{{Frame: headFrame()}}
 		for range backpressureFrames {

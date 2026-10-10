@@ -80,6 +80,12 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	initialRow, err := credentials.Get(ctx, "account", "credential")
+	if err != nil || initialRow.ExpiresAt != nil {
+		t.Fatalf("legacy credential expiry=%#v err=%v", initialRow.ExpiresAt, err)
+	}
+	interactiveExpiry := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Millisecond)
+	refreshExpiry := time.Now().Add(3 * time.Hour).UTC().Truncate(time.Millisecond)
 	connector := &integratedAuthConnector{call: func(r core.AuthRequest) core.AuthResult {
 		if r.Action == "start" {
 			return core.AuthResult{Supported: true, State: "private-opaque-state", NextAction: "continue"}
@@ -87,7 +93,10 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 		if string(r.State) == "private-opaque-state" {
 			return core.AuthResult{Supported: true, State: "private-next-state", NextAction: "continue"}
 		}
-		return core.AuthResult{Supported: true, Credentials: map[string][]byte{"bearer": []byte("interactive-next-token")}}
+		if r.Action == "refresh" {
+			return core.AuthResult{Supported: true, Credentials: map[string][]byte{"bearer": []byte("rotated-token")}, CredentialExpiresAt: &refreshExpiry}
+		}
+		return core.AuthResult{Supported: true, Credentials: map[string][]byte{"bearer": []byte("interactive-next-token")}, CredentialExpiresAt: &interactiveExpiry}
 	}}
 	registry, err := core.NewRegistry(map[core.ComponentKind]core.APIVersion{core.ComponentConnector: {Major: 1}}, nil)
 	if err != nil {
@@ -134,9 +143,17 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 	if err != nil || string(got) != "interactive-next-token" {
 		t.Fatalf("credential=%q err=%v", got, err)
 	}
+	interactiveRow, err := credentials.Get(ctx, "account", "credential")
+	if err != nil || interactiveRow.ExpiresAt == nil || !interactiveRow.ExpiresAt.Equal(interactiveExpiry) {
+		t.Fatalf("interactive expiry %#v err=%v", interactiveRow.ExpiresAt, err)
+	}
 	refreshed, err := coordinator.Refresh(ctx, "account")
-	if err != nil || refreshed.Revision != 3 || string(refreshed.Values["bearer"]) != "interactive-next-token" {
+	if err != nil || refreshed.Revision != 3 || string(refreshed.Values["bearer"]) != "rotated-token" || refreshed.ExpiresAt == nil || !refreshed.ExpiresAt.Equal(refreshExpiry) {
 		t.Fatalf("SQLite refresh result=%#v err=%v", refreshed, err)
+	}
+	stored, err := credentials.Get(ctx, "account", "credential")
+	if err != nil || stored.ExpiresAt == nil || !stored.ExpiresAt.Equal(*refreshed.ExpiresAt) {
+		t.Fatalf("refresh expiry %#v runtime=%#v err=%v", stored.ExpiresAt, refreshed.ExpiresAt, err)
 	}
 	var rowCount int
 	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE account_id='account' AND kind='refresh'`).Scan(&rowCount); err != nil || rowCount != 0 {
@@ -166,6 +183,113 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 	}
 	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE id=? AND lifecycle='consumed' AND ciphertext IS NULL`, staleSession.ID).Scan(&rowCount); err != nil || rowCount != 1 {
 		t.Fatalf("stale session cleanup count=%d err=%v", rowCount, err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials = sqlite.NewCredentials(db)
+	got, err = credentials.GetDecrypted(ctx, "account", "credential", key)
+	stored, rowErr := credentials.Get(ctx, "account", "credential")
+	if err != nil || rowErr != nil || string(got) != "external-update" || stored.ExpiresAt == nil || !stored.ExpiresAt.Equal(*refreshed.ExpiresAt) {
+		t.Fatalf("restart round trip credential=%q expiry=%#v errors=%v/%v", got, stored.ExpiresAt, err, rowErr)
+	}
+}
+
+func TestSQLiteAuthCoordinatorQuarantineCanRecoverThroughInteractiveAuth(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := sqlite.Open(filepath.Join(dir, "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := sqlite.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	accounts, credentials, sessions := sqlite.NewAccounts(db), sqlite.NewCredentials(db), sqlite.NewAuthSessions(db)
+	if _, err := accounts.Create(ctx, sqlite.Account{ID: "account", Connector: "connector", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(dir, "master.key")
+	if err := os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiry := time.Now().Add(time.Hour).UTC().Truncate(time.Millisecond)
+	envelope, err := secure.Seal(key, 1, "key-v1", "credentials", "credential", "account", []byte("old-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := credentials.Create(ctx, sqlite.Credential{ID: "credential", AccountID: "account", FormatVersion: envelope.FormatVersion, KeyVersion: envelope.KeyVersion, Nonce: envelope.Nonce, Ciphertext: envelope.Ciphertext, ExpiresAt: &expiry}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := newSQLiteAuthCoordinatorStore(accounts, credentials, sessions, key, "key-v1", map[string]map[string]string{"account": {"oauth": "credential"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := core.AuthSession{ID: "uncertain-refresh", AccountID: "account", ConnectorID: "connector", Revision: 1}
+	if err := store.CreateRefreshMarker(ctx, marker.ID, marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.QuarantineRefreshMarker(ctx, marker.ID, marker, "ambiguous_result", 1); err != nil {
+		t.Fatal(err)
+	}
+	newExpiry := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Millisecond)
+	connector := &integratedAuthConnector{call: func(request core.AuthRequest) core.AuthResult {
+		if request.Action == "start" {
+			return core.AuthResult{Supported: true, State: "reauth-state", NextAction: "continue"}
+		}
+		return core.AuthResult{Supported: true, Credentials: map[string][]byte{"oauth": []byte("reauthenticated")}, CredentialExpiresAt: &newExpiry}
+	}}
+	registry, err := core.NewRegistry(map[core.ComponentKind]core.APIVersion{core.ComponentConnector: {Major: 1}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register("connector", connector, core.ComponentConnector); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Init(ctx, "connector", core.ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := core.NewAuthCoordinator(registry, store, authServicesFactoryFunc(func(core.AttemptScope) core.InvocationServices { return core.InvocationServices{} }), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.ResolveFreshCredentials(ctx, "account", time.Minute); !errors.Is(err, core.ErrAuthUnavailable) {
+		t.Fatalf("quarantined freshness resolution error=%v", err)
+	}
+	connector.mu.Lock()
+	calls := len(connector.actions)
+	connector.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("quarantined freshness invoked connector %d times", calls)
+	}
+	authSession, err := coordinator.Start(ctx, "account")
+	if err != nil {
+		t.Fatalf("Start could not begin explicit reauthentication: %v", err)
+	}
+	if _, err := coordinator.Continue(ctx, authSession.ID); err != nil {
+		t.Fatalf("Continue could not replace quarantined credentials: %v", err)
+	}
+	if quarantined, err := sessions.HasQuarantinedRefresh(ctx, "account"); err != nil || quarantined {
+		t.Fatalf("reauthentication quarantine remains=%v err=%v", quarantined, err)
+	}
+	resolved, err := coordinator.ResolveFreshCredentials(ctx, "account", time.Minute)
+	if err != nil || string(resolved.Values["oauth"]) != "reauthenticated" || resolved.Revision != 2 {
+		t.Fatalf("recovered credentials=%+v err=%v", resolved, err)
+	}
+	connector.mu.Lock()
+	actions := append([]string(nil), connector.actions...)
+	connector.mu.Unlock()
+	if len(actions) != 2 || actions[0] != "start" || actions[1] != "continue" {
+		t.Fatalf("unexpected authentication calls after recovery: %v", actions)
 	}
 }
 
@@ -227,6 +351,9 @@ func TestSQLiteAuthCoordinatorRefreshCASConflictQuarantineAndInvalidation(t *tes
 	}
 	if err = store.QuarantineRefreshMarker(ctx, reauthMarker.ID, reauthMarker, "ambiguous_result", 2); err != nil {
 		t.Fatal(err)
+	}
+	if quarantinedCredentials, readErr := store.AuthCredentials(ctx, "account"); readErr != nil || !quarantinedCredentials.Valid {
+		t.Fatalf("explicit reauthentication could not read quarantined account credentials: %#v err=%v", quarantinedCredentials, readErr)
 	}
 	updated, err = store.ReplaceAuthCredentials(ctx, "account", 2, core.AuthCredentials{Revision: 2, Values: map[string][]byte{"bearer": []byte("reauthenticated")}})
 	if err != nil || updated.Revision != 3 {

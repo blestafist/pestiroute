@@ -22,6 +22,22 @@ Below are research starting points, not a promise to support all described capab
 
 OpenAI-compatible does not mean full support for the Responses API. For each upstream, endpoint, streaming, tools, reasoning, and session semantics must be verified separately. Similarly, the official public API does not necessarily match the backend protocol of a subscription client.
 
+## M5.1 Codex Subscription Research
+
+The supplied [CODEX_CONNECTOR_RESEARCH](../references/CODEX_CONNECTOR_RESEARCH.md)
+is preserved with trailing EOF whitespace normalized (research dated 2026-10-02). It pins actual OpenCode v2
+and official Codex revisions, separates standard Responses from Lite, and
+describes device auth, token rotation, header/account ownership, tools/reasoning,
+SSE usage and retry safety. It is research/proposal, not an accepted binding or
+live evidence. [M5.1-001](tasks/M5.1-001.md) reconciles that source baseline with
+the [inspected-code planning brief](M5.1-CODEX.md); later binding cards resolve
+auth presentation, atomic expiry and account affinity before implementation.
+
+Do not treat the public OpenAI API/M1 smoke, an OpenCode dev-only implementation
+or a compatible proxy as subscription-backend proof. Record copied behavior's
+pinned provenance and MIT/Apache-2.0 obligations before reuse. Other agent
+protocols keep their own research gates.
+
 ## M4 Translation Sources
 
 The [M4 planning brief](M4-TRANSLATION.md#source-selection) links official Messages

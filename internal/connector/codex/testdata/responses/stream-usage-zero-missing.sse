@@ -1,0 +1,2 @@
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_usage","status":"completed"}}

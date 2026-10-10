@@ -49,11 +49,28 @@ Implement Anthropic API connector as explicit Responses ↔ Messages transformat
 
 ## M5.1 · Agent Protocol Connectors
 
+The current bounded plan is [the Codex subscription slice](TASKS.md#m51--codex-subscription-connector),
+with [source/current-code gates](M5.1-CODEX.md). Its original breakdown had 43
+cards and has since gained separately scoped follow-ups; TASKS is the
+authoritative current registry. Device
+OAuth and Responses HTTP/SSE come first; other agent protocols remain separate
+spikes and Lite/WebSocket implementation is not included. Planning is not
+implementation or live support; the per-connector completion gate below remains
+unchanged.
+
 Scope: Codex, Claude Code, Gemini CLI, and ACP. Research each protocol first: record the official client version, capture its authentication flow, request format, and streaming behavior, and create a minimal trace. Implement each connector separately, including refresh and account affinity where applicable.
 
 ACP is a protocol for communicating with an agent process, not equivalent to a subscription backend API. Its spike must identify a concrete agent, transport, and owner of the agent/tool loop before implementation.
 
 **Done for each connector when:** applicable authorization, expiry, and concurrent refresh are verified; the connector does not persist its own secrets; versioned fixtures and a capability matrix are added; the direct-versus-gateway smoke test is reproducible. Unknown stateful capabilities are explicitly marked. Each connector can be released independently of others.
+
+For the Codex slice only, [DEC-012](../project/DECISIONS.md#dec-012--conditional-m51-codex-implementation-acceptance-with-deferred-live-gates)
+records user-approved conditional acceptance of implementation/audit evidence;
+it does not mark M5.1 DONE or pass either live gate. Live OAuth refresh remains
+BLOCKED as [M5.1-049](tasks/M5.1-049.md) until its natural eligibility time;
+scoped two-turn encrypted-reasoning replay remains unrun and DRAFT as
+[M5.1-051](tasks/M5.1-051.md). Neither deferral constitutes general Codex live
+support or changes other connectors' completion gates.
 
 ## M5.2 · Local Runtime Connectors
 

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-10-10T20:15:30Z",
+  "client": {
+    "name": "Codex CLI",
+    "version": "0.162.1"
+  },
+  "gateway_baseline_source": "M5.1-040",
+  "comparison": {
+    "cli_auth_present": true,
+    "gateway_auth_present": true,
+    "same_account": true,
+    "access_values_distinct": true,
+    "refresh_values_distinct": true,
+    "separate_store": true,
+    "gateway_store_unchanged": true
+  }
+}

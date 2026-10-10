@@ -52,6 +52,7 @@ func (s *sqliteAuthCoordinatorStore) AuthCredentials(ctx context.Context, accoun
 	values := make(map[string][]byte, len(ids))
 	var revision int64
 	valid := true
+	var expiresAt *time.Time
 	for name, id := range ids {
 		row, err := s.credentials.Get(ctx, account, id)
 		if err != nil {
@@ -61,6 +62,9 @@ func (s *sqliteAuthCoordinatorStore) AuthCredentials(ctx context.Context, accoun
 			return core.AuthCredentials{}, core.ErrAuthRevisionMismatch
 		}
 		revision = row.Revision
+		if len(ids) == 1 {
+			expiresAt = row.ExpiresAt
+		}
 		plain, err := crypto.Open(s.key, crypto.Envelope{FormatVersion: row.FormatVersion, KeyVersion: row.KeyVersion, Nonce: row.Nonce, Ciphertext: row.Ciphertext}, "credentials", row.ID, row.AccountID)
 		if err != nil {
 			return core.AuthCredentials{}, core.ErrCredentialUnavailable
@@ -70,7 +74,10 @@ func (s *sqliteAuthCoordinatorStore) AuthCredentials(ctx context.Context, accoun
 			valid = false
 		}
 	}
-	return core.AuthCredentials{Revision: revision, Values: values, Valid: valid}, nil
+	return core.AuthCredentials{Revision: revision, Values: values, ExpiresAt: cloneAuthExpiry(expiresAt), Valid: valid}, nil
+}
+func (s *sqliteAuthCoordinatorStore) HasQuarantinedRefresh(ctx context.Context, account string) (bool, error) {
+	return s.sessions.HasQuarantinedRefresh(ctx, account)
 }
 func (s *sqliteAuthCoordinatorStore) CreateAuthSession(ctx context.Context, v core.AuthSession, state []byte) error {
 	_, err := s.sessions.CreateInteractiveSession(ctx, v.ID, v.AccountID, string(v.ConnectorID), v.Revision, v.ExpiresAt, state, s.key, s.keyVersion, s.clock())
@@ -90,10 +97,10 @@ func (s *sqliteAuthCoordinatorStore) AdvanceAuthSession(ctx context.Context, v c
 func (s *sqliteAuthCoordinatorStore) ConsumeAuthSession(ctx context.Context, v core.AuthSession) error {
 	return s.sessions.ConsumeInteractiveSession(ctx, v.ID, v.AccountID, s.clock())
 }
-func (s *sqliteAuthCoordinatorStore) FinishAuthSession(ctx context.Context, v core.AuthSession, candidates map[string][]byte) error {
+func (s *sqliteAuthCoordinatorStore) FinishAuthSession(ctx context.Context, v core.AuthSession, candidates core.AuthCredentials) error {
 	var replacement *sqlite.Credential
-	if len(candidates) > 0 {
-		row, err := s.credentialReplacement(ctx, v.AccountID, v.Revision, candidates)
+	if len(candidates.Values) > 0 {
+		row, err := s.credentialReplacement(ctx, v.AccountID, v.Revision, candidates.Values, candidates.ExpiresAt)
 		if err != nil {
 			return err
 		}
@@ -116,7 +123,7 @@ func (s *sqliteAuthCoordinatorStore) QuarantineRefreshMarker(ctx context.Context
 	return s.sessions.QuarantineRefreshMarker(ctx, id, v.AccountID, reason, revision, s.clock())
 }
 func (s *sqliteAuthCoordinatorStore) ResolveRefresh(ctx context.Context, id string, v core.AuthSession, candidates core.AuthCredentials) (core.AuthCredentials, error) {
-	replacement, err := s.credentialReplacement(ctx, v.AccountID, v.Revision, candidates.Values)
+	replacement, err := s.credentialReplacement(ctx, v.AccountID, v.Revision, candidates.Values, candidates.ExpiresAt)
 	if err != nil {
 		return core.AuthCredentials{}, err
 	}
@@ -124,10 +131,10 @@ func (s *sqliteAuthCoordinatorStore) ResolveRefresh(ctx context.Context, id stri
 	if err != nil {
 		return core.AuthCredentials{}, mapAuthStoreError(err)
 	}
-	return core.AuthCredentials{Revision: updated.Revision, Values: cloneAuthValues(candidates.Values), Valid: true}, nil
+	return core.AuthCredentials{Revision: updated.Revision, Values: cloneAuthValues(candidates.Values), ExpiresAt: cloneAuthExpiry(candidates.ExpiresAt), Valid: true}, nil
 }
 func (s *sqliteAuthCoordinatorStore) ReplaceAuthCredentials(ctx context.Context, account string, revision int64, candidates core.AuthCredentials) (core.AuthCredentials, error) {
-	replacement, err := s.credentialReplacement(ctx, account, revision, candidates.Values)
+	replacement, err := s.credentialReplacement(ctx, account, revision, candidates.Values, candidates.ExpiresAt)
 	if err != nil {
 		return core.AuthCredentials{}, err
 	}
@@ -135,13 +142,13 @@ func (s *sqliteAuthCoordinatorStore) ReplaceAuthCredentials(ctx context.Context,
 	if err != nil {
 		return core.AuthCredentials{}, mapAuthStoreError(err)
 	}
-	return core.AuthCredentials{Revision: updated.Revision, Values: cloneAuthValues(candidates.Values), Valid: true}, nil
+	return core.AuthCredentials{Revision: updated.Revision, Values: cloneAuthValues(candidates.Values), ExpiresAt: cloneAuthExpiry(candidates.ExpiresAt), Valid: true}, nil
 }
 func (s *sqliteAuthCoordinatorStore) InvalidateAuth(ctx context.Context, account string, connector core.InstanceID, now time.Time) error {
 	return s.sessions.Invalidate(ctx, account, string(connector), now)
 }
 
-func (s *sqliteAuthCoordinatorStore) credentialReplacement(ctx context.Context, account string, revision int64, candidates map[string][]byte) (sqlite.Credential, error) {
+func (s *sqliteAuthCoordinatorStore) credentialReplacement(ctx context.Context, account string, revision int64, candidates map[string][]byte, expiresAt *time.Time) (sqlite.Credential, error) {
 	refs := s.refs[account]
 	if len(refs) != 1 || len(candidates) != 1 {
 		return sqlite.Credential{}, core.ErrAuthUnavailable
@@ -166,9 +173,18 @@ func (s *sqliteAuthCoordinatorStore) credentialReplacement(ctx context.Context, 
 		return sqlite.Credential{}, core.ErrAuthPersistence
 	}
 	old.FormatVersion, old.KeyVersion, old.Nonce, old.Ciphertext = envelope.FormatVersion, envelope.KeyVersion, envelope.Nonce, envelope.Ciphertext
-	old.ExpiresAt = nil
+	old.ExpiresAt = cloneAuthExpiry(expiresAt)
 	return old, nil
 }
+
+func cloneAuthExpiry(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
 func cloneAuthValues(in map[string][]byte) map[string][]byte {
 	out := make(map[string][]byte, len(in))
 	for k, v := range in {

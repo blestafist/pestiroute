@@ -90,6 +90,10 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 			}
 			component.Model, component.AccountID, component.CredentialEnv = s.Model, s.AccountID, s.CredentialID
 			component.MaxBodyBytes, component.MaxHeaderBytes = p.Server.MaxRequestBytes, 1<<20
+		case "pestiroute.codex.responses":
+			component.Model, component.AccountID, component.Profile = s.Model, s.AccountID, s.Profile
+			component.CredentialEnv = "oauth"
+			component.MaxBodyBytes, component.MaxHeaderBytes = min(p.Server.MaxRequestBytes, 1<<20), 16<<10
 		default:
 			return fail(db.Close, fmt.Errorf("connector %q: unsupported implementation", item.ID))
 		}

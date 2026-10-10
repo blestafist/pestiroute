@@ -8,9 +8,19 @@ runtime with scripted Connectors, not live OAuth flows.
 
 ## Binding the existing operation
 
-The current binding is `AuthRequest{AccountID, Action, State}` and
-`AuthResult{Supported, State, NextAction, Credentials}`. Apply these conventions
-without changing those structures:
+The binding is `AuthRequest{AccountID, Action, State}` and
+`AuthResult{Supported, State, NextAction, UserAction, Credentials,
+CredentialExpiresAt}`. `UserAction` is an optional
+`*AuthUserAction{VerificationURI, UserCode, PollInterval}` safe presentation
+projection; `CredentialExpiresAt *time.Time` is optional absolute expiry
+metadata for the candidate credential generation, never inferred by Core from
+credential bytes. Apply these runtime conventions:
+
+The runtime's `AuthCredentials` snapshot carries the encrypted credential
+revision, decrypted account-scoped values for the single invocation, optional
+`ExpiresAt`, and its current-time usability result. The coordinator decides
+freshness using the selected profile's margin; `Valid`/unexpired alone is not
+enough to skip a refresh.
 
 | Field | Runtime convention |
 | --- | --- |
@@ -20,7 +30,9 @@ without changing those structures:
 | `AuthResult.Supported` | `false` means do not accept returned state/credentials. If the method was invoked, it is not evidence that no network exchange occurred; retain/quarantine any refresh marker and invalidate the interactive continuation conservatively. |
 | `AuthResult.State` | Opaque Connector state bytes encoded in the existing string field; persist as bytes without parsing. Empty means no continuation state. |
 | `AuthResult.NextAction` | Empty means the flow ended; otherwise exactly `continue`. The runtime creates/retains a session only for `continue`. It does not infer provider-specific actions. |
+| `AuthResult.UserAction` | Optional safe presentation projection, valid only when `Supported=true` and `NextAction=continue`. Core validates before exposing: URI is 1–2048 printable ASCII bytes without spaces/control bytes, absolute HTTPS with host and no userinfo; code is 1–256 printable ASCII bytes without controls; interval is positive. It never contains device-auth identifiers, PKCE material, tokens, or raw response/state. Core returns it transiently with the auth session and never persists it. |
 | `AuthResult.Credentials` | Candidate account credentials returned by the Connector. Runtime validates and atomically persists them; they are not success until that write is acknowledged. |
+| `AuthResult.CredentialExpiresAt` | Optional absolute expiry for the candidate credential generation, sourced by the Connector from its trusted exchange response. Nil is compatible with existing credentials/profiles without expiry. If present, persist it in the same revision-CAS transaction as the encrypted bundle; acknowledgment covers both. The selected profile may require nonzero, future expiry. Runtime never parses tokens/JWTs to derive it. |
 
 The runtime assigns an unguessable session ID and binds the row to one account,
 the selected Connector instance, a fixed expiry, and the credential revision
@@ -38,13 +50,48 @@ and checked before every
 continuation; an extension requires a future explicit policy, not a provider
 response.
 
+Start and Continue return the optional `UserAction` on the transient
+`AuthSession` result, separately from its runtime-owned session handle and
+expiry. It is not an `AuthSession` persistence field. A pending poll is one
+explicit `continue` invocation, never a coordinator polling loop. The caller observes
+`PollInterval` and waits at least that long before issuing another
+continuation;
+the interval does not change the fixed session expiry. A completed result has no
+continuation session, and candidate credentials are successful only after the
+existing acknowledged atomic write. Presentation data is transient and must not
+be logged or included in credential/state storage. The Connector is responsible
+for ensuring its verification URI is absolute HTTPS without embedded credentials
+and the URI/code are safe to display without device-auth identifiers or other
+secrets.
+
+`UserAction` is valid only with `Supported=true` and `NextAction=continue`; an
+action on a completed, unsupported, or refresh result is invalid. A nil action
+on `continue` remains valid for legacy opaque continuations with no operator
+interaction. Any Connector flow requiring user interaction MUST provide a valid
+action; the Connector's auth-flow conformance tests enforce this because Core
+cannot infer a missing projection from opaque state. Presence is self-describing
+and requires no separate capability. Core rejects malformed or inconsistent
+actions before returning any result field: Start creates no session or
+credentials; Continue discards the result and consumes its already-claimed
+session/claim; Refresh discards it and quarantines the invoked refresh marker.
+If consuming a claimed continuation cannot be committed, do not expose any
+result and retain DEC-007 restart recovery's consume-on-ambiguous-claim behavior.
+
 Refresh loads the selected account's current credential snapshot and revision,
 then supplies it only through that account's invocation-scoped
 `InvocationServices.Credentials`. No database, repository, credential handle
 for another account, or decrypted credential map is passed as `State`.
+`AuthRequest.Action=refresh` selects the auth-only resolver mode: it may provide
+the selected account's expired bundle to that Authenticate call for refresh
+material, never to Execute/inference. Other credential access stays expiry-gated.
 `Credentials` in the result replaces the selected account's credential set as
-one atomic revision-checked write; it is not merged implicitly. The runtime
-returns persisted success only after acknowledgement. Start/continue session
+one atomic revision-checked write; it is not merged implicitly. When
+`CredentialExpiresAt` is present it is part of that same generation and write;
+nil preserves the existing no-expiry behavior. The runtime returns persisted
+success only after acknowledgement. A Connector may represent related secret
+values as one opaque encrypted credential bundle; Core does not parse or merge
+its provider-defined fields. A profile that requires freshness must require
+`CredentialExpiresAt` on every successful replacement. Start/continue session
 data and any PKCE verifier/challenge material are opaque, encrypted at rest,
 excluded from logs, and cleared on completion, cancellation, expiry, or
 account/Connector invalidation. Cancellation before a Connector call consumes
@@ -53,19 +100,29 @@ state: invalidate the continuation and retain only the non-secret uncertain
 marker until explicitly resolved. Cleanup is best-effort if storage is
 unavailable and expiry is the restart-safe backstop for ordinary sessions.
 
+The concrete Core/store binding carries `ExpiresAt *time.Time` on
+`AuthCredentials` snapshots and replacements. `ReplaceAuthCredentials` and
+`ResolveRefresh` CAS the expected credential revision while replacing encrypted
+values and expiry together; `FinishAuthSession` must likewise accept the
+complete candidate generation and atomically commit values, expiry, revision,
+session consumption and (where applicable) refresh-marker resolution. A stale
+CAS commits none of the candidate generation. These are required binding
+changes to the existing store operations, not permission to write expiry in a
+second transaction.
+
 ## Ownership and concurrency
 
 | Transition | Durable state and required behavior |
 | --- | --- |
 | Unsupported, known before call | If descriptor/preflight establishes unsupported before `Authenticate` is invoked, do not create a session/refresh marker or write credentials. `Supported:false` returned by an invoked method is not proof of no exchange. |
-| Start | Call once. Persist encrypted opaque state and fixed expiry only for a successful supported result with `NextAction=continue`; otherwise create no session. |
-| Continue | Require an active, unexpired session, enabled account, exact credential revision and loaded state version. Commit one durable claim before calling; competing/stale claims fail before invocation. Successful advance/finish resolves the claim atomically with the new state or consumed session. |
+| Start | Call once. Validate any `UserAction` before exposing output or persisting data. Persist encrypted opaque state and fixed expiry only for a supported result with `NextAction=continue`; invalid action combinations create no session and discard all candidates. |
+| Continue | Require an active, unexpired session, enabled account, exact credential revision and loaded state version. Commit one durable claim before calling; competing/stale claims fail before invocation. Validate any `UserAction` before exposing output. Successful advance/finish resolves the claim atomically with the new state or consumed session; invalid results discard all fields and consume the claimed session. |
 | Ordinary session expiry | Reject before `Authenticate`; consume/expire and delete encrypted state. Never revive it from client input. |
 | Refresh preflight proves no call | Clear the durable refresh marker; there is no provider exchange to recover. This is limited to runtime facts proving invocation never began, not a Connector error/result. |
-| Refresh succeeds with replacement credentials | Atomically compare expected credential revision, replace the selected account credentials/revision, and clear the marker. Acknowledged commit is the only persisted-success response. |
-| Refresh returns incomplete credentials or continuation state/action | Do not claim refresh success: require non-empty named replacement values and no continuation state/action. Quarantine the marker; invocation may already have consumed a token. |
+| Refresh succeeds with replacement credentials | Atomically compare expected credential revision, replace the selected account's encrypted credential bundle and optional absolute expiry as one generation, advance revision, and clear the marker. Acknowledged commit is the only persisted-success response. |
+| Refresh returns incomplete credentials or continuation state/action | Do not claim refresh success: require non-empty named replacement values and no continuation state/action or `UserAction`. Discard returned values and quarantine the marker; invocation may already have consumed a token. |
 | Refresh ambiguous / cancelled after call begins / generic error / `Supported:false` returned | Treat exchange outcome as uncertain. Retain a quarantined marker, fail closed for automatic refresh, and never infer safe delivery/no exchange from a generic error or unsupported result. |
-| Same-account concurrent refresh | Serialize by account. A waiter reloads credential revision and re-evaluates whether refresh is still needed; if the prior refresh advanced revision and credentials are valid, skip its Connector call. Otherwise it uses a fresh snapshot/revision and its own durable marker. Transactions end before network work. |
+| Same-account concurrent refresh | Serialize by account. A waiter reloads revision, expiry and values under lock, then evaluates `expires_at > now + profile_margin` using a fresh clock sample. Skip only if that predicate is true; mere unexpired/`Valid` is insufficient. Otherwise use the latest snapshot/revision and its own durable marker. Transactions end before network work. |
 | Different-account refresh | Independent account locks and snapshots; one account's wait/failure cannot block or disclose another account's credentials. |
 | External credential update / stale revision | CAS compares the expected revision atomically. On mismatch discard candidates and do not overwrite or silently rerun. A refresh waiter re-evaluates against the latest revision as above. |
 | Explicit successful reauthentication | Persist replacement credentials and resolve that account's quarantined refresh markers in the same transaction. A failed/stale write leaves markers quarantined. |

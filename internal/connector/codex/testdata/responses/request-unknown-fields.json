@@ -1,0 +1,1 @@
+{"model":"gpt-5.4-mini","stream":true,"store":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}],"optional_extension":{"opaque":[1,{"x":"preserve-me"}]},"vendor_hint":"synthetic"}

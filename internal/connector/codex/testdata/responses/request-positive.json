@@ -1,0 +1,1 @@
+{"model":"gpt-5.4-mini","instructions":"Answer briefly.","input":[{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Earlier commentary."}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"Say hello."}]}],"stream":true,"store":false,"include":["reasoning.encrypted_content"]}

@@ -98,9 +98,59 @@ The existing support operations retain their responsibilities alongside the stab
 | --- | --- |
 | `EstimateUsage` | Estimate, known/unknown indicator, and method for admission budgeting; provider tokenization remains in the Connector |
 | `Models` | Scoped model IDs, capabilities, and availability; optional context-window/provider metadata, not universal model behavior |
-| `Authenticate` | Authentication state-machine step: start, continue, or refresh; returns the next action or updated credentials for runtime persistence |
+| `Authenticate` | Authentication state-machine step: start, continue, or refresh; returns opaque continuation state, next action, optional safe user-action projection, candidate credentials, and optional absolute credential expiry for runtime persistence |
 
 These operations must report unsupported or unknown explicitly where applicable rather than fabricate success, models, or zero usage. Provider auth endpoints, scopes, exchanges, and streaming/usage formats remain private to the Connector. API, OpenAI-Compatible, Agent Protocol, and Local Runtime remain the four Connector categories; category does not alter Execute semantics.
+
+`AuthUserAction` is the optional presentation-only value
+`{VerificationURI string, UserCode string, PollInterval time.Duration}`;
+`PollInterval` is positive when an action is present. Core validates the action
+before exposing it: `VerificationURI` is 1–2048 printable ASCII bytes (no
+spaces/control bytes), an absolute HTTPS URI with a host and no userinfo;
+`UserCode` is 1–256 printable ASCII bytes (no controls, including terminal
+escape/newline). `AuthResult` contains
+`Supported`, opaque `State`, `NextAction`, optional `UserAction *AuthUserAction`,
+and candidate `Credentials`. The projection is never continuation state or a
+credential. Neither presentation field may contain device-auth identifiers,
+PKCE material, tokens, or raw provider responses. A Connector needing operator interaction returns
+the safe action separately from its opaque state. `UserAction` is valid only
+with `Supported=true` and `NextAction=continue`; it is invalid on completed,
+unsupported, or refresh results. A nil action with `continue` remains valid for
+legacy opaque continuations that require no operator interaction. A Connector
+whose flow requires user interaction MUST return a valid action. Presence is
+self-describing; no new capability is required. New Connector conformance tests
+must prove both this requirement and rejection of malformed/inconsistent
+actions; Core cannot infer that an omitted action was required from opaque
+state. Older producers may omit the optional projection, and older consumers
+may ignore it. Core owns encryption and persistence of `State`, session expiry
+and claims, and credential persistence; it exposes only a validated transient
+projection with the returned auth session, never persisting it as opaque session
+state. Invalid action results fail closed: discard all result fields before
+exposure or credential/state persistence. On a claimed continuation, consume
+the session/claim as for other invalid results; refresh remains quarantined if
+its invoked result is invalid or incomplete.
+
+`AuthResult.CredentialExpiresAt *time.Time` is optional absolute expiry metadata
+for the candidate credential generation, derived by the Connector from its
+trusted authentication exchange response. It is separate from credential
+bytes: Core never parses provider tokens or JWTs to infer expiry. Nil remains
+valid for existing credentials/profiles without expiry; when present, the
+timestamp is persisted with the encrypted candidate credentials in the same
+revision-checked atomic write. The write acknowledgement covers both envelope
+and expiry, and failed/stale writes expose no candidate as persisted success.
+Profile-specific bindings may require a nonzero, future expiry for successful
+credential results. This additive optional field is covered by
+[DEC-010](../project/DECISIONS.md#dec-010-carry-credential-expiry-with-auth-results).
+
+For `Authenticate` with `AuthRequest.Action=refresh`, that existing action is
+the provider-neutral selector for auth-scoped credential access: the selected
+account's expired credential may be returned to the refresh invocation so it
+can use refresh material in its opaque bundle. This exception is limited to
+that Authenticate call; inference `Execute` credential access always rejects
+expired credentials. Runtime still restricts reads to the selected account and
+does not expose the repository or another account's values. Freshness margins
+are selected by the Connector profile and applied by generic runtime
+coordination, not by provider-name branching.
 
 ## Protocol Adapter Contract
 
