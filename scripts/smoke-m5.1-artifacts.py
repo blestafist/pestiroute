@@ -30,6 +30,8 @@ REQUEST_KEYS = {"run", "attempt", "timeout_seconds", "max_output_tokens", "statu
 OBS_KEYS = {"early_delivery", "event_order", "tool_links", "usage", "target_dispatches", "retries", "client_status", "reasoning_observation"}
 AUTH_KEYS = {"schema_version", "endpoint_profile", "captured_at_utc", "artifacts"}
 AUTH_RECORD_KEYS = {"leg", "flow", "status", "expiry_preserved", "token_present"}
+OFFICIAL_AUTH_KEYS = {"schema_version", "captured_at_utc", "client", "gateway_baseline_source", "comparison"}
+OFFICIAL_AUTH_COMPARISON = {"cli_auth_present", "gateway_auth_present", "same_account", "access_values_distinct", "refresh_values_distinct", "separate_store", "gateway_store_unchanged"}
 
 
 def require(ok, message):
@@ -200,6 +202,21 @@ def validate_gateway_auth(path):
     print("PASS gateway-only auth schema, deferred comparison and redaction valid")
 
 
+def validate_official_auth(path):
+    data = json_file(path)
+    require(type(data) is dict and set(data) == OFFICIAL_AUTH_KEYS, "invalid official CLI comparison fields")
+    require(type(data["schema_version"]) is int and data["schema_version"] == 1, "unsupported official auth schema")
+    valid_stamp(data["captured_at_utc"])
+    client = data["client"]
+    require(type(client) is dict and set(client) == {"name", "version"} and client == {"name": "Codex CLI", "version": "0.162.1"}, "official CLI version provenance mismatch")
+    require(data["gateway_baseline_source"] == "M5.1-040", "gateway auth baseline must be identified as historical M5.1-040 evidence")
+    comparison = data["comparison"]
+    require(type(comparison) is dict and set(comparison) == OFFICIAL_AUTH_COMPARISON and all(type(value) is bool for value in comparison.values()), "comparison must contain only bounded booleans")
+    require(all(comparison.values()), "official CLI/gateway comparison did not prove same-account distinct credentials and unchanged isolated stores")
+    redact(data)
+    print("PASS sanitized official Codex CLI/M5.1-040 auth comparison; no identifiers or credentials")
+
+
 class Fake(http.server.BaseHTTPRequestHandler):
     hits = []
     gate = None
@@ -361,6 +378,27 @@ def self_test(outdir):
         gateway_auth_path.write_text(json.dumps(gateway_auth), encoding="utf-8")
         validate_gateway_auth(gateway_auth_path)
         must_reject(lambda: validate_auth(gateway_auth_path), "gateway-only artifact in strict paired mode")
+        official_auth = {
+            "schema_version": 1,
+            "captured_at_utc": "2026-10-10T00:00:00Z",
+            "client": {"name": "Codex CLI", "version": "0.162.1"},
+            "gateway_baseline_source": "M5.1-040",
+            "comparison": {key: True for key in OFFICIAL_AUTH_COMPARISON},
+        }
+        official_auth_path = outdir / "official-cli-auth-comparison.json"
+        official_auth_path.write_text(json.dumps(official_auth), encoding="utf-8")
+        validate_official_auth(official_auth_path)
+        for label, mutate in (
+            ("same account mismatch", lambda x: x["comparison"].update({"same_account": False})),
+            ("token sharing", lambda x: x["comparison"].update({"refresh_values_distinct": False})),
+            ("overwritten gateway credential", lambda x: x["comparison"].update({"gateway_store_unchanged": False})),
+            ("private account identifier", lambda x: x["comparison"].update({"account_id": "private-account"})),
+            ("wrong CLI version", lambda x: x["client"].update({"version": "0.162.0"})),
+        ):
+            bad = json.loads(json.dumps(official_auth))
+            mutate(bad)
+            official_auth_path.write_text(json.dumps(bad), encoding="utf-8")
+            must_reject(lambda: validate_official_auth(official_auth_path), label)
         direct = json.loads((outdir / "direct.json").read_text())
         gateway = json.loads((outdir / "gateway.json").read_text())
         scenario_values = {
@@ -474,7 +512,7 @@ def self_test(outdir):
         gateway_bad["artifacts"].append(auth_records[0])
         gateway_bad_path.write_text(json.dumps(gateway_bad), encoding="utf-8")
         must_reject(lambda: validate_gateway_auth(gateway_bad_path), "paired record in gateway-only artifact")
-        print("PASS independently counted direct/gateway SSE; paired and gateway-only auth schemas; missing deferral; pair/auth mismatches; missing links/reasoning; secret, prompt, cap, retry and malformed negatives; no provider calls")
+        print("PASS independently counted direct/gateway SSE; paired, gateway-only and official CLI comparison auth schemas; account/token/store mismatch negatives; pair/auth mismatches; secret, prompt, cap, retry and malformed negatives; no provider calls")
     finally:
         Fake.gate.set()
         server.shutdown()
@@ -487,13 +525,17 @@ def main():
     parser.add_argument("direct", nargs="?")
     parser.add_argument("gateway", nargs="?")
     parser.add_argument("--auth", type=Path)
+    parser.add_argument("--official-auth", type=Path, help="validate sanitized official Codex CLI versus M5.1-040 comparison")
     parser.add_argument("--gateway-only", action="store_true", help="validate one gateway auth record with an explicit operator-approved direct-comparison deferral")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     if args.self_test:
-        require(args.output_dir is not None and not args.direct and not args.gateway and args.auth is None and not args.gateway_only, "--self-test requires only --output-dir")
+        require(args.output_dir is not None and not args.direct and not args.gateway and args.auth is None and args.official_auth is None and not args.gateway_only, "--self-test requires only --output-dir")
         self_test(args.output_dir)
+    elif args.official_auth:
+        require(not args.direct and not args.gateway and args.auth is None and not args.gateway_only, "--official-auth cannot be combined with other artifact types")
+        validate_official_auth(args.official_auth)
     elif args.auth:
         require(not args.direct and not args.gateway, "--auth cannot be combined with inference artifacts")
         (validate_gateway_auth if args.gateway_only else validate_auth)(args.auth)

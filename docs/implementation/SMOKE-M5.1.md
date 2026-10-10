@@ -105,7 +105,18 @@ a synthetic direct record. Identify CLI completion as operator-reported and
 read-only offline decrypt/restart verification as locally measured. Verify
 authorization scope, selected account binding, persistence acknowledgement,
 expiry metadata, and usability after restart using sanitized boolean/status
-observations only.
+observations only. M5.1-050 separately completed one operator-approved fresh
+official Codex CLI 0.162.1 login in the isolated v3 home and compared it with
+the saved M5.1-040 gateway credential baseline. This is not evidence of two
+contemporaneous fresh auth flows, and it involved no inference. Its
+`--official-auth` artifact schema reports seven booleans:
+`cli_auth_present`, `gateway_auth_present`, `same_account`,
+`access_values_distinct`, `refresh_values_distinct`, `separate_store`, and
+`gateway_store_unchanged`. Validate that artifact with
+`scripts/smoke-m5.1-artifacts.py --official-auth <path>`. Keep
+`scripts/smoke-m5.1-artifacts.py --auth <path>` for existing paired gateway
+device-auth artifacts, and retain `--auth <path> --gateway-only` for the
+approved single-gateway-auth exception; these schemas are not interchangeable.
 Refresh is a separate selected-account operation: do not expire/revoke/delete a
 valid credential or manufacture a refresh failure. Exercise refresh only when
 the selected account's normal proactive-refresh condition is met and the
@@ -113,10 +124,8 @@ credential is still valid; verify successful persistence/expiry and retain the
 rotated credential. Otherwise mark live refresh unrun and cite synthetic local
 refresh/concurrency/recovery tests separately. Stop on account mismatch,
 unexpected auth redirect, ambiguous continuation, failed persistence, or any
-need to expose opaque auth state. Validate a regular redacted pair with
-`scripts/smoke-m5.1-artifacts.py --auth`; validate the approved single-leg
-exception with `scripts/smoke-m5.1-artifacts.py --auth <path> --gateway-only`.
-No secret-bearing output or raw auth transcript is retained.
+need to expose opaque auth state. No secret-bearing output or raw auth transcript
+is retained.
 
 ## Paired inference leg
 
