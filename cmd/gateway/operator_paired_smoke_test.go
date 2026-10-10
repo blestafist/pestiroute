@@ -623,11 +623,7 @@ func provisionOperatorPairGateway(t *testing.T, account sqlite.Account, credenti
 // The tool fixture opts into four requests (two two-round trips); paired baseline stays RPM=2.
 func provisionOperatorPairGatewayWithRPM(t *testing.T, account sqlite.Account, credential sqlite.Credential, rpm int64) (string, sqlite.IssuedVirtualKey) {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp/opencode", "m51-pair-gateway-")
-	if err != nil {
-		t.Fatal("isolated gateway fixture unavailable")
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := t.TempDir()
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal("isolated gateway fixture unavailable")
 	}
