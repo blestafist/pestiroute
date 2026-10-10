@@ -1537,7 +1537,7 @@ func TestDispatchConcurrentTerminalSignals(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &gatedFrame{frame: tc.frame, entered: make(chan struct{}), release: make(chan struct{})}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var mu sync.Mutex
 			var results []AttemptResult
@@ -1556,7 +1556,16 @@ func TestDispatchConcurrentTerminalSignals(t *testing.T) {
 			}
 			done := make(chan error, 1)
 			go func() { _, err := resp.Stream.Next(context.Background()); done <- err }()
-			<-p.entered
+			select {
+			case <-p.entered:
+			case <-done:
+				t.Fatal("stream returned before entering the source")
+			case <-time.After(time.Second):
+				t.Fatal("stream did not enter the source")
+			}
+			// Cancel only after Next is blocked inside the source. A short timer
+			// could expire before entry and leave this test waiting forever.
+			cancel()
 			<-ctx.Done()
 			start := make(chan struct{})
 			var signals sync.WaitGroup
