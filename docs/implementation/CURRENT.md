@@ -27,7 +27,7 @@ ambiguous claimed continuations before listen. Account disable atomically
 invalidates auth state. Scripted start/continue/refresh, revision CAS and
 cross-process claims are verified; live provider auth remains M5.1.
 
-## Immediate focus: M5.1-043 DRAFT; 23/200 upstream requests used, 177 remain
+## Immediate focus: M5.1-043 DONE conditional Codex implementation acceptance; M5.2 handoff; M5.1-049 BLOCKED and M5.1-051 DRAFT live gates remain open
 
 M4 PR [#11](https://github.com/blestafist/pestiroute/pull/11) is merged through
 merge commit `6002cadd226a11495cf659c7b0e7a635d5e41ba8`; head
@@ -39,8 +39,10 @@ and compatible-endpoint tools [M4-041](tasks/M4-041.md). The compatible harness
 and final review fixes are committed; [M4-045](tasks/M4-045.md) retains evidence.
 
 The new branch is `dev-m5.1`, based on that merge. The
-[Codex plan](TASKS.md#m51--codex-subscription-connector) has 49 small cards:
-[M5.1-001](tasks/M5.1-001.md) through [M5.1-042](tasks/M5.1-042.md), and [M5.1-044](tasks/M5.1-044.md) through [M5.1-048](tasks/M5.1-048.md) are DONE,
+[Codex registry](TASKS.md#m51--codex-subscription-connector) records the current
+bounded cards and statuses; see TASKS for its current range, ownership, and
+dependencies.
+M5.1-001 through M5.1-042, and M5.1-044 through M5.1-048, are DONE,
 resolving the source/profile baseline, safe device-login presentation/continuation,
 atomic OAuth credential/freshness binding, request dialect/affinity/retry policy under accepted
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
@@ -78,21 +80,23 @@ and offline Codex conformance and scoped capability matrix audit proving partici
 and synthetic local Codex operations guide and test daemon proving real CLI TLS loopback auth start/continue/refresh without secret leakage, same-DB YAML protected streaming, proactive refresh, quarantine restart and interactive recovery, account disablement, native/Anthropic coexistence, and populated WAL-safe SQLite backup/restore integrity (M5.1-037),
 and bounded smoke capture and privacy validation proving paired direct/gateway inference and auth schema enforcement, strict secret/token/prompt redaction, operational bounds, and offline loopback self-testing across all scenarios without external provider calls (M5.1-038),
 and exact live auth and paired inference procedure with explicit CPython client/profile/model selection, harmless function/parallel/reasoning probes, zero-dispatch rejection expectations, and bounded auth/refresh dry-runs with zero external calls (M5.1-039).
-M5.1-040–042 are DONE; see their cards for the auth and paired plain-text evidence. M5.1-044's direct single-tool probe and roundtrip are recorded in [its card](tasks/M5.1-044.md); 184 authorized Lite requests remained after M5.1-047's two-request probe. M5.1-045–047 are DONE: native Lite `gpt-6-luna` function-kind and custom Lark grammar tool support, multi-call forwarding/replay, and offline protected fake-TLS roundtrips are verified; standard-profile tools and explicit parallel requests remain fail-closed Unknown with zero-send gates. [M5.1-047](tasks/M5.1-047.md) is DONE (direct two-request roundtrip passed HTTP 200/200; scoped native Lite custom Lark grammar in functions namespace admitted; offline mixed-history, incremental/cancellation, and zero-send coverage verified; reviewer PASS). Its card contains no gateway-custom live claim; M5.1-048 now records that separate evidence. M5.1-043 remains DRAFT.
-M5.1-048 is DONE. Both native Lite (`gpt-6-luna`) protected gateway single-function (v4) and custom Lark grammar (v5) tool roundtrips are empirically verified: both completed HTTP 200/200, reported usage (324/26 and 391/24), snapshot/delta and normalized marker equality, 2 target dispatches, 2 network dials, and zero retries. Proof is durably mirrored in `docs/implementation/evidence/M5.1-048/` with zero secrets, tokens, or raw prompts. The objective for live gateway tools is complete.
-M5.1-048 is DONE. Both native Lite (`gpt-6-luna`) protected gateway single-function (v4) and custom Lark grammar (v5) tool roundtrips are empirically verified: both completed HTTP 200/200, reported usage (324/26 and 391/24), snapshot/delta and normalized marker equality, 2 target dispatches, 2 network dials, and zero retries. Proof is durably mirrored in `docs/implementation/evidence/M5.1-048/` with zero secrets, tokens, or raw prompts. The objective for live gateway tools is complete; stop here. M5.1-043 formal milestone closure is not started; refresh is not forced, and independent direct login remains deferred. Cumulative live budget is 23/200 used (177 remain). Isolated gateway credential store `/tmp/opencode/pestiroute-auth.pQ8lCE` is preserved; zero raw credentials or parallel refreshes permitted.
+M5.1-040–042 are DONE; see their cards for the auth and paired plain-text evidence. M5.1-044's direct single-tool probe and roundtrip are recorded in [its card](tasks/M5.1-044.md); 184 authorized Lite requests remained after M5.1-047's two-request probe. M5.1-045–047 are DONE: native Lite `gpt-6-luna` function-kind and custom Lark grammar tool support, multi-call forwarding/replay, and offline protected fake-TLS roundtrips are verified; standard-profile tools and explicit parallel requests remain fail-closed Unknown with zero-send gates. [M5.1-047](tasks/M5.1-047.md) is DONE (direct two-request roundtrip passed HTTP 200/200; scoped native Lite custom Lark grammar in functions namespace admitted; offline mixed-history, incremental/cancellation, and zero-send coverage verified; reviewer PASS). Its card contains no gateway-custom live claim; M5.1-048 now records that separate evidence. M5.1-043 is DONE: DEC-012 conditionally accepts implementation/audit evidence and handoff to M5.2, not M5.1 milestone DONE; both M5.1-049 refresh and M5.1-051 encrypted-reasoning replay remain open.
+M5.1-048 is DONE. Both native Lite (`gpt-6-luna`) protected gateway single-function (v4) and custom Lark grammar (v5) tool roundtrips are empirically verified: both completed HTTP 200/200, reported usage (324/26 and 391/24), snapshot/delta and normalized marker equality, 2 target dispatches, 2 network dials, and zero retries. Proof is durably mirrored in `docs/implementation/evidence/M5.1-048/` with zero secrets, tokens, or raw prompts. This evidence is limited to the exercised Lite `gpt-6-luna` function and custom Lark forms; it does not establish other grammars, namespaces, models, or standard-profile support.
+[M5.1-050](tasks/M5.1-050.md) is DONE: its one authorized read-only comparison passed all seven account/token/store checks; its official CLI comparison artifact is validated with `--official-auth`. It compares the fresh v3 CLI login against the historical M5.1-040 gateway baseline, not contemporaneous logins, token copying, or inference. [DEC-012](../project/DECISIONS.md#dec-012--conditional-m51-codex-implementation-acceptance-with-deferred-live-gates) conditionally accepts implementation/audit evidence without marking M5.1 DONE or authorizing either live follow-up. [M5.1-049](tasks/M5.1-049.md) remains BLOCKED until its natural threshold, 2026-10-15 21:04:55.103 UTC; [M5.1-051](tasks/M5.1-051.md) remains DRAFT and unrun. The prior 23/200 usage leaves a recorded ceiling of 177, not authorization. Isolated gateway credential store `/tmp/opencode/pestiroute-auth.pQ8lCE` is preserved; zero raw credentials or parallel refreshes permitted.
 The supplied [research](../references/CODEX_CONNECTOR_RESEARCH.md) is checked
 in with trailing EOF whitespace normalized; [M5.1-CODEX](M5.1-CODEX.md) maps it to inspected runtime seams.
 
 The scoped candidate is ChatGPT subscription OAuth device login plus Responses
-HTTP/SSE, ordinary tools, full-history encrypted reasoning and existing
-protected accounting. Auth user presentation is bound by DEC-009; M5.1-003
+HTTP/SSE, ordinary tools, client-owned history and opaque encrypted reasoning
+replay; the scoped live encrypted-reasoning follow-up remains unverified in
+M5.1-051. Auth user presentation is bound by DEC-009; M5.1-003
 specifies credential expiry/bootstrap and proactive refresh. Core remains
 provider-neutral. M5.1-040 records one operator-reported device login and locally
-measured read-only persistence/decryption; duplicate direct login comparison is
-operator-deferred, and refresh was not due/run. M5.1-041 separately verifies one
-matched Lite plain-text direct/gateway inference pair; it does not establish
-standard-profile live success or general account entitlement.
+measured read-only persistence/decryption; M5.1-050 compared a fresh official CLI
+login against that historical gateway baseline without contemporaneous dual
+login or inference. Refresh was not due/run and remains M5.1-049. M5.1-041
+separately verifies one matched Lite plain-text direct/gateway inference pair; it
+does not establish standard-profile live success or general account entitlement.
 Claude Code, Gemini CLI, ACP, WebSockets and Lite implementation stay outside
 this plan. No live auth/inference was performed in planning. The M4 deferral
 does not apply to M5.1-040/041.
@@ -134,7 +138,7 @@ remain loopback development compatibility modes; see [LOCAL-M2](LOCAL-M2.md).
   with explicit deterministic fixtures, not a broader real-provider retry claim.
   Remaining translation gates/live compatibility, stateful cross-target affinity,
   broader live OAuth verification and IPC remain M4/M5/M6. M5.1 has only the
-  narrowly scoped auth and Lite evidence summarized above; M5.1-043 review remains.
+  narrowly scoped auth and Lite evidence summarized above; M5.1-043 conditional review is DONE.
 - Historical M1 live evidence remains OpenCode 2.0.6 / public OpenAI Responses /
   `gpt-5.4-mini`, with parallel tools unknown; it is distinct from ChatGPT
   subscription Codex. Remote provider compute cancellation remains unverified.

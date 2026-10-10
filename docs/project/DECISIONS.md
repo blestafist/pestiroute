@@ -283,6 +283,44 @@ These accepted ADRs explain the existing constraints and establish the internal 
   establishes other grammars, hosted/parallel tools, general entitlement, or
   M5.1-043 completion.
 
+### DEC-012 — Conditional M5.1 Codex Implementation Acceptance with Deferred Live Gates
+
+- **Status:** Accepted by explicit user approval on 2026-10-10 for conditional
+  acceptance of M5.1 implementation/audit evidence while two live gates remain
+  open. This is not M5.1 milestone completion or live-gate passage.
+- **Context:** M5.1-043's audit is ready to proceed with its dependencies DONE.
+  M5.1-049's read-only preflight verified the selected gateway credential is
+  still fresh; its production one-minute freshness margin does not make refresh
+  due until 2026-10-15 21:04:55.103 UTC. Forcing expiry or refreshing early is
+  prohibited. Existing implementation and deterministic tests cover refresh
+  rotation, coalescing, cancellation, persistence, quarantine/restart recovery,
+  affinity, streaming and settlement, while actual provider refresh remains
+  unobserved.
+- **Decision:** Conditionally accept the implementation and deterministic-test
+  evidence audited by M5.1-043 without representing M5.1 as DONE or passing its
+  live gates. Retain (1) live OAuth refresh as M5.1-049, BLOCKED until its
+  natural eligibility time, and (2) scoped two-turn encrypted-reasoning replay
+  as M5.1-051, DRAFT and unrun. Both are separately tracked follow-ups; neither
+  is waived or authorized for execution by this decision. M5.1-049 requires the
+  due time, fresh read-only preflight, explicit authorization, and independent
+  review PASS of the then-current diff. M5.1-051 requires its own READY status,
+  assignment, explicit live authorization and independent review. These scoped
+  gates do not require or claim comprehensive live coverage of all
+  reasoning/history forms. Do not claim all M5.1 live acceptance or broader
+  Codex compatibility.
+- **Alternatives rejected:** Force expiration, revoke/rotate credentials, or
+  invoke refresh before eligibility; or represent the milestone as DONE while
+  either live gate remains open.
+- **Compatibility / impact:** Documentation/governance exception only. No v1
+  contract, implementation behavior, capability declaration, or follow-up
+  acceptance criteria change. This is not the M4 DEC-008 deferral and grants no
+  provider call authorization.
+- **Verification:** Audit task evidence and its exact claim boundaries; verify
+  M5.1-049 stays BLOCKED with a consistent natural due time, M5.1-051 stays
+  DRAFT and unrun, both are reflected as open in M5.1-043/current compatibility
+  claims, and links/dependencies remain valid. No live request is part of this
+  decision.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |
