@@ -1,6 +1,7 @@
 package responses
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -78,6 +79,9 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 		return errors.New("Responses connector cannot be initialized in its current state")
 	}
 	c.state = core.HealthUnavailable
+	if err := rejectDuplicateJSONKeys(config.Data); err != nil {
+		return fmt.Errorf("invalid Responses connector configuration: %w", err)
+	}
 	var cfg componentConfig
 	d := json.NewDecoder(strings.NewReader(string(config.Data)))
 	d.DisallowUnknownFields()
@@ -101,6 +105,9 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 		if capability == "" || (state != core.Supported && state != core.Unsupported && state != core.Unknown) {
 			return errors.New("invalid Responses connector capability declaration")
 		}
+		if c.local && state == core.Supported && modelDependentCapability(capability) {
+			return fmt.Errorf("local Responses connector capability %q requires reviewed model profile evidence", capability)
+		}
 	}
 	u, err := url.Parse(cfg.Transport.Endpoint)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
@@ -116,6 +123,80 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 	c.authMode = authMode
 	c.state = core.HealthReady
 	return nil
+}
+
+// rejectDuplicateJSONKeys checks decoded object keys, so escaped spellings of
+// the same JSON name (for example, "model" and "\\u006dodel") collide.
+func rejectDuplicateJSONKeys(data []byte) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	if err := consumeJSONValue(d); err != nil {
+		return err
+	}
+	if _, err := d.Token(); err != io.EOF {
+		if err == nil {
+			return errors.New("trailing data")
+		}
+		return err
+	}
+	return nil
+}
+
+func consumeJSONValue(d *json.Decoder) error {
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	delim, composite := token.(json.Delim)
+	if !composite {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for d.More() {
+			keyToken, err := d.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("invalid object key")
+			}
+			if _, exists := seen[key]; exists {
+				return fmt.Errorf("duplicate JSON object key %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := consumeJSONValue(d); err != nil {
+				return err
+			}
+		}
+		end, err := d.Token()
+		if err != nil || end != json.Delim('}') {
+			return errors.New("invalid JSON object")
+		}
+	case '[':
+		for d.More() {
+			if err := consumeJSONValue(d); err != nil {
+				return err
+			}
+		}
+		end, err := d.Token()
+		if err != nil || end != json.Delim(']') {
+			return errors.New("invalid JSON array")
+		}
+	default:
+		return errors.New("invalid JSON delimiter")
+	}
+	return nil
+}
+
+func modelDependentCapability(capability core.Capability) bool {
+	switch capability {
+	case "llm.tools", "llm.reasoning", "llm.tools.parallel":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Connector) Health(context.Context) core.Health {
@@ -147,12 +228,16 @@ func (c *Connector) capabilitiesLocked(scope core.CapabilityScope) core.Capabili
 		scope.Model != c.model || scope.AccountID != c.accountID {
 		return core.CapabilityResult{Values: values}
 	}
-	if c.model == modelID && capabilityEndpoint(c.transport.endpoint) {
+	if !c.local && c.model == modelID && capabilityEndpoint(c.transport.endpoint) {
 		values["llm.streaming"] = core.Supported
 		values["llm.tools"] = core.Supported
 		values["llm.reasoning"] = core.Supported
 	}
 	for capability, state := range c.capabilities {
+		if c.local {
+			values[capability] = state
+			continue
+		}
 		// Explicit fixture declarations apply only to this configured scope.
 		// Remote declarations cannot upgrade the historical live unknowns.
 		if state == core.Supported && !fixtureEndpoint(c.transport.endpoint) && values[capability] != core.Supported {

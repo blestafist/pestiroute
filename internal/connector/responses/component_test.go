@@ -139,6 +139,149 @@ func TestLocalConnectorRequiresExplicitAuthModeAndReportsDescriptor(t *testing.T
 	}
 }
 
+func TestLocalConnectorCapabilitiesAndModelsUseExactDeclaredScope(t *testing.T) {
+	const model = "llama3.2:3b"
+	c := NewLocalConnector(authNone)
+	data, marshalErr := json.Marshal(componentConfig{
+		Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"},
+		Model:     model, AccountID: "local-account", AuthMode: authNone,
+		Capabilities: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported},
+	})
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+
+	scope := core.CapabilityScope{Protocol: protocol, Mode: core.ModeNative, Model: model, AccountID: "local-account"}
+	got := c.Capabilities(context.Background(), scope)
+	if got.State("llm.streaming") != core.Supported || got.State("llm.tools") != core.Unknown || got.State("llm.reasoning") != core.Unknown || got.State("llm.tools.parallel") != core.Unknown {
+		t.Fatalf("local declarations/defaults = %#v", got.Values)
+	}
+	for _, mismatch := range []core.CapabilityScope{
+		{Protocol: "openai.chat.v1", Mode: scope.Mode, Model: model, AccountID: scope.AccountID},
+		{Protocol: protocol, Mode: "translation", Model: model, AccountID: scope.AccountID},
+		{Protocol: protocol, Mode: scope.Mode, Model: "qwen2.5:7b", AccountID: scope.AccountID},
+		{Protocol: protocol, Mode: scope.Mode, Model: model, AccountID: "other-account"},
+	} {
+		if values := c.Capabilities(context.Background(), mismatch).Values; len(values) != 0 {
+			t.Errorf("mismatched capability scope returned %#v", values)
+		}
+	}
+	models, modelErr := c.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: scope.Mode, AccountID: scope.AccountID}, core.InvocationServices{})
+	if modelErr != nil || !models.Supported || len(models.Models) != 1 {
+		t.Fatalf("exact Models query supported=%v count=%d, %v", models.Supported, len(models.Models), modelErr)
+	}
+	if models.Models[0].ID != model {
+		t.Fatalf("Models ID = %q, want %q", models.Models[0].ID, model)
+	}
+	for _, mismatch := range []core.ModelQuery{
+		{Protocol: "openai.chat.v1", Mode: scope.Mode, AccountID: scope.AccountID},
+		{Protocol: protocol, Mode: "translation", AccountID: scope.AccountID},
+		{Protocol: protocol, Mode: scope.Mode, AccountID: "other-account"},
+	} {
+		result, modelErr := c.Models(context.Background(), mismatch, core.InvocationServices{})
+		if modelErr != nil || result.Supported || len(result.Models) != 0 {
+			t.Errorf("mismatched Models query = %#v, %v", result, modelErr)
+		}
+	}
+
+	up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
+	defer up.Close()
+	routed, err := json.Marshal(componentConfig{Transport: Config{Endpoint: up.URL + "/v1/responses"}, Model: model, AccountID: scope.AccountID, AuthMode: authNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := NewLocalConnector(authNone)
+	if err := executor.Init(context.Background(), core.ComponentConfig{Data: routed}); err != nil {
+		t.Fatal(err)
+	}
+	defer executor.Close(context.Background())
+	request := fixedRequest()
+	request.Model = model
+	response, gatewayErr := executor.Execute(context.Background(), request, core.AttemptScope{Mode: scope.Mode, AccountID: scope.AccountID}, core.InvocationServices{})
+	if gatewayErr != nil {
+		t.Fatalf("arbitrary local model Execute: %v", gatewayErr)
+	}
+	response.Stream.Close()
+	capture := <-up.Requests
+	if string(capture.Body) != string(request.Payload.Body) {
+		t.Fatalf("local model request bytes changed: %q", capture.Body)
+	}
+}
+
+func TestLocalConnectorLoopbackDoesNotInheritNativeCapabilities(t *testing.T) {
+	c := NewLocalConnector(authNone)
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON("http://127.0.0.1:11434/v1/responses", authNone)}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	scope := core.CapabilityScope{Protocol: protocol, Mode: core.ModeNative, Model: modelID, AccountID: "account-a"}
+	got := c.Capabilities(context.Background(), scope)
+	for _, capability := range []core.Capability{"llm.streaming", "llm.tools", "llm.reasoning", "llm.tools.parallel", "usage.exact"} {
+		if got.State(capability) != core.Unknown {
+			t.Errorf("undeclared local %s = %q, want unknown", capability, got.State(capability))
+		}
+	}
+	estimate, err := c.EstimateUsage(context.Background(), core.UsageQuery{}, core.InvocationServices{})
+	if err != nil || estimate.Supported || estimate.Known {
+		t.Fatalf("local EstimateUsage = %#v, %v", estimate, err)
+	}
+}
+
+func TestLocalConnectorInitRejectsMissingScopeAndInvalidDeclarations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  componentConfig
+	}{
+		{"empty model", componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:1/v1/responses"}, AccountID: "a", AuthMode: authNone}},
+		{"empty account", componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:1/v1/responses"}, Model: "m", AuthMode: authNone}},
+		{"empty capability", componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:1/v1/responses"}, Model: "m", AccountID: "a", AuthMode: authNone, Capabilities: map[core.Capability]core.CapabilityState{"": core.Supported}}},
+		{"invalid capability state", componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:1/v1/responses"}, Model: "m", AccountID: "a", AuthMode: authNone, Capabilities: map[core.Capability]core.CapabilityState{"llm.tools": "enabled"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: data}); err == nil {
+				t.Fatal("invalid local declaration accepted")
+			}
+		})
+	}
+}
+
+func TestConnectorInitRejectsDuplicateJSONKeysIncludingEscapedNames(t *testing.T) {
+	for _, input := range []string{
+		`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"first","model":"second","account_id":"a","auth_mode":"none"}`,
+		`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses","endpoint":"http://127.0.0.1:2/v1/responses"},"model":"m","account_id":"a","auth_mode":"none"}`,
+		`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"first","\u006dodel":"second","account_id":"a","auth_mode":"none"}`,
+		`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"none","capabilities":{"llm.tools":"unknown","llm.\u0074ools":"unsupported"}}`,
+	} {
+		if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: []byte(input)}); err == nil {
+			t.Errorf("duplicate JSON key accepted: %s", input)
+		}
+	}
+}
+
+func TestLocalConnectorInitRejectsUnevidencedModelCapabilities(t *testing.T) {
+	for _, capability := range []core.Capability{"llm.tools", "llm.reasoning", "llm.tools.parallel"} {
+		data, err := json.Marshal(componentConfig{
+			Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"},
+			Model:     "arbitrary-model", AccountID: "account-a", AuthMode: authNone,
+			Capabilities: map[core.Capability]core.CapabilityState{capability: core.Supported},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: data}); err == nil {
+			t.Errorf("unevidenced %s support accepted", capability)
+		}
+	}
+}
+
 func TestLocalConnectorAuthPolicyAndClientHeaderIsolation(t *testing.T) {
 	for _, mode := range []string{authNone, authBearer} {
 		t.Run(mode, func(t *testing.T) {
