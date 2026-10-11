@@ -1,0 +1,5 @@
+Synthetic profile; not captured from a runtime and not live compatibility evidence.
+Runtime: vLLM v0.31.0
+Source commit: db9527a46873454610df6dbedf79a36d6bf1a7f6
+Profile: deterministic fake text-generation model, template, and tool parser.
+Stream serializer: pinned responses/serving.py and responses/streaming_events.py SimpleStreamingEventProcessor; text deltas use response.output_text.delta and close via output_text.done/content_part.done/output_item.done before response.completed.

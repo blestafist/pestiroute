@@ -1,0 +1,1 @@
+{"id":"resp_llama_synthetic","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Synthetic hello"}]}],"usage":{"input_tokens":6,"output_tokens":3,"total_tokens":9,"input_tokens_details":{"cached_tokens":2}}}

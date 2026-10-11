@@ -1,0 +1,2 @@
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_ollama_synthetic","status":"failed","error":{"message":"Synthetic web-search failure"}}}

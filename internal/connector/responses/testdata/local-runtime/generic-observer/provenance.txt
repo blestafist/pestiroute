@@ -1,0 +1,2 @@
+Generic observer mechanics only; intentionally unattributed to any runtime or source pin.
+Synthetic malformed, incomplete, EOF, and chunk-boundary examples for parser tests.

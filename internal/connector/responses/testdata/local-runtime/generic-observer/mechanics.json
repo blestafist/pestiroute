@@ -1,0 +1,8 @@
+[
+  {"scenario":"failure-unattributed","syntax_valid":true,"chunks":["event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"Synthetic observer failure\"}}\n\n"]},
+  {"scenario":"incomplete-unattributed","syntax_valid":true,"chunks":["event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\"}}\n\n"]},
+  {"scenario":"premature-eof-unattributed","syntax_valid":true,"chunks":["event: response.created\ndata: {\"type\":\"response.created\"}\n\n"]},
+  {"scenario":"malformed-json-unattributed","syntax_valid":false,"chunks":["event: response.completed\ndata: {\"type\":\"response.completed\",}\n\n"]},
+  {"scenario":"split-crlf-event-unattributed","syntax_valid":true,"chunks":["event: response.completed\r","\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\r\n\r","\n"]},
+  {"scenario":"split-data-event-unattributed","syntax_valid":true,"chunks":["event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",","\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n"]}
+]

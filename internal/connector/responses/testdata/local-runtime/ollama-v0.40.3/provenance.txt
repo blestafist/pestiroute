@@ -1,0 +1,5 @@
+Synthetic profile; not captured from a runtime and not live compatibility evidence.
+Runtime: Ollama v0.40.3
+Source commit: eab97e9f92b9a25c2d52d2cc6c1b1c99bd9fae21
+Profile: deterministic fake model/template; text and function-call wire shapes only.
+Stream serializer: pinned openai/responses.go ResponsesStreamConverter plus middleware event writer; synthetic trace follows created/in-progress, item/content open, output_text delta/done, item/content close, completed.

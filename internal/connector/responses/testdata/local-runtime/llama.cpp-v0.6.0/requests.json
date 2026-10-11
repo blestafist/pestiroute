@@ -1,0 +1,9 @@
+[
+  {"scenario":"text-string","body":{"model":"synthetic-llama","input":"Say hello","stream":false}},
+  {"scenario":"function-declaration","body":{"model":"synthetic-llama","input":"Call lookup","tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{}}}],"stream":false}},
+  {"scenario":"text-items-client-history","body":{"model":"synthetic-llama","input":[{"role":"user","content":"Call lookup"},{"type":"function_call","call_id":"call_llama_1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_llama_1","output":"synthetic result"}],"stream":false}},
+  {"scenario":"unsupported-previous-response-id","body":{"model":"synthetic-llama","input":"Say hello","previous_response_id":"resp_synthetic","stream":false}},
+  {"scenario":"rejected-input-file","body":{"model":"synthetic-llama","input":[{"type":"input_file","file_id":"file_synthetic"}],"stream":false}},
+  {"scenario":"instruction-reasoning-mapping","body":{"model":"synthetic-llama","instructions":"Synthetic system instruction","input":"Think briefly","reasoning":{"effort":"low"},"max_output_tokens":32,"stream":false}},
+  {"scenario":"non-function-tool-skipped","body":{"model":"synthetic-llama","input":"Search","tools":[{"type":"web_search_preview"}],"stream":false}}
+]
