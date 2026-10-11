@@ -386,12 +386,12 @@ and [tooling gate](TOOLING.md#m51-tooling-gate).
 
 ## M5.2 — Local Runtime Connectors
 
-Bounded plan under [ROADMAP M5.2](ROADMAP.md#m52--local-runtime-connectors) and [M5.2-LOCAL](M5.2-LOCAL.md). Only 001 is READY. Source/decision gates 002–007 precede implementation; 008–013 are DRAFT candidates to recheck/split at 006. Normal CI uses synthetic loopback fixtures. Real runtime/model gates 024–026 are independent and require their own provisioned environment and exact procedure before READY. Only DONE evidence promotes support; DEC-012's two Codex follow-ups remain open.
+Bounded plan under [ROADMAP M5.2](ROADMAP.md#m52--local-runtime-connectors) and [M5.2-LOCAL](M5.2-LOCAL.md). M5.2-001 and M5.2-002 are DONE. Source/decision gates 002–007 precede implementation; 008–013 are DRAFT candidates to recheck/split at 006. Normal CI uses synthetic loopback fixtures. Real runtime/model gates 024–026 are independent and require their own provisioned environment and exact procedure before READY. Only DONE evidence promotes support; DEC-012's two Codex follow-ups remain open.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
 | [M5.2-001](tasks/M5.2-001.md) | DONE | OpenCode subagent (M5.2-001 worker) / ses_ed4e60022ffessNCVko3o7Db0a (reviewer) / Planner closure | M5.1-043 | Audit the clean baseline and local-compatible reuse seams | Clean baseline, reuse/auth/capability gaps, CI distinction, and unchanged DEC-012 follow-ups audited and documented | Source/link/anchor/dependency review and `git diff --check`; [evidence](tasks/M5.2-001.md#completion-evidence) |
-| [M5.2-002](tasks/M5.2-002.md) | DRAFT | — | M5.2-001 | Pin the Ollama Responses source baseline | — | [Acceptance and verification](tasks/M5.2-002.md#verification) |
+| [M5.2-002](tasks/M5.2-002.md) | DONE | OpenCode subagent (M5.2-002 worker) / ses_ed475e1ecffeNI0qQVY3141ehb (reviewer) / Planner closure | M5.2-001 | Pin the Ollama Responses source baseline | Pinned v0.40.3 source and documented Responses/auth/usage semantics and later evidence scope | Official source/link/dependency review and `git diff --check`; [evidence](tasks/M5.2-002.md#completion-evidence) |
 | [M5.2-003](tasks/M5.2-003.md) | DRAFT | — | M5.2-001 | Pin the vLLM Responses source baseline | — | [Acceptance and verification](tasks/M5.2-003.md#verification) |
 | [M5.2-004](tasks/M5.2-004.md) | DRAFT | — | M5.2-001 | Pin the llama.cpp Responses source baseline | — | [Acceptance and verification](tasks/M5.2-004.md#verification) |
 | [M5.2-005](tasks/M5.2-005.md) | DRAFT | — | M5.2-002, M5.2-003, M5.2-004 | Define per-runtime request and capability policies | — | [Acceptance and verification](tasks/M5.2-005.md#verification) |
