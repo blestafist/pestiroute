@@ -390,7 +390,7 @@ Bounded plan under [ROADMAP M5.2](ROADMAP.md#m52--local-runtime-connectors) and 
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M5.2-001](tasks/M5.2-001.md) | READY | — | M5.1-043 | Audit the clean baseline and local-compatible reuse seams | — | [Acceptance and verification](tasks/M5.2-001.md#verification) |
+| [M5.2-001](tasks/M5.2-001.md) | DONE | OpenCode subagent (M5.2-001 worker) / ses_ed4e60022ffessNCVko3o7Db0a (reviewer) / Planner closure | M5.1-043 | Audit the clean baseline and local-compatible reuse seams | Clean baseline, reuse/auth/capability gaps, CI distinction, and unchanged DEC-012 follow-ups audited and documented | Source/link/anchor/dependency review and `git diff --check`; [evidence](tasks/M5.2-001.md#completion-evidence) |
 | [M5.2-002](tasks/M5.2-002.md) | DRAFT | — | M5.2-001 | Pin the Ollama Responses source baseline | — | [Acceptance and verification](tasks/M5.2-002.md#verification) |
 | [M5.2-003](tasks/M5.2-003.md) | DRAFT | — | M5.2-001 | Pin the vLLM Responses source baseline | — | [Acceptance and verification](tasks/M5.2-003.md#verification) |
 | [M5.2-004](tasks/M5.2-004.md) | DRAFT | — | M5.2-001 | Pin the llama.cpp Responses source baseline | — | [Acceptance and verification](tasks/M5.2-004.md#verification) |
