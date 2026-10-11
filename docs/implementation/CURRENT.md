@@ -18,7 +18,7 @@ The protected Codex Connector includes device OAuth, atomic credential/expiry pe
 
 [M5.1-049](tasks/M5.1-049.md) stays BLOCKED until the natural threshold 2026-10-15 21:04:55.103 UTC and its own current preflight, explicit authorization and independent review. Real OAuth refresh has not been verified. [M5.1-051](tasks/M5.1-051.md) stays DRAFT/unrun; live encrypted-reasoning continuation needs its own READY assignment/authorization/review. Both remain open and neither is an M5.2 research prerequisite. The previously recorded 177/200 remaining request budget is a ceiling, not authorization. Preserve the operator's isolated credential store; no credentials/raw payloads belong in repository evidence.
 
-M5.1-043's local checks included operator working-tree helpers not present in clean checkout; its card preserves that limit. Claude Code, Gemini CLI, ACP, WebSockets and IPC remain future work. Lite implementation is present under DEC-011; do not repeat the obsolete original planning exclusion as current state.
+M5.1-043's historical local checks included operator working-tree helpers not present in its clean checkout; its card preserves that limit. Those credential checkpoint and opt-in refresh helpers are now included on dev-m5.2, with offline checks passing; no live refresh or independent live-gate review is claimed. Claude Code, Gemini CLI, ACP, WebSockets and IPC remain future work. Lite implementation is present under DEC-011; do not repeat the obsolete original planning exclusion as current state.
 
 ## Checks and operations
 
