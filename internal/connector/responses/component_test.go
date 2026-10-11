@@ -23,6 +23,11 @@ func componentConfigJSON(endpoint string) []byte {
 	return b
 }
 
+func localComponentConfigJSON(endpoint, authMode string) []byte {
+	b, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: endpoint, ConnectTimeout: time.Second}, Model: modelID, AccountID: "account-a", AuthMode: authMode})
+	return b
+}
+
 func TestConnectorLifecycleSupportAndExactScope(t *testing.T) {
 	c := NewConnector()
 	d := c.Descriptor()
@@ -100,6 +105,101 @@ func TestConnectorInitRejectsInvalidConfigAndUnknownEndpointCapability(t *testin
 		t.Fatalf("unverified endpoint capability = %q", got)
 	}
 	_ = c.Close(context.Background())
+}
+
+func TestLocalConnectorRequiresExplicitAuthModeAndReportsDescriptor(t *testing.T) {
+	for _, data := range [][]byte{
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a"}`),
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":""}`),
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"api_key"}`),
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"none","unknown":true}`),
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"none"} {}`),
+	} {
+		if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: data}); err == nil {
+			t.Fatalf("invalid local auth config accepted: %s", data)
+		}
+	}
+	for _, mode := range []string{authNone, authBearer} {
+		c := NewLocalConnector(mode)
+		if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON("http://127.0.0.1:1/v1/responses", mode)}); err != nil {
+			t.Fatal(err)
+		}
+		d := c.Descriptor()
+		if d.ID != localComponentID || d.ConnectorType != "local" || len(d.AuthMethods) != 1 || d.AuthMethods[0] != mode {
+			t.Fatalf("local descriptor for %s: %+v", mode, d)
+		}
+		if err := d.Validate(core.ComponentConnector); err != nil {
+			t.Fatalf("invalid local descriptor: %v", err)
+		}
+		_ = c.Close(context.Background())
+	}
+	native := NewConnector().Descriptor()
+	if native.ID != componentID || native.ConnectorType != "api" || len(native.AuthMethods) != 1 || native.AuthMethods[0] != authBearer {
+		t.Fatalf("native descriptor changed: %+v", native)
+	}
+}
+
+func TestLocalConnectorAuthPolicyAndClientHeaderIsolation(t *testing.T) {
+	for _, mode := range []string{authNone, authBearer} {
+		t.Run(mode, func(t *testing.T) {
+			up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
+			defer up.Close()
+			c := NewLocalConnector(mode)
+			if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON(up.URL+"/v1/responses", mode)}); err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close(context.Background())
+			req := fixedRequest()
+			req.Model = modelID
+			req.Metadata.Headers = map[string][]string{"Authorization": {"Bearer client-fake"}, "Proxy-Authorization": {"Basic client-fake"}}
+			var credentialCalls atomic.Int32
+			services := core.InvocationServices{Credentials: credentialFunc(func(_ context.Context, name string) ([]byte, error) {
+				credentialCalls.Add(1)
+				if name != "bearer" {
+					t.Fatalf("credential name = %q", name)
+				}
+				return []byte("selected-account-secret"), nil
+			})}
+			_, ge := c.Execute(context.Background(), req, core.AttemptScope{AccountID: "account-a", Mode: "native"}, services)
+			if ge != nil {
+				t.Fatal(ge)
+			}
+			capture := <-up.Requests
+			wantAuth, wantCalls := "", int32(0)
+			if mode == authBearer {
+				wantAuth, wantCalls = "Bearer selected-account-secret", 1
+			}
+			if capture.Header.Get("Authorization") != wantAuth || capture.Header.Get("Proxy-Authorization") != "" || credentialCalls.Load() != wantCalls {
+				t.Fatalf("auth=%q proxy-auth=%q credential calls=%d", capture.Header.Get("Authorization"), capture.Header.Get("Proxy-Authorization"), credentialCalls.Load())
+			}
+		})
+	}
+}
+
+func TestLocalBearerMissingCredentialsRejectBeforeSend(t *testing.T) {
+	up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{}`)})
+	defer up.Close()
+	c := NewLocalConnector(authBearer)
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON(up.URL+"/v1/responses", authBearer)}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	req := fixedRequest()
+	req.Model = modelID
+	scope := core.AttemptScope{AccountID: "account-a", Mode: "native"}
+	for name, credentials := range map[string]core.CredentialAccess{
+		"nil":   nil,
+		"empty": credentialFunc(func(context.Context, string) ([]byte, error) { return nil, nil }),
+		"error": credentialFunc(func(context.Context, string) ([]byte, error) { return nil, errors.New("private") }),
+	} {
+		_, ge := c.Execute(context.Background(), req, scope, core.InvocationServices{Credentials: credentials})
+		if ge == nil || ge.Category != core.CategoryUnauthenticated {
+			t.Fatalf("%s credential result = %+v", name, ge)
+		}
+	}
+	if len(up.Requests) != 0 {
+		t.Fatal("missing bearer credential dispatched upstream")
+	}
 }
 
 func TestConnectorConfiguredCapabilitiesPreserveLiveUnknowns(t *testing.T) {

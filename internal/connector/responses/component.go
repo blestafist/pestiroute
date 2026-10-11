@@ -15,8 +15,11 @@ import (
 )
 
 const (
-	componentID = "pestiroute.responses.native"
-	modelID     = "gpt-5.4-mini"
+	componentID      = "pestiroute.responses.native"
+	localComponentID = "pestiroute.responses.local"
+	modelID          = "gpt-5.4-mini"
+	authNone         = "none"
+	authBearer       = "bearer"
 )
 
 // componentConfig is private non-secret connector configuration.
@@ -25,6 +28,7 @@ type componentConfig struct {
 	Model        string                                   `json:"model"`
 	AccountID    string                                   `json:"account_id"`
 	Capabilities map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	AuthMode     string                                   `json:"auth_mode,omitempty"`
 }
 
 // Connector exposes the native Responses transport through the common component API.
@@ -36,19 +40,34 @@ type Connector struct {
 	capabilities map[core.Capability]core.CapabilityState
 	state        core.HealthState
 	closed       bool
+	local        bool
+	authMode     string
 }
 
 var _ core.Connector = (*Connector)(nil)
 
 func NewConnector() *Connector { return &Connector{state: core.HealthUnknown} }
 
+// NewLocalConnector creates the separately identified compatible local-runtime
+// Connector. The mode is constructor input because the registry reads Descriptor
+// before Init; Init also verifies the serialized component config matches it.
+func NewLocalConnector(authMode string) *Connector {
+	return &Connector{state: core.HealthUnknown, local: true, authMode: authMode}
+}
+
 func (c *Connector) Descriptor() core.Descriptor {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id, connectorType, authMethods := componentID, "api", []string{authBearer}
+	if c.local {
+		id, connectorType, authMethods = localComponentID, "local", []string{c.authMode}
+	}
 	return core.Descriptor{
-		ID: componentID, Kind: core.ComponentConnector, ImplementationVersion: "1.0.0",
+		ID: id, Kind: core.ComponentConnector, ImplementationVersion: "1.0.0",
 		APIVersions:   []core.APIVersion{{Major: 1, Minor: 0}},
 		Protocols:     []string{protocol},
 		Operations:    []string{"execute", "models", "estimate_usage", "authenticate"},
-		ConnectorType: "api", AuthMethods: []string{"bearer"},
+		ConnectorType: connectorType, AuthMethods: authMethods,
 	}.Clone()
 }
 
@@ -71,6 +90,13 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 	if cfg.Model == "" || cfg.AccountID == "" {
 		return errors.New("Responses connector model and account_id are required")
 	}
+	if c.local {
+		if (c.authMode != authNone && c.authMode != authBearer) || cfg.AuthMode != c.authMode {
+			return errors.New("local Responses connector auth_mode must be none or bearer")
+		}
+	} else if cfg.AuthMode != "" {
+		return errors.New("native Responses connector does not accept auth_mode")
+	}
 	for capability, state := range cfg.Capabilities {
 		if capability == "" || (state != core.Supported && state != core.Unsupported && state != core.Unknown) {
 			return errors.New("invalid Responses connector capability declaration")
@@ -80,9 +106,14 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
 		return errors.New("Responses connector requires a valid HTTP(S) endpoint")
 	}
-	c.transport = NewTransport(cfg.Transport)
+	authMode := authBearer
+	if c.local {
+		authMode = c.authMode
+	}
+	c.transport = newTransport(cfg.Transport, authMode)
 	c.model, c.accountID = cfg.Model, cfg.AccountID
 	c.capabilities = cfg.Capabilities
+	c.authMode = authMode
 	c.state = core.HealthReady
 	return nil
 }
@@ -208,12 +239,16 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if scope.AccountID != c.accountID || req.Model != c.model {
 		return core.ExecutionResponse{}, gatewayError("scope_mismatch", core.CategoryPermissionDenied, "Execution scope does not match configured target")
 	}
-	if services.Credentials == nil {
-		return core.ExecutionResponse{}, gatewayError("credential_unavailable", core.CategoryUnauthenticated, "Selected credential is unavailable")
-	}
-	credential, err := services.Credentials.Get(ctx, "bearer")
-	if err != nil || len(credential) == 0 {
-		return core.ExecutionResponse{}, gatewayError("credential_unavailable", core.CategoryUnauthenticated, "Selected credential is unavailable")
+	var credential []byte
+	if c.authMode == authBearer {
+		if services.Credentials == nil {
+			return core.ExecutionResponse{}, gatewayError("credential_unavailable", core.CategoryUnauthenticated, "Selected credential is unavailable")
+		}
+		var err error
+		credential, err = services.Credentials.Get(ctx, "bearer")
+		if err != nil || len(credential) == 0 {
+			return core.ExecutionResponse{}, gatewayError("credential_unavailable", core.CategoryUnauthenticated, "Selected credential is unavailable")
+		}
 	}
 	if req.Metadata.Streaming != nil && *req.Metadata.Streaming {
 		return t.ExecuteSSE(ctx, req, string(credential), services.Transport)
