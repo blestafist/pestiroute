@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blestafist/pestiroute/internal/core"
+	secure "github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
@@ -185,8 +187,432 @@ func TestProtectedLocalRouteCompositionKeepsVirtualKeyAndNativeRoute(t *testing.
 	if err != nil || len(attempts) != 1 || attempts[0].Reservation.EstimatedTokens != 20 {
 		t.Fatalf("local unknown-usage reservation = %+v, %v", attempts, err)
 	}
+	usage, err := sqlite.NewLedger(prepared.runtimeDB).GetUsage(ctx, attempts[0].Attempt.ID)
+	if err != nil || usage.Source != "unknown" || usage.Completeness != "unknown" || usage.InputTokens != nil || usage.OutputTokens != nil || attempts[0].Reservation.State != "conservative" || attempts[0].Reservation.EffectiveCharge < 20 {
+		t.Fatalf("missing local usage was inferred free/zero: usage=%+v reservation=%+v err=%v", usage, attempts[0].Reservation, err)
+	}
 	if c.protected.Connectors[0].Implementation != "pestiroute.responses.native" {
 		t.Fatal("native connector configuration changed")
+	}
+}
+
+func TestLocalProtectedAccountingPolicyAndCredentialIsolation(t *testing.T) {
+	ctx := context.Background()
+	_, dbPath, keyPath := protectedFixture(t)
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts, policies := sqlite.NewAccounts(db), sqlite.NewKeyPolicies(db)
+	if _, err := accounts.Create(ctx, sqlite.Account{ID: "local-account-a", Connector: "local-a", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := accounts.Create(ctx, sqlite.Account{ID: "local-account-alt", Connector: "local-alt", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := accounts.Create(ctx, sqlite.Account{ID: "bearer-account", Connector: "local-b", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := secure.Seal(key, 2, "test-v1", "credentials", "bearer-credential", "bearer-account", []byte("synthetic-bearer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: "bearer-credential", AccountID: "bearer-account", FormatVersion: envelope.FormatVersion, KeyVersion: envelope.KeyVersion, Nonce: envelope.Nonce, Ciphertext: envelope.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := policies.GetLatest(ctx, "policy-id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err = policies.Update(ctx, policy.ID, policy.Revision, sqlite.UpdateKeyPolicyParams{Enabled: true, Models: []string{"model-a", "model-b"}, Connectors: []string{"local-a", "local-alt", "local-b"}, RPM: policy.RPM, TPM: policy.TPM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistKey, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewVirtualKeys(db).SetEnabled(ctx, disabled.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var callsA, callsB atomic.Int32
+	response := `{"status":"completed","usage":{"input_tokens":3,"output_tokens":2}}`
+	cancelStarted, cancelRelease := make(chan struct{}), make(chan struct{})
+	var cancelOnce sync.Once
+	persistStarted, persistRelease := make(chan struct{}), make(chan struct{})
+	backend := func(target string, calls *atomic.Int32) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			want := ""
+			if target == "b" {
+				want = "Bearer synthetic-bearer"
+			}
+			if got := r.Header.Get("Authorization"); got != want {
+				t.Errorf("target %s Authorization=%q, want %q", target, got, want)
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read target %s request body: %v", target, err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if target == "a" && bytes.Contains(body, []byte("terminal-failure")) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if target == "a" && bytes.Contains(body, []byte("incomplete")) {
+				_, _ = io.WriteString(w, `{"status":"incomplete","usage":{"input_tokens":7,"output_tokens":0}}`)
+				return
+			}
+			if target == "a" && bytes.Contains(body, []byte("interrupt")) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n")
+				return
+			}
+			if target == "a" && bytes.Contains(body, []byte("cancel")) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n")
+				w.(http.Flusher).Flush()
+				cancelOnce.Do(func() { close(cancelStarted) })
+				<-cancelRelease
+				return
+			}
+			if target == "a" && bytes.Contains(body, []byte("persist-failure")) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n")
+				w.(http.Flusher).Flush()
+				close(persistStarted)
+				<-persistRelease
+				_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}}\n\n")
+				return
+			}
+			_, _ = io.WriteString(w, response)
+		}))
+	}
+	var alternateCalls atomic.Int32
+	a, b, alternate := backend("a", &callsA), backend("b", &callsB), backend("alt", &alternateCalls)
+	defer a.Close()
+	defer b.Close()
+	defer alternate.Close()
+	c := fixtureProtectedConfig(dbPath, keyPath, "127.0.0.1:0")
+	connector := func(id, account, model, endpoint, profile, auth, credential string) protectedConnector {
+		return protectedConnector{ID: id, Kind: "connector", Implementation: "pestiroute.responses.local", Protocols: []string{responsesProtocol}, Settings: nativeSettings{
+			BaseURL: endpoint + "/v1/responses", RuntimeProfile: profile, AuthMode: auth, CredentialID: credential, MaxRequestBodyBytes: 1 << 20, MaxRequestHeaderBytes: 8192,
+			ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s", Model: model, AccountID: account,
+		}}
+	}
+	c.protected.Connectors[0] = connector("local-a", "local-account-a", "model-a", a.URL, "ollama-v0.40.3", "none", "")
+	c.protected.Connectors[0].Settings.Capabilities = map[string]string{"llm.streaming": "supported"}
+	c.protected.Connectors = append(c.protected.Connectors, connector("local-b", "bearer-account", "model-b", b.URL, "vllm-v0.31.0", "bearer", "bearer-credential"))
+	c.protected.Connectors = append(c.protected.Connectors, connector("local-alt", "local-account-alt", "model-a", alternate.URL, "ollama-v0.40.3", "none", ""))
+	c.protected.Connectors[len(c.protected.Connectors)-1].Settings.Capabilities = map[string]string{"llm.streaming": "supported"}
+	c.protected.Routes[0].ID, c.protected.Routes[0].Model, c.protected.Routes[0].Targets = "route-a", "model-a", []routeTarget{{Connector: "local-a", Account: "local-account-a"}, {Connector: "local-alt", Account: "local-account-alt"}}
+	retryAttempts := 2
+	c.protected.Routes[0].Retry = &retryConfig{MaxAttempts: &retryAttempts, Deadline: "5s"}
+	c.protected.Routes = append(c.protected.Routes, protectedRoute{ID: "route-b", Protocol: responsesProtocol, Mode: "native", Model: "model-b", Adapter: "pestiroute.responses.native", Policy: "standard", Budget: routeBudget{UnknownEstimate: "reserve", ConservativeTokens: ptrInt64(20)}, Targets: []routeTarget{{Connector: "local-b", Account: "bearer-account"}}})
+	c.protected.Policies["standard"] = "policy-id-a"
+	if err := validateBudget("local route", routeBudget{UnknownEstimate: "reserve", ConservativeTokens: ptrInt64(0)}); err == nil {
+		t.Fatal("zero conservative reservation budget accepted")
+	}
+	prepared, err := prepareProtectedConfig(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retryRouteFound bool
+	for _, route := range prepared.Routes {
+		if route.RouteID == "route-a" {
+			retryRouteFound = true
+			if route.RetryMaxAttempts != 2 || route.RetryDeadline != 5*time.Second {
+				t.Fatalf("eligible alternate route retry config: max=%d deadline=%s", route.RetryMaxAttempts, route.RetryDeadline)
+			}
+		}
+	}
+	if !retryRouteFound {
+		t.Fatal("configured two-target retry route missing from prepared runtime")
+	}
+	accountingCalls := &accountingCallCounters{}
+	prepared.accounting = &countedSQLiteAccountingStore{store: sqliteAccountingStore{ledger: sqlite.NewLedger(prepared.runtimeDB)}, calls: accountingCalls}
+	var ready, draining atomic.Bool
+	ready.Store(true)
+	h, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeComponents(context.Background()) })
+	gateway := httptest.NewServer(h)
+	defer gateway.Close()
+	makeRequest := func(requestCtx context.Context, model, secret, input string, stream bool) *http.Request {
+		streamValue := "false"
+		if stream {
+			streamValue = "true"
+		}
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":%q,"input":%q,"stream":%s}`, model, input, streamValue)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set("Content-Type", "application/json")
+		return req
+	}
+	postInput := func(model, secret, input string, stream bool) int {
+		req := makeRequest(ctx, model, secret, input, stream)
+		resp, err := gateway.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, readErr := io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		return resp.StatusCode
+	}
+	post := func(model, secret string) int { return postInput(model, secret, "synthetic", false) }
+	if got := post("model-a", issued.Secret); got != http.StatusOK {
+		t.Fatalf("unauthenticated target status=%d", got)
+	}
+	if got := post("model-b", issued.Secret); got != http.StatusOK {
+		t.Fatalf("bearer target status=%d", got)
+	}
+	if got := postInput("model-a", issued.Secret, "terminal-failure", false); got < 400 {
+		t.Fatalf("terminal error status=%d", got)
+	}
+	if got := postInput("model-a", issued.Secret, "incomplete", false); got != http.StatusOK {
+		t.Fatalf("incomplete response status=%d", got)
+	}
+	if got := postInput("model-a", issued.Secret, "interrupt", true); got != http.StatusOK {
+		t.Fatalf("interrupted stream status=%d", got)
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancelResp, err := gateway.Client().Do(makeRequest(cancelCtx, "model-a", issued.Secret, "cancel", true))
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelStarted:
+	case <-time.After(3 * time.Second):
+		cancel()
+		_ = cancelResp.Body.Close()
+		t.Fatal("cancel stream did not reach fake local target")
+	}
+	if _, err := bufio.NewReader(cancelResp.Body).ReadString('\n'); err != nil {
+		cancel()
+		_ = cancelResp.Body.Close()
+		t.Fatalf("read first cancel stream event: %v", err)
+	}
+	cancel()
+	_ = cancelResp.Body.Close()
+	close(cancelRelease)
+	deadline := time.Now().Add(3 * time.Second)
+	for accountingCalls.finalize.Load() != 6 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := accountingCalls.snapshot().finalize; got != 6 {
+		t.Fatalf("six local executions finalized %d times, want exactly once each", got)
+	}
+	rows, err := sqlite.NewLedger(prepared.runtimeDB).QueryRequests(ctx, sqlite.RequestFilter{Limit: 10})
+	if err != nil || len(rows) != 6 {
+		t.Fatalf("local lifecycle SQLite requests=%d err=%v", len(rows), err)
+	}
+	var known, failedUnknown, incompleteKnown, incompleteUnknown int
+	for _, row := range rows {
+		if len(row.Attempts) != 1 || row.Attempts[0].Usage == nil {
+			t.Fatalf("local attempt missing usage or duplicate attempt: %+v", row)
+		}
+		attempt, usage := row.Attempts[0].Attempt, row.Attempts[0].Usage
+		switch {
+		case attempt.State == "succeeded" && usage.Source == "provider" && usage.Completeness == "complete" && usage.InputTokens != nil && *usage.InputTokens == 3 && usage.OutputTokens != nil && *usage.OutputTokens == 2:
+			known++
+		case attempt.State == "failed" && usage.Source == "unknown" && usage.Completeness == "unknown" && usage.InputTokens == nil && usage.OutputTokens == nil:
+			failedUnknown++
+		case attempt.State == "interrupted" && usage.Source == "provider" && usage.Completeness == "complete" && usage.InputTokens != nil && *usage.InputTokens == 7 && usage.OutputTokens != nil && *usage.OutputTokens == 0:
+			incompleteKnown++
+		case (attempt.State == "cancelled" || attempt.State == "interrupted") && usage.Source == "unknown" && usage.Completeness == "unknown" && usage.InputTokens == nil && usage.OutputTokens == nil:
+			incompleteUnknown++
+		default:
+			t.Fatalf("unexpected local lifecycle attempt=%+v usage=%+v", attempt, usage)
+		}
+	}
+	if known != 2 || failedUnknown != 1 || incompleteKnown != 1 || incompleteUnknown != 2 {
+		t.Fatalf("SQLite lifecycle counts known=%d failed-unknown=%d incomplete-known=%d unknown-interrupted/cancelled=%d", known, failedUnknown, incompleteKnown, incompleteUnknown)
+	}
+	partialStore := sqliteAccountingStore{ledger: sqlite.NewLedger(prepared.runtimeDB)}
+	partial := core.AccountingAdmission{RequestID: "local-partial-fixture", AttemptID: "local-partial-attempt", KeyID: issued.ID, KeyRevision: issued.Revision, PolicyID: policy.ID, PolicyRevision: issued.PolicyRevision, Protocol: responsesProtocol, Model: "model-a", RouteID: "route-a", AccountID: "local-account-a", Connector: "local-a", EstimateTokens: 20, EstimateMethod: "fixture", BudgetPolicy: "reserve"}
+	if err := partialStore.Admit(ctx, partial); err != nil {
+		t.Fatal(err)
+	}
+	if err := partialStore.RecordDispatchIntent(ctx, partial.AttemptID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	partialInput := int64(4)
+	if err := partialStore.FinalizeAttempt(ctx, core.AccountingTerminal{AttemptID: partial.AttemptID, Outcome: core.OutcomeIncomplete, Committed: true, Usage: core.UsageReport{InputTokens: &partialInput, Source: core.UsageProvider, Completeness: core.UsagePartial}, EndedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := partialStore.FinishRequest(ctx, partial.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	partialUsage, err := partialStore.ledger.GetUsage(ctx, partial.AttemptID)
+	if err != nil || partialUsage.Source != "provider" || partialUsage.Completeness != "partial" || partialUsage.InputTokens == nil || *partialUsage.InputTokens != partialInput || partialUsage.OutputTokens != nil {
+		t.Fatalf("partial usage was not durably preserved: %+v err=%v", partialUsage, err)
+	}
+	wantCallsA, wantCallsB := callsA.Load(), callsB.Load()
+	if got := post("not-permitted", issued.Secret); got < 400 || callsA.Load() != wantCallsA || callsB.Load() != wantCallsB {
+		t.Fatalf("out-of-policy status=%d upstream calls=%d/%d", got, callsA.Load(), callsB.Load())
+	}
+	rows, err = sqlite.NewLedger(prepared.runtimeDB).QueryRequests(ctx, sqlite.RequestFilter{Limit: 10})
+	if err != nil || len(rows) != 7 {
+		t.Fatalf("ledger requests including partial SQLite fixture=%d err=%v", len(rows), err)
+	}
+	for _, row := range rows {
+		if len(row.Attempts) != 1 || row.Attempts[0].Attempt.State == "succeeded" && (row.Attempts[0].Usage == nil || row.Attempts[0].Usage.InputTokens == nil || *row.Attempts[0].Usage.InputTokens != 3 || row.Attempts[0].Usage.OutputTokens == nil || *row.Attempts[0].Usage.OutputTokens != 2 || row.Attempts[0].Reservation.State != "settled") {
+			t.Fatalf("known usage did not settle once in SQLite: %+v", row)
+		}
+	}
+	if _, err := sqlite.NewVirtualKeys(prepared.runtimeDB).Revoke(ctx, issued.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := post("model-a", issued.Secret); got < 400 || callsA.Load() != wantCallsA {
+		t.Fatalf("revoked key status=%d upstream calls=%d", got, callsA.Load())
+	}
+	if got := post("model-a", disabled.Secret); got < 400 || callsA.Load() != wantCallsA {
+		t.Fatalf("disabled key status=%d upstream calls=%d", got, callsA.Load())
+	}
+
+	persistCtx, persistCancel := context.WithCancel(ctx)
+	persistRespCh := make(chan *http.Response, 1)
+	persistErrCh := make(chan error, 1)
+	go func() {
+		resp, err := gateway.Client().Do(makeRequest(persistCtx, "model-a", persistKey.Secret, "persist-failure", true))
+		if err != nil {
+			persistErrCh <- err
+			return
+		}
+		persistRespCh <- resp
+	}()
+	select {
+	case <-persistStarted:
+	case <-time.After(3 * time.Second):
+		persistCancel()
+		t.Fatal("post-commit persistence request did not reach primary local target")
+	}
+	var persistResp *http.Response
+	select {
+	case persistResp = <-persistRespCh:
+	case err := <-persistErrCh:
+		persistCancel()
+		t.Fatal(err)
+	case <-time.After(3 * time.Second):
+		persistCancel()
+		t.Fatal("post-commit local response was not delivered")
+	}
+	if _, err := bufio.NewReader(persistResp.Body).ReadString('\n'); err != nil {
+		persistCancel()
+		_ = persistResp.Body.Close()
+		t.Fatalf("read committed local stream: %v", err)
+	}
+	if err := prepared.runtimeDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(persistRelease)
+	_, _ = io.Copy(io.Discard, persistResp.Body)
+	_ = persistResp.Body.Close()
+	persistCancel()
+	if ready.Load() {
+		t.Fatal("gateway remained ready after local SQLite settlement failure")
+	}
+	readyResp, err := gateway.Client().Get(gateway.URL + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = readyResp.Body.Close()
+	if readyResp.StatusCode != http.StatusServiceUnavailable || alternateCalls.Load() != 0 {
+		t.Fatalf("storage failure readyz=%d alternate dispatches=%d", readyResp.StatusCode, alternateCalls.Load())
+	}
+}
+
+func TestLocalProtectedConnectorPolicyDeniesConfiguredTarget(t *testing.T) {
+	ctx := context.Background()
+	_, dbPath, keyPath := protectedFixture(t)
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: "local-account-a", Connector: "local-a", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := sqlite.NewKeyPolicies(db).GetLatest(ctx, "policy-id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err = sqlite.NewKeyPolicies(db).Update(ctx, policy.ID, policy.Revision, sqlite.UpdateKeyPolicyParams{Enabled: true, Models: []string{"model-a"}, Connectors: []string{"local-a"}, RPM: policy.RPM, TPM: policy.TPM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"completed"}`)
+	}))
+	defer backend.Close()
+	c := fixtureProtectedConfig(dbPath, keyPath, "127.0.0.1:0")
+	c.protected.Connectors[0] = protectedConnector{ID: "local-a", Kind: "connector", Implementation: "pestiroute.responses.local", Protocols: []string{responsesProtocol}, Settings: nativeSettings{
+		BaseURL: backend.URL + "/v1/responses", RuntimeProfile: "ollama-v0.40.3", AuthMode: "none", MaxRequestBodyBytes: 1 << 20, MaxRequestHeaderBytes: 8192,
+		ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s", Model: "model-a", AccountID: "local-account-a",
+	}}
+	c.protected.Routes[0].Targets = []routeTarget{{Connector: "local-a", Account: "local-account-a"}}
+	prepared, err := prepareProtectedConfig(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policies := sqlite.NewKeyPolicies(prepared.runtimeDB)
+	latest, err := policies.GetLatest(ctx, policy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err = policies.Update(ctx, latest.ID, latest.Revision, sqlite.UpdateKeyPolicyParams{Enabled: true, Models: latest.Models, Connectors: []string{"unrelated-connector"}, RPM: latest.RPM, TPM: latest.TPM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewVirtualKeys(prepared.runtimeDB).UpdatePolicy(ctx, issued.ID, latest.ID, latest.Revision, issued.Revision); err != nil {
+		t.Fatal(err)
+	}
+	var ready, draining atomic.Bool
+	ready.Store(true)
+	h, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeComponents(context.Background()) })
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"model-a","input":"synthetic"}`))
+	req.Header.Set("Authorization", "Bearer "+issued.Secret)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"code":"permission_denied"`) || calls.Load() != 0 {
+		t.Fatalf("connector policy denial status=%d body=%s upstream calls=%d", w.Code, w.Body.String(), calls.Load())
 	}
 }
 
