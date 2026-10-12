@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -481,6 +482,173 @@ func TestProtectedLocalFunctionToolRoundTripIsClientOwned(t *testing.T) {
 			_, status = post(toolRequest)
 			if status != http.StatusBadRequest || calls.Load() != 2 {
 				t.Fatalf("unevidenced function tool status=%d backend dispatches=%d", status, calls.Load())
+			}
+		})
+	}
+}
+
+func TestProtectedLocalMultipleCallsAndParallelRequirementFailClosed(t *testing.T) {
+	const trace = "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"item_a\",\"type\":\"function_call\",\"call_id\":\"call_a\",\"name\":\"lookup\",\"arguments\":\"\"}}\n\nevent: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_id\":\"item_a\",\"delta\":\"{\\\"key\\\":\\\"\"}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"item_b\",\"type\":\"function_call\",\"call_id\":\"call_b\",\"name\":\"lookup\",\"arguments\":\"\"}}\n\nevent: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"item_id\":\"item_b\",\"delta\":\"{\\\"key\\\":\\\"beta\\\"}\"}\n\nevent: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_id\":\"item_a\",\"delta\":\"alpha\\\"}\"}\n\nevent: response.function_call_arguments.done\ndata: {\"type\":\"response.function_call_arguments.done\",\"output_index\":1,\"item_id\":\"item_b\",\"arguments\":\"{\\\"key\\\":\\\"beta\\\"}\"}\n\nevent: response.function_call_arguments.done\ndata: {\"type\":\"response.function_call_arguments.done\",\"output_index\":0,\"item_id\":\"item_a\",\"arguments\":\"{\\\"key\\\":\\\"alpha\\\"}\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+	for _, profile := range []string{"ollama-v0.40.3", "vllm-v0.31.0", "llamacpp-v0.6.0"} {
+		t.Run(profile, func(t *testing.T) {
+			ctx := context.Background()
+			_, dbPath, keyPath := protectedFixture(t)
+			db, err := sqlite.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			issued, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: "policy-id-a", PolicyRevision: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var dispatches atomic.Int32
+			captured := make(chan []byte, 2)
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read upstream request: %v", err)
+				}
+				captured <- body
+				if dispatches.Add(1) == 1 {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w, trace)
+					return
+				}
+				_, _ = io.WriteString(w, `{"id":"done","status":"completed"}`)
+			}))
+			defer backend.Close()
+
+			config := fixtureProtectedConfig(dbPath, keyPath, "127.0.0.1:0")
+			config.protected.Connectors[0] = protectedConnector{ID: "upstream", Kind: "connector", Implementation: "pestiroute.responses.local", Protocols: []string{responsesProtocol}, Settings: nativeSettings{
+				BaseURL: backend.URL + "/v1/responses", RuntimeProfile: profile, AuthMode: "none", MaxRequestBodyBytes: 1 << 20, MaxRequestHeaderBytes: 8192,
+				ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "5s", Model: "model-a", AccountID: "account-a",
+				Capabilities: map[string]string{"llm.streaming": "supported"},
+			}}
+			prepared, err := prepareProtectedConfig(ctx, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ready, draining atomic.Bool
+			ready.Store(true)
+			h, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = closeComponents(context.Background()) })
+			gateway := httptest.NewServer(h)
+			defer gateway.Close()
+
+			post := func(body string) (*http.Response, []byte) {
+				req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Authorization", "Bearer "+issued.Secret)
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := gateway.Client().Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return resp, got
+			}
+			first := `{"model":"model-a","stream":true,"parallel_tool_calls":false,"input":"find two"}`
+			resp, body := post(first)
+			if resp.StatusCode != http.StatusOK || string(body) != trace || string(<-captured) != first {
+				var result struct {
+					Error struct{ Code, Message string } `json:"error"`
+				}
+				_ = json.Unmarshal(body, &result)
+				t.Fatalf("synthetic interleaved trace status=%d code=%s message=%s", resp.StatusCode, result.Error.Code, result.Error.Message)
+			}
+			callIDs := make(map[string]string)
+			deltas := make(map[string]string)
+			completed := make(map[string]string)
+			for _, frame := range strings.Split(string(body), "\n\n") {
+				if frame == "" {
+					continue
+				}
+				data := strings.TrimPrefix(strings.SplitN(frame, "\n", 2)[1], "data: ")
+				var event struct {
+					Type      string `json:"type"`
+					ItemID    string `json:"item_id"`
+					Delta     string `json:"delta"`
+					Arguments string `json:"arguments"`
+					Item      struct {
+						ID     string `json:"id"`
+						CallID string `json:"call_id"`
+					} `json:"item"`
+				}
+				if err := json.Unmarshal([]byte(data), &event); err != nil {
+					t.Fatalf("decode synthetic SSE event %q: %v", data, err)
+				}
+				switch event.Type {
+				case "response.output_item.added":
+					callIDs[event.Item.ID] = event.Item.CallID
+				case "response.function_call_arguments.delta":
+					deltas[event.ItemID] += event.Delta
+				case "response.function_call_arguments.done":
+					completed[event.ItemID] = event.Arguments
+				}
+			}
+			wantCalls := map[string]string{"item_a": "call_a", "item_b": "call_b"}
+			wantArguments := map[string]string{"item_a": `{"key":"alpha"}`, "item_b": `{"key":"beta"}`}
+			for itemID, callID := range wantCalls {
+				if callIDs[itemID] != callID || deltas[itemID] != wantArguments[itemID] || completed[itemID] != deltas[itemID] {
+					t.Fatalf("call trace item=%q call=%q deltas=%q complete=%q; want call=%q arguments=%q", itemID, callIDs[itemID], deltas[itemID], completed[itemID], callID, wantArguments[itemID])
+				}
+			}
+			second := `{"model":"model-a","parallel_tool_calls":false,"input":[{"type":"function_call","id":"item_a","call_id":"call_a","name":"lookup","arguments":"{\"key\":\"alpha\"}"},{"type":"function_call_output","call_id":"call_a","output":"result-a"},{"type":"function_call","id":"item_b","call_id":"call_b","name":"lookup","arguments":"{\"key\":\"beta\"}"},{"type":"function_call_output","call_id":"call_b","output":"result-b"}]}`
+			resp, body = post(second)
+			upstreamHistory := string(<-captured)
+			if resp.StatusCode != http.StatusOK || upstreamHistory != second || dispatches.Load() != 2 {
+				t.Fatalf("client-resubmitted calls status=%d dispatched=%d body=%s", resp.StatusCode, dispatches.Load(), body)
+			}
+			var history struct {
+				Input []struct {
+					Type      string `json:"type"`
+					ID        string `json:"id"`
+					CallID    string `json:"call_id"`
+					Arguments string `json:"arguments"`
+					Output    string `json:"output"`
+				} `json:"input"`
+			}
+			if err := json.Unmarshal([]byte(upstreamHistory), &history); err != nil {
+				t.Fatalf("decode resubmitted history: %v", err)
+			}
+			resubmitted := make(map[string]string)
+			results := make(map[string]string)
+			for _, item := range history.Input {
+				switch item.Type {
+				case "function_call":
+					if callIDs[item.ID] != item.CallID {
+						t.Fatalf("resubmitted item %q linked to %q; trace linked to %q", item.ID, item.CallID, callIDs[item.ID])
+					}
+					resubmitted[item.ID] = item.Arguments
+				case "function_call_output":
+					results[item.CallID] = item.Output
+				}
+			}
+			for itemID, arguments := range completed {
+				if resubmitted[itemID] != arguments || results[callIDs[itemID]] == "" {
+					t.Fatalf("resubmitted call %q arguments=%q result=%q; completed arguments=%q", itemID, resubmitted[itemID], results[callIDs[itemID]], arguments)
+				}
+			}
+			resp, body = post(`{"model":"model-a","parallel_tool_calls":true,"input":"parallel required"}`)
+			var failure struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(body, &failure) != nil || resp.StatusCode != http.StatusBadRequest || failure.Error.Code != "unsupported_capability" || dispatches.Load() != 2 {
+				t.Fatalf("parallel requirement status=%d code=%q dispatches=%d body=%s", resp.StatusCode, failure.Error.Code, dispatches.Load(), body)
 			}
 		})
 	}
