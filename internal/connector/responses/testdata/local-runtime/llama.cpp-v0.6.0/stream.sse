@@ -27,3 +27,5 @@ data: {"type":"response.output_item.done","item":{"id":"msg_llama_synthetic","ty
 
 event: response.completed
 data: {"type":"response.completed","response":{"id":"resp_llama_synthetic","status":"completed","usage":{"input_tokens":6,"output_tokens":3,"total_tokens":9,"input_tokens_details":{"cached_tokens":2}}}}
+
+: end

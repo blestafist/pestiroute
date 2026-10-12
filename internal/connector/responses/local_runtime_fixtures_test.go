@@ -287,6 +287,8 @@ func readSSEEvents(t *testing.T, name string) []string {
 				payload.WriteByte('\n')
 			}
 			payload.WriteString(strings.TrimPrefix(line, "data: "))
+		} else if strings.HasPrefix(line, ":") {
+			continue
 		} else {
 			t.Fatalf("unexpected SSE line in %s: %q", name, line)
 		}
@@ -306,6 +308,7 @@ func assertRuntimeTextLifecycle(t *testing.T, name string, want []string, runtim
 	}
 	events := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n\n")
 	var itemID string
+	frames := 0
 	for _, rawEvent := range events {
 		var eventName string
 		var payload json.RawMessage
@@ -318,6 +321,10 @@ func assertRuntimeTextLifecycle(t *testing.T, name string, want []string, runtim
 				payload = json.RawMessage(strings.TrimPrefix(line, "data: "))
 			}
 		}
+		if eventName == "" { // Ignore the legal synthetic comment trailer.
+			continue
+		}
+		frames++
 		if eventName == "response.output_item.added" {
 			var body struct {
 				Item struct {
@@ -348,8 +355,8 @@ func assertRuntimeTextLifecycle(t *testing.T, name string, want []string, runtim
 			}
 		}
 	}
-	if len(events) != len(want) {
-		t.Fatalf("%s lifecycle frame count = %d, want %d", runtime, len(events), len(want))
+	if frames != len(want) {
+		t.Fatalf("%s lifecycle frame count = %d, want %d", runtime, frames, len(want))
 	}
 }
 

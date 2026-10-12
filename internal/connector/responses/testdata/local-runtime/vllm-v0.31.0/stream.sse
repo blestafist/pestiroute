@@ -24,3 +24,5 @@ data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_syn
 
 event: response.completed
 data: {"type":"response.completed","response":{"id":"resp_vllm_synthetic","status":"completed","usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7,"input_tokens_details":{"cached_tokens":1},"output_tokens_details":{"reasoning_tokens":0}}}}
+
+: end
