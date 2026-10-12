@@ -7,6 +7,14 @@ backends; no runtime, model, external endpoint, or live backend is contacted.
 The generated master key, virtual key, and temporary database are private and
 deleted on exit. Keep the master key separate from any retained database backup.
 
+These procedures prove protected synthetic routing, persistence, and backup
+mechanics only; they do not accept any runtime release claim or promote model
+capabilities. The independent live gates [M5.2-024](tasks/M5.2-024.md),
+[M5.2-025](tasks/M5.2-025.md), and [M5.2-026](tasks/M5.2-026.md) remain
+BLOCKED on their recorded runtime/model/hardware prerequisites and operator
+authorization. See [M5.2-COMPATIBILITY](M5.2-COMPATIBILITY.md) for the audited
+Unknown capability matrix.
+
 ## Provision, coexist, restart, and restore
 
 Run the complete block in a clean shell. It provisions distinct no-auth Ollama
