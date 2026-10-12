@@ -1,15 +1,20 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
@@ -181,5 +186,191 @@ func TestProtectedLocalRouteCompositionKeepsVirtualKeyAndNativeRoute(t *testing.
 	}
 	if c.protected.Connectors[0].Implementation != "pestiroute.responses.native" {
 		t.Fatal("native connector configuration changed")
+	}
+}
+
+func TestProtectedLocalTextJSONAndIncrementalSSE(t *testing.T) {
+	for _, tc := range []struct{ profile, fixture string }{
+		{"ollama-v0.40.3", "ollama-v0.40.3"},
+		{"vllm-v0.31.0", "vllm-v0.31.0"},
+		{"llamacpp-v0.6.0", "llama.cpp-v0.6.0"},
+	} {
+		t.Run(tc.profile, func(t *testing.T) {
+			ctx := context.Background()
+			_, dbPath, keyPath := protectedFixture(t)
+			db, err := sqlite.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			issued, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: "policy-id-a", PolicyRevision: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			fixtureDir := "../../internal/connector/responses/testdata/local-runtime/" + tc.fixture + "/"
+			response, err := os.ReadFile(fixtureDir + "response.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream, err := os.ReadFile(fixtureDir + "stream.sse")
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefixEnd := bytes.Index(stream, []byte("\n\n")) + 2
+			if prefixEnd <= 1 {
+				t.Fatal("fixture has no complete initial SSE event")
+			}
+			gate, started := make(chan struct{}), make(chan struct{})
+			var mode atomic.Int32
+			var startedOnce sync.Once
+			var captured atomic.Value
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, readErr := io.ReadAll(r.Body)
+				if readErr != nil {
+					t.Errorf("read request: %v", readErr)
+				}
+				captured.Store(body)
+				if r.Header.Get("Authorization") != "" {
+					t.Errorf("no-auth connector forwarded Authorization")
+				}
+				if mode.Load() == 3 {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusTooManyRequests)
+					_, _ = io.WriteString(w, `{"error":{"message":"synthetic busy"}}`)
+					return
+				}
+				if mode.Load() == 0 {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write(response)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write(stream[:prefixEnd])
+				w.(http.Flusher).Flush()
+				startedOnce.Do(func() { close(started) })
+				if mode.Load() == 2 {
+					return
+				}
+				<-gate
+				_, _ = w.Write(stream[prefixEnd:])
+			}))
+			defer backend.Close()
+
+			c := fixtureProtectedConfig(dbPath, keyPath, "127.0.0.1:0")
+			c.protected.Connectors[0] = protectedConnector{ID: "upstream", Kind: "connector", Implementation: "pestiroute.responses.local", Protocols: []string{responsesProtocol}, Settings: nativeSettings{
+				BaseURL: backend.URL + "/v1/responses", RuntimeProfile: tc.profile, AuthMode: "none", MaxRequestBodyBytes: 1 << 20, MaxRequestHeaderBytes: 8192,
+				ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "5s", Model: "model-a", AccountID: "account-a", Capabilities: map[string]string{"llm.streaming": "supported"},
+			}}
+			prepared, err := prepareProtectedConfig(ctx, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ready, draining atomic.Bool
+			ready.Store(true)
+			h, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = closeComponents(context.Background()) })
+			gateway := httptest.NewServer(h)
+			defer gateway.Close()
+			requestBody := func(streaming bool) []byte {
+				flag := "false"
+				if streaming {
+					flag = "true"
+				}
+				return []byte(fmt.Sprintf("{ \"model\" : \"model-a\", \"stream\" : %s, \"input\" : \"synthetic\", \"x_extension\" : { \"keep\" : true } }", flag))
+			}
+			request := func(streaming bool) *http.Request {
+				body := requestBody(streaming)
+				req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", bytes.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Authorization", "Bearer "+issued.Secret)
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			}
+			mode.Store(0)
+			resp, err := gateway.Client().Do(request(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if err != nil || resp.StatusCode != http.StatusOK || !bytes.Equal(got, response) {
+				t.Fatalf("JSON status=%d err=%v body=%q", resp.StatusCode, err, got)
+			}
+			if body, ok := captured.Load().([]byte); !ok || !bytes.Equal(body, requestBody(false)) {
+				t.Fatalf("request body changed: %q", body)
+			}
+			mode.Store(3)
+			rejected, err := gateway.Client().Do(request(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rejectedBody, err := io.ReadAll(rejected.Body)
+			_ = rejected.Body.Close()
+			if err != nil || rejected.StatusCode != http.StatusTooManyRequests || !bytes.Equal(rejectedBody, []byte(`{"error":{"message":"synthetic busy"}}`)) {
+				t.Fatalf("pre-commit rejection status=%d err=%v body=%q", rejected.StatusCode, err, rejectedBody)
+			}
+
+			mode.Store(2)
+			truncated, err := gateway.Client().Do(request(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			truncatedBody, err := io.ReadAll(truncated.Body)
+			_ = truncated.Body.Close()
+			if err != nil || truncated.StatusCode != http.StatusOK || !bytes.HasPrefix(truncatedBody, stream[:prefixEnd]) || bytes.Contains(truncatedBody, []byte("response.completed")) {
+				t.Fatalf("truncated SSE status=%d err=%v body=%q", truncated.StatusCode, err, truncatedBody)
+			}
+			rows, err := sqlite.NewLedger(prepared.runtimeDB).QueryRequests(ctx, sqlite.RequestFilter{Model: "model-a", Limit: 10})
+			if err != nil || len(rows) != 3 || len(rows[2].Attempts) != 1 || rows[2].Attempts[0].Attempt.State != "interrupted" || rows[2].Attempts[0].Reservation.State == "settled" {
+				t.Fatalf("truncated SSE settlement rows=%+v err=%v", rows, err)
+			}
+
+			mode.Store(1)
+			respCh := make(chan *http.Response, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				r, err := gateway.Client().Do(request(true))
+				if err != nil {
+					errCh <- err
+				} else {
+					respCh <- r
+				}
+			}()
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("upstream did not send first SSE event")
+			}
+			if body, ok := captured.Load().([]byte); !ok || !bytes.Equal(body, requestBody(true)) {
+				t.Fatalf("streaming request body changed: %q", body)
+			}
+			var sseResp *http.Response
+			select {
+			case sseResp = <-respCh:
+			case err := <-errCh:
+				t.Fatal(err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("gateway buffered before committing SSE")
+			}
+			reader := bufio.NewReader(sseResp.Body)
+			first := make([]byte, prefixEnd)
+			if _, err := io.ReadFull(reader, first); err != nil || !bytes.Equal(first, stream[:prefixEnd]) {
+				t.Fatalf("early SSE bytes=%q err=%v", first, err)
+			}
+			close(gate)
+			rest, err := io.ReadAll(reader)
+			_ = sseResp.Body.Close()
+			if err != nil || !bytes.Equal(append(first, rest...), stream) {
+				t.Fatalf("SSE bytes differ err=%v", err)
+			}
+		})
 	}
 }
