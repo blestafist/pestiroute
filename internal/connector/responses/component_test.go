@@ -391,7 +391,7 @@ func TestConnectorInitRejectsDuplicateJSONKeysIncludingEscapedNames(t *testing.T
 }
 
 func TestLocalConnectorInitRejectsUnevidencedModelCapabilities(t *testing.T) {
-	for _, capability := range []core.Capability{"llm.tools", "llm.reasoning", "llm.tools.parallel"} {
+	for _, capability := range []core.Capability{"llm.tools", "llm.reasoning", "llm.tools.parallel", "llm.structured_output", "llm.vision", "llm.audio"} {
 		data, err := json.Marshal(componentConfig{
 			Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"},
 			Model:     "arbitrary-model", AccountID: "account-a", AuthMode: authNone,
@@ -403,6 +403,17 @@ func TestLocalConnectorInitRejectsUnevidencedModelCapabilities(t *testing.T) {
 		if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: data}); err == nil {
 			t.Errorf("unevidenced %s support accepted", capability)
 		}
+	}
+	data, err := json.Marshal(componentConfig{
+		Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"},
+		Model:     "arbitrary-model", AccountID: "account-a", AuthMode: authNone, RuntimeProfile: profileOllama,
+		Capabilities: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+		t.Fatalf("transport-level streaming declaration rejected: %v", err)
 	}
 }
 

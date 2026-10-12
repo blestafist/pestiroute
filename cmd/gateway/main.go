@@ -76,6 +76,9 @@ type topologyComponent struct {
 	Model          string             `json:"-"`
 	AccountID      string             `json:"-"`
 	Profile        string             `json:"-"`
+	AuthMode       string             `json:"-"`
+	RuntimeProfile string             `json:"-"`
+	Capabilities   map[string]string  `json:"-"`
 }
 
 type topologyRoute struct {
@@ -486,10 +489,12 @@ func probes(ready *atomic.Bool) *http.ServeMux {
 }
 
 type responsesInit struct {
-	Transport    connector.Config                         `json:"transport"`
-	Model        string                                   `json:"model"`
-	AccountID    string                                   `json:"account_id"`
-	Capabilities map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	Transport      connector.Config                         `json:"transport"`
+	Model          string                                   `json:"model"`
+	AccountID      string                                   `json:"account_id"`
+	Capabilities   map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	AuthMode       string                                   `json:"auth_mode,omitempty"`
+	RuntimeProfile string                                   `json:"runtime_profile,omitempty"`
 }
 
 func handler(c config, ready *atomic.Bool) (http.Handler, func()) {
@@ -520,6 +525,9 @@ func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.A
 		}
 		if item.Implementation == "pestiroute.codex.responses" {
 			return codex.NewConnector()
+		}
+		if item.Implementation == "pestiroute.responses.local" {
+			return connector.NewLocalConnector(item.AuthMode)
 		}
 		return connector.NewConnector()
 	})
@@ -658,10 +666,17 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			responseHeader, _ := time.ParseDuration(item.HeaderTimeout)
 			streamIdle, _ := time.ParseDuration(item.IdleTimeout)
 			route := connectorRoutes[item.ID]
+			capabilities := make(map[core.Capability]core.CapabilityState, len(item.Capabilities)+len(route.Capabilities))
+			for capability, state := range route.Capabilities {
+				capabilities[capability] = state
+			}
+			for capability, state := range item.Capabilities {
+				capabilities[core.Capability(capability)] = core.CapabilityState(state)
+			}
 			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(responsesInit{Transport: connector.Config{
 				Endpoint: item.Endpoint, ConnectTimeout: connect, TLSHandshakeTimeout: tlsHandshake,
 				ResponseHeaderTimeout: responseHeader, StreamIdleTimeout: streamIdle,
-			}, Model: route.Model, AccountID: route.Account, Capabilities: route.Capabilities})}
+			}, Model: route.Model, AccountID: route.Account, Capabilities: capabilities, AuthMode: item.AuthMode, RuntimeProfile: item.RuntimeProfile})}
 		}
 		if err := registry.Register(item.ID, instance, item.Kind); err != nil {
 			cleanup()
@@ -890,6 +905,9 @@ func configuredCredentialRefs(c config) (map[string]map[string]string, error) {
 	refsByConnector := make(map[core.InstanceID]credentialRef)
 	for _, component := range c.Components {
 		if component.Kind == core.ComponentConnector {
+			if component.Implementation == "pestiroute.responses.local" && component.AuthMode == "none" {
+				continue
+			}
 			name := "bearer"
 			if component.Implementation == "pestiroute.codex.responses" {
 				name = "oauth"
@@ -900,6 +918,9 @@ func configuredCredentialRefs(c config) (map[string]map[string]string, error) {
 	refsByAccount := make(map[string]map[string]string)
 	for _, route := range c.Routes {
 		ref := refsByConnector[route.Connector]
+		if ref.id == "" {
+			continue
+		}
 		if existing := refsByAccount[route.Account]; existing != nil && (len(existing) != 1 || existing[ref.name] != ref.id) {
 			return nil, errors.New("persistent credential references conflict for one account")
 		}

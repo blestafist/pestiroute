@@ -200,7 +200,7 @@ func consumeJSONValue(d *json.Decoder) error {
 
 func modelDependentCapability(capability core.Capability) bool {
 	switch capability {
-	case "llm.tools", "llm.reasoning", "llm.tools.parallel":
+	case "llm.tools", "llm.tools.parallel", "llm.reasoning", "llm.structured_output", "llm.vision", "llm.audio":
 		return true
 	default:
 		return false
