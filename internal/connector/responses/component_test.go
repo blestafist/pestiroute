@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -294,6 +295,82 @@ func TestLocalConnectorPreflightRejectsUnsupportedSemanticsBeforeDispatch(t *tes
 		if ge == nil || ge.Code != "invalid_request" || strings.Contains(ge.Message, body) || calls.Load() != 0 {
 			t.Fatalf("invalid request error=%v dispatches=%d", ge, calls.Load())
 		}
+	}
+}
+
+func TestLocalConnectorReasoningFailsClosedForEveryPinnedProfile(t *testing.T) {
+	for _, profile := range []string{profileOllama, profileVLLM, profileLlama} {
+		t.Run(profile, func(t *testing.T) {
+			var calls atomic.Int32
+			services := core.InvocationServices{Transport: doerFunc(func(*http.Request) (*http.Response, error) {
+				calls.Add(1)
+				return nil, errors.New("unexpected dispatch")
+			})}
+			c := NewLocalConnector(authNone)
+			data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"}, Model: modelID, AccountID: "account-a", AuthMode: authNone, RuntimeProfile: profile})
+			if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close(context.Background())
+			req := fixedRequest()
+			req.Model = modelID
+			req.Payload.Body = []byte(`{"model":"model-a","reasoning":{"effort":"low"},"input":"synthetic"}`)
+			_, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, services)
+			if ge == nil || ge.Code != "unsupported_semantics" || calls.Load() != 0 {
+				t.Fatalf("undeclared reasoning error=%v dispatches=%d", ge, calls.Load())
+			}
+		})
+	}
+}
+
+func TestLocalConnectorReplaysOpaqueHistoryAndReasoningDeltas(t *testing.T) {
+	requestBody := []byte(` {"model":"model-a","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},{"type":"reasoning","id":"rs_synthetic","summary":[{"type":"summary_text","text":"prior"}],"encrypted_content":"synthetic-ciphertext","extension":{"keep":true}},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}],"future":{"retain":[1,2]}},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}],"x_extension":{"ordered":[1,2]}} `)
+	trace := "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\",\"id\":\"rs_next\",\"extension\":true}}\n\n" +
+		"event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_next\",\"delta\":\"synthetic \"}\n\n" +
+		"event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_next\",\"delta\":\"delta\"}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"extension\":{\"keep\":true}}}\n\n"
+	requests := make(chan []byte, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, trace)
+	}))
+	defer upstream.Close()
+	c := NewLocalConnector(authNone)
+	data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: upstream.URL + "/v1/responses"}, Model: modelID, AccountID: "account-a", AuthMode: authNone, RuntimeProfile: profileVLLM})
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	req := fixedRequest()
+	req.Model, req.Payload.Body = modelID, requestBody
+	response, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, core.InvocationServices{})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer response.Stream.Close()
+	var got bytes.Buffer
+	for {
+		frame, err := response.Stream.Next(context.Background())
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameBody {
+			got.Write(frame.Body.Data)
+		}
+	}
+	if sent := <-requests; !bytes.Equal(sent, requestBody) {
+		t.Fatalf("client-owned history changed: got %q want %q", sent, requestBody)
+	}
+	if !bytes.Equal(got.Bytes(), []byte(trace)) {
+		t.Fatalf("synthetic reasoning delta trace changed: got %q want %q", got.Bytes(), trace)
 	}
 }
 
