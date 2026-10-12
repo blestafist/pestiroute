@@ -54,7 +54,7 @@ func (c *Connector) preflight(req core.ExecutionRequest, scope core.AttemptScope
 	}
 	switch profile {
 	case profileOllama:
-		if nonEmpty(body["previous_response_id"]) || nonEmpty(body["conversation"]) || truthy(body["background"]) || nonEmpty(body["include"]) {
+		if nonEmpty(body["previous_response_id"]) || nonEmpty(body["conversation"]) || truthy(body["background"]) || nonEmpty(body["include"]) || nonEmpty(body["tool_choice"]) {
 			return unsupported()
 		}
 	case profileVLLM:
@@ -63,7 +63,7 @@ func (c *Connector) preflight(req core.ExecutionRequest, scope core.AttemptScope
 			return unsupported()
 		}
 	case profileLlama:
-		if nonEmpty(body["previous_response_id"]) {
+		if nonEmpty(body["previous_response_id"]) || nonEmpty(body["tool_choice"]) {
 			return unsupported()
 		}
 	}

@@ -241,11 +241,13 @@ func TestLocalConnectorPreflightRejectsUnsupportedSemanticsBeforeDispatch(t *tes
 		{profileOllama, `{"conversation":"thread_1"}`},
 		{profileOllama, `{"background":true}`},
 		{profileOllama, `{"include":["message.output_text.logprobs"]}`},
+		{profileOllama, `{"tools":[{"type":"function","name":"f"}],"tool_choice":"auto"}`},
 		{profileVLLM, `{"store":true}`},
 		{profileVLLM, `{"background":true}`},
 		{profileVLLM, `{"previous_response_id":"resp_1"}`},
 		{profileLlama, `{"previous_response_id":"resp_1"}`},
 		{profileLlama, `{"tools":[{"type":"custom"}]}`},
+		{profileLlama, `{"tools":[{"type":"function","name":"f"}],"tool_choice":"auto"}`},
 		{profileVLLM, `{"tools":[{"type":"function","name":"f","parameters":{}}]}`},
 		{profileVLLM, `{"parallel_tool_calls":true}`},
 		{profileVLLM, `{"reasoning":{"effort":"high"}}`},
@@ -313,6 +315,41 @@ func TestLocalConnectorPreflightPreservesUnknownNativeFields(t *testing.T) {
 	resp.Stream.Close()
 	if got := <-up.Requests; !bytes.Equal(got.Body, body) {
 		t.Fatalf("native request bytes changed: %q", got.Body)
+	}
+}
+
+func TestLocalConnectorPreservesSupportedToolChoiceBytes(t *testing.T) {
+	body := []byte(` { "model" : "model-a", "tools" : [{"type":"function","name":"lookup","parameters":{}}], "tool_choice" : "auto", "input" : "find alpha" } `)
+	up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
+	defer up.Close()
+	c := NewLocalConnector(authNone)
+	data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: up.URL + "/v1/responses", ConnectTimeout: time.Second}, Model: modelID, AccountID: "account-a", AuthMode: authNone, RuntimeProfile: profileVLLM})
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+
+	// Test-only evidence injection exercises the supported capability path without
+	// changing production Init/YAML policy or claiming model support.
+	c.mu.Lock()
+	c.capabilities = map[core.Capability]core.CapabilityState{"llm.tools": core.Supported}
+	c.mu.Unlock()
+	req := fixedRequest()
+	req.Model, req.Payload.Body = modelID, body
+	resp, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, core.InvocationServices{})
+	if ge != nil {
+		t.Fatalf("supported tool request rejected: %v", ge)
+	}
+	defer resp.Stream.Close()
+	for {
+		if _, err := resp.Stream.Next(context.Background()); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := <-up.Requests; !bytes.Equal(got.Body, body) {
+		t.Fatalf("supported tool request bytes changed: %q", got.Body)
 	}
 }
 

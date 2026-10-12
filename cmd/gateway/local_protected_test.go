@@ -374,3 +374,114 @@ func TestProtectedLocalTextJSONAndIncrementalSSE(t *testing.T) {
 		})
 	}
 }
+
+func TestProtectedLocalFunctionToolRoundTripIsClientOwned(t *testing.T) {
+	for _, profile := range []string{
+		"ollama-v0.40.3", "vllm-v0.31.0", "llamacpp-v0.6.0",
+	} {
+		t.Run(profile, func(t *testing.T) {
+			ctx := context.Background()
+			_, dbPath, keyPath := protectedFixture(t)
+			db, err := sqlite.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			issued, err := sqlite.NewVirtualKeys(db).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: "policy-id-a", PolicyRevision: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			callResponse := []byte(`{"id":"resp_call","status":"completed","output":[{"type":"function_call","id":"fc_item_42","call_id":"call_42","name":"lookup","arguments":"{  \"key\" : \"alpha\" }"}]}`)
+			finalResponse := []byte(`{"id":"resp_done","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done"}]}]}`)
+			var calls atomic.Int32
+			captured := make(chan []byte, 4)
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, readErr := io.ReadAll(r.Body)
+				if readErr != nil {
+					t.Errorf("read request: %v", readErr)
+				}
+				captured <- body
+				w.Header().Set("Content-Type", "application/json")
+				if calls.Add(1) == 1 {
+					_, _ = w.Write(callResponse)
+					return
+				}
+				_, _ = w.Write(finalResponse)
+			}))
+			defer backend.Close()
+
+			c := fixtureProtectedConfig(dbPath, keyPath, "127.0.0.1:0")
+			c.protected.Connectors[0] = protectedConnector{ID: "upstream", Kind: "connector", Implementation: "pestiroute.responses.local", Protocols: []string{responsesProtocol}, Settings: nativeSettings{
+				BaseURL: backend.URL + "/v1/responses", RuntimeProfile: profile, AuthMode: "none", MaxRequestBodyBytes: 1 << 20, MaxRequestHeaderBytes: 8192,
+				ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "5s", Model: "model-a", AccountID: "account-a",
+			}}
+			prepared, err := prepareProtectedConfig(ctx, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ready, draining atomic.Bool
+			ready.Store(true)
+			h, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = closeComponents(context.Background()) })
+			gateway := httptest.NewServer(h)
+			defer gateway.Close()
+			post := func(body []byte) ([]byte, int) {
+				req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", bytes.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Authorization", "Bearer "+issued.Secret)
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := gateway.Client().Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return got, resp.StatusCode
+			}
+			first := []byte(`{"model":"model-a","input":"Find alpha"}`)
+			got, status := post(first)
+			if status != http.StatusOK || !bytes.Equal(got, callResponse) {
+				t.Fatalf("call response status=%d body=%s", status, got)
+			}
+			if upstream := <-captured; !bytes.Equal(upstream, first) {
+				t.Fatalf("first request changed: %s", upstream)
+			}
+
+			// The test client supplies the result in a separate follow-up request;
+			// neither gateway nor backend receives an execution callback.
+			second := []byte(`{"model":"model-a","input":[{"type":"function_call","id":"fc_item_42","call_id":"call_42","name":"lookup","arguments":"{  \"key\" : \"alpha\" }"},{"type":"function_call_output","call_id":"call_42","output":"alpha-result"}]}`)
+			got, status = post(second)
+			if status != http.StatusOK || !bytes.Equal(got, finalResponse) {
+				t.Fatalf("follow-up response status=%d body=%s", status, got)
+			}
+			if upstream := <-captured; !bytes.Equal(upstream, second) {
+				t.Fatalf("follow-up request changed: %s", upstream)
+			}
+			if calls.Load() != 2 {
+				t.Fatalf("backend dispatches=%d", calls.Load())
+			}
+
+			choiceRequest := []byte(`{"model":"model-a","input":"Find alpha","tool_choice":"auto"}`)
+			_, status = post(choiceRequest)
+			if status != http.StatusBadRequest || calls.Load() != 2 {
+				t.Fatalf("unproven tool_choice status=%d backend dispatches=%d", status, calls.Load())
+			}
+			toolRequest := []byte(`{"model":"model-a","input":"Find alpha","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}`)
+			_, status = post(toolRequest)
+			if status != http.StatusBadRequest || calls.Load() != 2 {
+				t.Fatalf("unevidenced function tool status=%d backend dispatches=%d", status, calls.Load())
+			}
+		})
+	}
+}
