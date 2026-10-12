@@ -25,24 +25,26 @@ const (
 
 // componentConfig is private non-secret connector configuration.
 type componentConfig struct {
-	Transport    Config                                   `json:"transport"`
-	Model        string                                   `json:"model"`
-	AccountID    string                                   `json:"account_id"`
-	Capabilities map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
-	AuthMode     string                                   `json:"auth_mode,omitempty"`
+	Transport      Config                                   `json:"transport"`
+	Model          string                                   `json:"model"`
+	AccountID      string                                   `json:"account_id"`
+	Capabilities   map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	AuthMode       string                                   `json:"auth_mode,omitempty"`
+	RuntimeProfile string                                   `json:"runtime_profile,omitempty"`
 }
 
 // Connector exposes the native Responses transport through the common component API.
 type Connector struct {
-	mu           sync.Mutex
-	transport    *Transport
-	model        string
-	accountID    string
-	capabilities map[core.Capability]core.CapabilityState
-	state        core.HealthState
-	closed       bool
-	local        bool
-	authMode     string
+	mu             sync.Mutex
+	transport      *Transport
+	model          string
+	accountID      string
+	capabilities   map[core.Capability]core.CapabilityState
+	state          core.HealthState
+	closed         bool
+	local          bool
+	authMode       string
+	runtimeProfile string
 }
 
 var _ core.Connector = (*Connector)(nil)
@@ -98,8 +100,13 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 		if (c.authMode != authNone && c.authMode != authBearer) || cfg.AuthMode != c.authMode {
 			return errors.New("local Responses connector auth_mode must be none or bearer")
 		}
+		if !validLocalRuntimeProfile(cfg.RuntimeProfile) {
+			return errors.New("local Responses connector requires a supported runtime_profile")
+		}
 	} else if cfg.AuthMode != "" {
 		return errors.New("native Responses connector does not accept auth_mode")
+	} else if cfg.RuntimeProfile != "" {
+		return errors.New("native Responses connector does not accept runtime_profile")
 	}
 	for capability, state := range cfg.Capabilities {
 		if capability == "" || (state != core.Supported && state != core.Unsupported && state != core.Unknown) {
@@ -121,6 +128,7 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 	c.model, c.accountID = cfg.Model, cfg.AccountID
 	c.capabilities = cfg.Capabilities
 	c.authMode = authMode
+	c.runtimeProfile = cfg.RuntimeProfile
 	c.state = core.HealthReady
 	return nil
 }
@@ -323,6 +331,11 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	}
 	if scope.AccountID != c.accountID || req.Model != c.model {
 		return core.ExecutionResponse{}, gatewayError("scope_mismatch", core.CategoryPermissionDenied, "Execution scope does not match configured target")
+	}
+	if c.local {
+		if failure := c.preflight(req, scope); failure != nil {
+			return core.ExecutionResponse{}, failure
+		}
 	}
 	var credential []byte
 	if c.authMode == authBearer {

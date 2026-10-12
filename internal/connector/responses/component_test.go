@@ -24,7 +24,7 @@ func componentConfigJSON(endpoint string) []byte {
 }
 
 func localComponentConfigJSON(endpoint, authMode string) []byte {
-	b, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: endpoint, ConnectTimeout: time.Second}, Model: modelID, AccountID: "account-a", AuthMode: authMode})
+	b, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: endpoint, ConnectTimeout: time.Second}, Model: modelID, AccountID: "account-a", AuthMode: authMode, RuntimeProfile: profileOllama})
 	return b
 }
 
@@ -112,6 +112,7 @@ func TestLocalConnectorRequiresExplicitAuthModeAndReportsDescriptor(t *testing.T
 		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a"}`),
 		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":""}`),
 		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"api_key"}`),
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"none","runtime_profile":"ollama-latest"}`),
 		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"none","unknown":true}`),
 		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"none"} {}`),
 	} {
@@ -144,7 +145,7 @@ func TestLocalConnectorCapabilitiesAndModelsUseExactDeclaredScope(t *testing.T) 
 	c := NewLocalConnector(authNone)
 	data, marshalErr := json.Marshal(componentConfig{
 		Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"},
-		Model:     model, AccountID: "local-account", AuthMode: authNone,
+		Model:     model, AccountID: "local-account", AuthMode: authNone, RuntimeProfile: profileOllama,
 		Capabilities: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported},
 	})
 	if marshalErr != nil {
@@ -190,7 +191,7 @@ func TestLocalConnectorCapabilitiesAndModelsUseExactDeclaredScope(t *testing.T) 
 
 	up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
 	defer up.Close()
-	routed, err := json.Marshal(componentConfig{Transport: Config{Endpoint: up.URL + "/v1/responses"}, Model: model, AccountID: scope.AccountID, AuthMode: authNone})
+	routed, err := json.Marshal(componentConfig{Transport: Config{Endpoint: up.URL + "/v1/responses"}, Model: model, AccountID: scope.AccountID, AuthMode: authNone, RuntimeProfile: profileOllama})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +229,129 @@ func TestLocalConnectorLoopbackDoesNotInheritNativeCapabilities(t *testing.T) {
 	estimate, err := c.EstimateUsage(context.Background(), core.UsageQuery{}, core.InvocationServices{})
 	if err != nil || estimate.Supported || estimate.Known {
 		t.Fatalf("local EstimateUsage = %#v, %v", estimate, err)
+	}
+}
+
+func TestLocalConnectorPreflightRejectsUnsupportedSemanticsBeforeDispatch(t *testing.T) {
+	cases := []struct {
+		profile string
+		body    string
+	}{
+		{profileOllama, `{"previous_response_id":"resp_1"}`},
+		{profileOllama, `{"conversation":"thread_1"}`},
+		{profileOllama, `{"background":true}`},
+		{profileOllama, `{"include":["message.output_text.logprobs"]}`},
+		{profileVLLM, `{"store":true}`},
+		{profileVLLM, `{"background":true}`},
+		{profileVLLM, `{"previous_response_id":"resp_1"}`},
+		{profileLlama, `{"previous_response_id":"resp_1"}`},
+		{profileLlama, `{"tools":[{"type":"custom"}]}`},
+		{profileVLLM, `{"tools":[{"type":"function","name":"f","parameters":{}}]}`},
+		{profileVLLM, `{"parallel_tool_calls":true}`},
+		{profileVLLM, `{"reasoning":{"effort":"high"}}`},
+		{profileVLLM, `{"text":{"format":{"type":"json_object"}}}`},
+		{profileVLLM, `{"input":[{"type":"message","content":[{"type":"input_image","image_url":"x"}]}]}`},
+	}
+	var calls atomic.Int32
+	services := core.InvocationServices{Transport: doerFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("unexpected dispatch")
+	})}
+	for _, tc := range cases {
+		t.Run(tc.profile+"/"+tc.body, func(t *testing.T) {
+			c := NewLocalConnector(authNone)
+			data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"}, Model: modelID, AccountID: "account-a", AuthMode: authNone, RuntimeProfile: tc.profile})
+			if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close(context.Background())
+			req := fixedRequest()
+			req.Model, req.Payload.Body = modelID, []byte(tc.body)
+			_, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, services)
+			if ge == nil || ge.Code != "unsupported_semantics" || strings.Contains(ge.Message, tc.body) || calls.Load() != 0 {
+				t.Fatalf("preflight error=%v dispatches=%d", ge, calls.Load())
+			}
+		})
+	}
+
+	c := NewLocalConnector(authNone)
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON("http://127.0.0.1:11434/v1/responses", authNone)}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	req := fixedRequest()
+	req.Model = modelID
+	req.Capabilities = map[core.Capability]struct{}{"llm.tools": {}}
+	if _, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, services); ge == nil || ge.Code != "unsupported_semantics" || calls.Load() != 0 {
+		t.Fatalf("required capability bypassed preflight: error=%v dispatches=%d", ge, calls.Load())
+	}
+	req.Capabilities = nil
+	for _, body := range []string{`{"tools":`, `{"unknown":"bad"} trailing`, `[]`} {
+		req.Payload.Body = []byte(body)
+		_, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, services)
+		if ge == nil || ge.Code != "invalid_request" || strings.Contains(ge.Message, body) || calls.Load() != 0 {
+			t.Fatalf("invalid request error=%v dispatches=%d", ge, calls.Load())
+		}
+	}
+}
+
+func TestLocalConnectorPreflightPreservesUnknownNativeFields(t *testing.T) {
+	body := []byte(" {\"unknown_extension\": {\"future\": true}} ")
+	up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
+	defer up.Close()
+	c := NewLocalConnector(authNone)
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON(up.URL+"/v1/responses", authNone)}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	req := fixedRequest()
+	req.Model, req.Payload.Body = modelID, body
+	resp, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, core.InvocationServices{})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	resp.Stream.Close()
+	if got := <-up.Requests; !bytes.Equal(got.Body, body) {
+		t.Fatalf("native request bytes changed: %q", got.Body)
+	}
+}
+
+func TestLocalConnectorPreflightAdmitsProfileUnknownFieldsAndPlainTextFormat(t *testing.T) {
+	cases := []struct {
+		profile string
+		body    string
+	}{
+		{profileOllama, `{"input":"hi","text":{"format":{"type":"text"},"verbosity":"high"},"store":true}`},
+		{profileOllama, `{"input":[{"type":"input_file","file_id":"file_1"}]}`},
+		{profileOllama, `{"input":"hi","tools":[{"type":"web_search"}]}`},
+		{profileVLLM, `{"input":"hi","text":{"verbosity":"high"},"conversation":"thread_1","include":["future.extension"]}`},
+		{profileVLLM, `{"input":[{"type":"input_file","file_id":"file_1"}]}`},
+		{profileVLLM, `{"input":"hi","tools":[{"type":"custom"}]}`},
+		{profileVLLM, `{"input":[{"type":"compaction"}]}`},
+		{profileVLLM, `{"input":[{"type":"web_search_call"}]}`},
+		{profileLlama, `{"input":"hi","text":{"format":{"type":"text"},"verbosity":"high"},"background":true,"include":["future.extension"],"store":true}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.profile, func(t *testing.T) {
+			up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
+			defer up.Close()
+			c := NewLocalConnector(authNone)
+			data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: up.URL + "/v1/responses"}, Model: modelID, AccountID: "account-a", AuthMode: authNone, RuntimeProfile: tc.profile})
+			if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close(context.Background())
+			req := fixedRequest()
+			req.Model, req.Payload.Body = modelID, []byte(tc.body)
+			resp, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, core.InvocationServices{})
+			if ge != nil {
+				t.Fatalf("admitted profile request rejected: %v", ge)
+			}
+			resp.Stream.Close()
+			if got := <-up.Requests; !bytes.Equal(got.Body, req.Payload.Body) {
+				t.Fatalf("request bytes changed: got %q want %q", got.Body, req.Payload.Body)
+			}
+		})
 	}
 }
 
