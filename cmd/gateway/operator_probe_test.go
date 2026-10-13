@@ -47,25 +47,32 @@ func openOperatorProbeDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func verifyOperatorCredential(ctx context.Context, db *sql.DB, key crypto.MasterKey, accountID string) error {
+type operatorCredentialCheckpoint struct {
+	revision int64
+	expires  time.Time
+	checked  time.Time
+}
+
+func verifyOperatorCredential(ctx context.Context, db *sql.DB, key crypto.MasterKey, accountID string) (operatorCredentialCheckpoint, error) {
 	repo := sqlite.NewCredentials(db)
 	row, err := repo.Get(ctx, accountID, "oauth")
 	if err != nil {
-		return errors.New("selected credential unavailable")
+		return operatorCredentialCheckpoint{}, errors.New("selected credential unavailable")
 	}
-	if row.ExpiresAt == nil || !row.ExpiresAt.After(time.Now()) {
-		return errors.New("credential expiry is not in the future")
+	now := time.Now().UTC()
+	if row.ExpiresAt == nil || !row.ExpiresAt.After(now) {
+		return operatorCredentialCheckpoint{}, errors.New("credential expiry is not in the future")
 	}
 	plain, err := repo.GetDecrypted(ctx, accountID, "oauth", key)
 	if err != nil {
-		return errors.New("credential decryption failed")
+		return operatorCredentialCheckpoint{}, errors.New("credential decryption failed")
 	}
 	defer clear(plain)
 	var bundle operatorOAuthBundle
-	if err := json.Unmarshal(plain, &bundle); err != nil || bundle.Version != 1 || bundle.AccessToken == "" || bundle.AccountID == "" || bundle.ExpiresAt.IsZero() || !bundle.ExpiresAt.After(time.Now()) || bundle.ExpiresAt.UnixMilli() != row.ExpiresAt.UnixMilli() {
-		return errors.New("credential bundle validation failed")
+	if err := json.Unmarshal(plain, &bundle); err != nil || bundle.Version != 1 || bundle.AccessToken == "" || bundle.RefreshToken == "" || bundle.AccountID == "" || bundle.ExpiresAt.IsZero() || !bundle.ExpiresAt.After(now) || bundle.ExpiresAt.UnixMilli() != row.ExpiresAt.UnixMilli() {
+		return operatorCredentialCheckpoint{}, errors.New("credential bundle validation failed")
 	}
-	return nil
+	return operatorCredentialCheckpoint{revision: row.Revision, expires: *row.ExpiresAt, checked: now}, nil
 }
 
 func TestOperatorCredentialProbe(t *testing.T) {
@@ -82,9 +89,14 @@ func TestOperatorCredentialProbe(t *testing.T) {
 		t.Fatal("operator probe database validation failed")
 	}
 	defer db.Close()
-	if err := verifyOperatorCredential(context.Background(), db, key, accountID); err != nil {
+	checkpoint, err := verifyOperatorCredential(context.Background(), db, key, accountID)
+	if err != nil {
 		t.Fatal("operator probe credential checkpoint failed")
 	}
+	const freshnessMargin = time.Minute
+	remaining := checkpoint.expires.Sub(checkpoint.checked)
+	due := !checkpoint.expires.After(checkpoint.checked.Add(freshnessMargin))
+	t.Logf("safe checkpoint: revision=%d expires_at_utc=%s checked_at_utc=%s remaining=%s freshness_margin=%s refresh_due=%t", checkpoint.revision, checkpoint.expires.UTC().Format(time.RFC3339Nano), checkpoint.checked.Format(time.RFC3339Nano), remaining, freshnessMargin, due)
 }
 
 func TestOperatorCredentialProbeSynthetic(t *testing.T) {
@@ -134,7 +146,7 @@ func TestOperatorCredentialProbeSynthetic(t *testing.T) {
 			t.Fatal("synthetic read-only open failed")
 		}
 		defer db.Close()
-		err = verifyOperatorCredential(ctx, db, key, "logical-account")
+		_, err = verifyOperatorCredential(ctx, db, key, "logical-account")
 		if (err == nil) != wantValid {
 			t.Fatal("synthetic credential checkpoint outcome unexpected")
 		}
@@ -157,7 +169,7 @@ func TestOperatorCredentialProbeSynthetic(t *testing.T) {
 	if err != nil {
 		t.Fatal("synthetic read-only open failed")
 	}
-	if err := verifyOperatorCredential(ctx, db, wrongKey, "logical-account"); err == nil {
+	if _, err := verifyOperatorCredential(ctx, db, wrongKey, "logical-account"); err == nil {
 		t.Fatal("wrong key passed credential probe")
 	}
 	db.Close()

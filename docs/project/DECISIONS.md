@@ -321,6 +321,37 @@ These accepted ADRs explain the existing constraints and establish the internal 
   claims, and links/dependencies remain valid. No live request is part of this
   decision.
 
+### DEC-013 — Conditional M5.2 Handoff with Deferred vLLM Live Gate
+
+- **Status:** Accepted by explicit user approval on 2026-10-13 for a conditional
+  M5.2 handoff based on the completed offline slice and reviewed, exact-scope
+  Ollama and llama.cpp live evidence. This does not mark M5.2 DONE.
+- **Context:** M5.2-024 verified paired direct/gateway behavior on official
+  Ollama v0.40.3 with `llama3.2:1b`; M5.2-026 verified it on official
+  llama.cpp v0.6.0 with a 1.2358B Q8_0 Llama-3.2-1B-Instruct model. M5.2-025
+  remains BLOCKED because the required vLLM/GPU environment is unavailable and
+  execution is not authorized. The existing at-most-3B model bound remains in
+  force for future vLLM work; the card's Qwen3-8B candidate is not authorization
+  to exceed it.
+- **Decision:** Accept the verified offline M5.2 implementation and the narrowly
+  evidenced Ollama and llama.cpp observations for handoff. Retain M5.2-025 as
+  BLOCKED; do not claim vLLM evidence, all-runtime acceptance, or M5.2 DONE.
+  Before any vLLM run, resolve the candidate against the at-most-3B bound and
+  obtain separately provisioned prerequisites, a READY/assigned gate, and
+  explicit operator authorization. No capability is promoted by this decision;
+  unexercised model/runtime features remain **Unknown**. M4 live gates and both
+  DEC-012 M5.1 follow-ups remain open and unchanged.
+- **Alternatives rejected:** Mark M5.2 DONE while vLLM is unverified; waive the
+  vLLM gate or model-size bound; or infer capability support from offline
+  fixtures or the two other runtimes' observations.
+- **Compatibility / impact:** Documentation and milestone-governance decision
+  only. No contract, runtime behavior, capability declaration, task acceptance
+  criterion, or live-execution authorization changes.
+- **Verification:** Reconcile M5.2-024/025/026 status and evidence, keep all
+  capability declarations unchanged, verify the at-most-3B vLLM limit and
+  authorization boundary, retain older live gates, and check links/statuses.
+  No live request is part of this decision.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |

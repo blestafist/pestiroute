@@ -53,20 +53,23 @@ type protectedConnector struct {
 
 // settings remain connector-owned; this shape is the selected native connector's schema.
 type nativeSettings struct {
-	BaseURL               string `yaml:"base_url"`
-	UpstreamProtocol      string `yaml:"upstream_protocol"`
-	Mode                  string `yaml:"mode"`
-	CredentialEnv         string `yaml:"credential_env"`
-	MaxRequestBodyBytes   int64  `yaml:"max_request_body_bytes"`
-	MaxRequestHeaderBytes int64  `yaml:"max_request_header_bytes"`
-	ConnectTimeout        string `yaml:"connect_timeout"`
-	TLSHandshakeTimeout   string `yaml:"tls_handshake_timeout"`
-	ResponseHeaderTimeout string `yaml:"response_header_timeout"`
-	StreamIdleTimeout     string `yaml:"stream_idle_timeout"`
-	Model                 string `yaml:"model"`
-	AccountID             string `yaml:"account_id"`
-	CredentialID          string `yaml:"credential_id"`
-	Profile               string `yaml:"profile"`
+	BaseURL               string            `yaml:"base_url"`
+	UpstreamProtocol      string            `yaml:"upstream_protocol"`
+	Mode                  string            `yaml:"mode"`
+	CredentialEnv         string            `yaml:"credential_env"`
+	MaxRequestBodyBytes   int64             `yaml:"max_request_body_bytes"`
+	MaxRequestHeaderBytes int64             `yaml:"max_request_header_bytes"`
+	ConnectTimeout        string            `yaml:"connect_timeout"`
+	TLSHandshakeTimeout   string            `yaml:"tls_handshake_timeout"`
+	ResponseHeaderTimeout string            `yaml:"response_header_timeout"`
+	StreamIdleTimeout     string            `yaml:"stream_idle_timeout"`
+	Model                 string            `yaml:"model"`
+	AccountID             string            `yaml:"account_id"`
+	CredentialID          string            `yaml:"credential_id"`
+	Profile               string            `yaml:"profile"`
+	RuntimeProfile        string            `yaml:"runtime_profile"`
+	AuthMode              string            `yaml:"auth_mode"`
+	Capabilities          map[string]string `yaml:"capabilities"`
 }
 
 type protectedRoute struct {
@@ -209,6 +212,10 @@ func validateConnectorSettingsFields(root *yaml.Node) error {
 			allowed["model"], allowed["account_id"], allowed["credential_id"] = true, true, true
 		case "pestiroute.codex.responses":
 			allowed["profile"], allowed["model"], allowed["account_id"] = true, true, true
+		case "pestiroute.responses.local":
+			for _, key := range []string{"base_url", "runtime_profile", "auth_mode", "max_request_body_bytes", "max_request_header_bytes", "connect_timeout", "tls_handshake_timeout", "response_header_timeout", "stream_idle_timeout", "model", "account_id", "credential_id", "capabilities"} {
+				allowed[key] = true
+			}
 		default:
 			continue // Implementation validation reports this case.
 		}
@@ -329,6 +336,10 @@ func validateProtectedConfig(c protectedConfig) error {
 			if err := validateCodexSettings(prefix+".settings", item.Settings); err != nil {
 				return err
 			}
+		case "pestiroute.responses.local":
+			if err := validateLocalSettings(prefix+".settings", item.Settings); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("%s has unsupported connector implementation %q", prefix, item.Implementation)
 		}
@@ -402,6 +413,10 @@ func validateProtectedConfig(c protectedConfig) error {
 					if connector.Settings.Profile == "codex-responses-http-sse-lite-v1" && route.Mode != "native" {
 						return fmt.Errorf("%s target %q Lite profile requires native mode", prefix, target.Connector)
 					}
+				} else if connector.Implementation == "pestiroute.responses.local" {
+					if route.Mode != "native" || connector.Settings.Model != route.Model || connector.Settings.AccountID != target.Account {
+						return fmt.Errorf("%s target %q does not match local native mode, model, and account settings", prefix, target.Connector)
+					}
 				} else if route.Mode == "translation" {
 					return fmt.Errorf("%s target %q implementation does not match translation mode", prefix, target.Connector)
 				}
@@ -433,6 +448,63 @@ func validateProtectedConfig(c protectedConfig) error {
 		}
 	}
 	return nil
+}
+
+func validateLocalSettings(prefix string, s nativeSettings) error {
+	if strings.TrimSpace(s.Model) == "" || strings.TrimSpace(s.AccountID) == "" {
+		return fmt.Errorf("%s requires non-empty model and account_id", prefix)
+	}
+	switch s.RuntimeProfile {
+	case "ollama-v0.40.3", "vllm-v0.31.0", "llamacpp-v0.6.0":
+	default:
+		return fmt.Errorf("%s.runtime_profile is unsupported", prefix)
+	}
+	switch s.AuthMode {
+	case "none":
+		if s.CredentialID != "" {
+			return fmt.Errorf("%s.credential_id is not allowed with auth_mode none", prefix)
+		}
+	case "bearer":
+		if strings.TrimSpace(s.CredentialID) == "" {
+			return fmt.Errorf("%s.credential_id is required with auth_mode bearer", prefix)
+		}
+	default:
+		return fmt.Errorf("%s.auth_mode must be none or bearer", prefix)
+	}
+	u, err := url.Parse(s.BaseURL)
+	if err != nil || u == nil || u.Host == "" || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Scheme != "https" && u.Scheme != "http") || !isLocalRuntimeHost(u.Hostname()) || !strings.HasSuffix(u.EscapedPath(), "/v1/responses") {
+		return fmt.Errorf("%s.base_url must be a loopback HTTP(S) /v1/responses URL", prefix)
+	}
+	if s.MaxRequestBodyBytes <= 0 || s.MaxRequestHeaderBytes <= 0 {
+		return fmt.Errorf("%s limits must be positive", prefix)
+	}
+	for _, item := range []struct{ name, value string }{{"connect_timeout", s.ConnectTimeout}, {"tls_handshake_timeout", s.TLSHandshakeTimeout}, {"response_header_timeout", s.ResponseHeaderTimeout}, {"stream_idle_timeout", s.StreamIdleTimeout}} {
+		if err := positiveDuration(prefix+"."+item.name, item.value); err != nil {
+			return err
+		}
+	}
+	for name, state := range s.Capabilities {
+		if strings.TrimSpace(name) == "" || (state != "supported" && state != "unsupported" && state != "unknown") {
+			return fmt.Errorf("%s.capabilities contains invalid declaration", prefix)
+		}
+		if state == "supported" && localModelDependentCapability(name) {
+			return fmt.Errorf("%s.capabilities %q requires reviewed model profile evidence", prefix, name)
+		}
+	}
+	return nil
+}
+
+func isLocalRuntimeHost(host string) bool {
+	return isLoopbackHost(host) || strings.EqualFold(host, "localhost")
+}
+
+func localModelDependentCapability(name string) bool {
+	switch name {
+	case "llm.tools", "llm.tools.parallel", "llm.reasoning", "llm.structured_output", "llm.vision", "llm.audio":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateAnthropicSettings(prefix string, s nativeSettings) error {

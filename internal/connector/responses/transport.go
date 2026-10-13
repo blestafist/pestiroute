@@ -26,6 +26,7 @@ type Config struct {
 
 type Transport struct {
 	endpoint          string
+	authMode          string
 	streamIdleTimeout time.Duration
 	client            *http.Client
 	transport         *http.Transport
@@ -34,6 +35,10 @@ type Transport struct {
 // NewTransport creates a reusable one-target transport from validated startup
 // settings. The caller must close every response body, including redirects.
 func NewTransport(c Config) *Transport {
+	return newTransport(c, authBearer)
+}
+
+func newTransport(c Config, authMode string) *Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = nil
 	tr.DialContext = (&net.Dialer{Timeout: c.ConnectTimeout, KeepAlive: 30 * time.Second}).DialContext
@@ -44,7 +49,7 @@ func NewTransport(c Config) *Transport {
 	// connection fails; avoid the HTTP/2 no-cached-connection retry path.
 	tr.ForceAttemptHTTP2 = false
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
-	return &Transport{endpoint: c.Endpoint, streamIdleTimeout: c.StreamIdleTimeout, transport: tr,
+	return &Transport{endpoint: c.Endpoint, authMode: authMode, streamIdleTimeout: c.StreamIdleTimeout, transport: tr,
 		client: &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
@@ -75,7 +80,9 @@ func (t *Transport) Request(ctx context.Context, in core.ExecutionRequest, crede
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Authorization", "Bearer "+credential)
+	if t.authMode == authBearer {
+		req.Header.Set("Authorization", "Bearer "+credential)
+	}
 	return req, nil
 }
 

@@ -1,0 +1,5 @@
+Synthetic profile; not captured from a runtime and not live compatibility evidence.
+Runtime: llama.cpp v0.6.0
+Source commit: d81235049384534c167caea52b85a694f6103d14
+Profile: deterministic fake GGUF/template; no model artifact or inference used.
+Stream serializer: pinned tools/server/server-task.cpp partial and final Responses serializers; synthetic trace follows created/in-progress, item/content open, output_text delta/done, item/content close, completed.

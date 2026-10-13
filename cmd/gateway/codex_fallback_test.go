@@ -310,7 +310,15 @@ func TestCodexFallbackAdvancesOnlyAfterExplicitSafeNoSend(t *testing.T) {
 	if err != nil || len(rows) != 1 || len(rows[0].Attempts) != 2 {
 		t.Fatalf("Codex fallback records=%+v err=%v, want one request/two attempts", rows, err)
 	}
-	first, second := rows[0].Attempts[0], rows[0].Attempts[1]
+	var first, second sqlite.AttemptUsage
+	for _, attempt := range rows[0].Attempts {
+		switch attempt.Attempt.Ordinal {
+		case 1:
+			first = attempt
+		case 2:
+			second = attempt
+		}
+	}
 	if first.Attempt.Ordinal != 1 || second.Attempt.Ordinal != 2 || first.Attempt.ID == second.Attempt.ID || first.Attempt.AccountID == second.Attempt.AccountID || first.Reservation.EstimatedTokens <= 0 || second.Reservation.EstimatedTokens <= 0 {
 		t.Fatalf("fallback attempt sequence/reservations=%+v, want two distinct ordered account reservations", rows[0].Attempts)
 	}

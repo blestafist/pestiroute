@@ -1,6 +1,7 @@
 package responses
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,40 +16,61 @@ import (
 )
 
 const (
-	componentID = "pestiroute.responses.native"
-	modelID     = "gpt-5.4-mini"
+	componentID      = "pestiroute.responses.native"
+	localComponentID = "pestiroute.responses.local"
+	modelID          = "gpt-5.4-mini"
+	authNone         = "none"
+	authBearer       = "bearer"
 )
 
 // componentConfig is private non-secret connector configuration.
 type componentConfig struct {
-	Transport    Config                                   `json:"transport"`
-	Model        string                                   `json:"model"`
-	AccountID    string                                   `json:"account_id"`
-	Capabilities map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	Transport      Config                                   `json:"transport"`
+	Model          string                                   `json:"model"`
+	AccountID      string                                   `json:"account_id"`
+	Capabilities   map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+	AuthMode       string                                   `json:"auth_mode,omitempty"`
+	RuntimeProfile string                                   `json:"runtime_profile,omitempty"`
 }
 
 // Connector exposes the native Responses transport through the common component API.
 type Connector struct {
-	mu           sync.Mutex
-	transport    *Transport
-	model        string
-	accountID    string
-	capabilities map[core.Capability]core.CapabilityState
-	state        core.HealthState
-	closed       bool
+	mu             sync.Mutex
+	transport      *Transport
+	model          string
+	accountID      string
+	capabilities   map[core.Capability]core.CapabilityState
+	state          core.HealthState
+	closed         bool
+	local          bool
+	authMode       string
+	runtimeProfile string
 }
 
 var _ core.Connector = (*Connector)(nil)
 
 func NewConnector() *Connector { return &Connector{state: core.HealthUnknown} }
 
+// NewLocalConnector creates the separately identified compatible local-runtime
+// Connector. The mode is constructor input because the registry reads Descriptor
+// before Init; Init also verifies the serialized component config matches it.
+func NewLocalConnector(authMode string) *Connector {
+	return &Connector{state: core.HealthUnknown, local: true, authMode: authMode}
+}
+
 func (c *Connector) Descriptor() core.Descriptor {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id, connectorType, authMethods := componentID, "api", []string{authBearer}
+	if c.local {
+		id, connectorType, authMethods = localComponentID, "local", []string{c.authMode}
+	}
 	return core.Descriptor{
-		ID: componentID, Kind: core.ComponentConnector, ImplementationVersion: "1.0.0",
+		ID: id, Kind: core.ComponentConnector, ImplementationVersion: "1.0.0",
 		APIVersions:   []core.APIVersion{{Major: 1, Minor: 0}},
 		Protocols:     []string{protocol},
 		Operations:    []string{"execute", "models", "estimate_usage", "authenticate"},
-		ConnectorType: "api", AuthMethods: []string{"bearer"},
+		ConnectorType: connectorType, AuthMethods: authMethods,
 	}.Clone()
 }
 
@@ -59,6 +81,9 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 		return errors.New("Responses connector cannot be initialized in its current state")
 	}
 	c.state = core.HealthUnavailable
+	if err := rejectDuplicateJSONKeys(config.Data); err != nil {
+		return fmt.Errorf("invalid Responses connector configuration: %w", err)
+	}
 	var cfg componentConfig
 	d := json.NewDecoder(strings.NewReader(string(config.Data)))
 	d.DisallowUnknownFields()
@@ -71,20 +96,115 @@ func (c *Connector) Init(_ context.Context, config core.ComponentConfig) error {
 	if cfg.Model == "" || cfg.AccountID == "" {
 		return errors.New("Responses connector model and account_id are required")
 	}
+	if c.local {
+		if (c.authMode != authNone && c.authMode != authBearer) || cfg.AuthMode != c.authMode {
+			return errors.New("local Responses connector auth_mode must be none or bearer")
+		}
+		if !validLocalRuntimeProfile(cfg.RuntimeProfile) {
+			return errors.New("local Responses connector requires a supported runtime_profile")
+		}
+	} else if cfg.AuthMode != "" {
+		return errors.New("native Responses connector does not accept auth_mode")
+	} else if cfg.RuntimeProfile != "" {
+		return errors.New("native Responses connector does not accept runtime_profile")
+	}
 	for capability, state := range cfg.Capabilities {
 		if capability == "" || (state != core.Supported && state != core.Unsupported && state != core.Unknown) {
 			return errors.New("invalid Responses connector capability declaration")
+		}
+		if c.local && state == core.Supported && modelDependentCapability(capability) {
+			return fmt.Errorf("local Responses connector capability %q requires reviewed model profile evidence", capability)
 		}
 	}
 	u, err := url.Parse(cfg.Transport.Endpoint)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
 		return errors.New("Responses connector requires a valid HTTP(S) endpoint")
 	}
-	c.transport = NewTransport(cfg.Transport)
+	authMode := authBearer
+	if c.local {
+		authMode = c.authMode
+	}
+	c.transport = newTransport(cfg.Transport, authMode)
 	c.model, c.accountID = cfg.Model, cfg.AccountID
 	c.capabilities = cfg.Capabilities
+	c.authMode = authMode
+	c.runtimeProfile = cfg.RuntimeProfile
 	c.state = core.HealthReady
 	return nil
+}
+
+// rejectDuplicateJSONKeys checks decoded object keys, so escaped spellings of
+// the same JSON name (for example, "model" and "\\u006dodel") collide.
+func rejectDuplicateJSONKeys(data []byte) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	if err := consumeJSONValue(d); err != nil {
+		return err
+	}
+	if _, err := d.Token(); err != io.EOF {
+		if err == nil {
+			return errors.New("trailing data")
+		}
+		return err
+	}
+	return nil
+}
+
+func consumeJSONValue(d *json.Decoder) error {
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	delim, composite := token.(json.Delim)
+	if !composite {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for d.More() {
+			keyToken, err := d.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("invalid object key")
+			}
+			if _, exists := seen[key]; exists {
+				return fmt.Errorf("duplicate JSON object key %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := consumeJSONValue(d); err != nil {
+				return err
+			}
+		}
+		end, err := d.Token()
+		if err != nil || end != json.Delim('}') {
+			return errors.New("invalid JSON object")
+		}
+	case '[':
+		for d.More() {
+			if err := consumeJSONValue(d); err != nil {
+				return err
+			}
+		}
+		end, err := d.Token()
+		if err != nil || end != json.Delim(']') {
+			return errors.New("invalid JSON array")
+		}
+	default:
+		return errors.New("invalid JSON delimiter")
+	}
+	return nil
+}
+
+func modelDependentCapability(capability core.Capability) bool {
+	switch capability {
+	case "llm.tools", "llm.tools.parallel", "llm.reasoning", "llm.structured_output", "llm.vision", "llm.audio":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Connector) Health(context.Context) core.Health {
@@ -116,12 +236,16 @@ func (c *Connector) capabilitiesLocked(scope core.CapabilityScope) core.Capabili
 		scope.Model != c.model || scope.AccountID != c.accountID {
 		return core.CapabilityResult{Values: values}
 	}
-	if c.model == modelID && capabilityEndpoint(c.transport.endpoint) {
+	if !c.local && c.model == modelID && capabilityEndpoint(c.transport.endpoint) {
 		values["llm.streaming"] = core.Supported
 		values["llm.tools"] = core.Supported
 		values["llm.reasoning"] = core.Supported
 	}
 	for capability, state := range c.capabilities {
+		if c.local {
+			values[capability] = state
+			continue
+		}
 		// Explicit fixture declarations apply only to this configured scope.
 		// Remote declarations cannot upgrade the historical live unknowns.
 		if state == core.Supported && !fixtureEndpoint(c.transport.endpoint) && values[capability] != core.Supported {
@@ -208,12 +332,21 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if scope.AccountID != c.accountID || req.Model != c.model {
 		return core.ExecutionResponse{}, gatewayError("scope_mismatch", core.CategoryPermissionDenied, "Execution scope does not match configured target")
 	}
-	if services.Credentials == nil {
-		return core.ExecutionResponse{}, gatewayError("credential_unavailable", core.CategoryUnauthenticated, "Selected credential is unavailable")
+	if c.local {
+		if failure := c.preflight(req, scope); failure != nil {
+			return core.ExecutionResponse{}, failure
+		}
 	}
-	credential, err := services.Credentials.Get(ctx, "bearer")
-	if err != nil || len(credential) == 0 {
-		return core.ExecutionResponse{}, gatewayError("credential_unavailable", core.CategoryUnauthenticated, "Selected credential is unavailable")
+	var credential []byte
+	if c.authMode == authBearer {
+		if services.Credentials == nil {
+			return core.ExecutionResponse{}, gatewayError("credential_unavailable", core.CategoryUnauthenticated, "Selected credential is unavailable")
+		}
+		var err error
+		credential, err = services.Credentials.Get(ctx, "bearer")
+		if err != nil || len(credential) == 0 {
+			return core.ExecutionResponse{}, gatewayError("credential_unavailable", core.CategoryUnauthenticated, "Selected credential is unavailable")
+		}
 	}
 	if req.Metadata.Streaming != nil && *req.Metadata.Streaming {
 		return t.ExecuteSSE(ctx, req, string(credential), services.Transport)

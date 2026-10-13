@@ -94,6 +94,14 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 			component.Model, component.AccountID, component.Profile = s.Model, s.AccountID, s.Profile
 			component.CredentialEnv = "oauth"
 			component.MaxBodyBytes, component.MaxHeaderBytes = min(p.Server.MaxRequestBytes, 1<<20), 16<<10
+		case "pestiroute.responses.local":
+			component.Endpoint, component.Model, component.AccountID = s.BaseURL, s.Model, s.AccountID
+			component.AuthMode, component.RuntimeProfile = s.AuthMode, localConnectorProfile(s.RuntimeProfile)
+			component.Capabilities = s.Capabilities
+			component.CredentialEnv = s.CredentialID
+			component.MaxBodyBytes, component.MaxHeaderBytes = s.MaxRequestBodyBytes, s.MaxRequestHeaderBytes
+			component.ConnectTimeout, component.TLSTimeout = s.ConnectTimeout, s.TLSHandshakeTimeout
+			component.HeaderTimeout, component.IdleTimeout = s.ResponseHeaderTimeout, s.StreamIdleTimeout
 		default:
 			return fail(db.Close, fmt.Errorf("connector %q: unsupported implementation", item.ID))
 		}
@@ -151,4 +159,11 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 	c.runtimeDB, c.runtimeKey, c.processLock = db, key, lock
 	c.protected = nil
 	return c, nil
+}
+
+func localConnectorProfile(profile string) string {
+	if profile == "llamacpp-v0.6.0" {
+		return "llama.cpp-v0.6.0"
+	}
+	return profile
 }

@@ -1,0 +1,9 @@
+[
+  {"scenario":"text-string","body":{"model":"synthetic-ollama","input":"Say hello","stream":false}},
+  {"scenario":"text-items-resubmitted-history","body":{"model":"synthetic-ollama","input":[{"role":"user","content":"Say hello"},{"type":"function_call","call_id":"call_ollama_1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_ollama_1","output":"synthetic result"}],"stream":false}},
+  {"scenario":"function-declaration","body":{"model":"synthetic-ollama","input":"Call lookup","tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{}}}],"stream":false}},
+  {"scenario":"include-ignored","body":{"model":"synthetic-ollama","input":"Say hello","include":["reasoning.encrypted_content"],"stream":false}},
+  {"scenario":"conversation-decoded-unused","body":{"model":"synthetic-ollama","input":"Say hello","conversation":"synthetic-conversation","stream":false}},
+  {"scenario":"previous-response-no-source-handling","body":{"model":"synthetic-ollama","input":"Say hello","previous_response_id":"resp_synthetic","stream":false}},
+  {"scenario":"invalid-item-type-source-parse-error","body":{"model":"synthetic-ollama","input":[{"type":"input_file","file_id":"file_synthetic"}],"stream":false}}
+]

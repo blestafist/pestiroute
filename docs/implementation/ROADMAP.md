@@ -74,7 +74,23 @@ support or changes other connectors' completion gates.
 
 ## M5.2 · Local Runtime Connectors
 
+The [bounded M5.2 plan](TASKS.md#m52--local-runtime-connectors) and
+[current-code brief](M5.2-LOCAL.md) begin with separate version/source and
+reuse decisions. Only the baseline audit is initially READY; implementation
+candidates require the researched policy and minimal-path decision before
+execution. Start with compatible Responses endpoints; add native/translation
+work only when a concrete gap justifies it. Normal CI is deterministic and
+model/GPU-free. Ollama, vLLM and llama.cpp have independent real-runtime gates;
+a missing environment stays a blocker and does not establish support.
+
+
 Scope: Ollama, vLLM, and llama.cpp. First verify available OpenAI-compatible endpoints through the common compatible connector; use a local runtime connector for native protocols or behavior. If a backend only provides Chat Completions, either a declared Responses translator or a separate connector is needed; URL-style match alone does not mean ready support. Track these separately from client protocols because their complexity differs fundamentally.
+
+By [DEC-013](../project/DECISIONS.md#dec-013--conditional-m52-handoff-with-deferred-vllm-live-gate),
+the offline slice and exact Ollama v0.40.3 / llama.cpp v0.6.0 observations are
+conditionally accepted for handoff; M5.2 is not DONE. vLLM M5.2-025 remains
+BLOCKED and unwaived. Its at-most-3B model bound and separate operator
+authorization remain prerequisites; no capability is promoted by this decision.
 
 **Done for each connector when:** versioned fixtures and a capability matrix are added, the direct-versus-gateway smoke test is reproducible, and unsupported Responses features are explicitly marked. Each connector can be released independently.
 

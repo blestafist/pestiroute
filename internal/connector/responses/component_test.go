@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,6 +21,11 @@ func componentConfigJSON(endpoint string) []byte {
 	b, _ := json.Marshal(componentConfig{Transport: Config{
 		Endpoint: endpoint, ConnectTimeout: time.Second,
 	}, Model: modelID, AccountID: "account-a"})
+	return b
+}
+
+func localComponentConfigJSON(endpoint, authMode string) []byte {
+	b, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: endpoint, ConnectTimeout: time.Second}, Model: modelID, AccountID: "account-a", AuthMode: authMode, RuntimeProfile: profileOllama})
 	return b
 }
 
@@ -100,6 +106,492 @@ func TestConnectorInitRejectsInvalidConfigAndUnknownEndpointCapability(t *testin
 		t.Fatalf("unverified endpoint capability = %q", got)
 	}
 	_ = c.Close(context.Background())
+}
+
+func TestLocalConnectorRequiresExplicitAuthModeAndReportsDescriptor(t *testing.T) {
+	for _, data := range [][]byte{
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a"}`),
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":""}`),
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"api_key"}`),
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"none","runtime_profile":"ollama-latest"}`),
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"none","unknown":true}`),
+		[]byte(`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"none"} {}`),
+	} {
+		if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: data}); err == nil {
+			t.Fatalf("invalid local auth config accepted: %s", data)
+		}
+	}
+	for _, mode := range []string{authNone, authBearer} {
+		c := NewLocalConnector(mode)
+		if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON("http://127.0.0.1:1/v1/responses", mode)}); err != nil {
+			t.Fatal(err)
+		}
+		d := c.Descriptor()
+		if d.ID != localComponentID || d.ConnectorType != "local" || len(d.AuthMethods) != 1 || d.AuthMethods[0] != mode {
+			t.Fatalf("local descriptor for %s: %+v", mode, d)
+		}
+		if err := d.Validate(core.ComponentConnector); err != nil {
+			t.Fatalf("invalid local descriptor: %v", err)
+		}
+		_ = c.Close(context.Background())
+	}
+	native := NewConnector().Descriptor()
+	if native.ID != componentID || native.ConnectorType != "api" || len(native.AuthMethods) != 1 || native.AuthMethods[0] != authBearer {
+		t.Fatalf("native descriptor changed: %+v", native)
+	}
+}
+
+func TestLocalConnectorCapabilitiesAndModelsUseExactDeclaredScope(t *testing.T) {
+	const model = "llama3.2:3b"
+	c := NewLocalConnector(authNone)
+	data, marshalErr := json.Marshal(componentConfig{
+		Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"},
+		Model:     model, AccountID: "local-account", AuthMode: authNone, RuntimeProfile: profileOllama,
+		Capabilities: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported},
+	})
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+
+	scope := core.CapabilityScope{Protocol: protocol, Mode: core.ModeNative, Model: model, AccountID: "local-account"}
+	got := c.Capabilities(context.Background(), scope)
+	if got.State("llm.streaming") != core.Supported || got.State("llm.tools") != core.Unknown || got.State("llm.reasoning") != core.Unknown || got.State("llm.tools.parallel") != core.Unknown {
+		t.Fatalf("local declarations/defaults = %#v", got.Values)
+	}
+	for _, mismatch := range []core.CapabilityScope{
+		{Protocol: "openai.chat.v1", Mode: scope.Mode, Model: model, AccountID: scope.AccountID},
+		{Protocol: protocol, Mode: "translation", Model: model, AccountID: scope.AccountID},
+		{Protocol: protocol, Mode: scope.Mode, Model: "qwen2.5:7b", AccountID: scope.AccountID},
+		{Protocol: protocol, Mode: scope.Mode, Model: model, AccountID: "other-account"},
+	} {
+		if values := c.Capabilities(context.Background(), mismatch).Values; len(values) != 0 {
+			t.Errorf("mismatched capability scope returned %#v", values)
+		}
+	}
+	models, modelErr := c.Models(context.Background(), core.ModelQuery{Protocol: protocol, Mode: scope.Mode, AccountID: scope.AccountID}, core.InvocationServices{})
+	if modelErr != nil || !models.Supported || len(models.Models) != 1 {
+		t.Fatalf("exact Models query supported=%v count=%d, %v", models.Supported, len(models.Models), modelErr)
+	}
+	if models.Models[0].ID != model {
+		t.Fatalf("Models ID = %q, want %q", models.Models[0].ID, model)
+	}
+	for _, mismatch := range []core.ModelQuery{
+		{Protocol: "openai.chat.v1", Mode: scope.Mode, AccountID: scope.AccountID},
+		{Protocol: protocol, Mode: "translation", AccountID: scope.AccountID},
+		{Protocol: protocol, Mode: scope.Mode, AccountID: "other-account"},
+	} {
+		result, modelErr := c.Models(context.Background(), mismatch, core.InvocationServices{})
+		if modelErr != nil || result.Supported || len(result.Models) != 0 {
+			t.Errorf("mismatched Models query = %#v, %v", result, modelErr)
+		}
+	}
+
+	up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
+	defer up.Close()
+	routed, err := json.Marshal(componentConfig{Transport: Config{Endpoint: up.URL + "/v1/responses"}, Model: model, AccountID: scope.AccountID, AuthMode: authNone, RuntimeProfile: profileOllama})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := NewLocalConnector(authNone)
+	if err := executor.Init(context.Background(), core.ComponentConfig{Data: routed}); err != nil {
+		t.Fatal(err)
+	}
+	defer executor.Close(context.Background())
+	request := fixedRequest()
+	request.Model = model
+	response, gatewayErr := executor.Execute(context.Background(), request, core.AttemptScope{Mode: scope.Mode, AccountID: scope.AccountID}, core.InvocationServices{})
+	if gatewayErr != nil {
+		t.Fatalf("arbitrary local model Execute: %v", gatewayErr)
+	}
+	response.Stream.Close()
+	capture := <-up.Requests
+	if string(capture.Body) != string(request.Payload.Body) {
+		t.Fatalf("local model request bytes changed: %q", capture.Body)
+	}
+}
+
+func TestLocalConnectorLoopbackDoesNotInheritNativeCapabilities(t *testing.T) {
+	c := NewLocalConnector(authNone)
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON("http://127.0.0.1:11434/v1/responses", authNone)}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	scope := core.CapabilityScope{Protocol: protocol, Mode: core.ModeNative, Model: modelID, AccountID: "account-a"}
+	got := c.Capabilities(context.Background(), scope)
+	for _, capability := range []core.Capability{"llm.streaming", "llm.tools", "llm.reasoning", "llm.tools.parallel", "usage.exact"} {
+		if got.State(capability) != core.Unknown {
+			t.Errorf("undeclared local %s = %q, want unknown", capability, got.State(capability))
+		}
+	}
+	estimate, err := c.EstimateUsage(context.Background(), core.UsageQuery{}, core.InvocationServices{})
+	if err != nil || estimate.Supported || estimate.Known {
+		t.Fatalf("local EstimateUsage = %#v, %v", estimate, err)
+	}
+}
+
+func TestLocalConnectorPreflightRejectsUnsupportedSemanticsBeforeDispatch(t *testing.T) {
+	cases := []struct {
+		profile string
+		body    string
+	}{
+		{profileOllama, `{"previous_response_id":"resp_1"}`},
+		{profileOllama, `{"conversation":"thread_1"}`},
+		{profileOllama, `{"background":true}`},
+		{profileOllama, `{"include":["message.output_text.logprobs"]}`},
+		{profileOllama, `{"tools":[{"type":"function","name":"f"}],"tool_choice":"auto"}`},
+		{profileVLLM, `{"store":true}`},
+		{profileVLLM, `{"background":true}`},
+		{profileVLLM, `{"previous_response_id":"resp_1"}`},
+		{profileLlama, `{"previous_response_id":"resp_1"}`},
+		{profileLlama, `{"tools":[{"type":"custom"}]}`},
+		{profileLlama, `{"tools":[{"type":"function","name":"f"}],"tool_choice":"auto"}`},
+		{profileVLLM, `{"tools":[{"type":"function","name":"f","parameters":{}}]}`},
+		{profileVLLM, `{"parallel_tool_calls":true}`},
+		{profileVLLM, `{"reasoning":{"effort":"high"}}`},
+		{profileVLLM, `{"text":{"format":{"type":"json_object"}}}`},
+		{profileVLLM, `{"input":[{"type":"message","content":[{"type":"input_image","image_url":"x"}]}]}`},
+	}
+	var calls atomic.Int32
+	services := core.InvocationServices{Transport: doerFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("unexpected dispatch")
+	})}
+	for _, tc := range cases {
+		t.Run(tc.profile+"/"+tc.body, func(t *testing.T) {
+			c := NewLocalConnector(authNone)
+			data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"}, Model: modelID, AccountID: "account-a", AuthMode: authNone, RuntimeProfile: tc.profile})
+			if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close(context.Background())
+			req := fixedRequest()
+			req.Model, req.Payload.Body = modelID, []byte(tc.body)
+			_, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, services)
+			if ge == nil || ge.Code != "unsupported_semantics" || strings.Contains(ge.Message, tc.body) || calls.Load() != 0 {
+				t.Fatalf("preflight error=%v dispatches=%d", ge, calls.Load())
+			}
+		})
+	}
+
+	c := NewLocalConnector(authNone)
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON("http://127.0.0.1:11434/v1/responses", authNone)}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	req := fixedRequest()
+	req.Model = modelID
+	req.Capabilities = map[core.Capability]struct{}{"llm.tools": {}}
+	if _, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, services); ge == nil || ge.Code != "unsupported_semantics" || calls.Load() != 0 {
+		t.Fatalf("required capability bypassed preflight: error=%v dispatches=%d", ge, calls.Load())
+	}
+	req.Capabilities = nil
+	for _, body := range []string{`{"tools":`, `{"unknown":"bad"} trailing`, `[]`} {
+		req.Payload.Body = []byte(body)
+		_, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, services)
+		if ge == nil || ge.Code != "invalid_request" || strings.Contains(ge.Message, body) || calls.Load() != 0 {
+			t.Fatalf("invalid request error=%v dispatches=%d", ge, calls.Load())
+		}
+	}
+}
+
+func TestLocalConnectorReasoningFailsClosedForEveryPinnedProfile(t *testing.T) {
+	for _, profile := range []string{profileOllama, profileVLLM, profileLlama} {
+		t.Run(profile, func(t *testing.T) {
+			var calls atomic.Int32
+			services := core.InvocationServices{Transport: doerFunc(func(*http.Request) (*http.Response, error) {
+				calls.Add(1)
+				return nil, errors.New("unexpected dispatch")
+			})}
+			c := NewLocalConnector(authNone)
+			data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"}, Model: modelID, AccountID: "account-a", AuthMode: authNone, RuntimeProfile: profile})
+			if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close(context.Background())
+			req := fixedRequest()
+			req.Model = modelID
+			req.Payload.Body = []byte(`{"model":"model-a","reasoning":{"effort":"low"},"input":"synthetic"}`)
+			_, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, services)
+			if ge == nil || ge.Code != "unsupported_semantics" || calls.Load() != 0 {
+				t.Fatalf("undeclared reasoning error=%v dispatches=%d", ge, calls.Load())
+			}
+		})
+	}
+}
+
+func TestLocalConnectorReplaysOpaqueHistoryAndReasoningDeltas(t *testing.T) {
+	requestBody := []byte(` {"model":"model-a","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},{"type":"reasoning","id":"rs_synthetic","summary":[{"type":"summary_text","text":"prior"}],"encrypted_content":"synthetic-ciphertext","extension":{"keep":true}},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}],"future":{"retain":[1,2]}},{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}],"x_extension":{"ordered":[1,2]}} `)
+	trace := "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"reasoning\",\"id\":\"rs_next\",\"extension\":true}}\n\n" +
+		"event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_next\",\"delta\":\"synthetic \"}\n\n" +
+		"event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_next\",\"delta\":\"delta\"}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"extension\":{\"keep\":true}}}\n\n"
+	requests := make(chan []byte, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, trace)
+	}))
+	defer upstream.Close()
+	c := NewLocalConnector(authNone)
+	data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: upstream.URL + "/v1/responses"}, Model: modelID, AccountID: "account-a", AuthMode: authNone, RuntimeProfile: profileVLLM})
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	req := fixedRequest()
+	req.Model, req.Payload.Body = modelID, requestBody
+	response, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, core.InvocationServices{})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer response.Stream.Close()
+	var got bytes.Buffer
+	for {
+		frame, err := response.Stream.Next(context.Background())
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameBody {
+			got.Write(frame.Body.Data)
+		}
+	}
+	if sent := <-requests; !bytes.Equal(sent, requestBody) {
+		t.Fatalf("client-owned history changed: got %q want %q", sent, requestBody)
+	}
+	if !bytes.Equal(got.Bytes(), []byte(trace)) {
+		t.Fatalf("synthetic reasoning delta trace changed: got %q want %q", got.Bytes(), trace)
+	}
+}
+
+func TestLocalConnectorPreflightPreservesUnknownNativeFields(t *testing.T) {
+	body := []byte(" {\"unknown_extension\": {\"future\": true}} ")
+	up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
+	defer up.Close()
+	c := NewLocalConnector(authNone)
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON(up.URL+"/v1/responses", authNone)}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	req := fixedRequest()
+	req.Model, req.Payload.Body = modelID, body
+	resp, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, core.InvocationServices{})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	resp.Stream.Close()
+	if got := <-up.Requests; !bytes.Equal(got.Body, body) {
+		t.Fatalf("native request bytes changed: %q", got.Body)
+	}
+}
+
+func TestLocalConnectorPreservesSupportedToolChoiceBytes(t *testing.T) {
+	body := []byte(` { "model" : "model-a", "tools" : [{"type":"function","name":"lookup","parameters":{}}], "tool_choice" : "auto", "input" : "find alpha" } `)
+	up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
+	defer up.Close()
+	c := NewLocalConnector(authNone)
+	data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: up.URL + "/v1/responses", ConnectTimeout: time.Second}, Model: modelID, AccountID: "account-a", AuthMode: authNone, RuntimeProfile: profileVLLM})
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+
+	// Test-only evidence injection exercises the supported capability path without
+	// changing production Init/YAML policy or claiming model support.
+	c.mu.Lock()
+	c.capabilities = map[core.Capability]core.CapabilityState{"llm.tools": core.Supported}
+	c.mu.Unlock()
+	req := fixedRequest()
+	req.Model, req.Payload.Body = modelID, body
+	resp, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, core.InvocationServices{})
+	if ge != nil {
+		t.Fatalf("supported tool request rejected: %v", ge)
+	}
+	defer resp.Stream.Close()
+	for {
+		if _, err := resp.Stream.Next(context.Background()); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := <-up.Requests; !bytes.Equal(got.Body, body) {
+		t.Fatalf("supported tool request bytes changed: %q", got.Body)
+	}
+}
+
+func TestLocalConnectorPreflightAdmitsProfileUnknownFieldsAndPlainTextFormat(t *testing.T) {
+	cases := []struct {
+		profile string
+		body    string
+	}{
+		{profileOllama, `{"input":"hi","text":{"format":{"type":"text"},"verbosity":"high"},"store":true}`},
+		{profileOllama, `{"input":[{"type":"input_file","file_id":"file_1"}]}`},
+		{profileOllama, `{"input":"hi","tools":[{"type":"web_search"}]}`},
+		{profileVLLM, `{"input":"hi","text":{"verbosity":"high"},"conversation":"thread_1","include":["future.extension"]}`},
+		{profileVLLM, `{"input":[{"type":"input_file","file_id":"file_1"}]}`},
+		{profileVLLM, `{"input":"hi","tools":[{"type":"custom"}]}`},
+		{profileVLLM, `{"input":[{"type":"compaction"}]}`},
+		{profileVLLM, `{"input":[{"type":"web_search_call"}]}`},
+		{profileLlama, `{"input":"hi","text":{"format":{"type":"text"},"verbosity":"high"},"background":true,"include":["future.extension"],"store":true}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.profile, func(t *testing.T) {
+			up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
+			defer up.Close()
+			c := NewLocalConnector(authNone)
+			data, _ := json.Marshal(componentConfig{Transport: Config{Endpoint: up.URL + "/v1/responses"}, Model: modelID, AccountID: "account-a", AuthMode: authNone, RuntimeProfile: tc.profile})
+			if err := c.Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close(context.Background())
+			req := fixedRequest()
+			req.Model, req.Payload.Body = modelID, []byte(tc.body)
+			resp, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: "native", AccountID: "account-a"}, core.InvocationServices{})
+			if ge != nil {
+				t.Fatalf("admitted profile request rejected: %v", ge)
+			}
+			resp.Stream.Close()
+			if got := <-up.Requests; !bytes.Equal(got.Body, req.Payload.Body) {
+				t.Fatalf("request bytes changed: got %q want %q", got.Body, req.Payload.Body)
+			}
+		})
+	}
+}
+
+func TestLocalConnectorInitRejectsMissingScopeAndInvalidDeclarations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  componentConfig
+	}{
+		{"empty model", componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:1/v1/responses"}, AccountID: "a", AuthMode: authNone}},
+		{"empty account", componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:1/v1/responses"}, Model: "m", AuthMode: authNone}},
+		{"empty capability", componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:1/v1/responses"}, Model: "m", AccountID: "a", AuthMode: authNone, Capabilities: map[core.Capability]core.CapabilityState{"": core.Supported}}},
+		{"invalid capability state", componentConfig{Transport: Config{Endpoint: "http://127.0.0.1:1/v1/responses"}, Model: "m", AccountID: "a", AuthMode: authNone, Capabilities: map[core.Capability]core.CapabilityState{"llm.tools": "enabled"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: data}); err == nil {
+				t.Fatal("invalid local declaration accepted")
+			}
+		})
+	}
+}
+
+func TestConnectorInitRejectsDuplicateJSONKeysIncludingEscapedNames(t *testing.T) {
+	for _, input := range []string{
+		`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"first","model":"second","account_id":"a","auth_mode":"none"}`,
+		`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses","endpoint":"http://127.0.0.1:2/v1/responses"},"model":"m","account_id":"a","auth_mode":"none"}`,
+		`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"first","\u006dodel":"second","account_id":"a","auth_mode":"none"}`,
+		`{"transport":{"endpoint":"http://127.0.0.1:1/v1/responses"},"model":"m","account_id":"a","auth_mode":"none","capabilities":{"llm.tools":"unknown","llm.\u0074ools":"unsupported"}}`,
+	} {
+		if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: []byte(input)}); err == nil {
+			t.Errorf("duplicate JSON key accepted: %s", input)
+		}
+	}
+}
+
+func TestLocalConnectorInitRejectsUnevidencedModelCapabilities(t *testing.T) {
+	for _, capability := range []core.Capability{"llm.tools", "llm.reasoning", "llm.tools.parallel", "llm.structured_output", "llm.vision", "llm.audio"} {
+		data, err := json.Marshal(componentConfig{
+			Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"},
+			Model:     "arbitrary-model", AccountID: "account-a", AuthMode: authNone,
+			Capabilities: map[core.Capability]core.CapabilityState{capability: core.Supported},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: data}); err == nil {
+			t.Errorf("unevidenced %s support accepted", capability)
+		}
+	}
+	data, err := json.Marshal(componentConfig{
+		Transport: Config{Endpoint: "http://127.0.0.1:11434/v1/responses"},
+		Model:     "arbitrary-model", AccountID: "account-a", AuthMode: authNone, RuntimeProfile: profileOllama,
+		Capabilities: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewLocalConnector(authNone).Init(context.Background(), core.ComponentConfig{Data: data}); err != nil {
+		t.Fatalf("transport-level streaming declaration rejected: %v", err)
+	}
+}
+
+func TestLocalConnectorAuthPolicyAndClientHeaderIsolation(t *testing.T) {
+	for _, mode := range []string{authNone, authBearer} {
+		t.Run(mode, func(t *testing.T) {
+			up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{"id":"resp","status":"completed"}`)})
+			defer up.Close()
+			c := NewLocalConnector(mode)
+			if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON(up.URL+"/v1/responses", mode)}); err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close(context.Background())
+			req := fixedRequest()
+			req.Model = modelID
+			req.Metadata.Headers = map[string][]string{"Authorization": {"Bearer client-fake"}, "Proxy-Authorization": {"Basic client-fake"}}
+			var credentialCalls atomic.Int32
+			services := core.InvocationServices{Credentials: credentialFunc(func(_ context.Context, name string) ([]byte, error) {
+				credentialCalls.Add(1)
+				if name != "bearer" {
+					t.Fatalf("credential name = %q", name)
+				}
+				return []byte("selected-account-secret"), nil
+			})}
+			_, ge := c.Execute(context.Background(), req, core.AttemptScope{AccountID: "account-a", Mode: "native"}, services)
+			if ge != nil {
+				t.Fatal(ge)
+			}
+			capture := <-up.Requests
+			wantAuth, wantCalls := "", int32(0)
+			if mode == authBearer {
+				wantAuth, wantCalls = "Bearer selected-account-secret", 1
+			}
+			if capture.Header.Get("Authorization") != wantAuth || capture.Header.Get("Proxy-Authorization") != "" || credentialCalls.Load() != wantCalls {
+				t.Fatalf("auth=%q proxy-auth=%q credential calls=%d", capture.Header.Get("Authorization"), capture.Header.Get("Proxy-Authorization"), credentialCalls.Load())
+			}
+		})
+	}
+}
+
+func TestLocalBearerMissingCredentialsRejectBeforeSend(t *testing.T) {
+	up := fakeupstream.New(fakeupstream.Response{Body: []byte(`{}`)})
+	defer up.Close()
+	c := NewLocalConnector(authBearer)
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: localComponentConfigJSON(up.URL+"/v1/responses", authBearer)}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(context.Background())
+	req := fixedRequest()
+	req.Model = modelID
+	scope := core.AttemptScope{AccountID: "account-a", Mode: "native"}
+	for name, credentials := range map[string]core.CredentialAccess{
+		"nil":   nil,
+		"empty": credentialFunc(func(context.Context, string) ([]byte, error) { return nil, nil }),
+		"error": credentialFunc(func(context.Context, string) ([]byte, error) { return nil, errors.New("private") }),
+	} {
+		_, ge := c.Execute(context.Background(), req, scope, core.InvocationServices{Credentials: credentials})
+		if ge == nil || ge.Category != core.CategoryUnauthenticated {
+			t.Fatalf("%s credential result = %+v", name, ge)
+		}
+	}
+	if len(up.Requests) != 0 {
+		t.Fatal("missing bearer credential dispatched upstream")
+	}
 }
 
 func TestConnectorConfiguredCapabilitiesPreserveLiveUnknowns(t *testing.T) {
