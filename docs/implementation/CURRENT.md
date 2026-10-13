@@ -8,7 +8,7 @@ M5.1 and M5.2 handoffs are **conditionally accepted**, not fully DONE: [DEC-012/
 
 ## Immediate handoff: M6 planning
 
-New branch `dev-m6` starts at that merged main revision. [M6-EXTERNAL](M6-EXTERNAL.md) scopes external Connector processes, beginning with an identical long-stream/cancellation/scoped-service comparison of framed stdio and gRPC over Unix socket. IPC is not implemented or selected; D10 remains proposed. [M6-001](tasks/M6-001.md), [M6-002](tasks/M6-002.md), and [M6-003](tasks/M6-003.md) are DONE (baseline audit, seams, open gates, common comparison scenario, and framed-stdio spike completed). Next candidate is transport spike [M6-004](tasks/M6-004.md) (DRAFT). Cards 005–006 cover separate reviewed ADR and binding. Candidates 007–032 remain DRAFT without speculative implementation cards; prepare each just ahead of execution after the binding and actual predecessors.
+New branch `dev-m6` starts at that merged main revision. [M6-EXTERNAL](M6-EXTERNAL.md) scopes external Connector processes, beginning with an identical long-stream/cancellation/scoped-service comparison of framed stdio and gRPC over Unix socket. IPC is not implemented or selected; D10 remains proposed. [M6-001](tasks/M6-001.md), [M6-002](tasks/M6-002.md), [M6-003](tasks/M6-003.md), and [M6-004](tasks/M6-004.md) are DONE (baseline audit, seams, open gates, comparison scenario, and both framed-stdio and gRPC/Unix-socket spikes completed). Next candidate is [M6-005](tasks/M6-005.md) (DRAFT: select IPC transport and record ADR). Cards 005–006 cover separate reviewed ADR and binding. Candidates 007–032 remain DRAFT without speculative implementation cards; prepare each just ahead of execution after the binding and actual predecessors.
 
 Use one card per Worker/Reviewer session and one verified task per commit through existing `/next N`. The M6 plan is not authorization to execute older live gates. No new MCP/plugin is required; transport libraries/generators are selected and pinned through the spikes. Existing server configuration does not establish machine-local connections.
 
@@ -26,6 +26,6 @@ None is an M6 dependency. Preserve the isolated operator credential store and pr
 
 ## Checks and operations
 
-Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. M6-001 must run it on the actual execution checkout and record revision/results. This planning session changed documentation only; it did not run Go checks because `go` is absent in this environment. Documentation verification is reported in the planning commit, not as milestone acceptance.
+Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. M6-004 ran it successfully on the execution checkout; see its card for focused race checks and raw transport measurements.
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.
