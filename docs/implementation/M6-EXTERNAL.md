@@ -16,6 +16,22 @@ Start from merged main `bea67fe` (PR #13), not the old M5.2 branch. Conditional 
 | Composition | `cmd/gateway`, `internal/core/registry.go` | Construct external proxies/supervisors outside Core; explicit opt-in instance wiring |
 | Verification | `internal/conformance`, `internal/testutil/fakeupstream`, `internal/testutil/scripted` | Parameterize equivalent assertions for in-process and real child-process fixtures |
 
+### M6-001 baseline audit
+
+The audited code baseline is merge commit `bea67fe027e9a34cdb07629a84fbbad021fb1584` (PR #13), parented by `9d640cf1968ee93e8187a38648dae3e06a28c2b1` and M5.2 source `1d9634f8adbad7048222a316b732332641fb6d4c`; the latter is an ancestor of the merge. The clean execution checkout was `dev-m6` at `c842b6c` (`docs(m6): plan external connector runtime and archive completed backlog`). This is carried-forward code, not the M6 checks run now; see [M6-001 execution evidence](tasks/M6-001.md#completion-evidence).
+
+| Contract operation / service | Existing code ownership and observed seam |
+| --- | --- |
+| `Descriptor`, `Init`, `Health`, `Capabilities`, `Close` | `core.Component` in `internal/core/component.go`; descriptor/version validation and mutable declaration cloning live there. |
+| `Execute`, `EstimateUsage`, `Authenticate` | `core.Connector` and typed support values in `internal/core/connector.go`; request/response bytes and lifecycle are in `internal/core/execution.go`. |
+| `Models` | Declared on `core.Connector` in `internal/core/connector.go` and implemented by native, Anthropic, Codex and scripted connectors. The audit found no production Core dispatch or Adapter/gateway route calling it; direct calls are in conformance/tests. M6-015 owns the IPC bridge/parity decision for this operation. Do not assume a pre-existing host-side Models call path. |
+| Execute and estimate dispatch | `internal/core/dispatch.go` selects the connector and passes scoped services; `internal/core/estimate.go` invokes estimate. `internal/core/retry.go` and accounting own retry/finalization, not connectors. |
+| Auth operation | `internal/core/auth_coordinator.go` owns auth lifecycle/session coordination and invokes `Authenticate`; persistence remains runtime-owned. |
+| Credential access, HTTP transport, logging | `core.InvocationServices` holds `CredentialAccess`, `HTTPDoer`, `*slog.Logger`; `internal/core/persistent_services.go` and `services.go` bind scoped implementations. Native Responses uses its own transport in `internal/connector/responses/transport.go`. These live interfaces are not wire values. |
+| Conformance | `internal/conformance/conformance_test.go` runs shared contract assertions against native-loopback, Codex, Anthropic-translation and scripted in-process fixtures, including opacity, lifecycle, incremental delivery and cancellation. It has no child-process fixture or reverse-service callback under stalled output; M6-002 adds only the common streaming/cancellation scenario with credential lookup and HTTP callbacks. Synthetic `Authenticate` parity belongs to M6-016's authentication bridge, not M6-002. |
+
+Open gates remain M4-036 (BLOCKED: official Anthropic credentials and separately authorized procedure/review), M4-041 (BLOCKED: live tool cycle unmet after one authorized compatible-endpoint call failed its allowlist; no retry), M5.1-049 (BLOCKED until its natural refresh due time `2026-10-15 21:04:55.103 UTC`, then current preflight, explicit authority and independent review), M5.1-051 (DRAFT/unrun; own READY assignment, explicit live authority and independent review required), and M5.2-025 (BLOCKED pending provisioned vLLM/GPU/runtime/model and operator authority; DEC-013's at-most-3B ceiling holds). DEC-012/013 do not waive these gates or authorize provider calls; none is an M6 dependency.
+
 Package paths, executable/config keys, wire schemas and libraries beyond these existing seams are decisions for M6-005/006. Do not make Core import an IPC transport library or concrete Connector. Linux/Unix sockets are the initial comparison environment, not a portability claim. Other operating systems remain unverified until explicitly tested.
 
 ## Transport selection gate
@@ -42,7 +58,7 @@ Choose explicit executable/argv, environment allowlist, working directory, proce
 | --- | --- |
 | 001–006 | Baseline → common comparison → two spikes → reviewed ADR → binding; six small cards prepared now |
 | 007–011 | Codec, launch, handshake, lifecycle and invocation isolation; prepare cards only against accepted binding |
-| 012–016 | Credentials, streaming HTTP, logging, Models/EstimateUsage and synthetic Authenticate parity |
+| 012–016 | Credentials, streaming HTTP, logging, Models/EstimateUsage and synthetic Authenticate parity (the authentication parity is specifically M6-016) |
 | 017–020 | Fixed Execute → incremental output → cancellation/deadlines → aggregate backpressure/control progress |
 | 021–023 | Crash/invalid-frame classification → bounded recovery for new work → drain/termination/reaping |
 | 024–028 | Actual native Connector child → protected configuration → JSON/SSE integration → accounting/fallback → account isolation |

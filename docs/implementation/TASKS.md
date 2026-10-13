@@ -75,7 +75,7 @@ Completed rows and historical handoff: [archive](archive/TASKS-DONE.md).
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M6-001](tasks/M6-001.md) | READY | — | M5.2-028 | Audit the merged M5.2 baseline and M6 seams: Record exact revision, clean checks, contract-to-code map and retained open gates | — | [Verification](tasks/M6-001.md#verification) |
+| [M6-001](tasks/M6-001.md) | DONE | GPT-6 Luna (M6-001 worker) / ses_ec8fec907ffe8XdpMCiCkV3rSn (reviewer) / Planner closure | M5.2-028 | Audit the merged M5.2 baseline and M6 seams: Record exact revision, clean checks, contract-to-code map and retained open gates | Audited merge base bea67fe (PR #13) and seams; code mapping, Models host-dispatch gap, Authenticate scope and five retained open gates recorded; shared checks clean | `go version`, `./scripts/check.sh`, `git diff --check`; [evidence](tasks/M6-001.md#completion-evidence) |
 | [M6-002](tasks/M6-002.md) | DRAFT | — | M6-001 | Define the common IPC comparison scenario: One bounded long-stream/cancellation/callback scenario and reproducible in-process control | — | [Verification](tasks/M6-002.md#verification) |
 | [M6-003](tasks/M6-003.md) | DRAFT | — | M6-002 | Run the framed-stdio IPC spike: Disposable child-process framing, long stream, cancellation and reverse services measured | — | [Verification](tasks/M6-003.md#verification) |
 | [M6-004](tasks/M6-004.md) | DRAFT | — | M6-002 | Run the gRPC over Unix socket IPC spike: Disposable pinned gRPC/Protobuf candidate on the same scenario and resource budget | — | [Verification](tasks/M6-004.md#verification) |
