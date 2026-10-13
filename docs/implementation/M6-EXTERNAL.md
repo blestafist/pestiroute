@@ -2,7 +2,7 @@
 
 ## Outcome and scope
 
-Implement [M6](ROADMAP.md#m6--external-plugin-runtime): the existing native Responses Connector can run in a child process behind the same `core.Connector` semantics. Crashes stay isolated, payloads remain opaque, streaming is incremental and bounded, cancellation releases resources, and in-process/external conformance agrees. This plan does not select a transport. [D10](../project/DECISIONS.md) and [STACK](STACK.md) still propose gRPC over Unix socket; only measured M6-003/004 evidence and the M6-005 ADR can accept or replace it.
+Implement [M6](ROADMAP.md#m6--external-plugin-runtime): the existing native Responses Connector can run in a child process behind the same `core.Connector` semantics. Crashes stay isolated, payloads remain opaque, streaming is incremental and bounded, cancellation releases resources, and in-process/external conformance agrees. [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selected gRPC over Unix socket from measured M6-003/004 evidence; M6-005 remains ACTIVE pending reviewer acceptance. Production wire/process binding is M6-006 scope.
 
 Start from merged main `bea67fe` (PR #13), not the old M5.2 branch. Conditional acceptance under DEC-012/013 carries forward without converting incomplete live gates into DONE. M6 uses child binaries and deterministic loopback fake upstreams; no provider inference, GPU, model download or OAuth refresh is required.
 
@@ -32,7 +32,7 @@ The audited code baseline is merge commit `bea67fe027e9a34cdb07629a84fbbad021fb1
 
 Open gates remain M4-036 (BLOCKED: official Anthropic credentials and separately authorized procedure/review), M4-041 (BLOCKED: live tool cycle unmet after one authorized compatible-endpoint call failed its allowlist; no retry), M5.1-049 (BLOCKED until its natural refresh due time `2026-10-15 21:04:55.103 UTC`, then current preflight, explicit authority and independent review), M5.1-051 (DRAFT/unrun; own READY assignment, explicit live authority and independent review required), and M5.2-025 (BLOCKED pending provisioned vLLM/GPU/runtime/model and operator authority; DEC-013's at-most-3B ceiling holds). DEC-012/013 do not waive these gates or authorize provider calls; none is an M6 dependency.
 
-Package paths, executable/config keys, wire schemas and libraries beyond these existing seams are decisions for M6-005/006. Do not make Core import an IPC transport library or concrete Connector. Linux/Unix sockets are the initial comparison environment, not a portability claim. Other operating systems remain unverified until explicitly tested.
+Package paths, executable/config keys, and production wire schema details beyond the selected gRPC transport are decisions for M6-006. Do not make Core import an IPC transport library or concrete Connector. Linux/Unix sockets are the initial evidence environment, not a portability claim. Other operating systems remain unverified until explicitly tested.
 
 ## Transport selection gate
 
@@ -52,7 +52,7 @@ Fixed workload: one warmup (not measured), 10 measured repetitions, max concurre
 
 Record for every repetition: first-Body latency from Execute start, total completion time/throughput, process CPU time, peak RSS, maximum queued bytes/frames, cancellation request-to-ack latency, child exit/reap and owned-socket cleanup. Use monotonic clock; capture Go/toolchain, OS/kernel, CPU, RAM, transport/library/generator revisions and exact commands. Report each raw repetition and median/p95 (no dropping outliers), warmup separately, plus bytes equality and pass/fail against the fixed budgets. The in-process run establishes workload/control behavior; only actual child-process measurements count as transport evidence.
 
-Spike code is isolated from production startup. Use no real credentials or external endpoints. Pin any candidate library/code generator and retain reproducible generated-code commands; before spike readiness verify dependencies are obtainable in the development environment. Missing gRPC tooling blocks that spike, not a fabricated result or automatic stdio selection. M6-005 records motivation, alternatives, evidence, compatibility and migration requirements in DECISIONS, synchronizing STACK. Any semantic change also updates CONTRACT under its ADR rule; an IPC envelope must not create provider-aware Core types.
+Spike code is isolated from production startup. Use no real credentials or external endpoints. M6-003/004 retained pinned candidate libraries/code generators and reproducible generated-code commands; [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) records the selected transport, tradeoffs and compatibility policy, synchronized with STACK. M6-006 fixes production pins and binding. Any semantic change also updates CONTRACT under its ADR rule; an IPC envelope must not create provider-aware Core types.
 
 ## Binding gate
 

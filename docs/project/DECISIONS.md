@@ -17,7 +17,7 @@
 | D07 | Proposed | Go, `net/http`, single module | Provides minimal infrastructure for M0–M3 |
 | D08 | Proposed | SQLite for single-node state | Enables self-hosted deployment without separate database |
 | D09 | Accepted | `Head / Body / Complete` as the v1 transport stream | DEC-004 fixes lifecycle semantics without an LLM event model |
-| D10 | Proposed | gRPC over Unix socket for IPC | Will validate overhead and host-service lifecycle in M6 |
+| D10 | Accepted | gRPC over Unix socket for external Connector IPC | DEC-014 selects the bidirectional typed transport after matched M6 spikes; production binding remains for M6-006 |
 | D11 | Accepted | Model rewrite is not a native passthrough | Requires body modification to be explicit |
 | D12 | Proposed | CLI for initial admin operations | Enables account/key management without UI milestone |
 | D13 | Accepted | Client Protocol Adapters own client request parsing, protocol validation, envelope creation, and client response formatting | Supports multiple northbound protocols without protocol structures or conversions in Core; provider-specific translation remains in connectors |
@@ -351,6 +351,63 @@ These accepted ADRs explain the existing constraints and establish the internal 
   capability declarations unchanged, verify the at-most-3B vLLM limit and
   authorization boundary, retain older live gates, and check links/statuses.
   No live request is part of this decision.
+
+### DEC-014 — Select gRPC over Unix Socket for External Connector IPC
+
+- **Status:** Accepted as the technical transport selection under M6-005; the
+  production wire/process binding is not yet specified or implemented.
+- **Context:** M6-002 fixed one 16 MiB opaque streaming workload, callback
+  behavior, concurrency, cancellation and queue/frame budgets. M6-003 and
+  M6-004 ran disposable framed-stdio and gRPC/Unix-socket child prototypes on
+  that workload, with ten measured repetitions after warmup on the same Linux
+  x86_64 host (Go 1.27.1, 11th Gen Intel Core i5-1135G7, 8 logical CPUs,
+  32,458,596 KiB RAM). Full raw measurements, commands, limitations and
+  reviewer records remain in the [spike cards](../implementation/tasks/M6-003.md#completion-evidence)
+  and [M6-004](../implementation/tasks/M6-004.md#completion-evidence).
+- **Decision:** Use gRPC bidirectional streaming over a private Unix-domain
+  socket for the first external Connector runtime. It naturally supplies
+  typed, generated messages and duplex RPC needed for invocation-scoped reverse
+  credential/HTTP/logging services while one execution stream is active. Keep
+  framing, protobuf/gRPC code and dependencies outside `internal/core`; Core
+  continues to speak only the existing language-neutral v1 component contract.
+  M6-006 defines the actual binding and version handshake before any production
+  implementation.
+- **Evidence and tradeoff:** Both prototypes passed opaque-byte parity, early
+  delivery, reverse credential and HTTP callback parity, joint cancellation,
+  bounded queues, saturation and child cleanup within the common limits. The
+  measured stdio median was 11.069 ms first Body, 49.679 ms completion and
+  0.716 ms reap, at 315.05–324.57 MiB/s; gRPC medians were 19.902 ms first
+  Body, 284.234 ms completion, 2.053 ms reap and 56.53 MiB/s. Peak observed
+  retained queue was 82,970 B/2 frames for stdio and 82,986 B/2 frames for
+  gRPC; both remained well below the shared bounds. gRPC's additional latency,
+  CPU, dependencies and generator/tooling are real costs. Select it because
+  generated typed duplex RPC and transport-managed cancellation/versionable
+  messages reduce the bespoke protocol machinery and semantic drift risk at
+  this boundary; the observed 16 MiB completion time remains within the
+  scenario's 10-second repetition deadline. These are one-host prototype
+  measurements, not production SLO or cross-platform evidence.
+- **Alternative rejected:** Framed stdio is simpler to launch and materially
+  faster/lighter in this measurement, but requires a project-owned framing,
+  multiplexing, reverse-call, control-progress and compatibility protocol on
+  stdin/stdout. Retain the spike and its raw evidence as a frozen comparison;
+  do not maintain two production transports or infer stdio production support.
+- **Compatibility and migration:** No CONTRACT, API, `StreamFrame`, retry,
+  capability, credential authority, or lifecycle semantic change. Keep
+  component API major/minor, IPC wire/schema version, protocol identifier, and
+  implementation version distinct; M6-006 must define explicit incompatibility
+  rejection before Init/Execute and additive evolution rules. Initial support
+  is Linux with Unix-domain sockets only; other OSes and socket security
+  behavior remain unverified. Migration is limited to the disposable spikes:
+  downstream production work starts from the M6-006 binding, not either spike
+  implementation. Pin runtime/module and protoc/plugin versions, commit
+  reproducibly generated code with its exact regeneration command, and keep
+  code-generation tools/dependencies out of Core; production pins and supported
+  Go/tooling matrix are fixed with the binding/build task.
+- **Verification:** Reproduce the card's stdio, gRPC and common-control race
+  commands; compare all shared workload/budget rows and failure limits; review
+  this record against CONTRACT/M2-BINDING and synchronized STACK/M6-EXTERNAL.
+  M6-005 reviewer must accept the selection and M6-006 scope before binding
+  work is promoted. No real provider or live service call is relevant.
 
 ## Questions Before Implementation
 
