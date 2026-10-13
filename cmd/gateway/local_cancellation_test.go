@@ -62,7 +62,9 @@ func localCancellationGateway(t *testing.T, upstream http.Handler, setupConn ...
 	p.Connectors = append(p.Connectors, alt)
 	targets := []routeTarget{{Connector: connectorID, Account: accountID}, {Connector: alternateID, Account: alternateAccount}}
 	maxAttempts := 2
-	p.Routes[0] = protectedRoute{ID: "local-route", Protocol: responsesProtocol, Mode: "native", Model: model, Adapter: "pestiroute.responses.native", Policy: "standard", Budget: routeBudget{UnknownEstimate: "reserve", ConservativeTokens: ptrInt64(20)}, Targets: targets, Retry: &retryConfig{MaxAttempts: &maxAttempts, Deadline: "5s"}}
+	// Leave enough time for the 48-MiB backpressure fixture under the race
+	// detector. Drain expiry is exercised with its own shutdown deadline.
+	p.Routes[0] = protectedRoute{ID: "local-route", Protocol: responsesProtocol, Mode: "native", Model: model, Adapter: "pestiroute.responses.native", Policy: "standard", Budget: routeBudget{UnknownEstimate: "reserve", ConservativeTokens: ptrInt64(20)}, Targets: targets, Retry: &retryConfig{MaxAttempts: &maxAttempts, Deadline: "30s"}}
 	prepared, err := prepareProtectedConfig(ctx, config{protected: p, DatabasePath: dbPath, MasterKeyFile: keyPath})
 	if err != nil {
 		t.Fatal(err)
