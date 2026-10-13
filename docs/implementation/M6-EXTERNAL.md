@@ -2,7 +2,7 @@
 
 ## Outcome and scope
 
-Implement [M6](ROADMAP.md#m6--external-plugin-runtime): the existing native Responses Connector can run in a child process behind the same `core.Connector` semantics. Crashes stay isolated, payloads remain opaque, streaming is incremental and bounded, cancellation releases resources, and in-process/external conformance agrees. [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selected gRPC over Unix socket from measured M6-003/004 evidence; M6-005 remains ACTIVE pending reviewer acceptance. Production wire/process binding is M6-006 scope.
+Implement [M6](ROADMAP.md#m6--external-plugin-runtime): the existing native Responses Connector can run in a child process behind the same `core.Connector` semantics. Crashes stay isolated, payloads remain opaque, streaming is incremental and bounded, cancellation releases resources, and in-process/external conformance agrees. [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selected gRPC over Unix socket from measured M6-003/004 evidence; M6-005 is DONE. Production wire/process binding is M6-006 scope.
 
 Start from merged main `bea67fe` (PR #13), not the old M5.2 branch. Conditional acceptance under DEC-012/013 carries forward without converting incomplete live gates into DONE. M6 uses child binaries and deterministic loopback fake upstreams; no provider inference, GPU, model download or OAuth refresh is required.
 
