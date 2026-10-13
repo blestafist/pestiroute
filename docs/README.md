@@ -16,7 +16,9 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | Document | Owns |
 | --- | --- |
 | [Current](implementation/CURRENT.md) | Verified state, immediate focus, blockers, available commands |
-| [Tasks](implementation/TASKS.md) | Task status, owner, dependencies, scope, result, primary check; [M2 plan](implementation/TASKS.md#m2--connector-api-and-conformance-baseline), [bounded M3 plan](implementation/TASKS.md#m3--access-accounts-and-accounting), [bounded M4 plan](implementation/TASKS.md#m4--first-translation-connector), [M5.1 Codex plan](implementation/TASKS.md#m51--codex-subscription-connector), and [M5.2 local runtime plan](implementation/TASKS.md#m52--local-runtime-connectors) |
+| [Tasks](implementation/TASKS.md) | Active registry and [M6 candidates](implementation/TASKS.md#m6--external-plugin-runtime); DONE dependency rows in [archive](implementation/archive/TASKS-DONE.md) |
+| [Implementation index](implementation/README.md) | Grouped specs, bindings, operations, compatibility and stable evidence paths |
+| [M6 external runtime plan](implementation/M6-EXTERNAL.md) | Transport comparison, scoped service/process binding gates and bounded implementation candidates |
 | [Task template](implementation/tasks/TEMPLATE.md) | Planner's format for bounded task cards in `implementation/tasks/` |
 | [Roadmap](implementation/ROADMAP.md) | Milestones and acceptance gates; not a task checklist |
 | [Stack](implementation/STACK.md) | Toolchain, libraries, build and operational conventions |

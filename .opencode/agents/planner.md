@@ -65,7 +65,7 @@ You may edit TASKS.md, CURRENT.md, and task cards. Preserve TEMPLATE.md unless e
 
 ## Task Lifecycle
 
-- TASKS.md alone owns status, owner, dependencies, scope summary, result summary, and primary check. Cards own detailed scope, acceptance, and evidence.
+- TASKS.md and archive/TASKS-DONE.md jointly own status, owner, dependencies, scope summary, result summary, and primary check, with exactly one row per ID. Pending rows stay active; archived DONE rows remain dependencies. Move reopened rows back to TASKS.md and reassess dependent work. Cards own detailed scope, acceptance, and evidence.
 - Set ACTIVE only when execution actually starts and an identifiable executor owns the task. Planning a card does not claim implementation ownership.
 - For blocked execution, record the reason and unblock condition in the card and set BLOCKED. Summarize only immediate impact in CURRENT.
 - When a prerequisite is reopened, reassess dependent pending tasks and return them to DRAFT or BLOCKED as appropriate.
