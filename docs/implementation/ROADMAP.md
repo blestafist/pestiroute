@@ -86,6 +86,12 @@ a missing environment stays a blocker and does not establish support.
 
 Scope: Ollama, vLLM, and llama.cpp. First verify available OpenAI-compatible endpoints through the common compatible connector; use a local runtime connector for native protocols or behavior. If a backend only provides Chat Completions, either a declared Responses translator or a separate connector is needed; URL-style match alone does not mean ready support. Track these separately from client protocols because their complexity differs fundamentally.
 
+By [DEC-013](../project/DECISIONS.md#dec-013--conditional-m52-handoff-with-deferred-vllm-live-gate),
+the offline slice and exact Ollama v0.40.3 / llama.cpp v0.6.0 observations are
+conditionally accepted for handoff; M5.2 is not DONE. vLLM M5.2-025 remains
+BLOCKED and unwaived. Its at-most-3B model bound and separate operator
+authorization remain prerequisites; no capability is promoted by this decision.
+
 **Done for each connector when:** versioned fixtures and a capability matrix are added, the direct-versus-gateway smoke test is reproducible, and unsupported Responses features are explicitly marked. Each connector can be released independently.
 
 ## M6 · External Plugin Runtime
