@@ -12,6 +12,8 @@ import (
 	"github.com/blestafist/pestiroute/internal/ipc"
 	gen "github.com/blestafist/pestiroute/internal/ipc/gen"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -85,6 +87,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		err = stream.CloseSend()
 	}
 	if err != nil {
+		c.signalExecuteFatal(err, callerCtx)
 		cleanup()
 		return core.ExecutionResponse{}, executeGatewayError(err, requestSendAttempted, callerCtx)
 	}
@@ -94,6 +97,20 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		return core.ExecutionResponse{}, gatewayErr
 	}
 	return response, nil
+}
+
+func (c *Connector) signalExecuteFatal(err error, ctx context.Context) {
+	if err == nil || ctx != nil && ctx.Err() != nil {
+		return
+	}
+	if errors.Is(err, ipc.ErrMalformed) || errors.Is(err, errCreditIdentity) || errors.Is(err, errCreditReplay) {
+		c.signalFatal()
+		return
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.Unknown, codes.Internal, codes.DataLoss:
+		c.signalFatal()
+	}
 }
 
 func executeGatewayError(err error, deliveredOrAmbiguous bool, callerCtx context.Context) *core.GatewayError {
@@ -123,35 +140,43 @@ func executeFrameIdentity(frame *gen.ExecuteFrame, epoch uint64, invocationID st
 func readExecuteResponse(c *Connector, stream grpc.BidiStreamingClient[gen.ExecuteFrame, gen.ExecuteFrame], epoch uint64, invocationID string, ctx context.Context, cleanup func()) (core.ExecutionResponse, *core.GatewayError) {
 	first, err := stream.Recv()
 	if err != nil {
+		c.signalExecuteFatal(err, ctx)
 		return core.ExecutionResponse{}, executeGatewayError(err, true, ctx)
 	}
 	if err = executeFrameIdentity(first, epoch, invocationID); err != nil {
+		c.signalExecuteFatal(err, ctx)
 		return core.ExecutionResponse{}, executeGatewayError(err, true, ctx)
 	}
 	if record, ok := first.Payload.(*gen.ExecuteFrame_Record); ok {
 		if record.Record == nil || record.Record.RecordType != "HeadFrame" && record.Record.RecordType != "GatewayError" {
+			c.signalExecuteFatal(ipc.ErrMalformed, ctx)
 			return core.ExecutionResponse{}, executeGatewayError(ipc.ErrMalformed, true, ctx)
 		}
 		var wire gen.HeadFrame
 		if record.Record.RecordType == "GatewayError" {
 			var gateway gen.GatewayError
 			if err := readExecuteRecord(c, stream, epoch, invocationID, ctx, 0, "GatewayError", first.DataSequence, record.Record, &gateway); err != nil {
+				c.signalExecuteFatal(err, ctx)
 				return core.ExecutionResponse{}, executeGatewayError(err, true, ctx)
 			}
 			ge, err := ipc.GatewayErrorFrom(&gateway)
 			if err != nil || ge == nil {
+				c.signalExecuteFatal(ipc.ErrMalformed, ctx)
 				return core.ExecutionResponse{}, executeGatewayError(ipc.ErrMalformed, true, ctx)
 			}
 			if _, err = stream.Recv(); !errors.Is(err, io.EOF) {
+				c.signalExecuteFatal(ipc.ErrMalformed, ctx)
 				return core.ExecutionResponse{}, executeGatewayError(ipc.ErrMalformed, true, ctx)
 			}
 			return core.ExecutionResponse{}, ge
 		}
 		if err := readExecuteRecord(c, stream, epoch, invocationID, ctx, 0, "HeadFrame", first.DataSequence, record.Record, &wire); err != nil {
+			c.signalExecuteFatal(err, ctx)
 			return core.ExecutionResponse{}, executeGatewayError(err, true, ctx)
 		}
 		head, err := ipc.HeadFrom(&wire)
 		if err != nil {
+			c.signalExecuteFatal(err, ctx)
 			return core.ExecutionResponse{}, executeGatewayError(err, true, ctx)
 		}
 		closeCtx, closeCancel := context.WithCancel(context.Background())
@@ -159,6 +184,7 @@ func readExecuteResponse(c *Connector, stream grpc.BidiStreamingClient[gen.Execu
 		responseStream.stopParent = context.AfterFunc(ctx, func() { _ = responseStream.Close() })
 		return core.ExecutionResponse{Stream: responseStream}, nil
 	}
+	c.signalExecuteFatal(ipc.ErrMalformed, ctx)
 	return core.ExecutionResponse{}, executeGatewayError(ipc.ErrMalformed, true, ctx)
 }
 
@@ -362,6 +388,9 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 func (s *executeResponseStream) fail(err error) (core.StreamFrame, error) {
 	if errors.Is(err, io.EOF) {
 		err = ipc.ErrMalformed
+	}
+	if !s.isClosed() {
+		s.connector.signalExecuteFatal(err, s.ctx)
 	}
 	s.Close()
 	return core.StreamFrame{}, executeGatewayError(err, true, s.ctx)

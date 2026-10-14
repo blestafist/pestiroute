@@ -139,13 +139,13 @@ func stopTestProcess(t *testing.T, p *Process) {
 	}
 }
 
-func serveHandshakeChild(socket, mode string) {
+func serveHandshakeChild(socket, mode, marker, attemptMarker string) {
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
 	if err != nil {
 		os.Exit(31)
 	}
 	server := grpc.NewServer()
-	gen.RegisterConnectorServer(server, &handshakeChild{mode: mode})
+	gen.RegisterConnectorServer(server, &handshakeChild{mode: mode, marker: marker, attemptMarker: attemptMarker})
 	if err := server.Serve(listener); err != nil {
 		os.Exit(32)
 	}
@@ -153,10 +153,12 @@ func serveHandshakeChild(socket, mode string) {
 
 type handshakeChild struct {
 	gen.UnimplementedConnectorServer
-	mode     string
-	flowMu   sync.Mutex
-	flow     *ChildFlowControl
-	flowConn *grpc.ClientConn
+	mode          string
+	marker        string
+	attemptMarker string
+	flowMu        sync.Mutex
+	flow          *ChildFlowControl
+	flowConn      *grpc.ClientConn
 }
 
 func (s *handshakeChild) ensureFlowControl(epoch uint64) (*ChildFlowControl, error) {
@@ -251,7 +253,20 @@ func (s *handshakeChild) Init(stream grpc.ClientStreamingServer[gen.RecordFragme
 	if s.mode == "lifecycle-init-fail" {
 		return status.Error(codes.Internal, "private child error")
 	}
-	return stream.SendAndClose(&gen.RecordFragment{})
+	err := stream.SendAndClose(&gen.RecordFragment{})
+	if err == nil && (s.mode == "supervisor-crash-loop" || (strings.HasPrefix(s.mode, "supervisor-crash-once") && s.marker != "" && createMarker(s.marker))) {
+		go func() { time.Sleep(200 * time.Millisecond); _ = syscall.Kill(os.Getpid(), syscall.SIGKILL) }()
+	}
+	return err
+}
+
+func createMarker(path string) bool {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
 }
 
 func (s *handshakeChild) Health(req *gen.RecordFragment, stream grpc.ServerStreamingServer[gen.RecordFragment]) error {
@@ -586,6 +601,17 @@ inputDone:
 		_, _ = fmt.Fprintln(os.Stderr, "execute-stall-cancel-ack")
 		return stream.Context().Err()
 	}
+	if strings.HasSuffix(s.mode, "-execute") {
+		if s.attemptMarker != "" {
+			f, err := os.OpenFile(s.attemptMarker, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+			if err == nil {
+				_, _ = fmt.Fprintln(f, "attempt")
+				_ = f.Close()
+			}
+		}
+		<-stream.Context().Done()
+		return stream.Context().Err()
+	}
 	if s.mode == "execute-child-cancelled-before-head" {
 		_, _ = fmt.Fprintln(os.Stderr, "execute-child-cancelled-before-head")
 		return status.Error(codes.Canceled, "child cancelled execution")
@@ -596,6 +622,13 @@ inputDone:
 	}
 	if s.mode == "execute-error" {
 		ge := &core.GatewayError{Code: "rejected", Category: core.CategoryRateLimited, Retryable: true, RetryDisposition: core.RetrySafe, Provider: "fixture", OriginalError: "diagnostic", Message: "try later"}
+		if err := sendExecuteRecord(stream, flow, invocationCtx, epoch, invocationID, 0, "GatewayError", ipc.GatewayErrorTo(ge)); err != nil {
+			return err
+		}
+		return flow.WaitDrained(invocationCtx, invocationID)
+	}
+	if s.mode == "supervisor-valid-invalid-request" {
+		ge := &core.GatewayError{Code: "invalid_request", Category: core.CategoryInvalidRequest, RetryDisposition: core.RetryUnsafe, Message: "fixture rejected this request"}
 		if err := sendExecuteRecord(stream, flow, invocationCtx, epoch, invocationID, 0, "GatewayError", ipc.GatewayErrorTo(ge)); err != nil {
 			return err
 		}

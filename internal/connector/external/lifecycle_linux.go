@@ -37,6 +37,8 @@ type Connector struct {
 	invocations *invocationRegistry
 	hostServer  *grpc.Server
 	hostCancel  context.CancelFunc
+	fatal       chan struct{}
+	fatalOnce   sync.Once
 
 	gate               chan struct{}
 	mu                 sync.Mutex
@@ -65,7 +67,7 @@ func (p *Process) ConnectComponent(ctx context.Context) (*Connector, error) {
 	registry := newInvocationRegistry(p.epoch)
 	registry.secrets = p.secrets
 	hostServer := p.serveHostServices(serviceCtx, registry, controlClient)
-	c := &Connector{process: p, conn: conn, controlConn: controlConn, client: gen.NewConnectorClient(conn), control: controlClient, descriptor: descriptor.Clone(), epoch: p.epoch, invocations: registry, hostServer: hostServer, hostCancel: cancel, gate: make(chan struct{}, 1)}
+	c := &Connector{process: p, conn: conn, controlConn: controlConn, client: gen.NewConnectorClient(conn), control: controlClient, descriptor: descriptor.Clone(), epoch: p.epoch, invocations: registry, hostServer: hostServer, hostCancel: cancel, fatal: make(chan struct{}), gate: make(chan struct{}, 1)}
 	probe := &gen.FlowIdentity{Epoch: p.epoch, InvocationId: "probe", Operation: "Execute", CallId: 1, Direction: "host_to_child", Sequence: 1}
 	response, err := controlClient.FlowControl(ctx, &gen.FlowControlRequest{Kind: gen.FlowControlKind_FLOW_CONTROL_PROBE, Identity: probe})
 	if err != nil || response == nil || response.Kind != gen.FlowControlKind_FLOW_CONTROL_PROBE || !proto.Equal(response.Identity, probe) {
@@ -81,9 +83,26 @@ func (p *Process) ConnectComponent(ctx context.Context) (*Connector, error) {
 	return c, nil
 }
 
+func (c *Connector) signalFatal() {
+	if c.fatal != nil {
+		c.fatalOnce.Do(func() { close(c.fatal) })
+	}
+}
+
 var _ core.Component = (*Connector)(nil)
 
 func (c *Connector) Descriptor() core.Descriptor { return c.descriptor.Clone() }
+
+func (c *Connector) stopForRecovery() {
+	c.mu.Lock()
+	c.unavailable = true
+	c.mu.Unlock()
+	c.invocations.close()
+	c.hostCancel()
+	c.hostServer.Stop()
+	_ = c.conn.Close()
+	_ = c.controlConn.Close()
+}
 
 func (c *Connector) Init(ctx context.Context, config core.ComponentConfig) error {
 	ctx, cancel := boundedContext(ctx, initTimeout)
@@ -148,14 +167,21 @@ func (c *Connector) Health(ctx context.Context) core.Health {
 	c.mu.Unlock()
 	stream, err := c.client.Health(ctx, lifecycleRequest(c.epoch))
 	if err != nil {
+		if ctx.Err() == nil {
+			c.signalFatal()
+		}
 		return failedHealth(err)
 	}
 	var wire gen.Health
 	if err = readRecordCall(stream, c.epoch, 1, "Health", &wire); err != nil {
+		if ctx.Err() == nil {
+			c.signalFatal()
+		}
 		return failedHealth(err)
 	}
 	value, err := ipc.HealthFrom(&wire)
 	if err != nil {
+		c.signalFatal()
 		return core.Health{State: core.HealthUnavailable, Diagnostic: "external connector returned malformed health"}
 	}
 	return safeHealth(value)
@@ -177,23 +203,34 @@ func (c *Connector) Capabilities(ctx context.Context, scope core.CapabilityScope
 	c.mu.Unlock()
 	stream, err := c.client.Capabilities(ctx)
 	if err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.CapabilityResult{}
 	}
 	if err = ipc.WriteRecord(ipc.Identity{Epoch: c.epoch, CallID: 1, RecordID: 0, Type: "CapabilityScope"}, ipc.ScopeTo(scope), stream.Send); err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.CapabilityResult{}
 	}
 	if err = stream.CloseSend(); err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.CapabilityResult{}
 	}
 	var wire gen.CapabilityResult
 	if err = readBidiRecord(stream, c.epoch, "CapabilityResult", &wire); err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.CapabilityResult{}
 	}
 	result, err := ipc.CapabilityResultFrom(&wire)
 	if err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.CapabilityResult{}
 	}
 	return result
+}
+
+func (c *Connector) fatalUnlessCanceled(ctx context.Context, err error) {
+	if err != nil && ctx.Err() == nil {
+		c.signalFatal()
+	}
 }
 
 // Models forwards one scoped model query and returns only a fully validated result.
@@ -222,10 +259,12 @@ func (c *Connector) Models(ctx context.Context, query core.ModelQuery, _ core.In
 		err = readBidiRecord(stream, c.epoch, "ModelsResult", &wire)
 	}
 	if err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.ModelsResult{}, queryGatewayError(err, "models")
 	}
 	result, err := ipc.ModelsResultFrom(&wire)
 	if err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.ModelsResult{}, queryGatewayError(err, "models")
 	}
 	return result, nil
@@ -273,10 +312,12 @@ func (c *Connector) EstimateUsage(ctx context.Context, query core.UsageQuery, _ 
 		err = readEstimateRecord(stream, c.epoch, &wire)
 	}
 	if err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.EstimateResult{}, queryGatewayError(err, "estimate")
 	}
 	result, err := ipc.EstimateFrom(&wire)
 	if err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.EstimateResult{}, queryGatewayError(err, "estimate")
 	}
 	return result, nil
@@ -317,10 +358,12 @@ func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, serv
 		err = readInvocationRecord(stream, c.epoch, invocationID, "AuthResult", &wire)
 	}
 	if err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.AuthResult{}, queryGatewayError(err, "authenticate")
 	}
 	result, err := ipc.AuthResultFrom(&wire)
 	if err != nil {
+		c.fatalUnlessCanceled(ctx, err)
 		return core.AuthResult{}, queryGatewayError(err, "authenticate")
 	}
 	return result, nil

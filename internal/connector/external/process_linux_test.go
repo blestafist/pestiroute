@@ -36,7 +36,7 @@ func TestM6ProcessChild(t *testing.T) {
 			mode = args[i+1]
 		}
 	}
-	if strings.HasPrefix(mode, "handshake-") || strings.HasPrefix(mode, "lifecycle-") || strings.HasPrefix(mode, "auth-") || strings.HasPrefix(mode, "execute-") {
+	if strings.HasPrefix(mode, "handshake-") || strings.HasPrefix(mode, "lifecycle-") || strings.HasPrefix(mode, "auth-") || strings.HasPrefix(mode, "execute-") || strings.HasPrefix(mode, "supervisor-") {
 		if mode == "handshake-wrong-peer" {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestM6ProcessChild$", "--", "--mode", "handshake-valid")
 			cmd.Env = os.Environ()
@@ -46,7 +46,17 @@ func TestM6ProcessChild(t *testing.T) {
 			_ = cmd.Wait()
 			os.Exit(0)
 		}
-		serveHandshakeChild(connector, mode)
+		marker := ""
+		attemptMarker := ""
+		for i, arg := range args {
+			if arg == "--marker" && i+1 < len(args) {
+				marker = args[i+1]
+			}
+			if arg == "--attempt-marker" && i+1 < len(args) {
+				attemptMarker = args[i+1]
+			}
+		}
+		serveHandshakeChild(connector, mode, marker, attemptMarker)
 		os.Exit(0)
 	}
 	if mode == "hang" {

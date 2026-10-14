@@ -78,6 +78,14 @@ func Start(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	return startWithTimeout(ctx, cfg, startupTimeout)
 }
 
+func startWithEpoch(ctx context.Context, cfg ProcessConfig, epoch uint64) (*Process, error) {
+	p, err := startWithTimeout(ctx, cfg, startupTimeout)
+	if err == nil {
+		p.epoch = epoch
+	}
+	return p, err
+}
+
 // startWithTimeout keeps short deadlines available to deterministic package
 // tests; production callers always use the binding's fixed startupTimeout.
 func startWithTimeout(ctx context.Context, cfg ProcessConfig, timeout time.Duration) (*Process, error) {

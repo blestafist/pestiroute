@@ -87,9 +87,12 @@ func (p *Process) ConnectConnector(ctx context.Context) (result *grpc.ClientConn
 	}
 	result = conn
 	client := gen.NewConnectorClient(conn)
-	epoch, err := newEpoch()
-	if err != nil {
-		return nil, core.Descriptor{}, err
+	epoch := p.epoch
+	if epoch == 0 {
+		epoch, err = newEpoch()
+		if err != nil {
+			return nil, core.Descriptor{}, err
+		}
 	}
 	p.epoch = epoch
 	var handshake gen.Handshake
