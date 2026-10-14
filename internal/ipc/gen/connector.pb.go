@@ -9,6 +9,7 @@ package ipcgen
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -2426,7 +2427,7 @@ var File_connector_proto protoreflect.FileDescriptor
 
 const file_connector_proto_rawDesc = "" +
 	"\n" +
-	"\x0fconnector.proto\x12\x17pestiroute.connector.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"5\n" +
+	"\x0fconnector.proto\x12\x17pestiroute.connector.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\"5\n" +
 	"\aVersion\x12\x14\n" +
 	"\x05major\x18\x01 \x01(\rR\x05major\x12\x14\n" +
 	"\x05minor\x18\x02 \x01(\rR\x05minor\"\xb4\x02\n" +
@@ -2658,10 +2659,11 @@ const file_connector_proto_rawDesc = "" +
 	"\x04Init\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x01\x12\\\n" +
 	"\x06Health\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01\x12d\n" +
 	"\fCapabilities\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12Y\n" +
-	"\x05Close\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment2\xcb\x01\n" +
+	"\x05Close\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment2\x95\x02\n" +
 	"\fHostServices\x12e\n" +
 	"\rCredentialGet\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12T\n" +
-	"\x06HTTPDo\x12\".pestiroute.connector.v1.HTTPFrame\x1a\".pestiroute.connector.v1.HTTPFrame(\x010\x01B:Z8github.com/blestafist/pestiroute/internal/ipc/gen;ipcgenb\x06proto3"
+	"\x06HTTPDo\x12\".pestiroute.connector.v1.HTTPFrame\x1a\".pestiroute.connector.v1.HTTPFrame(\x010\x01\x12H\n" +
+	"\x03Log\x12'.pestiroute.connector.v1.RecordFragment\x1a\x16.google.protobuf.Empty(\x01B:Z8github.com/blestafist/pestiroute/internal/ipc/gen;ipcgenb\x06proto3"
 
 var (
 	file_connector_proto_rawDescOnce sync.Once
@@ -2723,6 +2725,7 @@ var file_connector_proto_goTypes = []any{
 	nil,                           // 43: pestiroute.connector.v1.HTTPResponse.HeadersEntry
 	nil,                           // 44: pestiroute.connector.v1.LogRecord.AttributesEntry
 	(*timestamppb.Timestamp)(nil), // 45: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),         // 46: google.protobuf.Empty
 }
 var file_connector_proto_depIdxs = []int32{
 	0,  // 0: pestiroute.connector.v1.Descriptor.api_versions:type_name -> pestiroute.connector.v1.Version
@@ -2764,16 +2767,18 @@ var file_connector_proto_depIdxs = []int32{
 	26, // 36: pestiroute.connector.v1.Connector.Close:input_type -> pestiroute.connector.v1.RecordFragment
 	26, // 37: pestiroute.connector.v1.HostServices.CredentialGet:input_type -> pestiroute.connector.v1.RecordFragment
 	33, // 38: pestiroute.connector.v1.HostServices.HTTPDo:input_type -> pestiroute.connector.v1.HTTPFrame
-	26, // 39: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 40: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 41: pestiroute.connector.v1.Connector.Init:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 42: pestiroute.connector.v1.Connector.Health:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 43: pestiroute.connector.v1.Connector.Capabilities:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 44: pestiroute.connector.v1.Connector.Close:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 45: pestiroute.connector.v1.HostServices.CredentialGet:output_type -> pestiroute.connector.v1.RecordFragment
-	33, // 46: pestiroute.connector.v1.HostServices.HTTPDo:output_type -> pestiroute.connector.v1.HTTPFrame
-	39, // [39:47] is the sub-list for method output_type
-	31, // [31:39] is the sub-list for method input_type
+	26, // 39: pestiroute.connector.v1.HostServices.Log:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 40: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 41: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 42: pestiroute.connector.v1.Connector.Init:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 43: pestiroute.connector.v1.Connector.Health:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 44: pestiroute.connector.v1.Connector.Capabilities:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 45: pestiroute.connector.v1.Connector.Close:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 46: pestiroute.connector.v1.HostServices.CredentialGet:output_type -> pestiroute.connector.v1.RecordFragment
+	33, // 47: pestiroute.connector.v1.HostServices.HTTPDo:output_type -> pestiroute.connector.v1.HTTPFrame
+	46, // 48: pestiroute.connector.v1.HostServices.Log:output_type -> google.protobuf.Empty
+	40, // [40:49] is the sub-list for method output_type
+	31, // [31:40] is the sub-list for method input_type
 	31, // [31:31] is the sub-list for extension type_name
 	31, // [31:31] is the sub-list for extension extendee
 	0,  // [0:31] is the sub-list for field type_name

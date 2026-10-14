@@ -11,6 +11,7 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -310,6 +311,7 @@ var Connector_ServiceDesc = grpc.ServiceDesc{
 const (
 	HostServices_CredentialGet_FullMethodName = "/pestiroute.connector.v1.HostServices/CredentialGet"
 	HostServices_HTTPDo_FullMethodName        = "/pestiroute.connector.v1.HostServices/HTTPDo"
+	HostServices_Log_FullMethodName           = "/pestiroute.connector.v1.HostServices/Log"
 )
 
 // HostServicesClient is the client API for HostServices service.
@@ -318,6 +320,7 @@ const (
 type HostServicesClient interface {
 	CredentialGet(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RecordFragment, RecordFragment], error)
 	HTTPDo(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HTTPFrame, HTTPFrame], error)
+	Log(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[RecordFragment, emptypb.Empty], error)
 }
 
 type hostServicesClient struct {
@@ -354,12 +357,26 @@ func (c *hostServicesClient) HTTPDo(ctx context.Context, opts ...grpc.CallOption
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostServices_HTTPDoClient = grpc.BidiStreamingClient[HTTPFrame, HTTPFrame]
 
+func (c *hostServicesClient) Log(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[RecordFragment, emptypb.Empty], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &HostServices_ServiceDesc.Streams[2], HostServices_Log_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RecordFragment, emptypb.Empty]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostServices_LogClient = grpc.ClientStreamingClient[RecordFragment, emptypb.Empty]
+
 // HostServicesServer is the server API for HostServices service.
 // All implementations must embed UnimplementedHostServicesServer
 // for forward compatibility.
 type HostServicesServer interface {
 	CredentialGet(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error
 	HTTPDo(grpc.BidiStreamingServer[HTTPFrame, HTTPFrame]) error
+	Log(grpc.ClientStreamingServer[RecordFragment, emptypb.Empty]) error
 	mustEmbedUnimplementedHostServicesServer()
 }
 
@@ -375,6 +392,9 @@ func (UnimplementedHostServicesServer) CredentialGet(grpc.BidiStreamingServer[Re
 }
 func (UnimplementedHostServicesServer) HTTPDo(grpc.BidiStreamingServer[HTTPFrame, HTTPFrame]) error {
 	return status.Errorf(codes.Unimplemented, "method HTTPDo not implemented")
+}
+func (UnimplementedHostServicesServer) Log(grpc.ClientStreamingServer[RecordFragment, emptypb.Empty]) error {
+	return status.Errorf(codes.Unimplemented, "method Log not implemented")
 }
 func (UnimplementedHostServicesServer) mustEmbedUnimplementedHostServicesServer() {}
 func (UnimplementedHostServicesServer) testEmbeddedByValue()                      {}
@@ -411,6 +431,13 @@ func _HostServices_HTTPDo_Handler(srv interface{}, stream grpc.ServerStream) err
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostServices_HTTPDoServer = grpc.BidiStreamingServer[HTTPFrame, HTTPFrame]
 
+func _HostServices_Log_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(HostServicesServer).Log(&grpc.GenericServerStream[RecordFragment, emptypb.Empty]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostServices_LogServer = grpc.ClientStreamingServer[RecordFragment, emptypb.Empty]
+
 // HostServices_ServiceDesc is the grpc.ServiceDesc for HostServices service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -429,6 +456,11 @@ var HostServices_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "HTTPDo",
 			Handler:       _HostServices_HTTPDo_Handler,
 			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Log",
+			Handler:       _HostServices_Log_Handler,
 			ClientStreams: true,
 		},
 	},

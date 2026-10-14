@@ -2,6 +2,7 @@ syntax = "proto3";
 package pestiroute.connector.v1;
 option go_package = "github.com/blestafist/pestiroute/internal/ipc/gen;ipcgen";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
 
 // Every message below is a logical typed record. Transport envelopes and
 // opaque body chunks are deliberately separate from these values.
@@ -61,4 +62,5 @@ service Connector {
 service HostServices {
   rpc CredentialGet(stream RecordFragment) returns (stream RecordFragment);
   rpc HTTPDo(stream HTTPFrame) returns (stream HTTPFrame);
+  rpc Log(stream RecordFragment) returns (google.protobuf.Empty);
 }

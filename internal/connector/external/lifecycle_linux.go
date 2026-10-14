@@ -56,6 +56,7 @@ func (p *Process) ConnectComponent(ctx context.Context) (*Connector, error) {
 	}
 	serviceCtx, cancel := context.WithCancel(context.Background())
 	registry := newInvocationRegistry(p.epoch)
+	registry.secrets = p.secrets
 	return &Connector{process: p, conn: conn, client: gen.NewConnectorClient(conn), descriptor: descriptor.Clone(), epoch: p.epoch, invocations: registry, hostServer: p.serveHostServices(serviceCtx, registry), hostCancel: cancel, gate: make(chan struct{}, 1)}, nil
 }
 

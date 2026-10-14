@@ -41,6 +41,7 @@ type Process struct {
 	listenerInfo    os.FileInfo
 	connectorInfo   os.FileInfo
 	diagnostics     *limitedWriter
+	secrets         *logSecretSet
 	startupDeadline time.Time
 	epoch           uint64
 	waitDone        chan struct{}
@@ -105,7 +106,7 @@ func startWithTimeout(ctx context.Context, cfg ProcessConfig, timeout time.Durat
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	p := &Process{dir: dir, connector: filepath.Join(dir, "connector.sock"), hostServices: filepath.Join(dir, "host-services.sock"), waitDone: make(chan struct{}), diagnostics: &limitedWriter{}}
+	p := &Process{dir: dir, connector: filepath.Join(dir, "connector.sock"), hostServices: filepath.Join(dir, "host-services.sock"), waitDone: make(chan struct{}), diagnostics: &limitedWriter{}, secrets: &logSecretSet{}}
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: p.hostServices, Net: "unix"})
 	if err != nil {
 		os.RemoveAll(dir)
@@ -172,7 +173,7 @@ func startWithTimeout(ctx context.Context, cfg ProcessConfig, timeout time.Durat
 func (p *Process) ConnectorSocket() string    { return p.connector }
 func (p *Process) HostServicesSocket() string { return p.hostServices }
 func (p *Process) PID() int                   { return p.cmd.Process.Pid }
-func (p *Process) Diagnostics() string        { return p.diagnostics.String() }
+func (p *Process) Diagnostics() string        { return p.secrets.redact(p.diagnostics.String()) }
 
 // StartupDeadline is shared with the subsequent connect/handshake layer.
 func (p *Process) StartupDeadline() time.Time { return p.startupDeadline }

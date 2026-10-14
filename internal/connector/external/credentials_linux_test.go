@@ -40,13 +40,14 @@ func (blockingCredentials) Get(ctx context.Context, _ string) ([]byte, error) {
 func credentialTestServer(t *testing.T, registry *invocationRegistry) gen.HostServicesClient {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
-	server := newHostServicesServer(registry)
+	ctx, cancel := context.WithCancel(context.Background())
+	server := newHostServicesServer(registry, ctx)
 	go func() { _ = server.Serve(listener) }()
 	conn, err := grpc.NewClient("passthrough:///credential-test", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = conn.Close(); server.Stop(); _ = listener.Close() })
+	t.Cleanup(func() { cancel(); _ = conn.Close(); server.Stop(); _ = listener.Close() })
 	return gen.NewHostServicesClient(conn)
 }
 
@@ -137,7 +138,7 @@ func TestM6CredentialRejectsDuplicateCallID(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := NewCredentialClient(credentialTestServer(t, r), 43, id)
-	callID := credentialCallID.Add(1)
+	callID := hostServiceCallID.Add(1)
 	if _, err := client.getWithCallID(context.Background(), "token", callID); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestM6CredentialCallbackLimits(t *testing.T) {
 	var leases []*callbackLease
 	for _, id := range ids {
 		for range maxCallbacksPerInvoke {
-			callID := credentialCallID.Add(1)
+			callID := hostServiceCallID.Add(1)
 			lease, _, _, err := r.admitCallback(51, id, callID)
 			if err != nil {
 				t.Fatal(err)

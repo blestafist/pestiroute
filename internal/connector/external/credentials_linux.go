@@ -6,8 +6,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
@@ -20,11 +20,12 @@ import (
 
 const credentialTimeout = 2 * time.Second
 
-var credentialCallID atomic.Uint64
-
 type hostServices struct {
 	gen.UnimplementedHostServicesServer
-	registry *invocationRegistry
+	registry      *invocationRegistry
+	logger        *slog.Logger
+	logQueue      chan logEntry
+	logWorkerDone chan struct{}
 }
 
 type verifiedHostListener struct {
@@ -47,23 +48,25 @@ func (l verifiedHostListener) Accept() (net.Conn, error) {
 }
 
 func (p *Process) serveHostServices(ctx context.Context, registry *invocationRegistry) *grpc.Server {
-	server := newHostServicesServer(registry)
+	serviceCtx, cancel := context.WithCancel(ctx)
+	server := newHostServicesServer(registry, serviceCtx)
 	go func() {
 		go func() {
-			<-ctx.Done()
+			<-serviceCtx.Done()
 			server.Stop()
 		}()
 		_ = server.Serve(verifiedHostListener{Listener: p.listener, pid: p.PID()})
+		cancel()
 	}()
 	return server
 }
 
-func newHostServicesServer(registry *invocationRegistry) *grpc.Server {
+func newHostServicesServer(registry *invocationRegistry, ctx context.Context) *grpc.Server {
 	server := grpc.NewServer(
 		grpc.MaxRecvMsgSize(ipc.MaxGRPCMessageBytes),
 		grpc.MaxSendMsgSize(ipc.MaxGRPCMessageBytes),
 	)
-	gen.RegisterHostServicesServer(server, &hostServices{registry: registry})
+	gen.RegisterHostServicesServer(server, newLogService(ctx, registry, slog.Default()))
 	return server
 }
 
@@ -117,6 +120,7 @@ func (s *hostServices) CredentialGet(stream grpc.BidiStreamingServer[gen.RecordF
 	if err != nil || !lease.live() || ctx.Err() != nil {
 		return status.Error(codes.PermissionDenied, "credential lookup denied")
 	}
+	lease.invocation.secrets.add(value)
 	if err := ipc.WriteRecord(ipc.Identity{Epoch: id.Epoch, CallID: id.CallID, RecordID: 0, Type: "CredentialValue"}, &gen.CredentialValue{Value: value}, func(f *gen.RecordFragment) error {
 		if !lease.live() || ctx.Err() != nil {
 			return context.Canceled
@@ -162,7 +166,7 @@ func NewCredentialClient(client gen.HostServicesClient, epoch uint64, invocation
 }
 
 func (c *CredentialClient) Get(ctx context.Context, name string) ([]byte, error) {
-	return c.getWithCallID(ctx, name, credentialCallID.Add(1))
+	return c.getWithCallID(ctx, name, hostServiceCallID.Add(1))
 }
 
 func (c *CredentialClient) getWithCallID(ctx context.Context, name string, callID uint64) ([]byte, error) {

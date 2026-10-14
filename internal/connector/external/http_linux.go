@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/blestafist/pestiroute/internal/core"
 	"github.com/blestafist/pestiroute/internal/ipc"
@@ -18,8 +17,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
-
-var httpCallID atomic.Uint64
 
 func httpFrameRecord(epoch, callID uint64, invocationID string, f *gen.RecordFragment) *gen.HTTPFrame {
 	f.Epoch, f.CallId, f.InvocationId = epoch, callID, invocationID
@@ -312,7 +309,7 @@ func NewHTTPDoerClient(client gen.HostServicesClient, epoch uint64, invocationID
 }
 
 func (c *HTTPDoerClient) Do(req *http.Request) (*http.Response, error) {
-	return c.doWithCallID(req, httpCallID.Add(1))
+	return c.doWithCallID(req, hostServiceCallID.Add(1))
 }
 
 func (c *HTTPDoerClient) doWithCallID(req *http.Request, callID uint64) (*http.Response, error) {

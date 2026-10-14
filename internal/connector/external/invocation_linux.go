@@ -7,7 +7,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -26,6 +28,8 @@ var (
 	errCallbackReplay  = errors.New("external connector callback ID is duplicate or unknown")
 )
 
+var hostServiceCallID atomic.Uint64
+
 // invocationRegistry is host-owned authority for one process epoch. Child data
 // never selects an account; callbacks retrieve it through their admitted call.
 type invocationRegistry struct {
@@ -37,6 +41,7 @@ type invocationRegistry struct {
 	closed      bool
 	lastCallID  uint64
 	seenCallIDs uint32
+	secrets     *logSecretSet
 }
 
 type invocation struct {
@@ -48,6 +53,8 @@ type invocation struct {
 	callbacks   map[uint64]struct{}
 	credentials core.CredentialAccess
 	transport   core.HTTPDoer
+	logger      *slog.Logger
+	secrets     *logSecretSet
 	revoked     bool
 }
 
@@ -58,7 +65,7 @@ type callbackLease struct {
 }
 
 func newInvocationRegistry(epoch uint64) *invocationRegistry {
-	return &invocationRegistry{epoch: epoch, active: make(map[string]*invocation), calls: make(map[uint64]*invocation)}
+	return &invocationRegistry{epoch: epoch, active: make(map[string]*invocation), calls: make(map[uint64]*invocation), secrets: &logSecretSet{}}
 }
 
 func (r *invocationRegistry) begin(parent context.Context, accountID string) (string, context.Context, error) {
@@ -70,6 +77,10 @@ func (r *invocationRegistry) beginWithCredentials(parent context.Context, accoun
 }
 
 func (r *invocationRegistry) beginWithServices(parent context.Context, accountID string, credentials core.CredentialAccess, transport core.HTTPDoer) (string, context.Context, error) {
+	return r.beginWithLogger(parent, accountID, credentials, transport, nil)
+}
+
+func (r *invocationRegistry) beginWithLogger(parent context.Context, accountID string, credentials core.CredentialAccess, transport core.HTTPDoer, logger *slog.Logger) (string, context.Context, error) {
 	if err := parent.Err(); err != nil {
 		return "", nil, err
 	}
@@ -87,7 +98,7 @@ func (r *invocationRegistry) beginWithServices(parent context.Context, accountID
 	}
 	id := hex.EncodeToString(raw[:])
 	ctx, cancel := context.WithCancel(parent)
-	inv := &invocation{id: id, epoch: r.epoch, accountID: accountID, ctx: ctx, cancel: cancel, callbacks: make(map[uint64]struct{}), credentials: credentials, transport: transport}
+	inv := &invocation{id: id, epoch: r.epoch, accountID: accountID, ctx: ctx, cancel: cancel, callbacks: make(map[uint64]struct{}), credentials: credentials, transport: transport, logger: logger, secrets: r.secrets}
 	r.active[id] = inv
 	go func() {
 		<-ctx.Done()
