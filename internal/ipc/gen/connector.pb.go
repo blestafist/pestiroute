@@ -1707,6 +1707,7 @@ type RecordFragment struct {
 	Sequence      uint64                 `protobuf:"varint,7,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	Final         bool                   `protobuf:"varint,8,opt,name=final,proto3" json:"final,omitempty"`
 	Data          []byte                 `protobuf:"bytes,9,opt,name=data,proto3" json:"data,omitempty"`
+	InvocationId  string                 `protobuf:"bytes,10,opt,name=invocation_id,json=invocationId,proto3" json:"invocation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1802,6 +1803,13 @@ func (x *RecordFragment) GetData() []byte {
 		return x.Data
 	}
 	return nil
+}
+
+func (x *RecordFragment) GetInvocationId() string {
+	if x != nil {
+		return x.InvocationId
+	}
+	return ""
 }
 
 type BodyChunk struct {
@@ -2472,7 +2480,7 @@ const file_connector_proto_rawDesc = "" +
 	"\x04head\x18\x02 \x01(\v2\".pestiroute.connector.v1.HeadFrameR\x04head\x12B\n" +
 	"\bcomplete\x18\x04 \x01(\v2&.pestiroute.connector.v1.CompleteFrameR\bcompleteJ\x04\b\x03\x10\x04\"'\n" +
 	"\rCapabilitySet\x12\x16\n" +
-	"\x06values\x18\x01 \x03(\tR\x06values\"\xfe\x01\n" +
+	"\x06values\x18\x01 \x03(\tR\x06values\"\xa3\x02\n" +
 	"\x0eRecordFragment\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\x17\n" +
 	"\acall_id\x18\x02 \x01(\x04R\x06callId\x12\x1b\n" +
@@ -2483,7 +2491,9 @@ const file_connector_proto_rawDesc = "" +
 	"\x06offset\x18\x06 \x01(\x04R\x06offset\x12\x1a\n" +
 	"\bsequence\x18\a \x01(\x04R\bsequence\x12\x14\n" +
 	"\x05final\x18\b \x01(\bR\x05final\x12\x12\n" +
-	"\x04data\x18\t \x01(\fR\x04data\"\x1f\n" +
+	"\x04data\x18\t \x01(\fR\x04data\x12#\n" +
+	"\rinvocation_id\x18\n" +
+	" \x01(\tR\finvocationId\"\x1f\n" +
 	"\tBodyChunk\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"\x90\x01\n" +
 	"\fExecuteStart\x12C\n" +
@@ -2535,7 +2545,9 @@ const file_connector_proto_rawDesc = "" +
 	"\x04Init\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x01\x12\\\n" +
 	"\x06Health\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01\x12d\n" +
 	"\fCapabilities\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12Y\n" +
-	"\x05Close\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragmentB:Z8github.com/blestafist/pestiroute/internal/ipc/gen;ipcgenb\x06proto3"
+	"\x05Close\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment2u\n" +
+	"\fHostServices\x12e\n" +
+	"\rCredentialGet\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01B:Z8github.com/blestafist/pestiroute/internal/ipc/gen;ipcgenb\x06proto3"
 
 var (
 	file_connector_proto_rawDescOnce sync.Once
@@ -2633,14 +2645,16 @@ var file_connector_proto_depIdxs = []int32{
 	26, // 32: pestiroute.connector.v1.Connector.Health:input_type -> pestiroute.connector.v1.RecordFragment
 	26, // 33: pestiroute.connector.v1.Connector.Capabilities:input_type -> pestiroute.connector.v1.RecordFragment
 	26, // 34: pestiroute.connector.v1.Connector.Close:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 35: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 36: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 37: pestiroute.connector.v1.Connector.Init:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 38: pestiroute.connector.v1.Connector.Health:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 39: pestiroute.connector.v1.Connector.Capabilities:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 40: pestiroute.connector.v1.Connector.Close:output_type -> pestiroute.connector.v1.RecordFragment
-	35, // [35:41] is the sub-list for method output_type
-	29, // [29:35] is the sub-list for method input_type
+	26, // 35: pestiroute.connector.v1.HostServices.CredentialGet:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 36: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 37: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 38: pestiroute.connector.v1.Connector.Init:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 39: pestiroute.connector.v1.Connector.Health:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 40: pestiroute.connector.v1.Connector.Capabilities:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 41: pestiroute.connector.v1.Connector.Close:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 42: pestiroute.connector.v1.HostServices.CredentialGet:output_type -> pestiroute.connector.v1.RecordFragment
+	36, // [36:43] is the sub-list for method output_type
+	29, // [29:36] is the sub-list for method input_type
 	29, // [29:29] is the sub-list for extension type_name
 	29, // [29:29] is the sub-list for extension extendee
 	0,  // [0:29] is the sub-list for field type_name
@@ -2666,7 +2680,7 @@ func file_connector_proto_init() {
 			NumEnums:      0,
 			NumMessages:   44,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_connector_proto_goTypes,
 		DependencyIndexes: file_connector_proto_depIdxs,

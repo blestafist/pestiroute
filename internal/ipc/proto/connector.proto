@@ -31,7 +31,7 @@ message HeadFrame { string protocol = 1; string content_type = 2; optional int32
 message CompleteFrame { string outcome = 1; UsageReport usage = 2; GatewayError error = 3; }
 message StreamFrame { string type = 1; HeadFrame head = 2; reserved 3; CompleteFrame complete = 4; }
 message CapabilitySet { repeated string values = 1; }
-message RecordFragment { uint64 epoch = 1; uint64 call_id = 2; uint64 record_id = 3; string record_type = 4; uint64 total_length = 5; uint64 offset = 6; uint64 sequence = 7; bool final = 8; bytes data = 9; }
+message RecordFragment { uint64 epoch = 1; uint64 call_id = 2; uint64 record_id = 3; string record_type = 4; uint64 total_length = 5; uint64 offset = 6; uint64 sequence = 7; bool final = 8; bytes data = 9; string invocation_id = 10; }
 message BodyChunk { bytes data = 1; }
 message ExecuteStart { ExecutionRequest request = 1; AttemptScope scope = 2; }
 message InputComplete {}
@@ -50,4 +50,8 @@ service Connector {
   rpc Health(RecordFragment) returns (stream RecordFragment);
   rpc Capabilities(stream RecordFragment) returns (stream RecordFragment);
   rpc Close(RecordFragment) returns (RecordFragment);
+}
+
+service HostServices {
+  rpc CredentialGet(stream RecordFragment) returns (stream RecordFragment);
 }

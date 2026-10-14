@@ -8,12 +8,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"sync"
+
+	"github.com/blestafist/pestiroute/internal/core"
 )
 
 const (
 	maxInvocations        = 4
 	maxCallbacksPerInvoke = 8
 	maxCallbacksProcess   = 32
+	callbackReplayWindow  = maxCallbacksProcess // ponytail: 32-ID reorder window; enlarge if transport reordering exceeds callback concurrency.
 )
 
 var (
@@ -33,16 +36,18 @@ type invocationRegistry struct {
 	outstanding int
 	closed      bool
 	lastCallID  uint64
+	seenCallIDs uint32
 }
 
 type invocation struct {
-	id        string
-	epoch     uint64
-	accountID string
-	ctx       context.Context
-	cancel    context.CancelFunc
-	callbacks map[uint64]struct{}
-	revoked   bool
+	id          string
+	epoch       uint64
+	accountID   string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	callbacks   map[uint64]struct{}
+	credentials core.CredentialAccess
+	revoked     bool
 }
 
 type callbackLease struct {
@@ -56,6 +61,10 @@ func newInvocationRegistry(epoch uint64) *invocationRegistry {
 }
 
 func (r *invocationRegistry) begin(parent context.Context, accountID string) (string, context.Context, error) {
+	return r.beginWithCredentials(parent, accountID, nil)
+}
+
+func (r *invocationRegistry) beginWithCredentials(parent context.Context, accountID string, credentials core.CredentialAccess) (string, context.Context, error) {
 	if err := parent.Err(); err != nil {
 		return "", nil, err
 	}
@@ -73,7 +82,7 @@ func (r *invocationRegistry) begin(parent context.Context, accountID string) (st
 	}
 	id := hex.EncodeToString(raw[:])
 	ctx, cancel := context.WithCancel(parent)
-	inv := &invocation{id: id, epoch: r.epoch, accountID: accountID, ctx: ctx, cancel: cancel, callbacks: make(map[uint64]struct{})}
+	inv := &invocation{id: id, epoch: r.epoch, accountID: accountID, ctx: ctx, cancel: cancel, callbacks: make(map[uint64]struct{}), credentials: credentials}
 	r.active[id] = inv
 	go func() {
 		<-ctx.Done()
@@ -99,7 +108,7 @@ func (r *invocationRegistry) admitCallback(epoch uint64, invocationID string, ca
 	if owner := r.calls[callID]; owner != nil && owner != inv {
 		return nil, "", nil, errCallbackReplay
 	}
-	if callID <= r.lastCallID {
+	if !r.rememberCallID(callID) {
 		return nil, "", nil, errCallbackReplay
 	}
 	if len(inv.callbacks) >= maxCallbacksPerInvoke || r.outstanding >= maxCallbacksProcess {
@@ -107,9 +116,34 @@ func (r *invocationRegistry) admitCallback(epoch uint64, invocationID string, ca
 	}
 	inv.callbacks[callID] = struct{}{}
 	r.calls[callID] = inv
-	r.lastCallID = callID
 	r.outstanding++
 	return &callbackLease{registry: r, invocation: inv, callID: callID}, inv.accountID, inv.ctx, nil
+}
+
+// rememberCallID keeps a fixed replay window so independently transported calls
+// may arrive out of order without retaining every completed ID for the epoch.
+func (r *invocationRegistry) rememberCallID(callID uint64) bool {
+	if callID > r.lastCallID {
+		shift := callID - r.lastCallID
+		if shift >= callbackReplayWindow {
+			r.seenCallIDs = 0
+		} else {
+			r.seenCallIDs <<= shift
+		}
+		r.lastCallID = callID
+		r.seenCallIDs |= 1
+		return true
+	}
+	behind := r.lastCallID - callID
+	if behind >= callbackReplayWindow {
+		return false
+	}
+	mask := uint32(1) << behind
+	if r.seenCallIDs&mask != 0 {
+		return false
+	}
+	r.seenCallIDs |= mask
+	return true
 }
 
 func (l *callbackLease) release() {

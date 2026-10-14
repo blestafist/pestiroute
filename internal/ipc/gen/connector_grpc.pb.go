@@ -306,3 +306,99 @@ var Connector_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "connector.proto",
 }
+
+const (
+	HostServices_CredentialGet_FullMethodName = "/pestiroute.connector.v1.HostServices/CredentialGet"
+)
+
+// HostServicesClient is the client API for HostServices service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type HostServicesClient interface {
+	CredentialGet(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RecordFragment, RecordFragment], error)
+}
+
+type hostServicesClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewHostServicesClient(cc grpc.ClientConnInterface) HostServicesClient {
+	return &hostServicesClient{cc}
+}
+
+func (c *hostServicesClient) CredentialGet(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RecordFragment, RecordFragment], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &HostServices_ServiceDesc.Streams[0], HostServices_CredentialGet_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RecordFragment, RecordFragment]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostServices_CredentialGetClient = grpc.BidiStreamingClient[RecordFragment, RecordFragment]
+
+// HostServicesServer is the server API for HostServices service.
+// All implementations must embed UnimplementedHostServicesServer
+// for forward compatibility.
+type HostServicesServer interface {
+	CredentialGet(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error
+	mustEmbedUnimplementedHostServicesServer()
+}
+
+// UnimplementedHostServicesServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedHostServicesServer struct{}
+
+func (UnimplementedHostServicesServer) CredentialGet(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error {
+	return status.Errorf(codes.Unimplemented, "method CredentialGet not implemented")
+}
+func (UnimplementedHostServicesServer) mustEmbedUnimplementedHostServicesServer() {}
+func (UnimplementedHostServicesServer) testEmbeddedByValue()                      {}
+
+// UnsafeHostServicesServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to HostServicesServer will
+// result in compilation errors.
+type UnsafeHostServicesServer interface {
+	mustEmbedUnimplementedHostServicesServer()
+}
+
+func RegisterHostServicesServer(s grpc.ServiceRegistrar, srv HostServicesServer) {
+	// If the following call pancis, it indicates UnimplementedHostServicesServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&HostServices_ServiceDesc, srv)
+}
+
+func _HostServices_CredentialGet_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(HostServicesServer).CredentialGet(&grpc.GenericServerStream[RecordFragment, RecordFragment]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostServices_CredentialGetServer = grpc.BidiStreamingServer[RecordFragment, RecordFragment]
+
+// HostServices_ServiceDesc is the grpc.ServiceDesc for HostServices service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var HostServices_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "pestiroute.connector.v1.HostServices",
+	HandlerType: (*HostServicesServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "CredentialGet",
+			Handler:       _HostServices_CredentialGet_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "connector.proto",
+}
