@@ -12,8 +12,6 @@ import (
 	"github.com/blestafist/pestiroute/internal/ipc"
 	gen "github.com/blestafist/pestiroute/internal/ipc/gen"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -24,7 +22,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	ctx, cancel := context.WithCancel(ctx)
 	if err := c.acquire(ctx); err != nil {
 		cancel()
-		return core.ExecutionResponse{}, queryGatewayError(err, "execute")
+		return core.ExecutionResponse{}, executeGatewayError(err, false, callerCtx)
 	}
 	c.mu.Lock()
 	valid := !c.closing && !c.unavailable && c.initialized && req.Payload.Protocol != "" && scope.ID != "" && scope.AccountID != "" && validMode(scope.Mode)
@@ -46,12 +44,17 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if err != nil {
 		cancel()
 		c.release()
-		return core.ExecutionResponse{}, queryGatewayError(err, "execute")
+		return core.ExecutionResponse{}, executeGatewayError(err, false, callerCtx)
 	}
 	var once sync.Once
 	cleanup := func() { once.Do(func() { cancel(); c.invocations.revoke(c.epoch, invocationID); c.release() }) }
 	stream, err := c.client.Execute(invokeCtx)
 	var dataSequence uint64
+	requestSendAttempted := false
+	send := func(frame *gen.ExecuteFrame) error {
+		requestSendAttempted = true
+		return stream.Send(frame)
+	}
 	if err == nil {
 		start := &gen.ExecuteStart{Request: nil, Scope: ipc.AttemptTo(scope), MaxBodyBytes: scope.MaxBodyBytes}
 		start.Request, err = ipc.ExecutionRequestTo(req)
@@ -59,7 +62,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 			id := ipc.Identity{Epoch: c.epoch, CallID: 1, RecordID: 0, Type: "ExecuteStart"}
 			err = ipc.WriteRecord(id, start, func(fragment *gen.RecordFragment) error {
 				fragment.InvocationId = invocationID
-				return c.sendExecuteData(invokeCtx, invocationID, 1, &dataSequence, len(fragment.Data), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Record{Record: fragment}}, stream.Send)
+				return c.sendExecuteData(invokeCtx, invocationID, 1, &dataSequence, len(fragment.Data), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Record{Record: fragment}}, send)
 			})
 		}
 	}
@@ -69,13 +72,13 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 			if e != nil {
 				return e
 			}
-			return c.sendExecuteData(invokeCtx, invocationID, 1, &dataSequence, len(body), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Body{Body: chunk}}, stream.Send)
+			return c.sendExecuteData(invokeCtx, invocationID, 1, &dataSequence, len(body), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Body{Body: chunk}}, send)
 		})
 	}
 	if err == nil {
 		err = ipc.WriteRecord(ipc.Identity{Epoch: c.epoch, CallID: 1, RecordID: 1, Type: "InputComplete"}, &gen.InputComplete{}, func(fragment *gen.RecordFragment) error {
 			fragment.InvocationId = invocationID
-			return c.sendExecuteData(invokeCtx, invocationID, 1, &dataSequence, len(fragment.Data), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Record{Record: fragment}}, stream.Send)
+			return c.sendExecuteData(invokeCtx, invocationID, 1, &dataSequence, len(fragment.Data), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Record{Record: fragment}}, send)
 		})
 	}
 	if err == nil {
@@ -83,7 +86,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	}
 	if err != nil {
 		cleanup()
-		return core.ExecutionResponse{}, queryGatewayError(err, "execute")
+		return core.ExecutionResponse{}, executeGatewayError(err, requestSendAttempted, callerCtx)
 	}
 	response, gatewayErr := readExecuteResponse(c, stream, c.epoch, invocationID, callerCtx, cleanup)
 	if gatewayErr != nil {
@@ -91,6 +94,23 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		return core.ExecutionResponse{}, gatewayErr
 	}
 	return response, nil
+}
+
+func executeGatewayError(err error, deliveredOrAmbiguous bool, callerCtx context.Context) *core.GatewayError {
+	if callerCtx != nil && errors.Is(callerCtx.Err(), context.Canceled) {
+		return &core.GatewayError{Code: "execute_cancelled", Category: core.CategoryCancelled, RetryDisposition: core.RetryUnknown, Message: "External connector execution was cancelled"}
+	}
+	if callerCtx != nil && errors.Is(callerCtx.Err(), context.DeadlineExceeded) {
+		return &core.GatewayError{Code: "connector_timeout", Category: core.CategoryTimeout, RetryDisposition: core.RetryUnknown, Message: "External connector execution timed out"}
+	}
+	if errors.Is(err, ipc.ErrMalformed) || errors.Is(err, errCreditIdentity) || errors.Is(err, errCreditReplay) {
+		return &core.GatewayError{Code: "connector_protocol_error", Category: core.CategoryInvalidRequest, RetryDisposition: core.RetryUnsafe, Message: "External connector returned a malformed execution stream"}
+	}
+	retry := core.RetrySafe
+	if deliveredOrAmbiguous {
+		retry = core.RetryUnknown
+	}
+	return &core.GatewayError{Code: "connector_unavailable", Category: core.CategoryUnavailable, RetryDisposition: retry, Message: "External connector execution failed"}
 }
 
 func executeFrameIdentity(frame *gen.ExecuteFrame, epoch uint64, invocationID string) error {
@@ -103,43 +123,43 @@ func executeFrameIdentity(frame *gen.ExecuteFrame, epoch uint64, invocationID st
 func readExecuteResponse(c *Connector, stream grpc.BidiStreamingClient[gen.ExecuteFrame, gen.ExecuteFrame], epoch uint64, invocationID string, ctx context.Context, cleanup func()) (core.ExecutionResponse, *core.GatewayError) {
 	first, err := stream.Recv()
 	if err != nil {
-		return core.ExecutionResponse{}, queryGatewayError(err, "execute")
+		return core.ExecutionResponse{}, executeGatewayError(err, true, ctx)
 	}
 	if err = executeFrameIdentity(first, epoch, invocationID); err != nil {
-		return core.ExecutionResponse{}, queryGatewayError(err, "execute")
+		return core.ExecutionResponse{}, executeGatewayError(err, true, ctx)
 	}
 	if record, ok := first.Payload.(*gen.ExecuteFrame_Record); ok {
 		if record.Record == nil || record.Record.RecordType != "HeadFrame" && record.Record.RecordType != "GatewayError" {
-			return core.ExecutionResponse{}, queryGatewayError(ipc.ErrMalformed, "execute")
+			return core.ExecutionResponse{}, executeGatewayError(ipc.ErrMalformed, true, ctx)
 		}
 		var wire gen.HeadFrame
 		if record.Record.RecordType == "GatewayError" {
 			var gateway gen.GatewayError
 			if err := readExecuteRecord(c, stream, epoch, invocationID, ctx, 0, "GatewayError", first.DataSequence, record.Record, &gateway); err != nil {
-				return core.ExecutionResponse{}, queryGatewayError(err, "execute")
+				return core.ExecutionResponse{}, executeGatewayError(err, true, ctx)
 			}
 			ge, err := ipc.GatewayErrorFrom(&gateway)
 			if err != nil || ge == nil {
-				return core.ExecutionResponse{}, queryGatewayError(ipc.ErrMalformed, "execute")
+				return core.ExecutionResponse{}, executeGatewayError(ipc.ErrMalformed, true, ctx)
 			}
 			if _, err = stream.Recv(); !errors.Is(err, io.EOF) {
-				return core.ExecutionResponse{}, queryGatewayError(ipc.ErrMalformed, "execute")
+				return core.ExecutionResponse{}, executeGatewayError(ipc.ErrMalformed, true, ctx)
 			}
 			return core.ExecutionResponse{}, ge
 		}
 		if err := readExecuteRecord(c, stream, epoch, invocationID, ctx, 0, "HeadFrame", first.DataSequence, record.Record, &wire); err != nil {
-			return core.ExecutionResponse{}, queryGatewayError(err, "execute")
+			return core.ExecutionResponse{}, executeGatewayError(err, true, ctx)
 		}
 		head, err := ipc.HeadFrom(&wire)
 		if err != nil {
-			return core.ExecutionResponse{}, queryGatewayError(err, "execute")
+			return core.ExecutionResponse{}, executeGatewayError(err, true, ctx)
 		}
 		closeCtx, closeCancel := context.WithCancel(context.Background())
 		responseStream := &executeResponseStream{connector: c, stream: stream, epoch: epoch, invocationID: invocationID, head: &head, ctx: ctx, closeCtx: closeCtx, closeCancel: closeCancel, cleanup: cleanup}
 		responseStream.stopParent = context.AfterFunc(ctx, func() { _ = responseStream.Close() })
 		return core.ExecutionResponse{Stream: responseStream}, nil
 	}
-	return core.ExecutionResponse{}, queryGatewayError(ipc.ErrMalformed, "execute")
+	return core.ExecutionResponse{}, executeGatewayError(ipc.ErrMalformed, true, ctx)
 }
 
 // readExecuteRecord consumes the rest of the first logical record; response
@@ -255,24 +275,16 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 			return core.StreamFrame{}, parentErr
 		}
 		if err != nil {
-			if status.Code(err) == codes.DeadlineExceeded {
-				s.Close()
-				return core.StreamFrame{}, context.DeadlineExceeded
-			}
-			if status.Code(err) == codes.Canceled {
-				s.Close()
-				return core.StreamFrame{}, context.Canceled
-			}
-			return core.StreamFrame{}, err
+			return s.fail(err)
 		}
 		if err := executeFrameIdentity(frame, s.epoch, s.invocationID); err != nil {
-			return core.StreamFrame{}, err
+			return s.fail(err)
 		}
 		switch p := frame.Payload.(type) {
 		case *gen.ExecuteFrame_Body:
 			body, err := ipc.BodyChunkFrom(p.Body)
 			if err != nil {
-				return core.StreamFrame{}, err
+				return s.fail(err)
 			}
 			if ctx.Err() != nil {
 				s.Close()
@@ -280,7 +292,7 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 			}
 			id, err := s.connector.acceptExecuteData(frame, len(body))
 			if err != nil {
-				return core.StreamFrame{}, err
+				return s.fail(err)
 			}
 			ackCtx, cancelAck := context.WithCancel(ctx)
 			stopStreamCancel := context.AfterFunc(s.ctx, cancelAck)
@@ -297,12 +309,12 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 					}
 					return core.StreamFrame{}, context.Canceled
 				}
-				return core.StreamFrame{}, err
+				return s.fail(err)
 			}
 			return core.StreamFrame{Type: core.FrameBody, Body: &core.BodyFrame{Data: body}}, nil
 		case *gen.ExecuteFrame_Record:
 			if p.Record == nil || p.Record.RecordType != "CompleteFrame" {
-				return core.StreamFrame{}, ipc.ErrMalformed
+				return s.fail(ipc.ErrMalformed)
 			}
 			var wire gen.CompleteFrame
 			if err := readExecuteRecord(s.connector, s.stream, s.epoch, s.invocationID, ctx, 2, "CompleteFrame", frame.DataSequence, p.Record, &wire); err != nil {
@@ -310,11 +322,11 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 					s.Close()
 					return core.StreamFrame{}, ctx.Err()
 				}
-				return core.StreamFrame{}, err
+				return s.fail(err)
 			}
 			complete, err := ipc.CompleteFrom(&wire)
 			if err != nil {
-				return core.StreamFrame{}, err
+				return s.fail(err)
 			}
 			if _, err := s.stream.Recv(); !errors.Is(err, io.EOF) {
 				if ctx.Err() != nil {
@@ -322,9 +334,9 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 					return core.StreamFrame{}, ctx.Err()
 				}
 				if err == nil {
-					return core.StreamFrame{}, ipc.ErrMalformed
+					return s.fail(ipc.ErrMalformed)
 				}
-				return core.StreamFrame{}, err
+				return s.fail(err)
 			}
 			if ctx.Err() != nil {
 				s.Close()
@@ -342,9 +354,17 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 			s.cleanup()
 			return core.StreamFrame{Type: core.FrameComplete, Complete: &complete}, nil
 		default:
-			return core.StreamFrame{}, ipc.ErrMalformed
+			return s.fail(ipc.ErrMalformed)
 		}
 	}
+}
+
+func (s *executeResponseStream) fail(err error) (core.StreamFrame, error) {
+	if errors.Is(err, io.EOF) {
+		err = ipc.ErrMalformed
+	}
+	s.Close()
+	return core.StreamFrame{}, executeGatewayError(err, true, s.ctx)
 }
 
 func (s *executeResponseStream) Close() error {

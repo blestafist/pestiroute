@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -373,7 +374,7 @@ func TestM6ExecuteIncrementalBodyArrivesBeforeProducerCompletes(t *testing.T) {
 	}
 }
 
-func TestM6ExecuteIncrementalTerminalOutcomesAndMalformedOrder(t *testing.T) {
+func TestM6FaultExecuteIncrementalTerminalOutcomesAndMalformedOrder(t *testing.T) {
 	for _, tc := range []struct {
 		mode string
 		want core.Outcome
@@ -515,13 +516,233 @@ func TestM6ExecuteFixedPreHeadGatewayErrorAndProtocolFailure(t *testing.T) {
 				t.Fatal("pre-head failure returned a stream")
 			}
 			if tc.want == nil {
-				if got == nil || got.RetryDisposition != core.RetryUnknown {
+				if got == nil || got.Category != core.CategoryInvalidRequest || got.RetryDisposition != core.RetryUnsafe {
 					t.Fatalf("malformed response error=%+v", got)
 				}
 				return
 			}
 			if got == nil || got.Code != tc.want.Code || got.Category != tc.want.Category || got.Retryable != tc.want.Retryable || got.RetryDisposition != tc.want.RetryDisposition || got.Provider != tc.want.Provider || got.OriginalError != tc.want.OriginalError || got.Message != tc.want.Message {
 				t.Fatalf("GatewayError=%+v want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestM6FaultChildCrashBeforeAndAfterHead(t *testing.T) {
+	for _, mode := range []string{"execute-crash-before-head", "execute-crash-after-head"} {
+		t.Run(mode, func(t *testing.T) {
+			p := startProcess(t, mode, startupTimeout)
+			c, err := p.ConnectComponent(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			started := time.Now()
+			response, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, core.InvocationServices{})
+			if mode == "execute-crash-before-head" {
+				if gatewayErr == nil || gatewayErr.Category != core.CategoryUnavailable || gatewayErr.RetryDisposition == core.RetrySafe || response.Stream != nil {
+					t.Fatalf("pre-Head crash response=%+v error=%+v", response, gatewayErr)
+				}
+			} else {
+				if gatewayErr != nil || response.Stream == nil {
+					t.Fatalf("post-Head crash response=%+v error=%+v", response, gatewayErr)
+				}
+				if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+					t.Fatalf("Head=%+v err=%v", frame, err)
+				}
+				_, err := response.Stream.Next(context.Background())
+				if err == nil {
+					t.Fatal("crash after Head fabricated successful stream termination")
+				}
+				if time.Since(started) > 2*time.Second {
+					t.Fatal("post-Head crash did not promptly unblock Next")
+				}
+			}
+			c.invocations.mu.Lock()
+			active := len(c.invocations.active)
+			c.invocations.mu.Unlock()
+			frames, bytes := c.invocations.credits.usage()
+			if active != 0 || frames != 0 || bytes != 0 {
+				t.Fatalf("crash leaked invocation/credits: active=%d frames=%d bytes=%d", active, frames, bytes)
+			}
+		})
+	}
+}
+
+func TestM6FaultBeforeSendCancellation(t *testing.T) {
+	p := startProcess(t, "execute-fixed", startupTimeout)
+	c, err := p.ConnectComponent(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	response, gatewayErr := c.Execute(ctx, core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, core.InvocationServices{})
+	if response.Stream != nil || gatewayErr == nil || gatewayErr.Category != core.CategoryCancelled {
+		t.Fatalf("pre-send cancellation response=%+v error=%+v", response, gatewayErr)
+	}
+	c.invocations.mu.Lock()
+	active := len(c.invocations.active)
+	c.invocations.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("pre-send cancellation leaked invocation: active=%d", active)
+	}
+}
+
+func TestM6FaultRemoteCancelAndDeadlineAreUnavailable(t *testing.T) {
+	for _, tc := range []struct {
+		mode, marker string
+	}{
+		{"execute-child-cancelled-before-head", "execute-child-cancelled-before-head"},
+		{"execute-child-deadline-before-head", "execute-child-deadline-before-head"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			p := startProcess(t, tc.mode, startupTimeout)
+			c, err := p.ConnectComponent(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			response, got := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, core.InvocationServices{})
+			if response.Stream != nil || got == nil || got.Category != core.CategoryUnavailable || got.RetryDisposition != core.RetryUnknown {
+				t.Fatalf("remote status response=%+v error=%+v", response, got)
+			}
+			if count := strings.Count(p.Diagnostics(), tc.marker); count != 1 {
+				t.Fatalf("child Execute count=%d; want exactly one; diagnostics=%q", count, p.Diagnostics())
+			}
+		})
+	}
+}
+
+func TestM6FaultRemoteCancelAndDeadlineAfterHead(t *testing.T) {
+	for _, tc := range []struct {
+		mode, marker string
+	}{
+		{"execute-child-cancelled-after-head", "execute-child-cancelled-after-head"},
+		{"execute-child-deadline-after-head", "execute-child-deadline-after-head"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			p := startProcess(t, tc.mode, startupTimeout)
+			c, err := p.ConnectComponent(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			response, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, core.InvocationServices{})
+			if gatewayErr != nil || response.Stream == nil {
+				t.Fatalf("Execute response=%+v error=%+v", response, gatewayErr)
+			}
+			if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+				t.Fatalf("Head=%+v err=%v", frame, err)
+			}
+			_, err = response.Stream.Next(context.Background())
+			var got *core.GatewayError
+			if !errors.As(err, &got) || got.Category != core.CategoryUnavailable || got.RetryDisposition != core.RetryUnknown {
+				t.Fatalf("remote post-Head status error=%T %v", err, err)
+			}
+			if _, err := response.Stream.Next(context.Background()); !errors.Is(err, io.EOF) {
+				t.Fatalf("failed stream was not closed: %v", err)
+			}
+			c.invocations.mu.Lock()
+			active := len(c.invocations.active)
+			c.invocations.mu.Unlock()
+			frames, bytes := c.invocations.credits.usage()
+			if active != 0 || frames != 0 || bytes != 0 {
+				t.Fatalf("post-Head status leaked invocation/credits: active=%d frames=%d bytes=%d", active, frames, bytes)
+			}
+			if count := strings.Count(p.Diagnostics(), tc.marker); count != 1 {
+				t.Fatalf("child Execute count=%d; want exactly one; diagnostics=%q", count, p.Diagnostics())
+			}
+		})
+	}
+}
+
+func TestM6FaultCallerDeadlineBeforeAndAfterHead(t *testing.T) {
+	t.Run("before Head", func(t *testing.T) {
+		p := startProcess(t, "execute-stall", startupTimeout)
+		c, err := p.ConnectComponent(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		_, got := c.Execute(ctx, core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, core.InvocationServices{})
+		if got == nil || got.Category != core.CategoryTimeout {
+			t.Fatalf("caller deadline error=%+v", got)
+		}
+	})
+	t.Run("after Head", func(t *testing.T) {
+		p := startProcess(t, "execute-head-stall", startupTimeout)
+		c, err := p.ConnectComponent(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+			t.Fatal(err)
+		}
+		response, got := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, authServices())
+		if got != nil || response.Stream == nil {
+			t.Fatalf("Execute response=%+v error=%+v", response, got)
+		}
+		if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+			t.Fatalf("Head=%+v err=%v", frame, err)
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		if _, err := response.Stream.Next(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("post-Head caller deadline error=%v", err)
+		}
+	})
+}
+
+func TestM6FaultMalformedExecuteStreams(t *testing.T) {
+	for _, mode := range []string{"execute-bad-epoch", "execute-incremental-before-head", "execute-bad-sequence", "execute-eof-after-head"} {
+		t.Run(mode, func(t *testing.T) {
+			p := startProcess(t, mode, startupTimeout)
+			c, err := p.ConnectComponent(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			response, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, core.InvocationServices{})
+			if response.Stream == nil {
+				if gatewayErr == nil || gatewayErr.Category != core.CategoryInvalidRequest || gatewayErr.RetryDisposition != core.RetryUnsafe {
+					t.Fatalf("%s malformed pre-Head response error=%+v diagnostics=%s", mode, gatewayErr, p.Diagnostics())
+				}
+				return
+			}
+			if gatewayErr != nil {
+				t.Fatal(gatewayErr)
+			}
+			if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+				t.Fatalf("Head=%+v err=%v", frame, err)
+			}
+			for {
+				frame, err := response.Stream.Next(context.Background())
+				if err != nil {
+					var ge *core.GatewayError
+					if !errors.As(err, &ge) || ge.Category != core.CategoryInvalidRequest || ge.RetryDisposition != core.RetryUnsafe {
+						t.Fatalf("malformed stream error=%T %+v category=%v retry=%v code=%s", err, err, ge.Category, ge.RetryDisposition, ge.Code)
+					}
+					return
+				}
+				if frame.Type == core.FrameComplete {
+					t.Fatalf("malformed stream synthesized Complete: %+v", frame.Complete)
+				}
 			}
 		})
 	}
@@ -554,7 +775,7 @@ func TestM6ExecuteFixedEmptyBodies(t *testing.T) {
 	}
 }
 
-func TestM6ExecuteFixedCancellationBeforeHead(t *testing.T) {
+func TestM6FaultCallerCancellationBeforeHead(t *testing.T) {
 	p := startProcess(t, "execute-stall", startupTimeout)
 	c, err := p.ConnectComponent(context.Background())
 	if err != nil {

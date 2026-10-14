@@ -586,12 +586,23 @@ inputDone:
 		_, _ = fmt.Fprintln(os.Stderr, "execute-stall-cancel-ack")
 		return stream.Context().Err()
 	}
+	if s.mode == "execute-child-cancelled-before-head" {
+		_, _ = fmt.Fprintln(os.Stderr, "execute-child-cancelled-before-head")
+		return status.Error(codes.Canceled, "child cancelled execution")
+	}
+	if s.mode == "execute-child-deadline-before-head" {
+		_, _ = fmt.Fprintln(os.Stderr, "execute-child-deadline-before-head")
+		return status.Error(codes.DeadlineExceeded, "child deadline expired")
+	}
 	if s.mode == "execute-error" {
 		ge := &core.GatewayError{Code: "rejected", Category: core.CategoryRateLimited, Retryable: true, RetryDisposition: core.RetrySafe, Provider: "fixture", OriginalError: "diagnostic", Message: "try later"}
 		if err := sendExecuteRecord(stream, flow, invocationCtx, epoch, invocationID, 0, "GatewayError", ipc.GatewayErrorTo(ge)); err != nil {
 			return err
 		}
 		return flow.WaitDrained(invocationCtx, invocationID)
+	}
+	if s.mode == "execute-crash-before-head" {
+		os.Exit(23)
 	}
 	if s.mode == "execute-bad-epoch" {
 		return stream.Send(&gen.ExecuteFrame{Epoch: epoch + 1, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Record{Record: &gen.RecordFragment{Epoch: epoch + 1, CallId: 1, RecordId: 0, RecordType: "HeadFrame", TotalLength: 0, Final: true, InvocationId: invocationID}}})
@@ -607,6 +618,32 @@ inputDone:
 	}
 	if err := sendExecuteRecord(stream, flow, invocationCtx, epoch, invocationID, 0, "HeadFrame", head); err != nil {
 		return err
+	}
+	if s.mode == "execute-child-cancelled-after-head" {
+		_, _ = fmt.Fprintln(os.Stderr, "execute-child-cancelled-after-head")
+		time.Sleep(100 * time.Millisecond)
+		return status.Error(codes.Canceled, "child cancelled after Head")
+	}
+	if s.mode == "execute-child-deadline-after-head" {
+		_, _ = fmt.Fprintln(os.Stderr, "execute-child-deadline-after-head")
+		time.Sleep(100 * time.Millisecond)
+		return status.Error(codes.DeadlineExceeded, "child deadline after Head")
+	}
+	if s.mode == "execute-crash-after-head" {
+		time.Sleep(100 * time.Millisecond)
+		os.Exit(23)
+	}
+	if s.mode == "execute-eof-after-head" {
+		time.Sleep(100 * time.Millisecond)
+		return nil
+	}
+	if s.mode == "execute-bad-sequence" {
+		time.Sleep(100 * time.Millisecond)
+		chunk, err := ipc.BodyChunkTo([]byte("bad sequence"))
+		if err != nil {
+			return err
+		}
+		return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, DataSequence: 99, Payload: &gen.ExecuteFrame_Body{Body: chunk}})
 	}
 	if s.mode == "execute-callback-credential" {
 		if _, err := NewCredentialClient(childHostServices(), epoch, invocationID).Get(stream.Context(), "token"); err != nil {
@@ -697,7 +734,7 @@ inputDone:
 		if err != nil {
 			return err
 		}
-		return sendExecuteData(stream, flow, invocationCtx, epoch, invocationID, len(chunk.Data), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Body{Body: chunk}})
+		return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Body{Body: chunk}})
 	}
 	if s.mode == "execute-incremental-duplicate-complete" {
 		return sendExecuteRecord(stream, flow, invocationCtx, epoch, invocationID, 2, "CompleteFrame", complete)
