@@ -36,7 +36,7 @@ func TestM6ProcessChild(t *testing.T) {
 			mode = args[i+1]
 		}
 	}
-	if strings.HasPrefix(mode, "handshake-") || strings.HasPrefix(mode, "lifecycle-") {
+	if strings.HasPrefix(mode, "handshake-") || strings.HasPrefix(mode, "lifecycle-") || strings.HasPrefix(mode, "auth-") {
 		if mode == "handshake-wrong-peer" {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestM6ProcessChild$", "--", "--mode", "handshake-valid")
 			cmd.Env = os.Environ()

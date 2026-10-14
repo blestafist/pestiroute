@@ -261,6 +261,50 @@ func (c *Connector) EstimateUsage(ctx context.Context, query core.UsageQuery, _ 
 	return result, nil
 }
 
+// Authenticate forwards the runtime-owned account/action and opaque continuation
+// state; candidate credentials remain unpersisted until Core acknowledges CAS.
+func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
+	ctx, cancel := boundedContext(ctx, queryTimeout)
+	defer cancel()
+	if err := c.acquire(ctx); err != nil {
+		return core.AuthResult{}, queryGatewayError(err, "authenticate")
+	}
+	defer c.release()
+	c.mu.Lock()
+	valid := !c.closing && !c.unavailable && c.initialized && req.AccountID != "" && (req.Action == "start" || req.Action == "continue" || req.Action == "refresh")
+	c.mu.Unlock()
+	if !valid {
+		return core.AuthResult{}, &core.GatewayError{Code: "invalid_request", Category: core.CategoryInvalidRequest, RetryDisposition: core.RetryUnsafe, Message: "Invalid or unavailable authentication request"}
+	}
+	invocationID, invokeCtx, err := c.invocations.beginWithLogger(ctx, req.AccountID, services.Credentials, services.Transport, services.Logger)
+	if err != nil {
+		return core.AuthResult{}, queryGatewayError(err, "authenticate")
+	}
+	defer c.invocations.revoke(c.epoch, invocationID)
+	stream, err := c.client.Authenticate(invokeCtx)
+	if err == nil {
+		err = ipc.WriteRecord(ipc.Identity{Epoch: c.epoch, CallID: 1, RecordID: 0, Type: "AuthRequest"}, ipc.AuthRequestTo(req), func(fragment *gen.RecordFragment) error {
+			fragment.InvocationId = invocationID
+			return stream.Send(fragment)
+		})
+	}
+	if err == nil {
+		err = stream.CloseSend()
+	}
+	var wire gen.AuthResult
+	if err == nil {
+		err = readInvocationRecord(stream, c.epoch, invocationID, "AuthResult", &wire)
+	}
+	if err != nil {
+		return core.AuthResult{}, queryGatewayError(err, "authenticate")
+	}
+	result, err := ipc.AuthResultFrom(&wire)
+	if err != nil {
+		return core.AuthResult{}, queryGatewayError(err, "authenticate")
+	}
+	return result, nil
+}
+
 func validMode(mode string) bool { return mode == core.ModeNative || mode == core.ModeTranslation }
 
 func queryGatewayError(err error, operation string) *core.GatewayError {
@@ -438,6 +482,34 @@ func readBidiRecord(stream grpc.BidiStreamingClient[gen.RecordFragment, gen.Reco
 		}
 		if err != nil {
 			return err
+		}
+		if err := a.Add(fragment); err != nil {
+			return err
+		}
+	}
+}
+
+func readInvocationRecord(stream grpc.BidiStreamingClient[gen.RecordFragment, gen.RecordFragment], epoch uint64, invocationID, typ string, dst proto.Message) error {
+	a := ipc.NewAssembler(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: typ})
+	for {
+		if a.Complete() {
+			if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+				if err == nil {
+					return ipc.ErrMalformed
+				}
+				return err
+			}
+			return a.Decode(dst)
+		}
+		fragment, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return a.Decode(dst)
+		}
+		if err != nil {
+			return err
+		}
+		if fragment == nil || fragment.InvocationId != invocationID {
+			return ipc.ErrMalformed
 		}
 		if err := a.Add(fragment); err != nil {
 			return err

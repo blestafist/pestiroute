@@ -64,6 +64,7 @@ service Connector {
   rpc Capabilities(stream RecordFragment) returns (stream RecordFragment);
   rpc Models(stream RecordFragment) returns (stream RecordFragment);
   rpc EstimateUsage(stream EstimateFrame) returns (stream RecordFragment);
+  rpc Authenticate(stream RecordFragment) returns (stream RecordFragment);
   rpc Close(RecordFragment) returns (RecordFragment);
 }
 

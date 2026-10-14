@@ -20,8 +20,10 @@ import (
 	gen "github.com/blestafist/pestiroute/internal/ipc/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestM6HandshakeRejectsWrongPeer(t *testing.T) {
@@ -372,6 +374,109 @@ func (s *handshakeChild) EstimateUsage(stream grpc.BidiStreamingServer[gen.Estim
 	zero := int64(0)
 	usage := &gen.UsageReport{InputTokens: &zero, Source: string(core.UsageEstimate), Completeness: string(core.UsagePartial)}
 	return ipc.WriteRecord(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: "EstimateResult"}, &gen.EstimateResult{Supported: true, Known: false, Usage: usage, Method: strings.Repeat("estimate", 12<<10)}, stream.Send)
+}
+
+func (s *handshakeChild) Authenticate(stream grpc.BidiStreamingServer[gen.RecordFragment, gen.RecordFragment]) error {
+	_, _ = fmt.Fprintln(os.Stderr, "lifecycle-authenticate-called")
+	var req gen.AuthRequest
+	epoch, invocationID, err := receiveAuthRequest(stream, &req)
+	if err != nil {
+		return err
+	}
+	if req.AccountId != "account" || (req.Action != "start" && req.Action != "continue" && req.Action != "refresh") {
+		return status.Error(codes.InvalidArgument, "invalid auth request")
+	}
+	if s.mode == "auth-continue" && (len(req.State) != (90<<10)+2 || !bytes.Equal(req.State[:2], []byte{0, 0xff})) {
+		return status.Error(codes.InvalidArgument, "invalid opaque continuation")
+	}
+	if s.mode == "auth-stall" {
+		<-stream.Context().Done()
+		if _, err := NewCredentialClient(childHostServices(), epoch, invocationID).Get(context.Background(), "token"); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "auth-cancel-callback-denied")
+		} else {
+			_, _ = fmt.Fprintln(os.Stderr, "auth-cancel-callback-granted")
+		}
+		return stream.Context().Err()
+	}
+	result := &gen.AuthResult{Supported: true}
+	switch s.mode {
+	case "auth-start":
+		result.State = append([]byte{0, 0xff, 's'}, make([]byte, 70<<10)...)
+		result.NextAction = "continue"
+		result.UserAction = &gen.AuthUserAction{VerificationUri: "https://example.test/device", UserCode: "ABC-123", PollIntervalNs: int64(5 * time.Second)}
+	case "auth-continue":
+		result.Credentials = map[string][]byte{"access": append([]byte{0, 0xff}, make([]byte, 70<<10)...)}
+		expires := time.Date(2030, 2, 3, 4, 5, 6, 7, time.FixedZone("fixture", 3600))
+		result.CredentialExpiresAt = timestamppb.New(expires)
+	case "auth-refresh":
+		value, err := NewCredentialClient(childHostServices(), epoch, invocationID).Get(stream.Context(), "token")
+		if err != nil {
+			return status.Error(codes.PermissionDenied, "credential lookup denied")
+		}
+		result.Credentials = map[string][]byte{"refresh": value}
+		expires := time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC)
+		result.CredentialExpiresAt = timestamppb.New(expires)
+	case "auth-unsupported":
+		result.Supported = false
+	case "auth-malformed":
+		result.CredentialExpiresAt = &timestamppb.Timestamp{Seconds: 1 << 40}
+	default:
+		return status.Error(codes.InvalidArgument, "unknown auth fixture")
+	}
+	err = ipc.WriteRecord(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: "AuthResult"}, result, func(fragment *gen.RecordFragment) error {
+		fragment.InvocationId = invocationID
+		return stream.Send(fragment)
+	})
+	if err == nil && s.mode == "auth-refresh" {
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			if _, err := NewCredentialClient(childHostServices(), epoch, invocationID).Get(context.Background(), "token"); err != nil {
+				_, _ = fmt.Fprintln(os.Stderr, "auth-complete-callback-denied")
+			} else {
+				_, _ = fmt.Fprintln(os.Stderr, "auth-complete-callback-granted")
+			}
+		}()
+	}
+	return err
+}
+
+func childHostServices() gen.HostServicesClient {
+	socket := os.Getenv(hostServicesSocketEnv)
+	conn, err := grpc.NewClient("passthrough:///child-host-services", grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	}), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		panic("host services connection failed")
+	}
+	return gen.NewHostServicesClient(conn)
+}
+
+func receiveAuthRequest(stream grpc.BidiStreamingServer[gen.RecordFragment, gen.RecordFragment], dst proto.Message) (uint64, string, error) {
+	first, err := stream.Recv()
+	if err != nil || first == nil || first.InvocationId == "" {
+		return 0, "", ipc.ErrMalformed
+	}
+	epoch, invocationID := first.Epoch, first.InvocationId
+	a := ipc.NewAssembler(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: "AuthRequest"})
+	for {
+		if first.InvocationId != invocationID || a.Add(first) != nil {
+			return 0, "", ipc.ErrMalformed
+		}
+		if a.Complete() {
+			break
+		}
+		first, err = stream.Recv()
+		if err != nil || first == nil {
+			return 0, "", ipc.ErrMalformed
+		}
+	}
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		return 0, "", ipc.ErrMalformed
+	}
+	if err := a.Decode(dst); err != nil {
+		return 0, "", err
+	}
+	return epoch, invocationID, nil
 }
 
 func receiveBidiRecord(stream grpc.BidiStreamingServer[gen.RecordFragment, gen.RecordFragment], typ string, dst proto.Message) (uint64, error) {

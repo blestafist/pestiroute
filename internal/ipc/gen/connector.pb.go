@@ -2773,7 +2773,7 @@ const file_connector_proto_rawDesc = "" +
 	"\vprotocol_id\x18\x01 \x01(\tR\n" +
 	"protocolId\x12A\n" +
 	"\vipc_version\x18\x02 \x01(\v2 .pestiroute.connector.v1.VersionR\n" +
-	"ipcVersion2\x8f\x06\n" +
+	"ipcVersion2\xf5\x06\n" +
 	"\tConnector\x12_\n" +
 	"\tHandshake\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01\x12`\n" +
 	"\n" +
@@ -2782,7 +2782,8 @@ const file_connector_proto_rawDesc = "" +
 	"\x06Health\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01\x12d\n" +
 	"\fCapabilities\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12^\n" +
 	"\x06Models\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12d\n" +
-	"\rEstimateUsage\x12&.pestiroute.connector.v1.EstimateFrame\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12Y\n" +
+	"\rEstimateUsage\x12&.pestiroute.connector.v1.EstimateFrame\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12d\n" +
+	"\fAuthenticate\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12Y\n" +
 	"\x05Close\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment2\x95\x02\n" +
 	"\fHostServices\x12e\n" +
 	"\rCredentialGet\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12T\n" +
@@ -2893,23 +2894,25 @@ var file_connector_proto_depIdxs = []int32{
 	26, // 37: pestiroute.connector.v1.Connector.Capabilities:input_type -> pestiroute.connector.v1.RecordFragment
 	26, // 38: pestiroute.connector.v1.Connector.Models:input_type -> pestiroute.connector.v1.RecordFragment
 	34, // 39: pestiroute.connector.v1.Connector.EstimateUsage:input_type -> pestiroute.connector.v1.EstimateFrame
-	26, // 40: pestiroute.connector.v1.Connector.Close:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 41: pestiroute.connector.v1.HostServices.CredentialGet:input_type -> pestiroute.connector.v1.RecordFragment
-	33, // 42: pestiroute.connector.v1.HostServices.HTTPDo:input_type -> pestiroute.connector.v1.HTTPFrame
-	26, // 43: pestiroute.connector.v1.HostServices.Log:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 44: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 45: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 46: pestiroute.connector.v1.Connector.Init:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 47: pestiroute.connector.v1.Connector.Health:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 48: pestiroute.connector.v1.Connector.Capabilities:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 49: pestiroute.connector.v1.Connector.Models:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 50: pestiroute.connector.v1.Connector.EstimateUsage:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 51: pestiroute.connector.v1.Connector.Close:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 52: pestiroute.connector.v1.HostServices.CredentialGet:output_type -> pestiroute.connector.v1.RecordFragment
-	33, // 53: pestiroute.connector.v1.HostServices.HTTPDo:output_type -> pestiroute.connector.v1.HTTPFrame
-	47, // 54: pestiroute.connector.v1.HostServices.Log:output_type -> google.protobuf.Empty
-	44, // [44:55] is the sub-list for method output_type
-	33, // [33:44] is the sub-list for method input_type
+	26, // 40: pestiroute.connector.v1.Connector.Authenticate:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 41: pestiroute.connector.v1.Connector.Close:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 42: pestiroute.connector.v1.HostServices.CredentialGet:input_type -> pestiroute.connector.v1.RecordFragment
+	33, // 43: pestiroute.connector.v1.HostServices.HTTPDo:input_type -> pestiroute.connector.v1.HTTPFrame
+	26, // 44: pestiroute.connector.v1.HostServices.Log:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 45: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 46: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 47: pestiroute.connector.v1.Connector.Init:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 48: pestiroute.connector.v1.Connector.Health:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 49: pestiroute.connector.v1.Connector.Capabilities:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 50: pestiroute.connector.v1.Connector.Models:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 51: pestiroute.connector.v1.Connector.EstimateUsage:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 52: pestiroute.connector.v1.Connector.Authenticate:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 53: pestiroute.connector.v1.Connector.Close:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 54: pestiroute.connector.v1.HostServices.CredentialGet:output_type -> pestiroute.connector.v1.RecordFragment
+	33, // 55: pestiroute.connector.v1.HostServices.HTTPDo:output_type -> pestiroute.connector.v1.HTTPFrame
+	47, // 56: pestiroute.connector.v1.HostServices.Log:output_type -> google.protobuf.Empty
+	45, // [45:57] is the sub-list for method output_type
+	33, // [33:45] is the sub-list for method input_type
 	33, // [33:33] is the sub-list for extension type_name
 	33, // [33:33] is the sub-list for extension extendee
 	0,  // [0:33] is the sub-list for field type_name
