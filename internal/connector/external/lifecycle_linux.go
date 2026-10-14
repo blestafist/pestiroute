@@ -175,6 +175,129 @@ func (c *Connector) Capabilities(ctx context.Context, scope core.CapabilityScope
 	return result
 }
 
+// Models forwards one scoped model query and returns only a fully validated result.
+func (c *Connector) Models(ctx context.Context, query core.ModelQuery, _ core.InvocationServices) (core.ModelsResult, *core.GatewayError) {
+	ctx, cancel := boundedContext(ctx, queryTimeout)
+	defer cancel()
+	if err := c.acquire(ctx); err != nil {
+		return core.ModelsResult{}, queryGatewayError(err, "models")
+	}
+	defer c.release()
+	c.mu.Lock()
+	valid := !c.closing && !c.unavailable && c.initialized && query.Protocol != "" && validMode(query.Mode)
+	c.mu.Unlock()
+	if !valid {
+		return core.ModelsResult{}, queryGatewayError(errors.New("invalid or unavailable query"), "models")
+	}
+	stream, err := c.client.Models(ctx)
+	if err == nil {
+		err = ipc.WriteRecord(ipc.Identity{Epoch: c.epoch, CallID: 1, RecordID: 0, Type: "ModelQuery"}, ipc.ModelQueryTo(query), stream.Send)
+	}
+	if err == nil {
+		err = stream.CloseSend()
+	}
+	var wire gen.ModelsResult
+	if err == nil {
+		err = readBidiRecord(stream, c.epoch, "ModelsResult", &wire)
+	}
+	if err != nil {
+		return core.ModelsResult{}, queryGatewayError(err, "models")
+	}
+	result, err := ipc.ModelsResultFrom(&wire)
+	if err != nil {
+		return core.ModelsResult{}, queryGatewayError(err, "models")
+	}
+	return result, nil
+}
+
+// EstimateUsage sends query metadata as fragments and its opaque body as
+// separately bounded chunks; Core has already admitted this body against the route limit.
+func (c *Connector) EstimateUsage(ctx context.Context, query core.UsageQuery, _ core.InvocationServices) (core.EstimateResult, *core.GatewayError) {
+	ctx, cancel := boundedContext(ctx, queryTimeout)
+	defer cancel()
+	if err := c.acquire(ctx); err != nil {
+		return core.EstimateResult{}, queryGatewayError(err, "estimate")
+	}
+	defer c.release()
+	c.mu.Lock()
+	valid := !c.closing && !c.unavailable && c.initialized && query.Protocol != "" && validMode(query.Mode)
+	c.mu.Unlock()
+	if !valid {
+		return core.EstimateResult{}, queryGatewayError(errors.New("invalid or unavailable query"), "estimate")
+	}
+	if query.MaxBodyBytes < 0 || int64(len(query.Payload.Body)) > query.MaxBodyBytes {
+		return core.EstimateResult{}, &core.GatewayError{Code: "invalid_request", Category: core.CategoryInvalidRequest, RetryDisposition: core.RetryUnsafe, Message: "Estimate request body exceeds the admitted route limit"}
+	}
+	stream, err := c.client.EstimateUsage(ctx)
+	if err == nil {
+		id := ipc.Identity{Epoch: c.epoch, CallID: 1, RecordID: 0, Type: "UsageQuery"}
+		err = ipc.WriteRecord(id, ipc.UsageQueryTo(query), func(f *gen.RecordFragment) error {
+			return stream.Send(&gen.EstimateFrame{Epoch: c.epoch, CallId: 1, Payload: &gen.EstimateFrame_Record{Record: f}})
+		})
+	}
+	if err == nil {
+		err = ipc.WriteBody(query.Payload.Body, uint64(query.MaxBodyBytes), func(body []byte) error {
+			chunk, e := ipc.BodyChunkTo(body)
+			if e != nil {
+				return e
+			}
+			return stream.Send(&gen.EstimateFrame{Epoch: c.epoch, CallId: 1, Payload: &gen.EstimateFrame_Body{Body: chunk}})
+		})
+	}
+	if err == nil {
+		err = stream.CloseSend()
+	}
+	var wire gen.EstimateResult
+	if err == nil {
+		err = readEstimateRecord(stream, c.epoch, &wire)
+	}
+	if err != nil {
+		return core.EstimateResult{}, queryGatewayError(err, "estimate")
+	}
+	result, err := ipc.EstimateFrom(&wire)
+	if err != nil {
+		return core.EstimateResult{}, queryGatewayError(err, "estimate")
+	}
+	return result, nil
+}
+
+func validMode(mode string) bool { return mode == core.ModeNative || mode == core.ModeTranslation }
+
+func queryGatewayError(err error, operation string) *core.GatewayError {
+	if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
+		return &core.GatewayError{Code: operation + "_cancelled", Category: core.CategoryCancelled, RetryDisposition: core.RetryUnknown, Message: "External connector query was cancelled"}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return &core.GatewayError{Code: "connector_timeout", Category: core.CategoryTimeout, RetryDisposition: core.RetryUnknown, Message: "External connector query timed out"}
+	}
+	return &core.GatewayError{Code: "connector_unavailable", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "External connector query failed"}
+}
+
+func readEstimateRecord(stream grpc.BidiStreamingClient[gen.EstimateFrame, gen.RecordFragment], epoch uint64, dst proto.Message) error {
+	a := ipc.NewAssembler(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: "EstimateResult"})
+	for {
+		if a.Complete() {
+			if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+				if err == nil {
+					return ipc.ErrMalformed
+				}
+				return err
+			}
+			return a.Decode(dst)
+		}
+		fragment, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return a.Decode(dst)
+		}
+		if err != nil {
+			return err
+		}
+		if err := a.Add(fragment); err != nil {
+			return err
+		}
+	}
+}
+
 func (c *Connector) Close(ctx context.Context) error {
 	c.mu.Lock()
 	c.closing = true

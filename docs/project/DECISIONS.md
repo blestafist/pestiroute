@@ -409,6 +409,29 @@ These accepted ADRs explain the existing constraints and establish the internal 
   M6-005 reviewer must accept the selection and M6-006 scope before binding
   work is promoted. No real provider or live service call is relevant.
 
+### DEC-015 — Convey the Admitted Route Body Bound to Usage Estimation
+
+- **Status:** Accepted by user authorization on 2026-10-14.
+- **Context:** External `EstimateUsage` receives opaque request bytes separately
+  from its fragmented typed query. The child needs the runtime's already
+  admitted body ceiling to reassemble those bytes without inventing an IPC
+  limit or trusting a child-selected value.
+- **Decision:** Add runtime-owned `MaxBodyBytes int64` to `core.UsageQuery`.
+  Core populates it from the selected route's effective admitted body limit;
+  the protobuf binding carries it as additive field 6. The host and child both
+  enforce the bound before passing the complete opaque body to the Connector.
+  This changes no payload semantics, accounting policy, or provider behavior.
+- **Alternative rejected:** Infer a maximum from the frame size or use a fixed
+  IPC cap; either would reject bodies Core admitted or make transport ceilings
+  masquerade as semantic limits.
+- **Compatibility/migration:** This is an approved internal contract extension
+  and protobuf wire addition. Existing components and operation behavior remain
+  valid; the new external RPC is available only when both host and child use
+  this binding. Protobuf field 6 is additive and does not change the IPC major.
+- **Verification:** Test exact-boundary body preservation and over-bound
+  rejection at host/child assembly; verify Core forwards the selected route
+  value and protobuf field 6 round-trips. No live provider call is relevant.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |

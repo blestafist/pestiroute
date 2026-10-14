@@ -3,6 +3,7 @@
 package external
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestM6HandshakeRejectsWrongPeer(t *testing.T) {
@@ -268,6 +270,136 @@ func (s *handshakeChild) Capabilities(stream grpc.BidiStreamingServer[gen.Record
 		}
 	}
 	return ipc.WriteRecord(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: "CapabilityResult"}, result, stream.Send)
+}
+
+func (s *handshakeChild) Models(stream grpc.BidiStreamingServer[gen.RecordFragment, gen.RecordFragment]) error {
+	_, _ = fmt.Fprintln(os.Stderr, "lifecycle-models-called")
+	if s.mode == "lifecycle-models-stall" {
+		<-stream.Context().Done()
+		return stream.Context().Err()
+	}
+	var query gen.ModelQuery
+	epoch, err := receiveBidiRecord(stream, "ModelQuery", &query)
+	if err != nil {
+		return err
+	}
+	if query.Protocol != "test.v1" || query.Mode != core.ModeTranslation || query.AccountId != "account" {
+		return status.Error(codes.InvalidArgument, "invalid model scope")
+	}
+	available := false
+	result := &gen.ModelsResult{Supported: true, Models: []*gen.ModelInfo{
+		{Id: strings.Repeat("m", 90<<10), Capabilities: []*gen.CapabilityValue{{Key: "llm.streaming", State: "supported"}, {Key: "llm.tools", State: "unknown"}}, Available: &available},
+		{Id: "availability-unknown", Capabilities: []*gen.CapabilityValue{{Key: "llm.audio", State: "unsupported"}}},
+	}}
+	return ipc.WriteRecord(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: "ModelsResult"}, result, stream.Send)
+}
+
+func (s *handshakeChild) EstimateUsage(stream grpc.BidiStreamingServer[gen.EstimateFrame, gen.RecordFragment]) error {
+	_, _ = fmt.Fprintln(os.Stderr, "lifecycle-estimate-called")
+	if s.mode == "lifecycle-estimate-stall" {
+		<-stream.Context().Done()
+		return stream.Context().Err()
+	}
+	var query gen.UsageQuery
+	var epoch uint64
+	assembler := ipc.NewAssembler(ipc.Identity{CallID: 1, RecordID: 0, Type: "UsageQuery"})
+	var body *ipc.BodyAssembler
+	bodyStarted := false
+	for {
+		frame, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if frame.CallId != 1 || (epoch != 0 && frame.Epoch != epoch) {
+			return ipc.ErrMalformed
+		}
+		if epoch == 0 {
+			epoch = frame.Epoch
+			assembler = ipc.NewAssembler(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: "UsageQuery"})
+		}
+		switch payload := frame.Payload.(type) {
+		case *gen.EstimateFrame_Record:
+			if bodyStarted {
+				return ipc.ErrMalformed
+			}
+			if err := assembler.Add(payload.Record); err != nil {
+				return err
+			}
+		case *gen.EstimateFrame_Body:
+			if !assembler.Complete() {
+				return ipc.ErrMalformed
+			}
+			if body == nil {
+				if err := assembler.Decode(&query); err != nil || query.MaxBodyBytes < 0 {
+					return ipc.ErrMalformed
+				}
+				body = ipc.NewBodyAssembler(uint64(query.MaxBodyBytes))
+			}
+			bodyStarted = true
+			chunk, err := ipc.BodyChunkFrom(payload.Body)
+			if err != nil {
+				return err
+			}
+			if err := body.Add(chunk); err != nil {
+				return err
+			}
+		default:
+			return ipc.ErrMalformed
+		}
+	}
+	if !assembler.Complete() {
+		return ipc.ErrMalformed
+	}
+	if body == nil {
+		if err := assembler.Decode(&query); err != nil || query.MaxBodyBytes < 0 {
+			return ipc.ErrMalformed
+		}
+		body = ipc.NewBodyAssembler(uint64(query.MaxBodyBytes))
+	}
+	if query.Protocol != "test.v1" || query.Mode != core.ModeNative || query.Model != "fixture" || query.AccountId != "account" || query.MaxBodyBytes != int64(ipc.MaxFragmentBytes+19) || query.Payload == nil || query.Payload.Protocol != "test.v1" || query.Payload.ContentType != "application/octet-stream" {
+		return status.Error(codes.InvalidArgument, "invalid estimate scope")
+	}
+	bodyBytes, err := body.Finish()
+	if err != nil {
+		return err
+	}
+	if len(bodyBytes) != ipc.MaxFragmentBytes+19 || !bytes.Equal(bodyBytes, bytes.Repeat([]byte{0xab}, len(bodyBytes))) {
+		return ipc.ErrMalformed
+	}
+	zero := int64(0)
+	usage := &gen.UsageReport{InputTokens: &zero, Source: string(core.UsageEstimate), Completeness: string(core.UsagePartial)}
+	return ipc.WriteRecord(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: "EstimateResult"}, &gen.EstimateResult{Supported: true, Known: false, Usage: usage, Method: strings.Repeat("estimate", 12<<10)}, stream.Send)
+}
+
+func receiveBidiRecord(stream grpc.BidiStreamingServer[gen.RecordFragment, gen.RecordFragment], typ string, dst proto.Message) (uint64, error) {
+	f, err := stream.Recv()
+	if err != nil {
+		return 0, err
+	}
+	epoch := f.Epoch
+	a := ipc.NewAssembler(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: typ})
+	for {
+		if err := a.Add(f); err != nil {
+			return 0, err
+		}
+		if a.Complete() {
+			break
+		}
+		f, err = stream.Recv()
+		if err != nil {
+			return 0, err
+		}
+	}
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return 0, ipc.ErrMalformed
+		}
+		return 0, err
+	}
+	return epoch, a.Decode(dst)
 }
 
 func (s *handshakeChild) Close(context.Context, *gen.RecordFragment) (*gen.RecordFragment, error) {

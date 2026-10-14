@@ -102,6 +102,12 @@ The existing support operations retain their responsibilities alongside the stab
 
 These operations must report unsupported or unknown explicitly where applicable rather than fabricate success, models, or zero usage. Provider auth endpoints, scopes, exchanges, and streaming/usage formats remain private to the Connector. API, OpenAI-Compatible, Agent Protocol, and Local Runtime remain the four Connector categories; category does not alter Execute semantics.
 
+`UsageQuery.MaxBodyBytes` is runtime-owned and carries the selected route's
+effective admitted request-body limit to `EstimateUsage`. It does not alter the
+opaque payload and is not a new global size ceiling. Connectors must not accept
+an estimate body larger than this bound; external bindings enforce it while
+reassembling the separately streamed body. See [DEC-015](../project/DECISIONS.md#dec-015--convey-the-admitted-route-body-bound-to-usage-estimation).
+
 `AuthUserAction` is the optional presentation-only value
 `{VerificationURI string, UserCode string, PollInterval time.Duration}`;
 `PollInterval` is positive when an action is present. Core validates the action

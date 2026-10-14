@@ -114,7 +114,7 @@ type CapabilityResult struct { Values map[Capability]CapabilityState }
 type ModelQuery struct { Protocol string; Mode string; AccountID string }
 type ModelInfo struct { ID string; Capabilities map[Capability]CapabilityState; Available *bool }
 type ModelsResult struct { Supported bool; Models []ModelInfo }
-type UsageQuery struct { Protocol string; Mode string; Model string; AccountID string; Payload RawPayload }
+type UsageQuery struct { Protocol string; Mode string; Model string; AccountID string; MaxBodyBytes int64; Payload RawPayload }
 type EstimateResult struct { Supported bool; Known bool; Usage *UsageReport; Method string }
 type AuthRequest struct { AccountID string; Action string; State []byte }
 type AuthResult struct { Supported bool; State string; NextAction string; Credentials map[string][]byte }
@@ -126,8 +126,15 @@ Model IDs/capabilities/availability describe only the requested protocol,
 mode, and account; do not infer capability from provider identity. Unsupported
 operations return `Supported:false` and no fabricated result; supported but
 not established values use explicit `unknown` (including usage `Known:false`,
-nil usage). `EstimateUsage`'s known estimate and method support admission
-budgeting, not provider tokenization in Core. `Models` never fabricates a
+nil usage). `UsageQuery.MaxBodyBytes` is runtime-owned and carries the selected
+route's effective admitted request-body limit; it does not change or parse the
+opaque payload. A route with no positive body cap is unbounded and Core passes
+`MaxInt64`, so zero in the query is not an alternate “unbounded” signal.
+Connectors must reject a body exceeding the conveyed bound; IPC must not infer
+a smaller limit from frame size. This additive internal-binding extension has
+no persisted-data migration; see [DEC-015](../project/DECISIONS.md#dec-015--convey-the-admitted-route-body-bound-to-usage-estimation).
+`EstimateUsage`'s known estimate and method support admission budgeting, not
+provider tokenization in Core. `Models` never fabricates a
 model or availability. `Authenticate` returns an explicit unsupported result
 when absent; otherwise it performs one start/continue/refresh state-machine
 step. Runtime owns session state, persistence, refresh serialization, and

@@ -216,6 +216,11 @@ type BodyAssembler struct {
 	complete   bool
 }
 
+// NewBodyAssembler constructs a request-body receiver bounded by its admitted route.
+func NewBodyAssembler(routeLimit uint64) *BodyAssembler {
+	return &BodyAssembler{routeLimit: routeLimit}
+}
+
 func (a *BodyAssembler) Add(chunk []byte) error {
 	if a.complete || len(chunk) == 0 || len(chunk) > MaxFragmentBytes || uint64(len(a.body)) > a.routeLimit || uint64(len(chunk)) > a.routeLimit-uint64(len(a.body)) {
 		return ErrMalformed

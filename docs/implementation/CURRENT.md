@@ -8,7 +8,7 @@ M5.1 and M5.2 handoffs are **conditionally accepted**, not fully DONE: [DEC-012/
 
 ## Immediate handoff: M6 implementation
 
-New branch `dev-m6` starts at that merged main revision. [M6-EXTERNAL](M6-EXTERNAL.md) scopes external Connector processes and [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selects gRPC over Unix socket based on matched framed-stdio/gRPC spikes. [M6-001](tasks/M6-001.md) through [M6-014](tasks/M6-014.md) are DONE (14/14 complete; M6-014 ready for commit verification). Next candidate selection paused until M6-014 commit verified; candidates 015–032 remain DRAFT without dispatch.
+New branch `dev-m6` starts at that merged main revision. [M6-EXTERNAL](M6-EXTERNAL.md) scopes external Connector processes and [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selects gRPC over Unix socket. In ongoing /next batch, 5/19 tasks are verified DONE (`59c40ca`, `05fbc6c`, `7f7389e`, `a19bad9` pushed, plus [M6-015](tasks/M6-015.md) complete and verified, ready for commit verification); up to 14 tasks remain under original /next19 cap without backlog expansion. Next candidate selection paused until M6-015 commit verified; candidates 016–032 remain DRAFT with no further dispatch or READY prep.
 
 Use one card per Worker/Reviewer session and one verified task per commit through existing `/next N`. The M6 plan is not authorization to execute older live gates. No new MCP/plugin is required; transport libraries/generators are selected and pinned through the spikes. Existing server configuration does not establish machine-local connections.
 

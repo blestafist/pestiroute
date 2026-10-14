@@ -158,13 +158,16 @@ func ModelsResultFrom(v *gen.ModelsResult) (core.ModelsResult, error) {
 	return o, nil
 }
 func UsageQueryTo(v core.UsageQuery) *gen.UsageQuery {
-	return &gen.UsageQuery{Protocol: v.Protocol, Mode: v.Mode, Model: v.Model, AccountId: v.AccountID, Payload: &gen.RawPayload{Protocol: v.Payload.Protocol, ContentType: v.Payload.ContentType}}
+	return &gen.UsageQuery{Protocol: v.Protocol, Mode: v.Mode, Model: v.Model, AccountId: v.AccountID, Payload: &gen.RawPayload{Protocol: v.Payload.Protocol, ContentType: v.Payload.ContentType}, MaxBodyBytes: v.MaxBodyBytes}
 }
 func UsageQueryFrom(v *gen.UsageQuery, body []byte) (core.UsageQuery, error) {
 	if v == nil || v.Payload == nil {
 		return core.UsageQuery{}, ErrMalformed
 	}
-	return core.UsageQuery{Protocol: v.Protocol, Mode: v.Mode, Model: v.Model, AccountID: v.AccountId, Payload: core.RawPayload{Protocol: v.Payload.Protocol, ContentType: v.Payload.ContentType, Body: append([]byte(nil), body...)}}, nil
+	if v.MaxBodyBytes < 0 {
+		return core.UsageQuery{}, ErrMalformed
+	}
+	return core.UsageQuery{Protocol: v.Protocol, Mode: v.Mode, Model: v.Model, AccountID: v.AccountId, MaxBodyBytes: v.MaxBodyBytes, Payload: core.RawPayload{Protocol: v.Payload.Protocol, ContentType: v.Payload.ContentType, Body: append([]byte(nil), body...)}}, nil
 }
 func UsageTo(v *core.UsageReport) *gen.UsageReport {
 	if v == nil {

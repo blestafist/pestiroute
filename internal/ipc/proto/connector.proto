@@ -17,7 +17,7 @@ message ModelQuery { string protocol = 1; string mode = 2; string account_id = 3
 message ModelInfo { string id = 1; repeated CapabilityValue capabilities = 2; optional bool available = 3; }
 message ModelsResult { bool supported = 1; repeated ModelInfo models = 2; }
 message RawPayload { string protocol = 1; string content_type = 2; }
-message UsageQuery { string protocol = 1; string mode = 2; string model = 3; string account_id = 4; RawPayload payload = 5; }
+message UsageQuery { string protocol = 1; string mode = 2; string model = 3; string account_id = 4; RawPayload payload = 5; int64 max_body_bytes = 6; }
 message UsageReport { optional int64 input_tokens = 1; optional int64 output_tokens = 2; optional int64 reasoning_tokens = 3; optional int64 cached_tokens = 4; string source = 5; string completeness = 6; }
 message EstimateResult { bool supported = 1; bool known = 2; UsageReport usage = 3; string method = 4; }
 message AuthRequest { string account_id = 1; string action = 2; bytes state = 3; }
@@ -45,6 +45,12 @@ message HTTPFrame {
   string invocation_id = 3;
   oneof payload { RecordFragment record = 4; BodyChunk body = 5; }
 }
+message EstimateFrame {
+  uint64 epoch = 1;
+  uint64 call_id = 2;
+  string invocation_id = 3;
+  oneof payload { RecordFragment record = 4; BodyChunk body = 5; }
+}
 message CredentialLookup { string name = 1; }
 message CredentialValue { bytes value = 1; }
 message LogRecord { string level = 1; string message = 2; map<string,string> attributes = 3; }
@@ -56,6 +62,8 @@ service Connector {
   rpc Init(stream RecordFragment) returns (RecordFragment);
   rpc Health(RecordFragment) returns (stream RecordFragment);
   rpc Capabilities(stream RecordFragment) returns (stream RecordFragment);
+  rpc Models(stream RecordFragment) returns (stream RecordFragment);
+  rpc EstimateUsage(stream EstimateFrame) returns (stream RecordFragment);
   rpc Close(RecordFragment) returns (RecordFragment);
 }
 

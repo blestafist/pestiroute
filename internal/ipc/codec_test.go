@@ -347,7 +347,7 @@ func TestM6GoValueConvertersParity(t *testing.T) {
 		t.Fatalf("models parity: %v", err)
 	}
 	usage := core.UsageReport{InputTokens: new(int64), OutputTokens: nil, ReasoningTokens: new(int64), CachedTokens: nil, Source: core.UsageProvider, Completeness: core.UsagePartial}
-	query := core.UsageQuery{Protocol: large, Mode: large, Model: large, AccountID: large, Payload: core.RawPayload{Protocol: large, ContentType: large, Body: body}}
+	query := core.UsageQuery{Protocol: large, Mode: large, Model: large, AccountID: large, MaxBodyBytes: 100, Payload: core.RawPayload{Protocol: large, ContentType: large, Body: body}}
 	queryWire := UsageQueryTo(query)
 	chunkedQuery := decodeRecord(t, queryWire)
 	queryBody := BodyAssembler{routeLimit: 100}
@@ -360,6 +360,9 @@ func TestM6GoValueConvertersParity(t *testing.T) {
 	}
 	if got, err := UsageQueryFrom(chunkedQuery, reassembled); err != nil || !reflect.DeepEqual(got, query) {
 		t.Fatalf("usage query parity: %v", err)
+	}
+	if _, err := UsageQueryFrom(&gen.UsageQuery{Payload: &gen.RawPayload{}, MaxBodyBytes: -1}, nil); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("negative route body bound accepted: %v", err)
 	}
 	usageReport := &usage
 	if got := UsageFrom(decodeRecord(t, UsageTo(usageReport))); !reflect.DeepEqual(got, usageReport) {

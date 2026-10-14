@@ -25,11 +25,12 @@ type ModelsResult struct {
 }
 
 type UsageQuery struct {
-	Protocol  string
-	Mode      string
-	Model     string
-	AccountID string
-	Payload   RawPayload
+	Protocol     string
+	Mode         string
+	Model        string
+	AccountID    string
+	MaxBodyBytes int64
+	Payload      RawPayload
 }
 
 type EstimateResult struct {

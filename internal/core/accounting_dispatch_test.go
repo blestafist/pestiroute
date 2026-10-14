@@ -21,10 +21,12 @@ type accountingTestConnector struct {
 	cancelSeen chan struct{}
 	estimates  int
 	executions int
+	usageQuery UsageQuery
 }
 
-func (c *accountingTestConnector) EstimateUsage(context.Context, UsageQuery, InvocationServices) (EstimateResult, *GatewayError) {
+func (c *accountingTestConnector) EstimateUsage(_ context.Context, query UsageQuery, _ InvocationServices) (EstimateResult, *GatewayError) {
 	c.estimates++
+	c.usageQuery = query
 	*c.order = append(*c.order, "estimate")
 	return EstimateResult{Supported: true, Known: true, Usage: &UsageReport{InputTokens: new(int64(2)), OutputTokens: new(int64(3)), Source: UsageEstimate, Completeness: UsageComplete}, Method: "fixture"}, nil
 }
@@ -134,7 +136,7 @@ func accountingDispatcher(t *testing.T, ctx context.Context, connector *accounti
 			t.Fatal(err)
 		}
 	}
-	routes, err := NewRouteTable([]Route{{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: m1Protocol, Mode: ModeNative, Model: "model"}, AccountID: "account"}, Adapter: "adapter", Connector: "connector"}}, registry)
+	routes, err := NewRouteTable([]Route{{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: m1Protocol, Mode: ModeNative, Model: "model"}, AccountID: "account"}, Adapter: "adapter", Connector: "connector", MaxBodyBytes: 1024}}, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +186,9 @@ func TestDispatchAccountingAdmissionIntentSettlement(t *testing.T) {
 	}
 	if store.admitted.EstimateTokens != 5 || store.admitted.EstimateMethod != "fixture" || store.finals != 1 || store.terminal.Outcome != OutcomeSucceeded || *store.terminal.Usage.InputTokens != 4 {
 		t.Fatalf("admission/terminal accounting = %+v / %+v", store.admitted, store.terminal)
+	}
+	if connector.usageQuery.MaxBodyBytes != 1024 {
+		t.Fatalf("estimate body bound = %d, want selected route limit 1024", connector.usageQuery.MaxBodyBytes)
 	}
 }
 
