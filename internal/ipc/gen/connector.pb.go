@@ -2527,11 +2527,15 @@ const file_connector_proto_rawDesc = "" +
 	"\vprotocol_id\x18\x01 \x01(\tR\n" +
 	"protocolId\x12A\n" +
 	"\vipc_version\x18\x02 \x01(\v2 .pestiroute.connector.v1.VersionR\n" +
-	"ipcVersion2\xce\x01\n" +
+	"ipcVersion2\xc9\x04\n" +
 	"\tConnector\x12_\n" +
 	"\tHandshake\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01\x12`\n" +
 	"\n" +
-	"Descriptor\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01B:Z8github.com/blestafist/pestiroute/internal/ipc/gen;ipcgenb\x06proto3"
+	"Descriptor\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01\x12Z\n" +
+	"\x04Init\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x01\x12\\\n" +
+	"\x06Health\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01\x12d\n" +
+	"\fCapabilities\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12Y\n" +
+	"\x05Close\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragmentB:Z8github.com/blestafist/pestiroute/internal/ipc/gen;ipcgenb\x06proto3"
 
 var (
 	file_connector_proto_rawDescOnce sync.Once
@@ -2625,10 +2629,18 @@ var file_connector_proto_depIdxs = []int32{
 	18, // 28: pestiroute.connector.v1.HTTPResponse.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
 	26, // 29: pestiroute.connector.v1.Connector.Handshake:input_type -> pestiroute.connector.v1.RecordFragment
 	26, // 30: pestiroute.connector.v1.Connector.Descriptor:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 31: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 32: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
-	31, // [31:33] is the sub-list for method output_type
-	29, // [29:31] is the sub-list for method input_type
+	26, // 31: pestiroute.connector.v1.Connector.Init:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 32: pestiroute.connector.v1.Connector.Health:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 33: pestiroute.connector.v1.Connector.Capabilities:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 34: pestiroute.connector.v1.Connector.Close:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 35: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 36: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 37: pestiroute.connector.v1.Connector.Init:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 38: pestiroute.connector.v1.Connector.Health:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 39: pestiroute.connector.v1.Connector.Capabilities:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 40: pestiroute.connector.v1.Connector.Close:output_type -> pestiroute.connector.v1.RecordFragment
+	35, // [35:41] is the sub-list for method output_type
+	29, // [29:35] is the sub-list for method input_type
 	29, // [29:29] is the sub-list for extension type_name
 	29, // [29:29] is the sub-list for extension extendee
 	0,  // [0:29] is the sub-list for field type_name

@@ -6,9 +6,9 @@
 
 M5.1 and M5.2 handoffs are **conditionally accepted**, not fully DONE: [DEC-012/013](../project/DECISIONS.md) preserve unwaived live gates. Exact feature/evidence ceilings belong in [M4](M4-COMPATIBILITY.md), [Codex](M5.1-COMPATIBILITY.md) and [local-runtime](M5.2-COMPATIBILITY.md) matrices. Ollama and llama.cpp scoped live text gates completed; vLLM live evidence remains blocked. Tools/reasoning/parallel or compute cancellation are not promoted beyond their recorded scope. Historical completion/check evidence lives in [archived rows](archive/TASKS-DONE.md) and the stable task cards.
 
-## Immediate handoff: M6 planning
+## Immediate handoff: M6 implementation
 
-New branch `dev-m6` starts at that merged main revision. [M6-EXTERNAL](M6-EXTERNAL.md) scopes external Connector processes and [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selects gRPC over Unix socket based on matched framed-stdio/gRPC spikes. [M6-001](tasks/M6-001.md) through [M6-009](tasks/M6-009.md) are DONE. Next candidate is [M6-010](tasks/M6-010.md) (DRAFT: bridge Descriptor, Init, Health, Capabilities and Close with partial-init cleanup). Candidates 010–032 remain DRAFT.
+New branch `dev-m6` starts at that merged main revision. [M6-EXTERNAL](M6-EXTERNAL.md) scopes external Connector processes and [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selects gRPC over Unix socket based on matched framed-stdio/gRPC spikes. [M6-001](tasks/M6-001.md) through [M6-010](tasks/M6-010.md) are DONE (10/10 batch complete). Next backlog candidate is [M6-011](tasks/M6-011.md) (DRAFT: correlate bounded concurrent calls by runtime invocation/epoch; reject stale and cross-call traffic); candidates 011–032 remain DRAFT without dispatch.
 
 Use one card per Worker/Reviewer session and one verified task per commit through existing `/next N`. The M6 plan is not authorization to execute older live gates. No new MCP/plugin is required; transport libraries/generators are selected and pinned through the spikes. Existing server configuration does not establish machine-local connections.
 

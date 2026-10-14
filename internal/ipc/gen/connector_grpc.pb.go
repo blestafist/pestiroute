@@ -19,8 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Connector_Handshake_FullMethodName  = "/pestiroute.connector.v1.Connector/Handshake"
-	Connector_Descriptor_FullMethodName = "/pestiroute.connector.v1.Connector/Descriptor"
+	Connector_Handshake_FullMethodName    = "/pestiroute.connector.v1.Connector/Handshake"
+	Connector_Descriptor_FullMethodName   = "/pestiroute.connector.v1.Connector/Descriptor"
+	Connector_Init_FullMethodName         = "/pestiroute.connector.v1.Connector/Init"
+	Connector_Health_FullMethodName       = "/pestiroute.connector.v1.Connector/Health"
+	Connector_Capabilities_FullMethodName = "/pestiroute.connector.v1.Connector/Capabilities"
+	Connector_Close_FullMethodName        = "/pestiroute.connector.v1.Connector/Close"
 )
 
 // ConnectorClient is the client API for Connector service.
@@ -29,6 +33,10 @@ const (
 type ConnectorClient interface {
 	Handshake(ctx context.Context, in *RecordFragment, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RecordFragment], error)
 	Descriptor(ctx context.Context, in *RecordFragment, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RecordFragment], error)
+	Init(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[RecordFragment, RecordFragment], error)
+	Health(ctx context.Context, in *RecordFragment, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RecordFragment], error)
+	Capabilities(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RecordFragment, RecordFragment], error)
+	Close(ctx context.Context, in *RecordFragment, opts ...grpc.CallOption) (*RecordFragment, error)
 }
 
 type connectorClient struct {
@@ -77,12 +85,71 @@ func (c *connectorClient) Descriptor(ctx context.Context, in *RecordFragment, op
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Connector_DescriptorClient = grpc.ServerStreamingClient[RecordFragment]
 
+func (c *connectorClient) Init(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[RecordFragment, RecordFragment], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Connector_ServiceDesc.Streams[2], Connector_Init_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RecordFragment, RecordFragment]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Connector_InitClient = grpc.ClientStreamingClient[RecordFragment, RecordFragment]
+
+func (c *connectorClient) Health(ctx context.Context, in *RecordFragment, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RecordFragment], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Connector_ServiceDesc.Streams[3], Connector_Health_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RecordFragment, RecordFragment]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Connector_HealthClient = grpc.ServerStreamingClient[RecordFragment]
+
+func (c *connectorClient) Capabilities(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RecordFragment, RecordFragment], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Connector_ServiceDesc.Streams[4], Connector_Capabilities_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RecordFragment, RecordFragment]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Connector_CapabilitiesClient = grpc.BidiStreamingClient[RecordFragment, RecordFragment]
+
+func (c *connectorClient) Close(ctx context.Context, in *RecordFragment, opts ...grpc.CallOption) (*RecordFragment, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordFragment)
+	err := c.cc.Invoke(ctx, Connector_Close_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ConnectorServer is the server API for Connector service.
 // All implementations must embed UnimplementedConnectorServer
 // for forward compatibility.
 type ConnectorServer interface {
 	Handshake(*RecordFragment, grpc.ServerStreamingServer[RecordFragment]) error
 	Descriptor(*RecordFragment, grpc.ServerStreamingServer[RecordFragment]) error
+	Init(grpc.ClientStreamingServer[RecordFragment, RecordFragment]) error
+	Health(*RecordFragment, grpc.ServerStreamingServer[RecordFragment]) error
+	Capabilities(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error
+	Close(context.Context, *RecordFragment) (*RecordFragment, error)
 	mustEmbedUnimplementedConnectorServer()
 }
 
@@ -98,6 +165,18 @@ func (UnimplementedConnectorServer) Handshake(*RecordFragment, grpc.ServerStream
 }
 func (UnimplementedConnectorServer) Descriptor(*RecordFragment, grpc.ServerStreamingServer[RecordFragment]) error {
 	return status.Errorf(codes.Unimplemented, "method Descriptor not implemented")
+}
+func (UnimplementedConnectorServer) Init(grpc.ClientStreamingServer[RecordFragment, RecordFragment]) error {
+	return status.Errorf(codes.Unimplemented, "method Init not implemented")
+}
+func (UnimplementedConnectorServer) Health(*RecordFragment, grpc.ServerStreamingServer[RecordFragment]) error {
+	return status.Errorf(codes.Unimplemented, "method Health not implemented")
+}
+func (UnimplementedConnectorServer) Capabilities(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error {
+	return status.Errorf(codes.Unimplemented, "method Capabilities not implemented")
+}
+func (UnimplementedConnectorServer) Close(context.Context, *RecordFragment) (*RecordFragment, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Close not implemented")
 }
 func (UnimplementedConnectorServer) mustEmbedUnimplementedConnectorServer() {}
 func (UnimplementedConnectorServer) testEmbeddedByValue()                   {}
@@ -142,13 +221,61 @@ func _Connector_Descriptor_Handler(srv interface{}, stream grpc.ServerStream) er
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Connector_DescriptorServer = grpc.ServerStreamingServer[RecordFragment]
 
+func _Connector_Init_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ConnectorServer).Init(&grpc.GenericServerStream[RecordFragment, RecordFragment]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Connector_InitServer = grpc.ClientStreamingServer[RecordFragment, RecordFragment]
+
+func _Connector_Health_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(RecordFragment)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ConnectorServer).Health(m, &grpc.GenericServerStream[RecordFragment, RecordFragment]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Connector_HealthServer = grpc.ServerStreamingServer[RecordFragment]
+
+func _Connector_Capabilities_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ConnectorServer).Capabilities(&grpc.GenericServerStream[RecordFragment, RecordFragment]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Connector_CapabilitiesServer = grpc.BidiStreamingServer[RecordFragment, RecordFragment]
+
+func _Connector_Close_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordFragment)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConnectorServer).Close(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Connector_Close_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConnectorServer).Close(ctx, req.(*RecordFragment))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Connector_ServiceDesc is the grpc.ServiceDesc for Connector service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Connector_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "pestiroute.connector.v1.Connector",
 	HandlerType: (*ConnectorServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Close",
+			Handler:    _Connector_Close_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Handshake",
@@ -159,6 +286,22 @@ var Connector_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "Descriptor",
 			Handler:       _Connector_Descriptor_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "Init",
+			Handler:       _Connector_Init_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Health",
+			Handler:       _Connector_Health_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Capabilities",
+			Handler:       _Connector_Capabilities_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "connector.proto",

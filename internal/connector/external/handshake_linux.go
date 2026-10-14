@@ -34,8 +34,7 @@ var (
 )
 
 // ConnectConnector authenticates the Unix peer and validates IPC and Connector
-// API compatibility before returning a usable connection. No component method
-// is called here; lifecycle bridging belongs to the next task.
+// API compatibility before returning a usable connection.
 func (p *Process) ConnectConnector(ctx context.Context) (result *grpc.ClientConn, descriptor core.Descriptor, retErr error) {
 	defer func() {
 		if retErr != nil {
@@ -91,6 +90,7 @@ func (p *Process) ConnectConnector(ctx context.Context) (result *grpc.ClientConn
 	if err != nil {
 		return nil, core.Descriptor{}, err
 	}
+	p.epoch = epoch
 	var handshake gen.Handshake
 	handshakeStream, err := client.Handshake(ctx, bootstrapRequest(epoch))
 	if err != nil {
@@ -128,7 +128,11 @@ func bootstrapRequest(epoch uint64) *gen.RecordFragment {
 }
 
 func readRecord(stream grpc.ServerStreamingClient[gen.RecordFragment], epoch uint64, typ string, dst proto.Message) error {
-	a := ipc.NewAssembler(ipc.Identity{Epoch: epoch, CallID: 0, RecordID: 0, Type: typ})
+	return readRecordCall(stream, epoch, 0, typ, dst)
+}
+
+func readRecordCall(stream grpc.ServerStreamingClient[gen.RecordFragment], epoch, callID uint64, typ string, dst proto.Message) error {
+	a := ipc.NewAssembler(ipc.Identity{Epoch: epoch, CallID: callID, RecordID: 0, Type: typ})
 	for {
 		if a.Complete() {
 			if _, err := stream.Recv(); !errors.Is(err, io.EOF) {

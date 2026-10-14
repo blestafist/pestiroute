@@ -46,4 +46,8 @@ message Handshake { string protocol_id = 1; Version ipc_version = 2; }
 service Connector {
   rpc Handshake(RecordFragment) returns (stream RecordFragment);
   rpc Descriptor(RecordFragment) returns (stream RecordFragment);
+  rpc Init(stream RecordFragment) returns (RecordFragment);
+  rpc Health(RecordFragment) returns (stream RecordFragment);
+  rpc Capabilities(stream RecordFragment) returns (stream RecordFragment);
+  rpc Close(RecordFragment) returns (RecordFragment);
 }

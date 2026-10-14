@@ -42,6 +42,7 @@ type Process struct {
 	connectorInfo   os.FileInfo
 	diagnostics     *limitedWriter
 	startupDeadline time.Time
+	epoch           uint64
 	waitDone        chan struct{}
 	waitErr         error
 	closeOnce       sync.Once
@@ -71,7 +72,7 @@ func (w *limitedWriter) String() string {
 
 // Start launches an absolute executable directly, with no inherited
 // environment, in a fresh process group. Startup waits for the child's socket
-// path to appear; protocol handshake is owned by the next lifecycle layer.
+// path to appear; protocol handshake and lifecycle calls use the Connector proxy.
 func Start(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	return startWithTimeout(ctx, cfg, startupTimeout)
 }
