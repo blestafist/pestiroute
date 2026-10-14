@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"syscall"
@@ -522,6 +523,7 @@ inputDone:
 	if s.mode == "execute-stall" {
 		_, _ = fmt.Fprintln(os.Stderr, "execute-stall-called")
 		<-stream.Context().Done()
+		_, _ = fmt.Fprintln(os.Stderr, "execute-stall-cancel-ack")
 		return stream.Context().Err()
 	}
 	if s.mode == "execute-error" {
@@ -542,6 +544,35 @@ inputDone:
 	}
 	if err := sendExecuteRecord(stream, epoch, invocationID, 0, "HeadFrame", head); err != nil {
 		return err
+	}
+	if s.mode == "execute-callback-credential" {
+		if _, err := NewCredentialClient(childHostServices(), epoch, invocationID).Get(stream.Context(), "token"); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "execute-credential-cancel-ack")
+		} else {
+			_, _ = fmt.Fprintln(os.Stderr, "execute-credential-unexpected-success")
+		}
+		if _, err := NewCredentialClient(childHostServices(), epoch, invocationID).Get(context.Background(), "token"); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "execute-late-callback-denied")
+		} else {
+			_, _ = fmt.Fprintln(os.Stderr, "execute-late-callback-authorized")
+		}
+		return stream.Context().Err()
+	}
+	if s.mode == "execute-callback-http" {
+		client := NewHTTPDoerClient(childHostServices(), epoch, invocationID)
+		request, _ := http.NewRequestWithContext(stream.Context(), http.MethodGet, "http://example.invalid/", nil)
+		if _, err := client.Do(request); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "execute-http-cancel-ack")
+		} else {
+			_, _ = fmt.Fprintln(os.Stderr, "execute-http-unexpected-success")
+		}
+		request, _ = http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
+		if _, err := client.Do(request); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "execute-late-callback-denied")
+		} else {
+			_, _ = fmt.Fprintln(os.Stderr, "execute-late-callback-authorized")
+		}
+		return stream.Context().Err()
 	}
 	if s.mode == "execute-head-stall" {
 		_, _ = fmt.Fprintln(os.Stderr, "execute-posthead-waiting")

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,8 +21,22 @@ import (
 )
 
 type executeGateCredentials struct {
-	called  chan struct{}
-	release chan struct{}
+	called    chan struct{}
+	release   chan struct{}
+	cancelled chan struct{}
+}
+
+type executeGateTransport struct {
+	called    chan struct{}
+	cancelled chan struct{}
+	once      sync.Once
+}
+
+func (t *executeGateTransport) Do(req *http.Request) (*http.Response, error) {
+	t.called <- struct{}{}
+	<-req.Context().Done()
+	t.once.Do(func() { close(t.cancelled) })
+	return nil, req.Context().Err()
 }
 
 func (c executeGateCredentials) Get(ctx context.Context, name string) ([]byte, error) {
@@ -35,8 +51,271 @@ func (c executeGateCredentials) Get(ctx context.Context, name string) ([]byte, e
 	case <-c.release:
 		return []byte("released"), nil
 	case <-ctx.Done():
+		if c.cancelled != nil {
+			close(c.cancelled)
+		}
 		return nil, ctx.Err()
 	}
+}
+
+func TestM6ExecuteCancel(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		deadline bool
+	}{
+		{name: "before head cancel"},
+		{name: "before head deadline", deadline: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := startProcess(t, "execute-stall", startupTimeout)
+			c, err := p.ConnectComponent(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.deadline {
+				ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+			}
+			defer cancel()
+			finished := make(chan *core.GatewayError, 1)
+			go func() {
+				response, gatewayErr := c.Execute(ctx, core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, core.InvocationServices{})
+				if response.Stream != nil {
+					_ = response.Stream.Close()
+				}
+				finished <- gatewayErr
+			}()
+			waitForDiagnostic(t, p, "execute-stall-called")
+			requestedAt := time.Now()
+			if !tc.deadline {
+				cancel()
+			} else {
+				<-ctx.Done()
+				requestedAt = time.Now()
+			}
+			select {
+			case got := <-finished:
+				want := core.CategoryCancelled
+				wantCode := "execute_cancelled"
+				if tc.deadline {
+					want = core.CategoryTimeout
+					wantCode = "connector_timeout"
+				}
+				if got == nil || got.Category != want || got.Code != wantCode {
+					t.Fatalf("Execute error=%+v want %s/%s", got, wantCode, want)
+				}
+				if len(c.gate) != 0 {
+					t.Fatal("Execute acquisition gate was not released")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("Execute did not unwind within cancellation bound")
+			}
+			waitForDiagnostic(t, p, "execute-stall-cancel-ack")
+			if elapsed := time.Since(requestedAt); elapsed > 2*time.Second {
+				t.Fatalf("child cancellation acknowledgement took %s", elapsed)
+			}
+		})
+	}
+
+	for _, deadline := range []bool{false, true} {
+		name, want := "after head cancel", error(context.Canceled)
+		if deadline {
+			name, want = "after head deadline", context.DeadlineExceeded
+		}
+		t.Run(name, func(t *testing.T) {
+			p := startProcess(t, "execute-head-stall", startupTimeout)
+			c, err := p.ConnectComponent(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			response, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, authServices())
+			if gatewayErr != nil {
+				t.Fatal(gatewayErr)
+			}
+			if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+				t.Fatalf("Head=%+v err=%v", frame, err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			if deadline {
+				ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+			}
+			defer cancel()
+			waitForDiagnostic(t, p, "execute-posthead-authorized")
+			finished := make(chan error, 1)
+			started := make(chan struct{})
+			go func() { close(started); _, err := response.Stream.Next(ctx); finished <- err }()
+			<-started
+			requestedAt := time.Now()
+			if !deadline {
+				cancel()
+			} else {
+				<-ctx.Done()
+				requestedAt = time.Now()
+			}
+			select {
+			case err := <-finished:
+				if !errors.Is(err, want) {
+					t.Fatalf("Next error=%v want %v", err, want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("Next did not unwind within cancellation bound")
+			}
+			waitForDiagnostic(t, p, "execute-posthead-revoked")
+			if elapsed := time.Since(requestedAt); elapsed > 2*time.Second {
+				t.Fatalf("child cancellation acknowledgement took %s", elapsed)
+			}
+			if len(c.gate) != 0 {
+				t.Fatal("stream acquisition gate was not released")
+			}
+			if err := response.Stream.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := response.Stream.Next(context.Background()); !errors.Is(err, io.EOF) {
+				t.Fatalf("Next after Close=%v, want EOF", err)
+			}
+		})
+	}
+
+	for _, callbackKind := range []string{"credential", "http"} {
+		for _, deadline := range []bool{false, true} {
+			name := callbackKind + " parent cancel"
+			if deadline {
+				name = callbackKind + " parent deadline"
+			}
+			t.Run(name, func(t *testing.T) {
+				mode := "execute-callback-" + callbackKind
+				p := startProcess(t, mode, startupTimeout)
+				c, err := p.ConnectComponent(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+					t.Fatal(err)
+				}
+				var ctx context.Context
+				var cancel context.CancelFunc
+				if deadline {
+					ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+				} else {
+					ctx, cancel = context.WithCancel(context.Background())
+				}
+				defer cancel()
+				services := core.InvocationServices{}
+				var entered, released <-chan struct{}
+				if callbackKind == "credential" {
+					callback := executeGateCredentials{called: make(chan struct{}, 1), release: make(chan struct{}), cancelled: make(chan struct{})}
+					services.Credentials = callback
+					entered, released = callback.called, callback.cancelled
+				} else {
+					callback := &executeGateTransport{called: make(chan struct{}, 1), cancelled: make(chan struct{})}
+					services.Transport = callback
+					entered, released = callback.called, callback.cancelled
+				}
+				response, gatewayErr := c.Execute(ctx, core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, services)
+				if gatewayErr != nil {
+					t.Fatal(gatewayErr)
+				}
+				if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+					t.Fatalf("Head=%+v err=%v", frame, err)
+				}
+				select {
+				case <-entered:
+				case <-time.After(2 * time.Second):
+					t.Fatal("reverse callback was not admitted")
+				}
+				nextDone := make(chan error, 1)
+				nextStarted := make(chan struct{})
+				go func() { close(nextStarted); _, err := response.Stream.Next(context.Background()); nextDone <- err }()
+				<-nextStarted
+				requestedAt := time.Now()
+				if !deadline {
+					cancel()
+				} else {
+					<-ctx.Done()
+					requestedAt = time.Now()
+				}
+				select {
+				case <-released:
+				case <-time.After(2 * time.Second):
+					t.Fatal("parent cancellation did not release stalled callback")
+				}
+				waitForDiagnostic(t, p, "execute-"+callbackKind+"-cancel-ack")
+				waitForDiagnostic(t, p, "execute-late-callback-denied")
+				if elapsed := time.Since(requestedAt); elapsed > 2*time.Second {
+					t.Fatalf("child/callback cancellation acknowledgement took %s", elapsed)
+				}
+				select {
+				case nextErr := <-nextDone:
+					wantErr := error(context.Canceled)
+					if deadline {
+						wantErr = context.DeadlineExceeded
+					}
+					if !errors.Is(nextErr, wantErr) {
+						t.Fatalf("Next error=%v, want %v", nextErr, wantErr)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("Next did not unblock after parent cancellation")
+				}
+				c.invocations.mu.Lock()
+				active, callbacks := len(c.invocations.active), c.invocations.outstanding
+				c.invocations.mu.Unlock()
+				if active != 0 || callbacks != 0 || len(c.gate) != 0 {
+					t.Fatalf("resources retained: invocations=%d callbacks=%d gate=%d", active, callbacks, len(c.gate))
+				}
+				if err := response.Stream.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := response.Stream.Next(context.Background()); !errors.Is(err, io.EOF) {
+					t.Fatalf("Next after cancellation=%v, want EOF", err)
+				}
+			})
+		}
+	}
+
+	t.Run("concurrent idempotent close", func(t *testing.T) {
+		p := startProcess(t, "execute-head-stall", startupTimeout)
+		c, err := p.ConnectComponent(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+			t.Fatal(err)
+		}
+		response, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, authServices())
+		if gatewayErr != nil {
+			t.Fatal(gatewayErr)
+		}
+		if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+			t.Fatalf("Head=%+v err=%v", frame, err)
+		}
+		waitForDiagnostic(t, p, "execute-posthead-authorized")
+		nextDone := make(chan struct{})
+		go func() { _, _ = response.Stream.Next(context.Background()); close(nextDone) }()
+		started := make(chan struct{})
+		go func() { _ = response.Stream.Close(); _ = response.Stream.Close(); close(started) }()
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Close blocked")
+		}
+		select {
+		case <-nextDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Next did not unblock")
+		}
+		if len(c.gate) != 0 {
+			t.Fatal("acquisition gate was not released")
+		}
+		if _, err := response.Stream.Next(context.Background()); !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close=%v, want EOF", err)
+		}
+	})
 }
 
 func TestM6ExecuteIncrementalBodyArrivesBeforeProducerCompletes(t *testing.T) {

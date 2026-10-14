@@ -7,18 +7,20 @@ import (
 	"errors"
 	"io"
 	"sync"
-	"sync/atomic"
 
 	"github.com/blestafist/pestiroute/internal/core"
 	"github.com/blestafist/pestiroute/internal/ipc"
 	gen "github.com/blestafist/pestiroute/internal/ipc/gen"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // Execute forwards one already-admitted attempt. Request and response bodies
 // stay in bounded chunks; no retry is inferred from a transport failure.
 func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
+	callerCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	if err := c.acquire(ctx); err != nil {
 		cancel()
@@ -82,7 +84,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		cleanup()
 		return core.ExecutionResponse{}, queryGatewayError(err, "execute")
 	}
-	response, gatewayErr := readExecuteResponse(stream, c.epoch, invocationID, cleanup)
+	response, gatewayErr := readExecuteResponse(stream, c.epoch, invocationID, callerCtx, cleanup)
 	if gatewayErr != nil {
 		cleanup()
 		return core.ExecutionResponse{}, gatewayErr
@@ -97,7 +99,7 @@ func executeFrameIdentity(frame *gen.ExecuteFrame, epoch uint64, invocationID st
 	return nil
 }
 
-func readExecuteResponse(stream grpc.BidiStreamingClient[gen.ExecuteFrame, gen.ExecuteFrame], epoch uint64, invocationID string, cleanup func()) (core.ExecutionResponse, *core.GatewayError) {
+func readExecuteResponse(stream grpc.BidiStreamingClient[gen.ExecuteFrame, gen.ExecuteFrame], epoch uint64, invocationID string, ctx context.Context, cleanup func()) (core.ExecutionResponse, *core.GatewayError) {
 	first, err := stream.Recv()
 	if err != nil {
 		return core.ExecutionResponse{}, queryGatewayError(err, "execute")
@@ -131,7 +133,9 @@ func readExecuteResponse(stream grpc.BidiStreamingClient[gen.ExecuteFrame, gen.E
 		if err != nil {
 			return core.ExecutionResponse{}, queryGatewayError(err, "execute")
 		}
-		return core.ExecutionResponse{Stream: &executeResponseStream{stream: stream, epoch: epoch, invocationID: invocationID, head: &head, cleanup: cleanup}}, nil
+		responseStream := &executeResponseStream{stream: stream, epoch: epoch, invocationID: invocationID, head: &head, ctx: ctx, cleanup: cleanup}
+		responseStream.stopParent = context.AfterFunc(ctx, func() { _ = responseStream.Close() })
+		return core.ExecutionResponse{Stream: responseStream}, nil
 	}
 	return core.ExecutionResponse{}, queryGatewayError(ipc.ErrMalformed, "execute")
 }
@@ -173,23 +177,36 @@ type executeResponseStream struct {
 	epoch        uint64
 	invocationID string
 	head         *core.HeadFrame
-	done         atomic.Bool
+	ctx          context.Context
+	stateMu      sync.Mutex
+	done         bool
+	stopParent   func() bool
 	cleanup      func()
 }
 
 func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, error) {
+	s.stateMu.Lock()
+	if s.done {
+		s.stateMu.Unlock()
+		return core.StreamFrame{}, io.EOF
+	}
 	if err := ctx.Err(); err != nil {
+		s.stateMu.Unlock()
+		s.Close()
+		return core.StreamFrame{}, err
+	}
+	if err := s.ctx.Err(); err != nil {
+		s.stateMu.Unlock()
 		s.Close()
 		return core.StreamFrame{}, err
 	}
 	if s.head != nil {
 		h := s.head
 		s.head = nil
+		s.stateMu.Unlock()
 		return core.StreamFrame{Type: core.FrameHead, Head: h}, nil
 	}
-	if s.done.Load() {
-		return core.StreamFrame{}, io.EOF
-	}
+	s.stateMu.Unlock()
 	watchStop := make(chan struct{})
 	watchDone := make(chan struct{})
 	go func() {
@@ -213,7 +230,19 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 			s.Close()
 			return core.StreamFrame{}, ctx.Err()
 		}
+		if parentErr := s.ctx.Err(); parentErr != nil {
+			s.Close()
+			return core.StreamFrame{}, parentErr
+		}
 		if err != nil {
+			if status.Code(err) == codes.DeadlineExceeded {
+				s.Close()
+				return core.StreamFrame{}, context.DeadlineExceeded
+			}
+			if status.Code(err) == codes.Canceled {
+				s.Close()
+				return core.StreamFrame{}, context.Canceled
+			}
 			return core.StreamFrame{}, err
 		}
 		if err := executeFrameIdentity(frame, s.epoch, s.invocationID); err != nil {
@@ -260,7 +289,14 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 				s.Close()
 				return core.StreamFrame{}, ctx.Err()
 			}
-			s.done.Store(true)
+			s.stateMu.Lock()
+			s.done = true
+			stopParent := s.stopParent
+			s.stopParent = nil
+			s.stateMu.Unlock()
+			if stopParent != nil {
+				stopParent()
+			}
 			s.cleanup()
 			return core.StreamFrame{Type: core.FrameComplete, Complete: &complete}, nil
 		default:
@@ -270,8 +306,16 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 }
 
 func (s *executeResponseStream) Close() error {
-	if s.done.CompareAndSwap(false, true) {
-		_ = s.stream.CloseSend()
+	s.stateMu.Lock()
+	closeStream := !s.done
+	s.done = true
+	stopParent := s.stopParent
+	s.stopParent = nil
+	s.stateMu.Unlock()
+	if closeStream {
+		if stopParent != nil {
+			stopParent()
+		}
 		s.cleanup()
 	}
 	return nil
