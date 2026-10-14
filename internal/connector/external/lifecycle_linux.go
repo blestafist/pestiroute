@@ -27,11 +27,12 @@ const (
 
 // Connector is the lifecycle-only host proxy for one verified child process.
 type Connector struct {
-	process    *Process
-	conn       *grpc.ClientConn
-	client     gen.ConnectorClient
-	descriptor core.Descriptor
-	epoch      uint64
+	process     *Process
+	conn        *grpc.ClientConn
+	client      gen.ConnectorClient
+	descriptor  core.Descriptor
+	epoch       uint64
+	invocations *invocationRegistry
 
 	gate               chan struct{}
 	mu                 sync.Mutex
@@ -51,7 +52,7 @@ func (p *Process) ConnectComponent(ctx context.Context) (*Connector, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Connector{process: p, conn: conn, client: gen.NewConnectorClient(conn), descriptor: descriptor.Clone(), epoch: p.epoch, gate: make(chan struct{}, 1)}, nil
+	return &Connector{process: p, conn: conn, client: gen.NewConnectorClient(conn), descriptor: descriptor.Clone(), epoch: p.epoch, invocations: newInvocationRegistry(p.epoch), gate: make(chan struct{}, 1)}, nil
 }
 
 var _ core.Component = (*Connector)(nil)
@@ -91,6 +92,7 @@ func (c *Connector) Init(ctx context.Context, config core.ComponentConfig) error
 	c.mu.Lock()
 	c.unavailable = true
 	c.mu.Unlock()
+	c.invocations.close()
 	primary := lifecycleError("Init", err)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer shutdownCancel()
@@ -169,6 +171,7 @@ func (c *Connector) Capabilities(ctx context.Context, scope core.CapabilityScope
 func (c *Connector) Close(ctx context.Context) error {
 	c.mu.Lock()
 	c.closing = true
+	c.invocations.close()
 	if !c.closeStarted {
 		c.closeStarted = true
 		c.closeDone = make(chan struct{})
