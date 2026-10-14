@@ -42,6 +42,8 @@ type invocationRegistry struct {
 	lastCallID  uint64
 	seenCallIDs uint32
 	secrets     *logSecretSet
+	credits     *creditBroker
+	control     *controlLane
 }
 
 type invocation struct {
@@ -55,6 +57,7 @@ type invocation struct {
 	transport   core.HTTPDoer
 	logger      *slog.Logger
 	secrets     *logSecretSet
+	controlSeq  map[creditStream]uint64
 	revoked     bool
 }
 
@@ -65,7 +68,7 @@ type callbackLease struct {
 }
 
 func newInvocationRegistry(epoch uint64) *invocationRegistry {
-	return &invocationRegistry{epoch: epoch, active: make(map[string]*invocation), calls: make(map[uint64]*invocation), secrets: &logSecretSet{}}
+	return &invocationRegistry{epoch: epoch, active: make(map[string]*invocation), calls: make(map[uint64]*invocation), secrets: &logSecretSet{}, credits: newCreditBroker(epoch), control: newControlLane()}
 }
 
 func (r *invocationRegistry) begin(parent context.Context, accountID string) (string, context.Context, error) {
@@ -97,8 +100,11 @@ func (r *invocationRegistry) beginWithLogger(parent context.Context, accountID s
 		return "", nil, err
 	}
 	id := hex.EncodeToString(raw[:])
+	if err := r.credits.register(id); err != nil {
+		return "", nil, err
+	}
 	ctx, cancel := context.WithCancel(parent)
-	inv := &invocation{id: id, epoch: r.epoch, accountID: accountID, ctx: ctx, cancel: cancel, callbacks: make(map[uint64]struct{}), credentials: credentials, transport: transport, logger: logger, secrets: r.secrets}
+	inv := &invocation{id: id, epoch: r.epoch, accountID: accountID, ctx: ctx, cancel: cancel, callbacks: make(map[uint64]struct{}), credentials: credentials, transport: transport, logger: logger, secrets: r.secrets, controlSeq: make(map[creditStream]uint64)}
 	r.active[id] = inv
 	go func() {
 		<-ctx.Done()
@@ -174,7 +180,34 @@ func (l *callbackLease) release() {
 		delete(inv.callbacks, l.callID)
 		delete(r.calls, l.callID)
 		r.outstanding--
+		key := creditStream{invocationID: inv.id, operation: "HTTPDo", callID: l.callID, direction: "child_to_host"}
+		if !r.credits.hasStream(inv.id, "HTTPDo", l.callID) {
+			delete(inv.controlSeq, key)
+		}
 	}
+}
+
+func (r *invocationRegistry) cancelHTTPCall(id creditIdentity) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if id.epoch != r.epoch {
+		return errInvocationStale
+	}
+	inv := r.active[id.invocationID]
+	if inv == nil || inv.revoked || inv.epoch != id.epoch {
+		return errInvocationStale
+	}
+	key := creditStream{invocationID: id.invocationID, operation: id.operation, callID: id.callID, direction: id.direction}
+	_, callbackLive := inv.callbacks[id.callID]
+	if !callbackLive && !r.credits.hasStream(id.invocationID, id.operation, id.callID) {
+		return errInvocationStale
+	}
+	if id.sequence != inv.controlSeq[key]+1 {
+		return errCallbackReplay
+	}
+	inv.controlSeq[key] = id.sequence
+	r.credits.revokeStream(id.invocationID, id.operation, id.callID)
+	return nil
 }
 
 // live gates result delivery; canceled or revoked callback results are dropped.
@@ -209,6 +242,7 @@ func (r *invocationRegistry) revokeLocked(inv *invocation) {
 		return
 	}
 	inv.revoked = true
+	r.credits.revoke(inv.id)
 	delete(r.active, inv.id)
 	r.outstanding -= len(inv.callbacks)
 	for callID := range inv.callbacks {
@@ -222,6 +256,7 @@ func (r *invocationRegistry) close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
+	r.credits.close()
 	for id, inv := range r.active {
 		inv.revoked = true
 		inv.cancel()

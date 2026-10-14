@@ -44,6 +44,7 @@ message HTTPFrame {
   uint64 call_id = 2;
   string invocation_id = 3;
   oneof payload { RecordFragment record = 4; BodyChunk body = 5; }
+  uint64 data_sequence = 6;
 }
 message EstimateFrame {
   uint64 epoch = 1;
@@ -56,6 +57,37 @@ message ExecuteFrame {
   uint64 call_id = 2;
   string invocation_id = 3;
   oneof payload { RecordFragment record = 4; BodyChunk body = 5; }
+  uint64 data_sequence = 6;
+}
+enum FlowControlKind {
+  FLOW_CONTROL_UNSPECIFIED = 0;
+  FLOW_CONTROL_RESERVE = 1;
+  FLOW_CONTROL_GRANT = 2;
+  FLOW_CONTROL_ACK = 3;
+  FLOW_CONTROL_CANCEL = 4;
+  FLOW_CONTROL_CLOSE = 5;
+  FLOW_CONTROL_PROBE = 6;
+}
+message FlowIdentity {
+  uint64 epoch = 1;
+  string invocation_id = 2;
+  string operation = 3;
+  uint64 call_id = 4;
+  string direction = 5;
+  uint64 sequence = 6;
+}
+message FlowControlRequest {
+  FlowControlKind kind = 1;
+  FlowIdentity identity = 2;
+  uint32 frames = 3;
+  uint32 application_bytes = 4;
+  repeated FlowIdentity acknowledgements = 5;
+}
+message FlowControlResponse {
+  FlowControlKind kind = 1;
+  FlowIdentity identity = 2;
+  uint32 frames = 3;
+  uint32 application_bytes = 4;
 }
 message CredentialLookup { string name = 1; }
 message CredentialValue { bytes value = 1; }
@@ -73,10 +105,12 @@ service Connector {
   rpc Authenticate(stream RecordFragment) returns (stream RecordFragment);
   rpc Execute(stream ExecuteFrame) returns (stream ExecuteFrame);
   rpc Close(RecordFragment) returns (RecordFragment);
+  rpc FlowControl(FlowControlRequest) returns (FlowControlResponse);
 }
 
 service HostServices {
   rpc CredentialGet(stream RecordFragment) returns (stream RecordFragment);
   rpc HTTPDo(stream HTTPFrame) returns (stream HTTPFrame);
   rpc Log(stream RecordFragment) returns (google.protobuf.Empty);
+  rpc FlowControl(FlowControlRequest) returns (FlowControlResponse);
 }

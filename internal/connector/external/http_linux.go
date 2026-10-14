@@ -33,6 +33,12 @@ func (s *hostServices) HTTPDo(stream grpc.BidiStreamingServer[gen.HTTPFrame, gen
 		return status.Error(codes.PermissionDenied, "HTTP request denied")
 	}
 	defer lease.release()
+	completed := false
+	defer func() {
+		if !completed {
+			s.registry.credits.revokeStream(first.InvocationId, "HTTPDo", first.CallId)
+		}
+	}()
 	if lease.invocation.transport == nil {
 		return status.Error(codes.PermissionDenied, "HTTP request denied")
 	}
@@ -40,7 +46,7 @@ func (s *hostServices) HTTPDo(stream grpc.BidiStreamingServer[gen.HTTPFrame, gen
 	defer cancel()
 	stopStreamCancel := context.AfterFunc(stream.Context(), cancel)
 	defer stopStreamCancel()
-	body := &httpRequestStreamBody{ctx: ctx, stream: stream, epoch: first.Epoch, callID: first.CallId, invocationID: first.InvocationId, first: first}
+	body := &httpRequestStreamBody{ctx: ctx, stream: stream, services: s, epoch: first.Epoch, callID: first.CallId, invocationID: first.InvocationId, first: first}
 	meta, err := body.readRequest()
 	if err != nil {
 		return status.Error(codes.InvalidArgument, "HTTP request denied")
@@ -77,11 +83,12 @@ func (s *hostServices) HTTPDo(stream grpc.BidiStreamingServer[gen.HTTPFrame, gen
 	if err != nil {
 		return status.Error(codes.Internal, "HTTP response failed")
 	}
+	var responseSequence uint64
 	if err := ipc.WriteRecord(wid, wire, func(f *gen.RecordFragment) error {
 		if !lease.live() || ctx.Err() != nil {
 			return context.Canceled
 		}
-		return stream.Send(httpFrameRecord(first.Epoch, first.CallId, first.InvocationId, f))
+		return s.sendHTTPData(ctx, stream, first, &responseSequence, len(f.Data), httpFrameRecord(first.Epoch, first.CallId, first.InvocationId, f))
 	}); err != nil {
 		return status.Error(codes.Internal, "HTTP response failed")
 	}
@@ -90,7 +97,7 @@ func (s *hostServices) HTTPDo(stream grpc.BidiStreamingServer[gen.HTTPFrame, gen
 		if e != nil {
 			return e
 		}
-		return stream.Send(&gen.HTTPFrame{Epoch: first.Epoch, CallId: first.CallId, InvocationId: first.InvocationId, Payload: &gen.HTTPFrame_Body{Body: b}})
+		return s.sendHTTPData(ctx, stream, first, &responseSequence, len(chunk), &gen.HTTPFrame{Payload: &gen.HTTPFrame_Body{Body: b}})
 	}); err != nil {
 		return status.Error(codes.Unavailable, "HTTP response failed")
 	}
@@ -98,13 +105,14 @@ func (s *hostServices) HTTPDo(stream grpc.BidiStreamingServer[gen.HTTPFrame, gen
 		if !lease.live() || ctx.Err() != nil {
 			return context.Canceled
 		}
-		return stream.Send(httpFrameRecord(first.Epoch, first.CallId, first.InvocationId, f))
+		return s.sendHTTPData(ctx, stream, first, &responseSequence, len(f.Data), httpFrameRecord(first.Epoch, first.CallId, first.InvocationId, f))
 	}); err != nil {
 		return err
 	}
 	if err := body.wait(); err != nil {
 		return status.Error(codes.InvalidArgument, "HTTP request body incomplete")
 	}
+	completed = true
 	return nil
 }
 
@@ -122,15 +130,25 @@ func stripHopByHopHeaders(h http.Header) {
 type httpRequestStreamBody struct {
 	ctx           context.Context
 	stream        grpc.BidiStreamingServer[gen.HTTPFrame, gen.HTTPFrame]
+	services      *hostServices
 	epoch, callID uint64
 	invocationID  string
 	first         *gen.HTTPFrame
-	chunks        chan []byte
+	chunks        chan requestBodyChunk
 	done          chan struct{}
 	readErr       error
 	stopped       chan struct{}
 	stopOnce      sync.Once
 	current       []byte
+	currentID     creditIdentity
+	currentCred   bool
+	currentMu     sync.Mutex
+}
+
+type requestBodyChunk struct {
+	data []byte
+	id   creditIdentity
+	cred bool
 }
 
 func (b *httpRequestStreamBody) readRequest() (*gen.HTTPRequest, error) {
@@ -150,6 +168,13 @@ func (b *httpRequestStreamBody) readRequest() (*gen.HTTPRequest, error) {
 		if r.InvocationId != b.invocationID || a.Add(r) != nil {
 			return nil, ipc.ErrMalformed
 		}
+		if id, credited, err := b.acceptFrame(f, len(r.Data)); err != nil {
+			return nil, err
+		} else if credited {
+			if err := b.services.ackChild(b.ctx, id); err != nil {
+				return nil, err
+			}
+		}
 		if a.Complete() {
 			var req gen.HTTPRequest
 			if a.Decode(&req) != nil {
@@ -161,13 +186,28 @@ func (b *httpRequestStreamBody) readRequest() (*gen.HTTPRequest, error) {
 }
 
 func (b *httpRequestStreamBody) start() {
-	b.chunks = make(chan []byte, 1)
+	b.chunks = make(chan requestBodyChunk, 1)
 	b.done = make(chan struct{})
 	b.stopped = make(chan struct{})
 	go b.receiveBody()
 }
 
-func (b *httpRequestStreamBody) stop() { b.stopOnce.Do(func() { close(b.stopped) }) }
+func (b *httpRequestStreamBody) stop() {
+	b.stopOnce.Do(func() { close(b.stopped) })
+	for {
+		select {
+		case chunk, ok := <-b.chunks:
+			if !ok {
+				return
+			}
+			if chunk.cred {
+				_ = b.services.ackChild(b.ctx, chunk.id)
+			}
+		default:
+			return
+		}
+	}
+}
 
 func (b *httpRequestStreamBody) wait() error { <-b.done; return b.readErr }
 
@@ -204,13 +244,28 @@ func (b *httpRequestStreamBody) receiveBody() {
 				finish(e)
 				return
 			}
+			if len(data) == 0 {
+				finish(ipc.ErrMalformed)
+				return
+			}
+			id, credited, creditErr := b.acceptFrame(f, len(data))
+			if creditErr != nil {
+				finish(creditErr)
+				return
+			}
 			if discard {
+				if credited {
+					_ = b.services.ackChild(b.ctx, id)
+				}
 				continue
 			}
 			select {
-			case b.chunks <- data:
+			case b.chunks <- requestBodyChunk{data: data, id: id, cred: credited}:
 			case <-b.stopped:
 				discard = true
+				if credited {
+					_ = b.services.ackChild(b.ctx, id)
+				}
 			}
 			continue
 		}
@@ -220,6 +275,11 @@ func (b *httpRequestStreamBody) receiveBody() {
 			return
 		}
 		a := ipc.NewAssembler(ipc.Identity{Epoch: b.epoch, CallID: b.callID, RecordID: 1, Type: "HTTPBodyComplete"})
+		id, credited, creditErr := b.acceptFrame(f, len(r.Data))
+		if creditErr != nil {
+			finish(creditErr)
+			return
+		}
 		if a.Add(r) != nil || !a.Complete() {
 			finish(ipc.ErrMalformed)
 			return
@@ -229,11 +289,31 @@ func (b *httpRequestStreamBody) receiveBody() {
 			finish(ipc.ErrMalformed)
 			return
 		}
+		if credited {
+			if err := b.services.ackChild(b.ctx, id); err != nil {
+				finish(err)
+				return
+			}
+		}
 		complete = true
 		if discard {
 			continue
 		}
 	}
+}
+
+func (b *httpRequestStreamBody) acceptFrame(frame *gen.HTTPFrame, applicationBytes int) (creditIdentity, bool, error) {
+	if b.services == nil || b.services.control == nil {
+		return creditIdentity{}, false, nil
+	}
+	if frame == nil || frame.DataSequence == 0 {
+		return creditIdentity{}, false, errCreditIdentity
+	}
+	id := creditIdentity{epoch: frame.Epoch, invocationID: frame.InvocationId, operation: "HTTPDo", callID: frame.CallId, direction: "child_to_host", sequence: frame.DataSequence}
+	if err := b.services.registry.credits.delivered(id, applicationBytes); err != nil {
+		return creditIdentity{}, false, err
+	}
+	return id, true, nil
 }
 
 func isClosed(ch <-chan struct{}) bool {
@@ -271,11 +351,22 @@ func (b *httpRequestStreamBody) Read(p []byte) (int, error) {
 	if isClosed(b.stopped) {
 		return 0, io.EOF
 	}
-	if len(b.current) == 0 {
+	b.currentMu.Lock()
+	currentEmpty := len(b.current) == 0
+	b.currentMu.Unlock()
+	if currentEmpty {
 		select {
-		case data, ok := <-b.chunks:
+		case chunk, ok := <-b.chunks:
 			if ok {
-				b.current = data
+				if isClosed(b.stopped) {
+					if chunk.cred {
+						_ = b.services.ackChild(b.ctx, chunk.id)
+					}
+					return 0, io.EOF
+				}
+				b.currentMu.Lock()
+				b.current, b.currentID, b.currentCred = chunk.data, chunk.id, chunk.cred
+				b.currentMu.Unlock()
 			} else {
 				<-b.done
 				if b.readErr != nil {
@@ -289,23 +380,46 @@ func (b *httpRequestStreamBody) Read(p []byte) (int, error) {
 			return 0, b.ctx.Err()
 		}
 	}
+	b.currentMu.Lock()
 	n := copy(p, b.current)
 	b.current = b.current[n:]
+	id, credited := b.currentID, b.currentCred && len(b.current) == 0
+	if credited {
+		b.currentCred = false
+	}
+	b.currentMu.Unlock()
+	if credited {
+		if err := b.services.ackChild(b.ctx, id); err != nil {
+			return n, err
+		}
+	}
 	return n, nil
 }
-func (b *httpRequestStreamBody) Close() error { b.stop(); return nil }
+func (b *httpRequestStreamBody) Close() error {
+	b.stop()
+	b.currentMu.Lock()
+	id, credited := b.currentID, b.currentCred
+	b.currentCred = false
+	b.current = nil
+	b.currentMu.Unlock()
+	if credited {
+		return b.services.ackChild(b.ctx, id)
+	}
+	return nil
+}
 
 // HTTPDoerClient is scoped to a single host-issued invocation.
 type HTTPDoerClient struct {
 	client       gen.HostServicesClient
+	flow         *ChildFlowControl
 	epoch        uint64
 	invocationID string
 }
 
 var _ core.HTTPDoer = (*HTTPDoerClient)(nil)
 
-func NewHTTPDoerClient(client gen.HostServicesClient, epoch uint64, invocationID string) *HTTPDoerClient {
-	return &HTTPDoerClient{client: client, epoch: epoch, invocationID: invocationID}
+func NewHTTPDoerClient(client gen.HostServicesClient, flow *ChildFlowControl, epoch uint64, invocationID string) *HTTPDoerClient {
+	return &HTTPDoerClient{client: client, flow: flow, epoch: epoch, invocationID: invocationID}
 }
 
 func (c *HTTPDoerClient) Do(req *http.Request) (*http.Response, error) {
@@ -336,7 +450,7 @@ func (c *HTTPDoerClient) doWithCallID(req *http.Request, callID uint64) (*http.R
 		return nil, err
 	}
 	if err = ipc.WriteRecord(id, wire, func(f *gen.RecordFragment) error {
-		return stream.Send(httpFrameRecord(c.epoch, callID, c.invocationID, f))
+		return c.sendFrame(ctx, stream, callID, len(f.Data), httpFrameRecord(c.epoch, callID, c.invocationID, f))
 	}); err != nil {
 		cancel()
 		return nil, err
@@ -366,7 +480,7 @@ func (c *HTTPDoerClient) doWithCallID(req *http.Request, callID uint64) (*http.R
 				if e != nil {
 					return e
 				}
-				return stream.Send(&gen.HTTPFrame{Epoch: c.epoch, CallId: callID, InvocationId: c.invocationID, Payload: &gen.HTTPFrame_Body{Body: b}})
+				return c.sendFrame(rpcCtx, stream, callID, len(chunk), &gen.HTTPFrame{Payload: &gen.HTTPFrame_Body{Body: b}})
 			})
 		}
 		stopped := isClosed(stopUpload)
@@ -375,7 +489,7 @@ func (c *HTTPDoerClient) doWithCallID(req *http.Request, callID uint64) (*http.R
 		}
 		if sendErr == nil {
 			sendErr = ipc.WriteRecord(ipc.Identity{Epoch: c.epoch, CallID: callID, RecordID: 1, Type: "HTTPBodyComplete"}, &gen.HTTPBodyComplete{}, func(f *gen.RecordFragment) error {
-				return stream.Send(httpFrameRecord(c.epoch, callID, c.invocationID, f))
+				return c.sendFrame(rpcCtx, stream, callID, len(f.Data), httpFrameRecord(c.epoch, callID, c.invocationID, f))
 			})
 		}
 		closeErr := stream.CloseSend()
@@ -407,9 +521,27 @@ func (c *HTTPDoerClient) doWithCallID(req *http.Request, callID uint64) (*http.R
 			return nil, ipc.ErrMalformed
 		}
 		stopRequestUpload()
-		if f.GetRecord().InvocationId != c.invocationID || a.Add(f.GetRecord()) != nil {
+		if f.GetRecord().InvocationId != c.invocationID {
 			cancel()
 			return nil, ipc.ErrMalformed
+		}
+		var flowID creditIdentity
+		if c.flow != nil {
+			flowID = creditIdentity{epoch: f.Epoch, invocationID: f.InvocationId, operation: "HTTPDo", callID: f.CallId, direction: "host_to_child", sequence: f.DataSequence}
+			if err := c.flow.ValidateIncoming(flowID, len(f.GetRecord().Data)); err != nil {
+				cancel()
+				return nil, err
+			}
+		}
+		if a.Add(f.GetRecord()) != nil {
+			cancel()
+			return nil, ipc.ErrMalformed
+		}
+		if c.flow != nil {
+			if err := c.flow.AckIncoming(ctx, flowID); err != nil {
+				cancel()
+				return nil, err
+			}
 		}
 	}
 	if err := <-uploadDone; err != nil {
@@ -423,7 +555,10 @@ func (c *HTTPDoerClient) doWithCallID(req *http.Request, callID uint64) (*http.R
 		cancel()
 		return nil, err
 	}
-	body := &httpResponseStreamBody{stream: stream, epoch: c.epoch, callID: callID, invocationID: c.invocationID, cancel: cancel}
+	body := &httpResponseStreamBody{stream: stream, flow: c.flow, ctx: ctx, epoch: c.epoch, callID: callID, invocationID: c.invocationID, cancel: cancel}
+	if c.flow != nil {
+		body.onDone = func() { c.flow.UnregisterCall(c.invocationID, "HTTPDo", callID) }
+	}
 	resp, err := ipc.HTTPResponseFrom(&meta, body)
 	if err != nil {
 		cancel()
@@ -433,15 +568,32 @@ func (c *HTTPDoerClient) doWithCallID(req *http.Request, callID uint64) (*http.R
 	return resp, nil
 }
 
+func (c *HTTPDoerClient) sendFrame(ctx context.Context, stream grpc.BidiStreamingClient[gen.HTTPFrame, gen.HTTPFrame], callID uint64, applicationBytes int, frame *gen.HTTPFrame) error {
+	if c.flow != nil {
+		id, err := c.flow.ReserveNext(ctx, c.invocationID, "HTTPDo", callID, applicationBytes)
+		if err != nil {
+			return err
+		}
+		frame.DataSequence = id.sequence
+	}
+	frame.Epoch, frame.CallId, frame.InvocationId = c.epoch, callID, c.invocationID
+	return stream.Send(frame)
+}
+
 type httpResponseStreamBody struct {
 	stream        grpc.BidiStreamingClient[gen.HTTPFrame, gen.HTTPFrame]
+	flow          *ChildFlowControl
+	ctx           context.Context
 	epoch, callID uint64
 	invocationID  string
 	current       []byte
+	currentID     creditIdentity
+	currentCred   bool
 	done          bool
 	terminalErr   error
 	cancel        context.CancelFunc
 	cancelOnce    sync.Once
+	onDone        func()
 }
 
 func (b *httpResponseStreamBody) fail(err error) (int, error) {
@@ -455,6 +607,12 @@ func (b *httpResponseStreamBody) cancelStream() {
 	b.cancelOnce.Do(func() {
 		if b.cancel != nil {
 			b.cancel()
+		}
+		if b.flow != nil {
+			_ = b.flow.CancelCall(b.invocationID, "HTTPDo", b.callID)
+		}
+		if b.onDone != nil {
+			b.onDone()
 		}
 	})
 }
@@ -482,6 +640,13 @@ func (b *httpResponseStreamBody) Read(p []byte) (int, error) {
 			if err != nil {
 				return b.fail(err)
 			}
+			if b.flow != nil {
+				b.currentID = creditIdentity{epoch: f.Epoch, invocationID: f.InvocationId, operation: "HTTPDo", callID: f.CallId, direction: "host_to_child", sequence: f.DataSequence}
+				if err := b.flow.ValidateIncoming(b.currentID, len(b.current)); err != nil {
+					return b.fail(err)
+				}
+				b.currentCred = true
+			}
 			continue
 		}
 		r := f.GetRecord()
@@ -489,12 +654,24 @@ func (b *httpResponseStreamBody) Read(p []byte) (int, error) {
 			return b.fail(ipc.ErrMalformed)
 		}
 		a := ipc.NewAssembler(ipc.Identity{Epoch: b.epoch, CallID: b.callID, RecordID: 1, Type: "HTTPBodyComplete"})
+		var flowID creditIdentity
+		if b.flow != nil {
+			flowID = creditIdentity{epoch: f.Epoch, invocationID: f.InvocationId, operation: "HTTPDo", callID: f.CallId, direction: "host_to_child", sequence: f.DataSequence}
+			if err := b.flow.ValidateIncoming(flowID, len(r.Data)); err != nil {
+				return b.fail(err)
+			}
+		}
 		if a.Add(r) != nil || !a.Complete() {
 			return b.fail(ipc.ErrMalformed)
 		}
 		var complete gen.HTTPBodyComplete
 		if a.Decode(&complete) != nil {
 			return b.fail(ipc.ErrMalformed)
+		}
+		if b.flow != nil {
+			if err := b.flow.AckIncoming(b.ctx, flowID); err != nil {
+				return b.fail(err)
+			}
 		}
 		if _, err = b.stream.Recv(); errors.Is(err, io.EOF) {
 			b.done = true
@@ -510,6 +687,13 @@ func (b *httpResponseStreamBody) Read(p []byte) (int, error) {
 	}
 	n := copy(p, b.current)
 	b.current = b.current[n:]
+	if len(b.current) == 0 && b.currentCred {
+		if err := b.flow.AckIncoming(b.ctx, b.currentID); err != nil {
+			b.cancelStream()
+			return n, err
+		}
+		b.currentCred = false
+	}
 	return n, nil
 }
 func (b *httpResponseStreamBody) Close() error { b.cancelStream(); return nil }

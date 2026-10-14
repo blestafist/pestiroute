@@ -25,6 +25,7 @@
 | D15 | Accepted | CONTRACT.md owns the v1 Adapter–Core Runtime–Connector boundary; semantic changes require ADR | Prevents per-provider API growth and undocumented compatibility breaks; see DEC-004 |
 | D16 | Proposed | M3 protected startup loads its master key from a permission-checked external file | Keeps key material out of SQLite and configuration/environment surfaces; see DEC-005 |
 | D18 | Accepted | Defer official Anthropic verification as an M4 completion prerequisite only after offline gates pass; retain it before production release | Human governance accepted the narrow deferral on 2026-10-04 and authorized the documentation batch; separates offline implementation quality from official-provider entitlement; see DEC-008 |
+| D19 | Accepted | External Connector IPC uses a host-owned epoch credit broker and a dedicated priority control lane | Enforces aggregate queue ceilings across independent data sockets; see DEC-017 |
 
 ## Contract ADRs
 
@@ -456,6 +457,15 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Verification:** Test route-bound and unbounded `AttemptScope` population,
   exact-boundary transport, and over-bound rejection at both host and child
   assembly. No live provider call is relevant.
+
+### DEC-017 — Enforce Aggregate IPC Backpressure with a Host-Owned Epoch Broker
+
+- **Status:** Accepted by the M6-020 planner resolution; IPC-only semantic extension, not a Core API change.
+- **Context:** Execute and reverse HTTP use independent gRPC connections. HTTP/2 flow-control windows are peer-configurable and cannot enforce shared per-invocation/process limits across both sockets; an independent real-transport probe sent 257 x 64 KiB frames without receiver `Recv()` despite an 84 KiB server initial window.
+- **Decision:** The host owns an epoch-bound `CreditBroker` with 64 frames / 4 MiB per invocation and 256 frames / 16 MiB per process. Every streamed data envelope (Execute and HTTPDo, either direction; BodyChunk or RecordFragment) carries a monotonic sequence. A producer must reserve one frame and its application bytes before sending; host-issued reservations are authoritative and the receiver returns credit only after delivery/assembly consumption. Identity binds epoch, invocation, operation, call, direction and sequence. Reject stale, replayed, missing, oversized or unreserved data. Use separate control RPC connections for broker Reserve/Ack and prioritized Cancel/Close, with a combined 64-message / 256 KiB cap and bounded/coalesced ACKs. Cancellation revokes reservations without waiting for data credits. gRPC windows alone are not an enforcement mechanism.
+- **Alternatives rejected:** Tune HTTP/2 initial windows (peer-controlled, connection-local); maintain independent per-socket/per-stream budgets (cannot enforce aggregate cross-socket limits); buffer complete responses (breaks incremental delivery); or change Core/provider APIs (unnecessary).
+- **Compatibility / impact:** Add `FlowControl` RPCs and frame sequence fields to the generated IPC schema; require IPC minor >=1 before Init/Execute. IPC major remains 1 because the addition is minor-version gated; old children are rejected rather than used without broker semantics. No Core contract, provider API, or native child composition change; child helper integration is defined here, production root remains M6-024.
+- **Verification:** Real gRPC tests must prove cross-socket shared limits with large peer windows, tiny-frame count limits, reserve-before-send, partial-read ACK release, stale/replay rejection, control progress under saturation and reservation cleanup on cancellation. Synchronize this ADR with M6-BINDING and M6-EXTERNAL; regenerate protobuf bindings using pinned tools.
 
 ## Questions Before Implementation
 

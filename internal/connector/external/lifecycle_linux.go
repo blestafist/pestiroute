@@ -29,7 +29,9 @@ const (
 type Connector struct {
 	process     *Process
 	conn        *grpc.ClientConn
+	controlConn *grpc.ClientConn
 	client      gen.ConnectorClient
+	control     gen.ConnectorClient
 	descriptor  core.Descriptor
 	epoch       uint64
 	invocations *invocationRegistry
@@ -54,10 +56,29 @@ func (p *Process) ConnectComponent(ctx context.Context) (*Connector, error) {
 	if err != nil {
 		return nil, err
 	}
+	controlConn, controlClient, err := p.connectControl(ctx)
+	if err != nil {
+		_ = conn.Close()
+		return nil, p.abort(fmt.Errorf("connector flow-control connection: %w", err))
+	}
 	serviceCtx, cancel := context.WithCancel(context.Background())
 	registry := newInvocationRegistry(p.epoch)
 	registry.secrets = p.secrets
-	return &Connector{process: p, conn: conn, client: gen.NewConnectorClient(conn), descriptor: descriptor.Clone(), epoch: p.epoch, invocations: registry, hostServer: p.serveHostServices(serviceCtx, registry), hostCancel: cancel, gate: make(chan struct{}, 1)}, nil
+	hostServer := p.serveHostServices(serviceCtx, registry, controlClient)
+	c := &Connector{process: p, conn: conn, controlConn: controlConn, client: gen.NewConnectorClient(conn), control: controlClient, descriptor: descriptor.Clone(), epoch: p.epoch, invocations: registry, hostServer: hostServer, hostCancel: cancel, gate: make(chan struct{}, 1)}
+	probe := &gen.FlowIdentity{Epoch: p.epoch, InvocationId: "probe", Operation: "Execute", CallId: 1, Direction: "host_to_child", Sequence: 1}
+	response, err := controlClient.FlowControl(ctx, &gen.FlowControlRequest{Kind: gen.FlowControlKind_FLOW_CONTROL_PROBE, Identity: probe})
+	if err != nil || response == nil || response.Kind != gen.FlowControlKind_FLOW_CONTROL_PROBE || !proto.Equal(response.Identity, probe) {
+		cancel()
+		hostServer.Stop()
+		_ = controlConn.Close()
+		_ = conn.Close()
+		if err != nil {
+			return nil, p.abort(fmt.Errorf("connector flow-control handshake: %w", err))
+		}
+		return nil, p.abort(errors.New("child does not implement required flow-control protocol"))
+	}
+	return c, nil
 }
 
 var _ core.Component = (*Connector)(nil)
@@ -386,14 +407,16 @@ func (c *Connector) closeOwned(ctx context.Context, done chan struct{}) {
 		if !alreadyUnavailable {
 			shutdownErr := c.process.Shutdown(bounded, c.closeRPC)
 			connErr := c.conn.Close()
-			err = errors.Join(lifecycleError("Close", shutdownErr), lifecycleError("connection close", connErr))
+			controlErr := c.controlConn.Close()
+			err = errors.Join(lifecycleError("Close", shutdownErr), lifecycleError("connection close", connErr), lifecycleError("control connection close", controlErr))
 		}
 	} else {
 		// Even when admission could not drain before the caller's deadline, the
 		// supervisor still owns terminating/reaping the process group.
 		shutdownErr := c.process.Shutdown(bounded, c.closeRPC)
 		connErr := c.conn.Close()
-		err = errors.Join(lifecycleError("Close", shutdownErr), lifecycleError("connection close", connErr))
+		controlErr := c.controlConn.Close()
+		err = errors.Join(lifecycleError("Close", shutdownErr), lifecycleError("connection close", connErr), lifecycleError("control connection close", controlErr))
 	}
 	c.mu.Lock()
 	c.closeErr = err
@@ -402,8 +425,10 @@ func (c *Connector) closeOwned(ctx context.Context, done chan struct{}) {
 }
 
 func (c *Connector) closeRPC(ctx context.Context) error {
+	id := &gen.FlowIdentity{Epoch: c.epoch, InvocationId: "process", Operation: "Execute", CallId: 1, Direction: "host_to_child", Sequence: 1}
+	_, controlErr := controlCall(ctx, c.invocations.control, c.control, controlUrgent, &gen.FlowControlRequest{Kind: gen.FlowControlKind_FLOW_CONTROL_CLOSE, Identity: id})
 	_, err := c.client.Close(ctx, lifecycleRequest(c.epoch))
-	return err
+	return errors.Join(controlErr, err)
 }
 
 func (c *Connector) acquire(ctx context.Context) error {

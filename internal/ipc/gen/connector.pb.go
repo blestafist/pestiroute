@@ -23,6 +23,67 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type FlowControlKind int32
+
+const (
+	FlowControlKind_FLOW_CONTROL_UNSPECIFIED FlowControlKind = 0
+	FlowControlKind_FLOW_CONTROL_RESERVE     FlowControlKind = 1
+	FlowControlKind_FLOW_CONTROL_GRANT       FlowControlKind = 2
+	FlowControlKind_FLOW_CONTROL_ACK         FlowControlKind = 3
+	FlowControlKind_FLOW_CONTROL_CANCEL      FlowControlKind = 4
+	FlowControlKind_FLOW_CONTROL_CLOSE       FlowControlKind = 5
+	FlowControlKind_FLOW_CONTROL_PROBE       FlowControlKind = 6
+)
+
+// Enum value maps for FlowControlKind.
+var (
+	FlowControlKind_name = map[int32]string{
+		0: "FLOW_CONTROL_UNSPECIFIED",
+		1: "FLOW_CONTROL_RESERVE",
+		2: "FLOW_CONTROL_GRANT",
+		3: "FLOW_CONTROL_ACK",
+		4: "FLOW_CONTROL_CANCEL",
+		5: "FLOW_CONTROL_CLOSE",
+		6: "FLOW_CONTROL_PROBE",
+	}
+	FlowControlKind_value = map[string]int32{
+		"FLOW_CONTROL_UNSPECIFIED": 0,
+		"FLOW_CONTROL_RESERVE":     1,
+		"FLOW_CONTROL_GRANT":       2,
+		"FLOW_CONTROL_ACK":         3,
+		"FLOW_CONTROL_CANCEL":      4,
+		"FLOW_CONTROL_CLOSE":       5,
+		"FLOW_CONTROL_PROBE":       6,
+	}
+)
+
+func (x FlowControlKind) Enum() *FlowControlKind {
+	p := new(FlowControlKind)
+	*p = x
+	return p
+}
+
+func (x FlowControlKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (FlowControlKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_connector_proto_enumTypes[0].Descriptor()
+}
+
+func (FlowControlKind) Type() protoreflect.EnumType {
+	return &file_connector_proto_enumTypes[0]
+}
+
+func (x FlowControlKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use FlowControlKind.Descriptor instead.
+func (FlowControlKind) EnumDescriptor() ([]byte, []int) {
+	return file_connector_proto_rawDescGZIP(), []int{0}
+}
+
 // Every message below is a logical typed record. Transport envelopes and
 // opaque body chunks are deliberately separate from these values.
 type Version struct {
@@ -2143,6 +2204,7 @@ type HTTPFrame struct {
 	//	*HTTPFrame_Record
 	//	*HTTPFrame_Body
 	Payload       isHTTPFrame_Payload `protobuf_oneof:"payload"`
+	DataSequence  uint64              `protobuf:"varint,6,opt,name=data_sequence,json=dataSequence,proto3" json:"data_sequence,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2221,6 +2283,13 @@ func (x *HTTPFrame) GetBody() *BodyChunk {
 		}
 	}
 	return nil
+}
+
+func (x *HTTPFrame) GetDataSequence() uint64 {
+	if x != nil {
+		return x.DataSequence
+	}
+	return 0
 }
 
 type isHTTPFrame_Payload interface {
@@ -2355,6 +2424,7 @@ type ExecuteFrame struct {
 	//	*ExecuteFrame_Record
 	//	*ExecuteFrame_Body
 	Payload       isExecuteFrame_Payload `protobuf_oneof:"payload"`
+	DataSequence  uint64                 `protobuf:"varint,6,opt,name=data_sequence,json=dataSequence,proto3" json:"data_sequence,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2435,6 +2505,13 @@ func (x *ExecuteFrame) GetBody() *BodyChunk {
 	return nil
 }
 
+func (x *ExecuteFrame) GetDataSequence() uint64 {
+	if x != nil {
+		return x.DataSequence
+	}
+	return 0
+}
+
 type isExecuteFrame_Payload interface {
 	isExecuteFrame_Payload()
 }
@@ -2451,6 +2528,234 @@ func (*ExecuteFrame_Record) isExecuteFrame_Payload() {}
 
 func (*ExecuteFrame_Body) isExecuteFrame_Payload() {}
 
+type FlowIdentity struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	InvocationId  string                 `protobuf:"bytes,2,opt,name=invocation_id,json=invocationId,proto3" json:"invocation_id,omitempty"`
+	Operation     string                 `protobuf:"bytes,3,opt,name=operation,proto3" json:"operation,omitempty"`
+	CallId        uint64                 `protobuf:"varint,4,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
+	Direction     string                 `protobuf:"bytes,5,opt,name=direction,proto3" json:"direction,omitempty"`
+	Sequence      uint64                 `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FlowIdentity) Reset() {
+	*x = FlowIdentity{}
+	mi := &file_connector_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FlowIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FlowIdentity) ProtoMessage() {}
+
+func (x *FlowIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_connector_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FlowIdentity.ProtoReflect.Descriptor instead.
+func (*FlowIdentity) Descriptor() ([]byte, []int) {
+	return file_connector_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *FlowIdentity) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *FlowIdentity) GetInvocationId() string {
+	if x != nil {
+		return x.InvocationId
+	}
+	return ""
+}
+
+func (x *FlowIdentity) GetOperation() string {
+	if x != nil {
+		return x.Operation
+	}
+	return ""
+}
+
+func (x *FlowIdentity) GetCallId() uint64 {
+	if x != nil {
+		return x.CallId
+	}
+	return 0
+}
+
+func (x *FlowIdentity) GetDirection() string {
+	if x != nil {
+		return x.Direction
+	}
+	return ""
+}
+
+func (x *FlowIdentity) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+type FlowControlRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Kind             FlowControlKind        `protobuf:"varint,1,opt,name=kind,proto3,enum=pestiroute.connector.v1.FlowControlKind" json:"kind,omitempty"`
+	Identity         *FlowIdentity          `protobuf:"bytes,2,opt,name=identity,proto3" json:"identity,omitempty"`
+	Frames           uint32                 `protobuf:"varint,3,opt,name=frames,proto3" json:"frames,omitempty"`
+	ApplicationBytes uint32                 `protobuf:"varint,4,opt,name=application_bytes,json=applicationBytes,proto3" json:"application_bytes,omitempty"`
+	Acknowledgements []*FlowIdentity        `protobuf:"bytes,5,rep,name=acknowledgements,proto3" json:"acknowledgements,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *FlowControlRequest) Reset() {
+	*x = FlowControlRequest{}
+	mi := &file_connector_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FlowControlRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FlowControlRequest) ProtoMessage() {}
+
+func (x *FlowControlRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_connector_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FlowControlRequest.ProtoReflect.Descriptor instead.
+func (*FlowControlRequest) Descriptor() ([]byte, []int) {
+	return file_connector_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *FlowControlRequest) GetKind() FlowControlKind {
+	if x != nil {
+		return x.Kind
+	}
+	return FlowControlKind_FLOW_CONTROL_UNSPECIFIED
+}
+
+func (x *FlowControlRequest) GetIdentity() *FlowIdentity {
+	if x != nil {
+		return x.Identity
+	}
+	return nil
+}
+
+func (x *FlowControlRequest) GetFrames() uint32 {
+	if x != nil {
+		return x.Frames
+	}
+	return 0
+}
+
+func (x *FlowControlRequest) GetApplicationBytes() uint32 {
+	if x != nil {
+		return x.ApplicationBytes
+	}
+	return 0
+}
+
+func (x *FlowControlRequest) GetAcknowledgements() []*FlowIdentity {
+	if x != nil {
+		return x.Acknowledgements
+	}
+	return nil
+}
+
+type FlowControlResponse struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Kind             FlowControlKind        `protobuf:"varint,1,opt,name=kind,proto3,enum=pestiroute.connector.v1.FlowControlKind" json:"kind,omitempty"`
+	Identity         *FlowIdentity          `protobuf:"bytes,2,opt,name=identity,proto3" json:"identity,omitempty"`
+	Frames           uint32                 `protobuf:"varint,3,opt,name=frames,proto3" json:"frames,omitempty"`
+	ApplicationBytes uint32                 `protobuf:"varint,4,opt,name=application_bytes,json=applicationBytes,proto3" json:"application_bytes,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *FlowControlResponse) Reset() {
+	*x = FlowControlResponse{}
+	mi := &file_connector_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FlowControlResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FlowControlResponse) ProtoMessage() {}
+
+func (x *FlowControlResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_connector_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FlowControlResponse.ProtoReflect.Descriptor instead.
+func (*FlowControlResponse) Descriptor() ([]byte, []int) {
+	return file_connector_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *FlowControlResponse) GetKind() FlowControlKind {
+	if x != nil {
+		return x.Kind
+	}
+	return FlowControlKind_FLOW_CONTROL_UNSPECIFIED
+}
+
+func (x *FlowControlResponse) GetIdentity() *FlowIdentity {
+	if x != nil {
+		return x.Identity
+	}
+	return nil
+}
+
+func (x *FlowControlResponse) GetFrames() uint32 {
+	if x != nil {
+		return x.Frames
+	}
+	return 0
+}
+
+func (x *FlowControlResponse) GetApplicationBytes() uint32 {
+	if x != nil {
+		return x.ApplicationBytes
+	}
+	return 0
+}
+
 type CredentialLookup struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -2460,7 +2765,7 @@ type CredentialLookup struct {
 
 func (x *CredentialLookup) Reset() {
 	*x = CredentialLookup{}
-	mi := &file_connector_proto_msgTypes[36]
+	mi := &file_connector_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2472,7 +2777,7 @@ func (x *CredentialLookup) String() string {
 func (*CredentialLookup) ProtoMessage() {}
 
 func (x *CredentialLookup) ProtoReflect() protoreflect.Message {
-	mi := &file_connector_proto_msgTypes[36]
+	mi := &file_connector_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2485,7 +2790,7 @@ func (x *CredentialLookup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CredentialLookup.ProtoReflect.Descriptor instead.
 func (*CredentialLookup) Descriptor() ([]byte, []int) {
-	return file_connector_proto_rawDescGZIP(), []int{36}
+	return file_connector_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *CredentialLookup) GetName() string {
@@ -2504,7 +2809,7 @@ type CredentialValue struct {
 
 func (x *CredentialValue) Reset() {
 	*x = CredentialValue{}
-	mi := &file_connector_proto_msgTypes[37]
+	mi := &file_connector_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2516,7 +2821,7 @@ func (x *CredentialValue) String() string {
 func (*CredentialValue) ProtoMessage() {}
 
 func (x *CredentialValue) ProtoReflect() protoreflect.Message {
-	mi := &file_connector_proto_msgTypes[37]
+	mi := &file_connector_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2529,7 +2834,7 @@ func (x *CredentialValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CredentialValue.ProtoReflect.Descriptor instead.
 func (*CredentialValue) Descriptor() ([]byte, []int) {
-	return file_connector_proto_rawDescGZIP(), []int{37}
+	return file_connector_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *CredentialValue) GetValue() []byte {
@@ -2550,7 +2855,7 @@ type LogRecord struct {
 
 func (x *LogRecord) Reset() {
 	*x = LogRecord{}
-	mi := &file_connector_proto_msgTypes[38]
+	mi := &file_connector_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2562,7 +2867,7 @@ func (x *LogRecord) String() string {
 func (*LogRecord) ProtoMessage() {}
 
 func (x *LogRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_connector_proto_msgTypes[38]
+	mi := &file_connector_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2575,7 +2880,7 @@ func (x *LogRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogRecord.ProtoReflect.Descriptor instead.
 func (*LogRecord) Descriptor() ([]byte, []int) {
-	return file_connector_proto_rawDescGZIP(), []int{38}
+	return file_connector_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *LogRecord) GetLevel() string {
@@ -2609,7 +2914,7 @@ type Handshake struct {
 
 func (x *Handshake) Reset() {
 	*x = Handshake{}
-	mi := &file_connector_proto_msgTypes[39]
+	mi := &file_connector_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2621,7 +2926,7 @@ func (x *Handshake) String() string {
 func (*Handshake) ProtoMessage() {}
 
 func (x *Handshake) ProtoReflect() protoreflect.Message {
-	mi := &file_connector_proto_msgTypes[39]
+	mi := &file_connector_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2634,7 +2939,7 @@ func (x *Handshake) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Handshake.ProtoReflect.Descriptor instead.
 func (*Handshake) Descriptor() ([]byte, []int) {
-	return file_connector_proto_rawDescGZIP(), []int{39}
+	return file_connector_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *Handshake) GetProtocolId() string {
@@ -2856,13 +3161,14 @@ const file_connector_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x129\n" +
 	"\x05value\x18\x02 \x01(\v2#.pestiroute.connector.v1.StringListR\x05value:\x028\x01B\x11\n" +
 	"\x0f_content_length\"\x12\n" +
-	"\x10HTTPBodyComplete\"\xe7\x01\n" +
+	"\x10HTTPBodyComplete\"\x8c\x02\n" +
 	"\tHTTPFrame\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\x17\n" +
 	"\acall_id\x18\x02 \x01(\x04R\x06callId\x12#\n" +
 	"\rinvocation_id\x18\x03 \x01(\tR\finvocationId\x12A\n" +
 	"\x06record\x18\x04 \x01(\v2'.pestiroute.connector.v1.RecordFragmentH\x00R\x06record\x128\n" +
-	"\x04body\x18\x05 \x01(\v2\".pestiroute.connector.v1.BodyChunkH\x00R\x04bodyB\t\n" +
+	"\x04body\x18\x05 \x01(\v2\".pestiroute.connector.v1.BodyChunkH\x00R\x04body\x12#\n" +
+	"\rdata_sequence\x18\x06 \x01(\x04R\fdataSequenceB\t\n" +
 	"\apayload\"\xeb\x01\n" +
 	"\rEstimateFrame\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\x17\n" +
@@ -2870,14 +3176,33 @@ const file_connector_proto_rawDesc = "" +
 	"\rinvocation_id\x18\x03 \x01(\tR\finvocationId\x12A\n" +
 	"\x06record\x18\x04 \x01(\v2'.pestiroute.connector.v1.RecordFragmentH\x00R\x06record\x128\n" +
 	"\x04body\x18\x05 \x01(\v2\".pestiroute.connector.v1.BodyChunkH\x00R\x04bodyB\t\n" +
-	"\apayload\"\xea\x01\n" +
+	"\apayload\"\x8f\x02\n" +
 	"\fExecuteFrame\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\x17\n" +
 	"\acall_id\x18\x02 \x01(\x04R\x06callId\x12#\n" +
 	"\rinvocation_id\x18\x03 \x01(\tR\finvocationId\x12A\n" +
 	"\x06record\x18\x04 \x01(\v2'.pestiroute.connector.v1.RecordFragmentH\x00R\x06record\x128\n" +
-	"\x04body\x18\x05 \x01(\v2\".pestiroute.connector.v1.BodyChunkH\x00R\x04bodyB\t\n" +
-	"\apayload\"&\n" +
+	"\x04body\x18\x05 \x01(\v2\".pestiroute.connector.v1.BodyChunkH\x00R\x04body\x12#\n" +
+	"\rdata_sequence\x18\x06 \x01(\x04R\fdataSequenceB\t\n" +
+	"\apayload\"\xba\x01\n" +
+	"\fFlowIdentity\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12#\n" +
+	"\rinvocation_id\x18\x02 \x01(\tR\finvocationId\x12\x1c\n" +
+	"\toperation\x18\x03 \x01(\tR\toperation\x12\x17\n" +
+	"\acall_id\x18\x04 \x01(\x04R\x06callId\x12\x1c\n" +
+	"\tdirection\x18\x05 \x01(\tR\tdirection\x12\x1a\n" +
+	"\bsequence\x18\x06 \x01(\x04R\bsequence\"\xad\x02\n" +
+	"\x12FlowControlRequest\x12<\n" +
+	"\x04kind\x18\x01 \x01(\x0e2(.pestiroute.connector.v1.FlowControlKindR\x04kind\x12A\n" +
+	"\bidentity\x18\x02 \x01(\v2%.pestiroute.connector.v1.FlowIdentityR\bidentity\x12\x16\n" +
+	"\x06frames\x18\x03 \x01(\rR\x06frames\x12+\n" +
+	"\x11application_bytes\x18\x04 \x01(\rR\x10applicationBytes\x12Q\n" +
+	"\x10acknowledgements\x18\x05 \x03(\v2%.pestiroute.connector.v1.FlowIdentityR\x10acknowledgements\"\xdb\x01\n" +
+	"\x13FlowControlResponse\x12<\n" +
+	"\x04kind\x18\x01 \x01(\x0e2(.pestiroute.connector.v1.FlowControlKindR\x04kind\x12A\n" +
+	"\bidentity\x18\x02 \x01(\v2%.pestiroute.connector.v1.FlowIdentityR\bidentity\x12\x16\n" +
+	"\x06frames\x18\x03 \x01(\rR\x06frames\x12+\n" +
+	"\x11application_bytes\x18\x04 \x01(\rR\x10applicationBytes\"&\n" +
 	"\x10CredentialLookup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"'\n" +
 	"\x0fCredentialValue\x12\x14\n" +
@@ -2895,7 +3220,15 @@ const file_connector_proto_rawDesc = "" +
 	"\vprotocol_id\x18\x01 \x01(\tR\n" +
 	"protocolId\x12A\n" +
 	"\vipc_version\x18\x02 \x01(\v2 .pestiroute.connector.v1.VersionR\n" +
-	"ipcVersion2\xd2\a\n" +
+	"ipcVersion*\xc0\x01\n" +
+	"\x0fFlowControlKind\x12\x1c\n" +
+	"\x18FLOW_CONTROL_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14FLOW_CONTROL_RESERVE\x10\x01\x12\x16\n" +
+	"\x12FLOW_CONTROL_GRANT\x10\x02\x12\x14\n" +
+	"\x10FLOW_CONTROL_ACK\x10\x03\x12\x17\n" +
+	"\x13FLOW_CONTROL_CANCEL\x10\x04\x12\x16\n" +
+	"\x12FLOW_CONTROL_CLOSE\x10\x05\x12\x16\n" +
+	"\x12FLOW_CONTROL_PROBE\x10\x062\xbc\b\n" +
 	"\tConnector\x12_\n" +
 	"\tHandshake\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01\x12`\n" +
 	"\n" +
@@ -2907,11 +3240,13 @@ const file_connector_proto_rawDesc = "" +
 	"\rEstimateUsage\x12&.pestiroute.connector.v1.EstimateFrame\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12d\n" +
 	"\fAuthenticate\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12[\n" +
 	"\aExecute\x12%.pestiroute.connector.v1.ExecuteFrame\x1a%.pestiroute.connector.v1.ExecuteFrame(\x010\x01\x12Y\n" +
-	"\x05Close\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment2\x95\x02\n" +
+	"\x05Close\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment\x12h\n" +
+	"\vFlowControl\x12+.pestiroute.connector.v1.FlowControlRequest\x1a,.pestiroute.connector.v1.FlowControlResponse2\xff\x02\n" +
 	"\fHostServices\x12e\n" +
 	"\rCredentialGet\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment(\x010\x01\x12T\n" +
 	"\x06HTTPDo\x12\".pestiroute.connector.v1.HTTPFrame\x1a\".pestiroute.connector.v1.HTTPFrame(\x010\x01\x12H\n" +
-	"\x03Log\x12'.pestiroute.connector.v1.RecordFragment\x1a\x16.google.protobuf.Empty(\x01B:Z8github.com/blestafist/pestiroute/internal/ipc/gen;ipcgenb\x06proto3"
+	"\x03Log\x12'.pestiroute.connector.v1.RecordFragment\x1a\x16.google.protobuf.Empty(\x01\x12h\n" +
+	"\vFlowControl\x12+.pestiroute.connector.v1.FlowControlRequest\x1a,.pestiroute.connector.v1.FlowControlResponseB:Z8github.com/blestafist/pestiroute/internal/ipc/gen;ipcgenb\x06proto3"
 
 var (
 	file_connector_proto_rawDescOnce sync.Once
@@ -2925,125 +3260,139 @@ func file_connector_proto_rawDescGZIP() []byte {
 	return file_connector_proto_rawDescData
 }
 
-var file_connector_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
+var file_connector_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_connector_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
 var file_connector_proto_goTypes = []any{
-	(*Version)(nil),               // 0: pestiroute.connector.v1.Version
-	(*Descriptor)(nil),            // 1: pestiroute.connector.v1.Descriptor
-	(*ComponentConfig)(nil),       // 2: pestiroute.connector.v1.ComponentConfig
-	(*Health)(nil),                // 3: pestiroute.connector.v1.Health
-	(*CapabilityScope)(nil),       // 4: pestiroute.connector.v1.CapabilityScope
-	(*CapabilityValue)(nil),       // 5: pestiroute.connector.v1.CapabilityValue
-	(*CapabilityResult)(nil),      // 6: pestiroute.connector.v1.CapabilityResult
-	(*ModelQuery)(nil),            // 7: pestiroute.connector.v1.ModelQuery
-	(*ModelInfo)(nil),             // 8: pestiroute.connector.v1.ModelInfo
-	(*ModelsResult)(nil),          // 9: pestiroute.connector.v1.ModelsResult
-	(*RawPayload)(nil),            // 10: pestiroute.connector.v1.RawPayload
-	(*UsageQuery)(nil),            // 11: pestiroute.connector.v1.UsageQuery
-	(*UsageReport)(nil),           // 12: pestiroute.connector.v1.UsageReport
-	(*EstimateResult)(nil),        // 13: pestiroute.connector.v1.EstimateResult
-	(*AuthRequest)(nil),           // 14: pestiroute.connector.v1.AuthRequest
-	(*AuthUserAction)(nil),        // 15: pestiroute.connector.v1.AuthUserAction
-	(*AuthResult)(nil),            // 16: pestiroute.connector.v1.AuthResult
-	(*RequestMetadata)(nil),       // 17: pestiroute.connector.v1.RequestMetadata
-	(*StringList)(nil),            // 18: pestiroute.connector.v1.StringList
-	(*ExecutionRequest)(nil),      // 19: pestiroute.connector.v1.ExecutionRequest
-	(*AttemptScope)(nil),          // 20: pestiroute.connector.v1.AttemptScope
-	(*GatewayError)(nil),          // 21: pestiroute.connector.v1.GatewayError
-	(*HeadFrame)(nil),             // 22: pestiroute.connector.v1.HeadFrame
-	(*CompleteFrame)(nil),         // 23: pestiroute.connector.v1.CompleteFrame
-	(*StreamFrame)(nil),           // 24: pestiroute.connector.v1.StreamFrame
-	(*CapabilitySet)(nil),         // 25: pestiroute.connector.v1.CapabilitySet
-	(*RecordFragment)(nil),        // 26: pestiroute.connector.v1.RecordFragment
-	(*BodyChunk)(nil),             // 27: pestiroute.connector.v1.BodyChunk
-	(*ExecuteStart)(nil),          // 28: pestiroute.connector.v1.ExecuteStart
-	(*InputComplete)(nil),         // 29: pestiroute.connector.v1.InputComplete
-	(*HTTPRequest)(nil),           // 30: pestiroute.connector.v1.HTTPRequest
-	(*HTTPResponse)(nil),          // 31: pestiroute.connector.v1.HTTPResponse
-	(*HTTPBodyComplete)(nil),      // 32: pestiroute.connector.v1.HTTPBodyComplete
-	(*HTTPFrame)(nil),             // 33: pestiroute.connector.v1.HTTPFrame
-	(*EstimateFrame)(nil),         // 34: pestiroute.connector.v1.EstimateFrame
-	(*ExecuteFrame)(nil),          // 35: pestiroute.connector.v1.ExecuteFrame
-	(*CredentialLookup)(nil),      // 36: pestiroute.connector.v1.CredentialLookup
-	(*CredentialValue)(nil),       // 37: pestiroute.connector.v1.CredentialValue
-	(*LogRecord)(nil),             // 38: pestiroute.connector.v1.LogRecord
-	(*Handshake)(nil),             // 39: pestiroute.connector.v1.Handshake
-	nil,                           // 40: pestiroute.connector.v1.AuthResult.CredentialsEntry
-	nil,                           // 41: pestiroute.connector.v1.RequestMetadata.HeadersEntry
-	nil,                           // 42: pestiroute.connector.v1.RequestMetadata.ExtensionsEntry
-	nil,                           // 43: pestiroute.connector.v1.HeadFrame.HeadersEntry
-	nil,                           // 44: pestiroute.connector.v1.HTTPRequest.HeadersEntry
-	nil,                           // 45: pestiroute.connector.v1.HTTPResponse.HeadersEntry
-	nil,                           // 46: pestiroute.connector.v1.LogRecord.AttributesEntry
-	(*timestamppb.Timestamp)(nil), // 47: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),         // 48: google.protobuf.Empty
+	(FlowControlKind)(0),          // 0: pestiroute.connector.v1.FlowControlKind
+	(*Version)(nil),               // 1: pestiroute.connector.v1.Version
+	(*Descriptor)(nil),            // 2: pestiroute.connector.v1.Descriptor
+	(*ComponentConfig)(nil),       // 3: pestiroute.connector.v1.ComponentConfig
+	(*Health)(nil),                // 4: pestiroute.connector.v1.Health
+	(*CapabilityScope)(nil),       // 5: pestiroute.connector.v1.CapabilityScope
+	(*CapabilityValue)(nil),       // 6: pestiroute.connector.v1.CapabilityValue
+	(*CapabilityResult)(nil),      // 7: pestiroute.connector.v1.CapabilityResult
+	(*ModelQuery)(nil),            // 8: pestiroute.connector.v1.ModelQuery
+	(*ModelInfo)(nil),             // 9: pestiroute.connector.v1.ModelInfo
+	(*ModelsResult)(nil),          // 10: pestiroute.connector.v1.ModelsResult
+	(*RawPayload)(nil),            // 11: pestiroute.connector.v1.RawPayload
+	(*UsageQuery)(nil),            // 12: pestiroute.connector.v1.UsageQuery
+	(*UsageReport)(nil),           // 13: pestiroute.connector.v1.UsageReport
+	(*EstimateResult)(nil),        // 14: pestiroute.connector.v1.EstimateResult
+	(*AuthRequest)(nil),           // 15: pestiroute.connector.v1.AuthRequest
+	(*AuthUserAction)(nil),        // 16: pestiroute.connector.v1.AuthUserAction
+	(*AuthResult)(nil),            // 17: pestiroute.connector.v1.AuthResult
+	(*RequestMetadata)(nil),       // 18: pestiroute.connector.v1.RequestMetadata
+	(*StringList)(nil),            // 19: pestiroute.connector.v1.StringList
+	(*ExecutionRequest)(nil),      // 20: pestiroute.connector.v1.ExecutionRequest
+	(*AttemptScope)(nil),          // 21: pestiroute.connector.v1.AttemptScope
+	(*GatewayError)(nil),          // 22: pestiroute.connector.v1.GatewayError
+	(*HeadFrame)(nil),             // 23: pestiroute.connector.v1.HeadFrame
+	(*CompleteFrame)(nil),         // 24: pestiroute.connector.v1.CompleteFrame
+	(*StreamFrame)(nil),           // 25: pestiroute.connector.v1.StreamFrame
+	(*CapabilitySet)(nil),         // 26: pestiroute.connector.v1.CapabilitySet
+	(*RecordFragment)(nil),        // 27: pestiroute.connector.v1.RecordFragment
+	(*BodyChunk)(nil),             // 28: pestiroute.connector.v1.BodyChunk
+	(*ExecuteStart)(nil),          // 29: pestiroute.connector.v1.ExecuteStart
+	(*InputComplete)(nil),         // 30: pestiroute.connector.v1.InputComplete
+	(*HTTPRequest)(nil),           // 31: pestiroute.connector.v1.HTTPRequest
+	(*HTTPResponse)(nil),          // 32: pestiroute.connector.v1.HTTPResponse
+	(*HTTPBodyComplete)(nil),      // 33: pestiroute.connector.v1.HTTPBodyComplete
+	(*HTTPFrame)(nil),             // 34: pestiroute.connector.v1.HTTPFrame
+	(*EstimateFrame)(nil),         // 35: pestiroute.connector.v1.EstimateFrame
+	(*ExecuteFrame)(nil),          // 36: pestiroute.connector.v1.ExecuteFrame
+	(*FlowIdentity)(nil),          // 37: pestiroute.connector.v1.FlowIdentity
+	(*FlowControlRequest)(nil),    // 38: pestiroute.connector.v1.FlowControlRequest
+	(*FlowControlResponse)(nil),   // 39: pestiroute.connector.v1.FlowControlResponse
+	(*CredentialLookup)(nil),      // 40: pestiroute.connector.v1.CredentialLookup
+	(*CredentialValue)(nil),       // 41: pestiroute.connector.v1.CredentialValue
+	(*LogRecord)(nil),             // 42: pestiroute.connector.v1.LogRecord
+	(*Handshake)(nil),             // 43: pestiroute.connector.v1.Handshake
+	nil,                           // 44: pestiroute.connector.v1.AuthResult.CredentialsEntry
+	nil,                           // 45: pestiroute.connector.v1.RequestMetadata.HeadersEntry
+	nil,                           // 46: pestiroute.connector.v1.RequestMetadata.ExtensionsEntry
+	nil,                           // 47: pestiroute.connector.v1.HeadFrame.HeadersEntry
+	nil,                           // 48: pestiroute.connector.v1.HTTPRequest.HeadersEntry
+	nil,                           // 49: pestiroute.connector.v1.HTTPResponse.HeadersEntry
+	nil,                           // 50: pestiroute.connector.v1.LogRecord.AttributesEntry
+	(*timestamppb.Timestamp)(nil), // 51: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),         // 52: google.protobuf.Empty
 }
 var file_connector_proto_depIdxs = []int32{
-	0,  // 0: pestiroute.connector.v1.Descriptor.api_versions:type_name -> pestiroute.connector.v1.Version
-	5,  // 1: pestiroute.connector.v1.CapabilityResult.values:type_name -> pestiroute.connector.v1.CapabilityValue
-	5,  // 2: pestiroute.connector.v1.ModelInfo.capabilities:type_name -> pestiroute.connector.v1.CapabilityValue
-	8,  // 3: pestiroute.connector.v1.ModelsResult.models:type_name -> pestiroute.connector.v1.ModelInfo
-	10, // 4: pestiroute.connector.v1.UsageQuery.payload:type_name -> pestiroute.connector.v1.RawPayload
-	12, // 5: pestiroute.connector.v1.EstimateResult.usage:type_name -> pestiroute.connector.v1.UsageReport
-	15, // 6: pestiroute.connector.v1.AuthResult.user_action:type_name -> pestiroute.connector.v1.AuthUserAction
-	40, // 7: pestiroute.connector.v1.AuthResult.credentials:type_name -> pestiroute.connector.v1.AuthResult.CredentialsEntry
-	47, // 8: pestiroute.connector.v1.AuthResult.credential_expires_at:type_name -> google.protobuf.Timestamp
-	41, // 9: pestiroute.connector.v1.RequestMetadata.headers:type_name -> pestiroute.connector.v1.RequestMetadata.HeadersEntry
-	42, // 10: pestiroute.connector.v1.RequestMetadata.extensions:type_name -> pestiroute.connector.v1.RequestMetadata.ExtensionsEntry
-	17, // 11: pestiroute.connector.v1.ExecutionRequest.metadata:type_name -> pestiroute.connector.v1.RequestMetadata
-	10, // 12: pestiroute.connector.v1.ExecutionRequest.payload:type_name -> pestiroute.connector.v1.RawPayload
-	43, // 13: pestiroute.connector.v1.HeadFrame.headers:type_name -> pestiroute.connector.v1.HeadFrame.HeadersEntry
-	21, // 14: pestiroute.connector.v1.HeadFrame.error:type_name -> pestiroute.connector.v1.GatewayError
-	12, // 15: pestiroute.connector.v1.CompleteFrame.usage:type_name -> pestiroute.connector.v1.UsageReport
-	21, // 16: pestiroute.connector.v1.CompleteFrame.error:type_name -> pestiroute.connector.v1.GatewayError
-	22, // 17: pestiroute.connector.v1.StreamFrame.head:type_name -> pestiroute.connector.v1.HeadFrame
-	23, // 18: pestiroute.connector.v1.StreamFrame.complete:type_name -> pestiroute.connector.v1.CompleteFrame
-	19, // 19: pestiroute.connector.v1.ExecuteStart.request:type_name -> pestiroute.connector.v1.ExecutionRequest
-	20, // 20: pestiroute.connector.v1.ExecuteStart.scope:type_name -> pestiroute.connector.v1.AttemptScope
-	44, // 21: pestiroute.connector.v1.HTTPRequest.headers:type_name -> pestiroute.connector.v1.HTTPRequest.HeadersEntry
-	45, // 22: pestiroute.connector.v1.HTTPResponse.headers:type_name -> pestiroute.connector.v1.HTTPResponse.HeadersEntry
-	26, // 23: pestiroute.connector.v1.HTTPFrame.record:type_name -> pestiroute.connector.v1.RecordFragment
-	27, // 24: pestiroute.connector.v1.HTTPFrame.body:type_name -> pestiroute.connector.v1.BodyChunk
-	26, // 25: pestiroute.connector.v1.EstimateFrame.record:type_name -> pestiroute.connector.v1.RecordFragment
-	27, // 26: pestiroute.connector.v1.EstimateFrame.body:type_name -> pestiroute.connector.v1.BodyChunk
-	26, // 27: pestiroute.connector.v1.ExecuteFrame.record:type_name -> pestiroute.connector.v1.RecordFragment
-	27, // 28: pestiroute.connector.v1.ExecuteFrame.body:type_name -> pestiroute.connector.v1.BodyChunk
-	46, // 29: pestiroute.connector.v1.LogRecord.attributes:type_name -> pestiroute.connector.v1.LogRecord.AttributesEntry
-	0,  // 30: pestiroute.connector.v1.Handshake.ipc_version:type_name -> pestiroute.connector.v1.Version
-	18, // 31: pestiroute.connector.v1.RequestMetadata.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
-	18, // 32: pestiroute.connector.v1.HeadFrame.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
-	18, // 33: pestiroute.connector.v1.HTTPRequest.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
-	18, // 34: pestiroute.connector.v1.HTTPResponse.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
-	26, // 35: pestiroute.connector.v1.Connector.Handshake:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 36: pestiroute.connector.v1.Connector.Descriptor:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 37: pestiroute.connector.v1.Connector.Init:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 38: pestiroute.connector.v1.Connector.Health:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 39: pestiroute.connector.v1.Connector.Capabilities:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 40: pestiroute.connector.v1.Connector.Models:input_type -> pestiroute.connector.v1.RecordFragment
-	34, // 41: pestiroute.connector.v1.Connector.EstimateUsage:input_type -> pestiroute.connector.v1.EstimateFrame
-	26, // 42: pestiroute.connector.v1.Connector.Authenticate:input_type -> pestiroute.connector.v1.RecordFragment
-	35, // 43: pestiroute.connector.v1.Connector.Execute:input_type -> pestiroute.connector.v1.ExecuteFrame
-	26, // 44: pestiroute.connector.v1.Connector.Close:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 45: pestiroute.connector.v1.HostServices.CredentialGet:input_type -> pestiroute.connector.v1.RecordFragment
-	33, // 46: pestiroute.connector.v1.HostServices.HTTPDo:input_type -> pestiroute.connector.v1.HTTPFrame
-	26, // 47: pestiroute.connector.v1.HostServices.Log:input_type -> pestiroute.connector.v1.RecordFragment
-	26, // 48: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 49: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 50: pestiroute.connector.v1.Connector.Init:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 51: pestiroute.connector.v1.Connector.Health:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 52: pestiroute.connector.v1.Connector.Capabilities:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 53: pestiroute.connector.v1.Connector.Models:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 54: pestiroute.connector.v1.Connector.EstimateUsage:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 55: pestiroute.connector.v1.Connector.Authenticate:output_type -> pestiroute.connector.v1.RecordFragment
-	35, // 56: pestiroute.connector.v1.Connector.Execute:output_type -> pestiroute.connector.v1.ExecuteFrame
-	26, // 57: pestiroute.connector.v1.Connector.Close:output_type -> pestiroute.connector.v1.RecordFragment
-	26, // 58: pestiroute.connector.v1.HostServices.CredentialGet:output_type -> pestiroute.connector.v1.RecordFragment
-	33, // 59: pestiroute.connector.v1.HostServices.HTTPDo:output_type -> pestiroute.connector.v1.HTTPFrame
-	48, // 60: pestiroute.connector.v1.HostServices.Log:output_type -> google.protobuf.Empty
-	48, // [48:61] is the sub-list for method output_type
-	35, // [35:48] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	1,  // 0: pestiroute.connector.v1.Descriptor.api_versions:type_name -> pestiroute.connector.v1.Version
+	6,  // 1: pestiroute.connector.v1.CapabilityResult.values:type_name -> pestiroute.connector.v1.CapabilityValue
+	6,  // 2: pestiroute.connector.v1.ModelInfo.capabilities:type_name -> pestiroute.connector.v1.CapabilityValue
+	9,  // 3: pestiroute.connector.v1.ModelsResult.models:type_name -> pestiroute.connector.v1.ModelInfo
+	11, // 4: pestiroute.connector.v1.UsageQuery.payload:type_name -> pestiroute.connector.v1.RawPayload
+	13, // 5: pestiroute.connector.v1.EstimateResult.usage:type_name -> pestiroute.connector.v1.UsageReport
+	16, // 6: pestiroute.connector.v1.AuthResult.user_action:type_name -> pestiroute.connector.v1.AuthUserAction
+	44, // 7: pestiroute.connector.v1.AuthResult.credentials:type_name -> pestiroute.connector.v1.AuthResult.CredentialsEntry
+	51, // 8: pestiroute.connector.v1.AuthResult.credential_expires_at:type_name -> google.protobuf.Timestamp
+	45, // 9: pestiroute.connector.v1.RequestMetadata.headers:type_name -> pestiroute.connector.v1.RequestMetadata.HeadersEntry
+	46, // 10: pestiroute.connector.v1.RequestMetadata.extensions:type_name -> pestiroute.connector.v1.RequestMetadata.ExtensionsEntry
+	18, // 11: pestiroute.connector.v1.ExecutionRequest.metadata:type_name -> pestiroute.connector.v1.RequestMetadata
+	11, // 12: pestiroute.connector.v1.ExecutionRequest.payload:type_name -> pestiroute.connector.v1.RawPayload
+	47, // 13: pestiroute.connector.v1.HeadFrame.headers:type_name -> pestiroute.connector.v1.HeadFrame.HeadersEntry
+	22, // 14: pestiroute.connector.v1.HeadFrame.error:type_name -> pestiroute.connector.v1.GatewayError
+	13, // 15: pestiroute.connector.v1.CompleteFrame.usage:type_name -> pestiroute.connector.v1.UsageReport
+	22, // 16: pestiroute.connector.v1.CompleteFrame.error:type_name -> pestiroute.connector.v1.GatewayError
+	23, // 17: pestiroute.connector.v1.StreamFrame.head:type_name -> pestiroute.connector.v1.HeadFrame
+	24, // 18: pestiroute.connector.v1.StreamFrame.complete:type_name -> pestiroute.connector.v1.CompleteFrame
+	20, // 19: pestiroute.connector.v1.ExecuteStart.request:type_name -> pestiroute.connector.v1.ExecutionRequest
+	21, // 20: pestiroute.connector.v1.ExecuteStart.scope:type_name -> pestiroute.connector.v1.AttemptScope
+	48, // 21: pestiroute.connector.v1.HTTPRequest.headers:type_name -> pestiroute.connector.v1.HTTPRequest.HeadersEntry
+	49, // 22: pestiroute.connector.v1.HTTPResponse.headers:type_name -> pestiroute.connector.v1.HTTPResponse.HeadersEntry
+	27, // 23: pestiroute.connector.v1.HTTPFrame.record:type_name -> pestiroute.connector.v1.RecordFragment
+	28, // 24: pestiroute.connector.v1.HTTPFrame.body:type_name -> pestiroute.connector.v1.BodyChunk
+	27, // 25: pestiroute.connector.v1.EstimateFrame.record:type_name -> pestiroute.connector.v1.RecordFragment
+	28, // 26: pestiroute.connector.v1.EstimateFrame.body:type_name -> pestiroute.connector.v1.BodyChunk
+	27, // 27: pestiroute.connector.v1.ExecuteFrame.record:type_name -> pestiroute.connector.v1.RecordFragment
+	28, // 28: pestiroute.connector.v1.ExecuteFrame.body:type_name -> pestiroute.connector.v1.BodyChunk
+	0,  // 29: pestiroute.connector.v1.FlowControlRequest.kind:type_name -> pestiroute.connector.v1.FlowControlKind
+	37, // 30: pestiroute.connector.v1.FlowControlRequest.identity:type_name -> pestiroute.connector.v1.FlowIdentity
+	37, // 31: pestiroute.connector.v1.FlowControlRequest.acknowledgements:type_name -> pestiroute.connector.v1.FlowIdentity
+	0,  // 32: pestiroute.connector.v1.FlowControlResponse.kind:type_name -> pestiroute.connector.v1.FlowControlKind
+	37, // 33: pestiroute.connector.v1.FlowControlResponse.identity:type_name -> pestiroute.connector.v1.FlowIdentity
+	50, // 34: pestiroute.connector.v1.LogRecord.attributes:type_name -> pestiroute.connector.v1.LogRecord.AttributesEntry
+	1,  // 35: pestiroute.connector.v1.Handshake.ipc_version:type_name -> pestiroute.connector.v1.Version
+	19, // 36: pestiroute.connector.v1.RequestMetadata.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
+	19, // 37: pestiroute.connector.v1.HeadFrame.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
+	19, // 38: pestiroute.connector.v1.HTTPRequest.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
+	19, // 39: pestiroute.connector.v1.HTTPResponse.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
+	27, // 40: pestiroute.connector.v1.Connector.Handshake:input_type -> pestiroute.connector.v1.RecordFragment
+	27, // 41: pestiroute.connector.v1.Connector.Descriptor:input_type -> pestiroute.connector.v1.RecordFragment
+	27, // 42: pestiroute.connector.v1.Connector.Init:input_type -> pestiroute.connector.v1.RecordFragment
+	27, // 43: pestiroute.connector.v1.Connector.Health:input_type -> pestiroute.connector.v1.RecordFragment
+	27, // 44: pestiroute.connector.v1.Connector.Capabilities:input_type -> pestiroute.connector.v1.RecordFragment
+	27, // 45: pestiroute.connector.v1.Connector.Models:input_type -> pestiroute.connector.v1.RecordFragment
+	35, // 46: pestiroute.connector.v1.Connector.EstimateUsage:input_type -> pestiroute.connector.v1.EstimateFrame
+	27, // 47: pestiroute.connector.v1.Connector.Authenticate:input_type -> pestiroute.connector.v1.RecordFragment
+	36, // 48: pestiroute.connector.v1.Connector.Execute:input_type -> pestiroute.connector.v1.ExecuteFrame
+	27, // 49: pestiroute.connector.v1.Connector.Close:input_type -> pestiroute.connector.v1.RecordFragment
+	38, // 50: pestiroute.connector.v1.Connector.FlowControl:input_type -> pestiroute.connector.v1.FlowControlRequest
+	27, // 51: pestiroute.connector.v1.HostServices.CredentialGet:input_type -> pestiroute.connector.v1.RecordFragment
+	34, // 52: pestiroute.connector.v1.HostServices.HTTPDo:input_type -> pestiroute.connector.v1.HTTPFrame
+	27, // 53: pestiroute.connector.v1.HostServices.Log:input_type -> pestiroute.connector.v1.RecordFragment
+	38, // 54: pestiroute.connector.v1.HostServices.FlowControl:input_type -> pestiroute.connector.v1.FlowControlRequest
+	27, // 55: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
+	27, // 56: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
+	27, // 57: pestiroute.connector.v1.Connector.Init:output_type -> pestiroute.connector.v1.RecordFragment
+	27, // 58: pestiroute.connector.v1.Connector.Health:output_type -> pestiroute.connector.v1.RecordFragment
+	27, // 59: pestiroute.connector.v1.Connector.Capabilities:output_type -> pestiroute.connector.v1.RecordFragment
+	27, // 60: pestiroute.connector.v1.Connector.Models:output_type -> pestiroute.connector.v1.RecordFragment
+	27, // 61: pestiroute.connector.v1.Connector.EstimateUsage:output_type -> pestiroute.connector.v1.RecordFragment
+	27, // 62: pestiroute.connector.v1.Connector.Authenticate:output_type -> pestiroute.connector.v1.RecordFragment
+	36, // 63: pestiroute.connector.v1.Connector.Execute:output_type -> pestiroute.connector.v1.ExecuteFrame
+	27, // 64: pestiroute.connector.v1.Connector.Close:output_type -> pestiroute.connector.v1.RecordFragment
+	39, // 65: pestiroute.connector.v1.Connector.FlowControl:output_type -> pestiroute.connector.v1.FlowControlResponse
+	27, // 66: pestiroute.connector.v1.HostServices.CredentialGet:output_type -> pestiroute.connector.v1.RecordFragment
+	34, // 67: pestiroute.connector.v1.HostServices.HTTPDo:output_type -> pestiroute.connector.v1.HTTPFrame
+	52, // 68: pestiroute.connector.v1.HostServices.Log:output_type -> google.protobuf.Empty
+	39, // 69: pestiroute.connector.v1.HostServices.FlowControl:output_type -> pestiroute.connector.v1.FlowControlResponse
+	55, // [55:70] is the sub-list for method output_type
+	40, // [40:55] is the sub-list for method input_type
+	40, // [40:40] is the sub-list for extension type_name
+	40, // [40:40] is the sub-list for extension extendee
+	0,  // [0:40] is the sub-list for field type_name
 }
 
 func init() { file_connector_proto_init() }
@@ -3075,13 +3424,14 @@ func file_connector_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_connector_proto_rawDesc), len(file_connector_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   47,
+			NumEnums:      1,
+			NumMessages:   50,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
 		GoTypes:           file_connector_proto_goTypes,
 		DependencyIndexes: file_connector_proto_depIdxs,
+		EnumInfos:         file_connector_proto_enumTypes,
 		MessageInfos:      file_connector_proto_msgTypes,
 	}.Build()
 	File_connector_proto = out.File

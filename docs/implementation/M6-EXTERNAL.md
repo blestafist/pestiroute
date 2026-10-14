@@ -2,7 +2,7 @@
 
 ## Outcome and scope
 
-Implement [M6](ROADMAP.md#m6--external-plugin-runtime): the existing native Responses Connector can run in a child process behind the same `core.Connector` semantics. Crashes stay isolated, payloads remain opaque, streaming is incremental and bounded, cancellation releases resources, and in-process/external conformance agrees. [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selected gRPC over Unix socket from measured M6-003/004 evidence; M6-005 is DONE. Production wire/process binding is M6-006 scope.
+Implement [M6](ROADMAP.md#m6--external-plugin-runtime): the existing native Responses Connector can run in a child process behind the same `core.Connector` semantics. Crashes stay isolated, payloads remain opaque, streaming is incremental and bounded, cancellation releases resources, and in-process/external conformance agrees. [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selected gRPC over Unix socket from measured M6-003/004 evidence; M6-005 is DONE. [DEC-017](../project/DECISIONS.md#dec-017--enforce-aggregate-ipc-backpressure-with-a-host-owned-epoch-broker) owns cross-socket IPC flow control; it adds no Core/provider API. Production wire/process binding began in M6-006.
 
 Start from merged main `bea67fe` (PR #13), not the old M5.2 branch. Conditional acceptance under DEC-012/013 carries forward without converting incomplete live gates into DONE. M6 uses child binaries and deterministic loopback fake upstreams; no provider inference, GPU, model download or OAuth refresh is required.
 
@@ -75,6 +75,8 @@ Choose explicit executable/argv, environment allowlist, working directory, proce
 | 021–023 | Crash/invalid-frame classification → bounded recovery for new work → drain/termination/reaping |
 | 024–028 | Actual native Connector child → protected configuration → JSON/SSE integration → accounting/fallback → account isolation |
 | 029–032 | Shared conformance → executed offline operations → minimal integration guide/example → final acceptance/handoff |
+
+M6-020 synchronizes DEC-017 into [M6-BINDING](M6-BINDING.md#epoch-credit-broker-and-control-lane-dec-017): a host-owned epoch broker requires reserve-before-send and consumption ACKs across Execute and HostServices data sockets. Dedicated bounded control connections carry grants/ACKs and prioritized Cancel/Close; HTTP/2 window tuning is not a substitute. The IPC minor compatibility gate is required before execution. M6-024 later wires the production child root; M6-020 supplies reusable child control helpers and deterministic fixtures.
 
 The [registry](TASKS.md#m6--external-plugin-runtime) owns exact dependencies and checks. These are outcome candidates, not frozen package designs. Promote dependent cards only after predecessor evidence and an executable verification procedure exist. Use the existing Planner → Worker → Reviewer cycle and one verified task per commit; stop at each card boundary. No task is marked DONE by this planning commit.
 

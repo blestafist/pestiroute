@@ -24,6 +24,7 @@ import (
 const (
 	connectorProtocolID = "pestiroute.connector.v1"
 	connectorIPCMajor   = 1
+	connectorIPCMinor   = 1
 )
 
 var (
@@ -102,7 +103,7 @@ func (p *Process) ConnectConnector(ctx context.Context) (result *grpc.ClientConn
 	if handshake.ProtocolId != connectorProtocolID {
 		return nil, core.Descriptor{}, fmt.Errorf("%w: %q", ErrHandshakeProtocol, handshake.ProtocolId)
 	}
-	if handshake.IpcVersion == nil || handshake.IpcVersion.Major != connectorIPCMajor {
+	if handshake.IpcVersion == nil || handshake.IpcVersion.Major != connectorIPCMajor || handshake.IpcVersion.Minor < connectorIPCMinor {
 		return nil, core.Descriptor{}, fmt.Errorf("%w: %v", ErrHandshakeVersion, handshake.IpcVersion)
 	}
 	var wireDescriptor gen.Descriptor
@@ -121,6 +122,25 @@ func (p *Process) ConnectConnector(ctx context.Context) (result *grpc.ClientConn
 		return nil, core.Descriptor{}, ErrHandshakeAPI
 	}
 	return result, descriptor.Clone(), nil
+}
+
+func (p *Process) connectControl(ctx context.Context) (*grpc.ClientConn, gen.ConnectorClient, error) {
+	ctx, cancel, err := startupContext(ctx, p.StartupDeadline())
+	if err != nil {
+		return nil, nil, err
+	}
+	defer cancel()
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) { return p.DialConnector(ctx) }
+	conn, err := grpc.NewClient("unix://"+p.ConnectorSocket(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(ipc.MaxGRPCMessageBytes), grpc.MaxCallSendMsgSize(ipc.MaxGRPCMessageBytes)),
+		grpc.WithContextDialer(dialer),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	client := gen.NewConnectorClient(conn)
+	return conn, client, nil
 }
 
 func bootstrapRequest(epoch uint64) *gen.RecordFragment {

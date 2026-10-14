@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -37,6 +38,10 @@ func TestM6HandshakeProtocol(t *testing.T) {
 
 func TestM6HandshakeIPCMajor(t *testing.T) {
 	assertHandshakeFailure(t, "handshake-ipc-major", ErrHandshakeVersion)
+}
+
+func TestM6HandshakeRequiresFlowControlMinor(t *testing.T) {
+	assertHandshakeFailure(t, "handshake-ipc-minor-0", ErrHandshakeVersion)
 }
 
 func TestM6HandshakeMissingExactAPIPair(t *testing.T) {
@@ -148,7 +153,38 @@ func serveHandshakeChild(socket, mode string) {
 
 type handshakeChild struct {
 	gen.UnimplementedConnectorServer
-	mode string
+	mode     string
+	flowMu   sync.Mutex
+	flow     *ChildFlowControl
+	flowConn *grpc.ClientConn
+}
+
+func (s *handshakeChild) ensureFlowControl(epoch uint64) (*ChildFlowControl, error) {
+	s.flowMu.Lock()
+	defer s.flowMu.Unlock()
+	if s.flow != nil {
+		if s.flow.epoch != epoch {
+			return nil, errCreditIdentity
+		}
+		return s.flow, nil
+	}
+	flow, conn, err := DialChildFlowControl(context.Background(), os.Getenv(hostServicesSocketEnv), epoch)
+	if err != nil {
+		return nil, err
+	}
+	s.flow, s.flowConn = flow, conn
+	return flow, nil
+}
+
+func (s *handshakeChild) FlowControl(ctx context.Context, req *gen.FlowControlRequest) (*gen.FlowControlResponse, error) {
+	if req == nil || req.Identity == nil || req.Identity.Epoch == 0 || proto.Size(req) > maxControlMessageBytes {
+		return nil, status.Error(codes.InvalidArgument, "invalid flow control message")
+	}
+	flow, err := s.ensureFlowControl(req.Identity.Epoch)
+	if err != nil {
+		return nil, err
+	}
+	return flow.FlowControl(ctx, req)
 }
 
 func (s *handshakeChild) Handshake(req *gen.RecordFragment, stream grpc.ServerStreamingServer[gen.RecordFragment]) error {
@@ -159,7 +195,7 @@ func (s *handshakeChild) Handshake(req *gen.RecordFragment, stream grpc.ServerSt
 	if strings.Contains(s.mode, "oversized-handshake") {
 		return stream.Send(&gen.RecordFragment{Epoch: req.Epoch, CallId: req.CallId, RecordId: req.RecordId, RecordType: "Handshake", TotalLength: 1, Final: true, Data: make([]byte, ipc.MaxGRPCMessageBytes+1)})
 	}
-	msg := &gen.Handshake{ProtocolId: connectorProtocolID, IpcVersion: &gen.Version{Major: 1}}
+	msg := &gen.Handshake{ProtocolId: connectorProtocolID, IpcVersion: &gen.Version{Major: 1, Minor: connectorIPCMinor}}
 	switch s.mode {
 	case "handshake-protocol":
 		msg.ProtocolId = "other"
@@ -167,6 +203,8 @@ func (s *handshakeChild) Handshake(req *gen.RecordFragment, stream grpc.ServerSt
 		msg.IpcVersion.Major = 2
 	case "handshake-ipc-minor-99":
 		msg.IpcVersion.Minor = 99
+	case "handshake-ipc-minor-0":
+		msg.IpcVersion.Minor = 0
 	}
 	return ipc.WriteRecord(ipc.Identity{Epoch: req.Epoch, CallID: req.CallId, RecordID: req.RecordId, Type: "Handshake"}, msg, stream.Send)
 }
@@ -450,11 +488,24 @@ func (s *handshakeChild) Execute(stream grpc.BidiStreamingServer[gen.ExecuteFram
 		return status.Error(codes.InvalidArgument, "invalid execute identity")
 	}
 	epoch, invocationID := first.Epoch, first.InvocationId
+	flow, err := s.ensureFlowControl(epoch)
+	if err != nil {
+		return err
+	}
+	invocationCtx, cancelInvocation := context.WithCancel(stream.Context())
+	if err := flow.RegisterInvocation(invocationID, cancelInvocation); err != nil {
+		cancelInvocation()
+		return status.Error(codes.InvalidArgument, "duplicate execute invocation")
+	}
+	defer func() { flow.UnregisterInvocation(invocationID); cancelInvocation() }()
 	r, ok := first.Payload.(*gen.ExecuteFrame_Record)
 	if !ok || r.Record == nil || r.Record.RecordType != "ExecuteStart" || r.Record.InvocationId != invocationID {
 		return status.Error(codes.InvalidArgument, "missing execute start")
 	}
 	a := ipc.NewAssembler(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: "ExecuteStart"})
+	if err := validateChildExecuteFrame(invocationCtx, flow, first, len(r.Record.Data)); err != nil {
+		return status.Error(codes.InvalidArgument, "unreserved execute start")
+	}
 	if err := a.Add(r.Record); err != nil {
 		return status.Error(codes.InvalidArgument, "malformed execute start")
 	}
@@ -469,6 +520,9 @@ func (s *handshakeChild) Execute(stream grpc.BidiStreamingServer[gen.ExecuteFram
 		r, ok := f.Payload.(*gen.ExecuteFrame_Record)
 		if !ok || r.Record == nil || r.Record.InvocationId != invocationID {
 			return status.Error(codes.InvalidArgument, "invalid execute start fragment")
+		}
+		if err := validateChildExecuteFrame(invocationCtx, flow, f, len(r.Record.Data)); err != nil {
+			return status.Error(codes.InvalidArgument, "unreserved execute start fragment")
 		}
 		if err := a.Add(r.Record); err != nil {
 			return status.Error(codes.InvalidArgument, "malformed execute start")
@@ -502,12 +556,18 @@ func (s *handshakeChild) Execute(stream grpc.BidiStreamingServer[gen.ExecuteFram
 			if uint64(len(chunk)) > uint64(start.MaxBodyBytes)-uint64(len(body)) {
 				return status.Error(codes.InvalidArgument, "execute body exceeds admitted route limit")
 			}
+			if err := validateChildExecuteFrame(invocationCtx, flow, f, len(chunk)); err != nil {
+				return status.Error(codes.InvalidArgument, "unreserved execute body")
+			}
 			body = append(body, chunk...)
 		case *gen.ExecuteFrame_Record:
 			if p.Record == nil || p.Record.InvocationId != invocationID || p.Record.RecordType != "InputComplete" || p.Record.RecordId != 1 {
 				return status.Error(codes.InvalidArgument, "invalid input terminator")
 			}
 			var end gen.InputComplete
+			if err := validateChildExecuteFrame(invocationCtx, flow, f, len(p.Record.Data)); err != nil {
+				return status.Error(codes.InvalidArgument, "unreserved input terminator")
+			}
 			if err := ipc.Reassemble(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 1, Type: "InputComplete"}, []*gen.RecordFragment{p.Record}, &end); err != nil {
 				return status.Error(codes.InvalidArgument, "malformed input terminator")
 			}
@@ -528,7 +588,10 @@ inputDone:
 	}
 	if s.mode == "execute-error" {
 		ge := &core.GatewayError{Code: "rejected", Category: core.CategoryRateLimited, Retryable: true, RetryDisposition: core.RetrySafe, Provider: "fixture", OriginalError: "diagnostic", Message: "try later"}
-		return sendExecuteRecord(stream, epoch, invocationID, 0, "GatewayError", ipc.GatewayErrorTo(ge))
+		if err := sendExecuteRecord(stream, flow, invocationCtx, epoch, invocationID, 0, "GatewayError", ipc.GatewayErrorTo(ge)); err != nil {
+			return err
+		}
+		return flow.WaitDrained(invocationCtx, invocationID)
 	}
 	if s.mode == "execute-bad-epoch" {
 		return stream.Send(&gen.ExecuteFrame{Epoch: epoch + 1, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Record{Record: &gen.RecordFragment{Epoch: epoch + 1, CallId: 1, RecordId: 0, RecordType: "HeadFrame", TotalLength: 0, Final: true, InvocationId: invocationID}}})
@@ -540,9 +603,9 @@ inputDone:
 		if err != nil {
 			return err
 		}
-		return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Body{Body: chunk}})
+		return sendExecuteData(stream, flow, invocationCtx, epoch, invocationID, len(chunk.Data), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Body{Body: chunk}})
 	}
-	if err := sendExecuteRecord(stream, epoch, invocationID, 0, "HeadFrame", head); err != nil {
+	if err := sendExecuteRecord(stream, flow, invocationCtx, epoch, invocationID, 0, "HeadFrame", head); err != nil {
 		return err
 	}
 	if s.mode == "execute-callback-credential" {
@@ -559,7 +622,7 @@ inputDone:
 		return stream.Context().Err()
 	}
 	if s.mode == "execute-callback-http" {
-		client := NewHTTPDoerClient(childHostServices(), epoch, invocationID)
+		client := NewHTTPDoerClient(childHostServices(), flow, epoch, invocationID)
 		request, _ := http.NewRequestWithContext(stream.Context(), http.MethodGet, "http://example.invalid/", nil)
 		if _, err := client.Do(request); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, "execute-http-cancel-ack")
@@ -594,7 +657,7 @@ inputDone:
 			if err != nil {
 				return err
 			}
-			return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Body{Body: b}})
+			return sendExecuteData(stream, flow, invocationCtx, epoch, invocationID, len(chunk), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Body{Body: b}})
 		}
 		if s.mode == "execute-incremental" {
 			if len(body) <= ipc.MaxFragmentBytes {
@@ -626,7 +689,7 @@ inputDone:
 		complete.Outcome = string(core.OutcomeIncomplete)
 		complete.Error = ipc.GatewayErrorTo(&core.GatewayError{Code: "fixture_incomplete", Category: core.CategoryInternal, RetryDisposition: core.RetryUnknown, Message: "fixture incomplete"})
 	}
-	if err := sendExecuteRecord(stream, epoch, invocationID, 2, "CompleteFrame", complete); err != nil {
+	if err := sendExecuteRecord(stream, flow, invocationCtx, epoch, invocationID, 2, "CompleteFrame", complete); err != nil {
 		return err
 	}
 	if s.mode == "execute-incremental-after-complete" {
@@ -634,22 +697,39 @@ inputDone:
 		if err != nil {
 			return err
 		}
-		return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Body{Body: chunk}})
+		return sendExecuteData(stream, flow, invocationCtx, epoch, invocationID, len(chunk.Data), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Body{Body: chunk}})
 	}
 	if s.mode == "execute-incremental-duplicate-complete" {
-		return sendExecuteRecord(stream, epoch, invocationID, 2, "CompleteFrame", complete)
+		return sendExecuteRecord(stream, flow, invocationCtx, epoch, invocationID, 2, "CompleteFrame", complete)
 	}
-	return nil
+	return flow.WaitDrained(invocationCtx, invocationID)
 }
 
 func sameExecuteIdentity(f *gen.ExecuteFrame, epoch uint64, invocationID string) bool {
 	return f != nil && f.Epoch == epoch && f.CallId == 1 && f.InvocationId == invocationID
 }
 
-func sendExecuteRecord(stream grpc.BidiStreamingServer[gen.ExecuteFrame, gen.ExecuteFrame], epoch uint64, invocationID string, recordID uint64, typ string, value proto.Message) error {
+func validateChildExecuteFrame(ctx context.Context, flow *ChildFlowControl, frame *gen.ExecuteFrame, appBytes int) error {
+	id := creditIdentity{epoch: frame.Epoch, invocationID: frame.InvocationId, operation: "Execute", callID: frame.CallId, direction: "host_to_child", sequence: frame.DataSequence}
+	if err := flow.ValidateIncoming(id, appBytes); err != nil {
+		return err
+	}
+	return flow.AckIncoming(ctx, id)
+}
+
+func sendExecuteData(stream grpc.BidiStreamingServer[gen.ExecuteFrame, gen.ExecuteFrame], flow *ChildFlowControl, ctx context.Context, epoch uint64, invocationID string, appBytes int, frame *gen.ExecuteFrame) error {
+	id, err := flow.ReserveNext(ctx, invocationID, "Execute", 1, appBytes)
+	if err != nil {
+		return err
+	}
+	frame.Epoch, frame.CallId, frame.InvocationId, frame.DataSequence = epoch, 1, invocationID, id.sequence
+	return stream.Send(frame)
+}
+
+func sendExecuteRecord(stream grpc.BidiStreamingServer[gen.ExecuteFrame, gen.ExecuteFrame], flow *ChildFlowControl, ctx context.Context, epoch uint64, invocationID string, recordID uint64, typ string, value proto.Message) error {
 	return ipc.WriteRecord(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: recordID, Type: typ}, value, func(f *gen.RecordFragment) error {
 		f.InvocationId = invocationID
-		return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Record{Record: f}})
+		return sendExecuteData(stream, flow, ctx, epoch, invocationID, len(f.Data), &gen.ExecuteFrame{Payload: &gen.ExecuteFrame_Record{Record: f}})
 	})
 }
 

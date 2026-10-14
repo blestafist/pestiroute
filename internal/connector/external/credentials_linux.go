@@ -23,6 +23,7 @@ const credentialTimeout = 2 * time.Second
 type hostServices struct {
 	gen.UnimplementedHostServicesServer
 	registry      *invocationRegistry
+	control       flowControlCaller
 	logger        *slog.Logger
 	logQueue      chan logEntry
 	logWorkerDone chan struct{}
@@ -47,9 +48,9 @@ func (l verifiedHostListener) Accept() (net.Conn, error) {
 	}
 }
 
-func (p *Process) serveHostServices(ctx context.Context, registry *invocationRegistry) *grpc.Server {
+func (p *Process) serveHostServices(ctx context.Context, registry *invocationRegistry, control ...flowControlCaller) *grpc.Server {
 	serviceCtx, cancel := context.WithCancel(ctx)
-	server := newHostServicesServer(registry, serviceCtx)
+	server := newHostServicesServer(registry, serviceCtx, control...)
 	go func() {
 		go func() {
 			<-serviceCtx.Done()
@@ -61,12 +62,16 @@ func (p *Process) serveHostServices(ctx context.Context, registry *invocationReg
 	return server
 }
 
-func newHostServicesServer(registry *invocationRegistry, ctx context.Context) *grpc.Server {
+func newHostServicesServer(registry *invocationRegistry, ctx context.Context, control ...flowControlCaller) *grpc.Server {
 	server := grpc.NewServer(
 		grpc.MaxRecvMsgSize(ipc.MaxGRPCMessageBytes),
 		grpc.MaxSendMsgSize(ipc.MaxGRPCMessageBytes),
 	)
-	gen.RegisterHostServicesServer(server, newLogService(ctx, registry, slog.Default()))
+	services := newLogService(ctx, registry, slog.Default())
+	if len(control) != 0 {
+		services.control = control[0]
+	}
+	gen.RegisterHostServicesServer(server, services)
 	return server
 }
 

@@ -429,7 +429,7 @@ func TestM6HTTPResponseReadErrorCancelsAndReleasesCallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close(); server.Stop(); _ = listener.Close() })
-	client := NewHTTPDoerClient(gen.NewHostServicesClient(conn), 42, id)
+	client := NewHTTPDoerClient(gen.NewHostServicesClient(conn), nil, 42, id)
 	req, _ := http.NewRequest("GET", "http://example.invalid", nil)
 	resp, err := client.Do(req)
 	if err != nil {

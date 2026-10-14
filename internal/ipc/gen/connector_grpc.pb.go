@@ -30,6 +30,7 @@ const (
 	Connector_Authenticate_FullMethodName  = "/pestiroute.connector.v1.Connector/Authenticate"
 	Connector_Execute_FullMethodName       = "/pestiroute.connector.v1.Connector/Execute"
 	Connector_Close_FullMethodName         = "/pestiroute.connector.v1.Connector/Close"
+	Connector_FlowControl_FullMethodName   = "/pestiroute.connector.v1.Connector/FlowControl"
 )
 
 // ConnectorClient is the client API for Connector service.
@@ -46,6 +47,7 @@ type ConnectorClient interface {
 	Authenticate(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RecordFragment, RecordFragment], error)
 	Execute(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecuteFrame, ExecuteFrame], error)
 	Close(ctx context.Context, in *RecordFragment, opts ...grpc.CallOption) (*RecordFragment, error)
+	FlowControl(ctx context.Context, in *FlowControlRequest, opts ...grpc.CallOption) (*FlowControlResponse, error)
 }
 
 type connectorClient struct {
@@ -201,6 +203,16 @@ func (c *connectorClient) Close(ctx context.Context, in *RecordFragment, opts ..
 	return out, nil
 }
 
+func (c *connectorClient) FlowControl(ctx context.Context, in *FlowControlRequest, opts ...grpc.CallOption) (*FlowControlResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FlowControlResponse)
+	err := c.cc.Invoke(ctx, Connector_FlowControl_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ConnectorServer is the server API for Connector service.
 // All implementations must embed UnimplementedConnectorServer
 // for forward compatibility.
@@ -215,6 +227,7 @@ type ConnectorServer interface {
 	Authenticate(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error
 	Execute(grpc.BidiStreamingServer[ExecuteFrame, ExecuteFrame]) error
 	Close(context.Context, *RecordFragment) (*RecordFragment, error)
+	FlowControl(context.Context, *FlowControlRequest) (*FlowControlResponse, error)
 	mustEmbedUnimplementedConnectorServer()
 }
 
@@ -254,6 +267,9 @@ func (UnimplementedConnectorServer) Execute(grpc.BidiStreamingServer[ExecuteFram
 }
 func (UnimplementedConnectorServer) Close(context.Context, *RecordFragment) (*RecordFragment, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Close not implemented")
+}
+func (UnimplementedConnectorServer) FlowControl(context.Context, *FlowControlRequest) (*FlowControlResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FlowControl not implemented")
 }
 func (UnimplementedConnectorServer) mustEmbedUnimplementedConnectorServer() {}
 func (UnimplementedConnectorServer) testEmbeddedByValue()                   {}
@@ -369,6 +385,24 @@ func _Connector_Close_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Connector_FlowControl_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FlowControlRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConnectorServer).FlowControl(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Connector_FlowControl_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConnectorServer).FlowControl(ctx, req.(*FlowControlRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Connector_ServiceDesc is the grpc.ServiceDesc for Connector service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -379,6 +413,10 @@ var Connector_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Close",
 			Handler:    _Connector_Close_Handler,
+		},
+		{
+			MethodName: "FlowControl",
+			Handler:    _Connector_FlowControl_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
@@ -440,6 +478,7 @@ const (
 	HostServices_CredentialGet_FullMethodName = "/pestiroute.connector.v1.HostServices/CredentialGet"
 	HostServices_HTTPDo_FullMethodName        = "/pestiroute.connector.v1.HostServices/HTTPDo"
 	HostServices_Log_FullMethodName           = "/pestiroute.connector.v1.HostServices/Log"
+	HostServices_FlowControl_FullMethodName   = "/pestiroute.connector.v1.HostServices/FlowControl"
 )
 
 // HostServicesClient is the client API for HostServices service.
@@ -449,6 +488,7 @@ type HostServicesClient interface {
 	CredentialGet(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RecordFragment, RecordFragment], error)
 	HTTPDo(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HTTPFrame, HTTPFrame], error)
 	Log(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[RecordFragment, emptypb.Empty], error)
+	FlowControl(ctx context.Context, in *FlowControlRequest, opts ...grpc.CallOption) (*FlowControlResponse, error)
 }
 
 type hostServicesClient struct {
@@ -498,6 +538,16 @@ func (c *hostServicesClient) Log(ctx context.Context, opts ...grpc.CallOption) (
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostServices_LogClient = grpc.ClientStreamingClient[RecordFragment, emptypb.Empty]
 
+func (c *hostServicesClient) FlowControl(ctx context.Context, in *FlowControlRequest, opts ...grpc.CallOption) (*FlowControlResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FlowControlResponse)
+	err := c.cc.Invoke(ctx, HostServices_FlowControl_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HostServicesServer is the server API for HostServices service.
 // All implementations must embed UnimplementedHostServicesServer
 // for forward compatibility.
@@ -505,6 +555,7 @@ type HostServicesServer interface {
 	CredentialGet(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error
 	HTTPDo(grpc.BidiStreamingServer[HTTPFrame, HTTPFrame]) error
 	Log(grpc.ClientStreamingServer[RecordFragment, emptypb.Empty]) error
+	FlowControl(context.Context, *FlowControlRequest) (*FlowControlResponse, error)
 	mustEmbedUnimplementedHostServicesServer()
 }
 
@@ -523,6 +574,9 @@ func (UnimplementedHostServicesServer) HTTPDo(grpc.BidiStreamingServer[HTTPFrame
 }
 func (UnimplementedHostServicesServer) Log(grpc.ClientStreamingServer[RecordFragment, emptypb.Empty]) error {
 	return status.Errorf(codes.Unimplemented, "method Log not implemented")
+}
+func (UnimplementedHostServicesServer) FlowControl(context.Context, *FlowControlRequest) (*FlowControlResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FlowControl not implemented")
 }
 func (UnimplementedHostServicesServer) mustEmbedUnimplementedHostServicesServer() {}
 func (UnimplementedHostServicesServer) testEmbeddedByValue()                      {}
@@ -566,13 +620,36 @@ func _HostServices_Log_Handler(srv interface{}, stream grpc.ServerStream) error 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostServices_LogServer = grpc.ClientStreamingServer[RecordFragment, emptypb.Empty]
 
+func _HostServices_FlowControl_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FlowControlRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServicesServer).FlowControl(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostServices_FlowControl_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServicesServer).FlowControl(ctx, req.(*FlowControlRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HostServices_ServiceDesc is the grpc.ServiceDesc for HostServices service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var HostServices_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "pestiroute.connector.v1.HostServices",
 	HandlerType: (*HostServicesServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "FlowControl",
+			Handler:    _HostServices_FlowControl_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "CredentialGet",
