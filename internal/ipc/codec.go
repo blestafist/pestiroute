@@ -15,7 +15,9 @@ const (
 	MaxFragmentBytes  = 64 << 10
 	MaxWireFrameBytes = 84 << 10
 	grpcPrefixBytes   = 5
-	maxMessageBytes   = MaxWireFrameBytes - grpcPrefixBytes
+	// MaxGRPCMessageBytes excludes gRPC's five-byte per-message prefix.
+	MaxGRPCMessageBytes = MaxWireFrameBytes - grpcPrefixBytes
+	maxMessageBytes     = MaxGRPCMessageBytes
 )
 
 var ErrMalformed = errors.New("malformed IPC record")
@@ -97,6 +99,12 @@ type Assembler struct {
 	next              uint64
 	started, complete bool
 }
+
+// NewAssembler constructs an incremental receiver for one typed record.
+func NewAssembler(id Identity) *Assembler { return &Assembler{identity: id} }
+
+// Complete reports whether the final fragment for this record was accepted.
+func (a *Assembler) Complete() bool { return a.complete }
 
 func (a *Assembler) Add(f *gen.RecordFragment) error {
 	if a.complete || f == nil || a.identity.Type == "BodyChunk" {

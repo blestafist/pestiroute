@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,19 @@ func TestM6ProcessChild(t *testing.T) {
 		if arg == "--mode" && i+1 < len(args) {
 			mode = args[i+1]
 		}
+	}
+	if strings.HasPrefix(mode, "handshake-") {
+		if mode == "handshake-wrong-peer" {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestM6ProcessChild$", "--", "--mode", "handshake-valid")
+			cmd.Env = os.Environ()
+			if err := cmd.Start(); err != nil {
+				os.Exit(33)
+			}
+			_ = cmd.Wait()
+			os.Exit(0)
+		}
+		serveHandshakeChild(connector, mode)
+		os.Exit(0)
 	}
 	if mode == "hang" {
 		select {}

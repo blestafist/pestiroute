@@ -2527,7 +2527,11 @@ const file_connector_proto_rawDesc = "" +
 	"\vprotocol_id\x18\x01 \x01(\tR\n" +
 	"protocolId\x12A\n" +
 	"\vipc_version\x18\x02 \x01(\v2 .pestiroute.connector.v1.VersionR\n" +
-	"ipcVersionB:Z8github.com/blestafist/pestiroute/internal/ipc/gen;ipcgenb\x06proto3"
+	"ipcVersion2\xce\x01\n" +
+	"\tConnector\x12_\n" +
+	"\tHandshake\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01\x12`\n" +
+	"\n" +
+	"Descriptor\x12'.pestiroute.connector.v1.RecordFragment\x1a'.pestiroute.connector.v1.RecordFragment0\x01B:Z8github.com/blestafist/pestiroute/internal/ipc/gen;ipcgenb\x06proto3"
 
 var (
 	file_connector_proto_rawDescOnce sync.Once
@@ -2619,8 +2623,12 @@ var file_connector_proto_depIdxs = []int32{
 	18, // 26: pestiroute.connector.v1.HeadFrame.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
 	18, // 27: pestiroute.connector.v1.HTTPRequest.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
 	18, // 28: pestiroute.connector.v1.HTTPResponse.HeadersEntry.value:type_name -> pestiroute.connector.v1.StringList
-	29, // [29:29] is the sub-list for method output_type
-	29, // [29:29] is the sub-list for method input_type
+	26, // 29: pestiroute.connector.v1.Connector.Handshake:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 30: pestiroute.connector.v1.Connector.Descriptor:input_type -> pestiroute.connector.v1.RecordFragment
+	26, // 31: pestiroute.connector.v1.Connector.Handshake:output_type -> pestiroute.connector.v1.RecordFragment
+	26, // 32: pestiroute.connector.v1.Connector.Descriptor:output_type -> pestiroute.connector.v1.RecordFragment
+	31, // [31:33] is the sub-list for method output_type
+	29, // [29:31] is the sub-list for method input_type
 	29, // [29:29] is the sub-list for extension type_name
 	29, // [29:29] is the sub-list for extension extendee
 	0,  // [0:29] is the sub-list for field type_name
@@ -2646,7 +2654,7 @@ func file_connector_proto_init() {
 			NumEnums:      0,
 			NumMessages:   44,
 			NumExtensions: 0,
-			NumServices:   0,
+			NumServices:   1,
 		},
 		GoTypes:           file_connector_proto_goTypes,
 		DependencyIndexes: file_connector_proto_depIdxs,

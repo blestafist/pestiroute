@@ -42,3 +42,8 @@ message CredentialLookup { string name = 1; }
 message CredentialValue { bytes value = 1; }
 message LogRecord { string level = 1; string message = 2; map<string,string> attributes = 3; }
 message Handshake { string protocol_id = 1; Version ipc_version = 2; }
+
+service Connector {
+  rpc Handshake(RecordFragment) returns (stream RecordFragment);
+  rpc Descriptor(RecordFragment) returns (stream RecordFragment);
+}

@@ -250,7 +250,7 @@ func VerifyPeer(conn *net.UnixConn, pid int) error {
 		return controlErr
 	}
 	if cred.Pid != int32(pid) || int(cred.Uid) != os.Getuid() {
-		return fmt.Errorf("unexpected Unix peer pid=%d uid=%d", cred.Pid, cred.Uid)
+		return fmt.Errorf("%w: Unix peer pid=%d uid=%d", ErrHandshakePeer, cred.Pid, cred.Uid)
 	}
 	return nil
 }
@@ -311,7 +311,11 @@ func (p *Process) shutdown(ctx context.Context, closeChild func(context.Context)
 func (p *Process) abort(cause error) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return errors.Join(cause, p.Shutdown(shutdownCtx, func(context.Context) error { return cause }))
+	shutdownErr := p.Shutdown(shutdownCtx, func(context.Context) error { return cause })
+	if errors.Is(shutdownErr, cause) {
+		return shutdownErr
+	}
+	return errors.Join(cause, shutdownErr)
 }
 
 func (p *Process) waitGroupGoneUntil(deadline time.Time) error {
