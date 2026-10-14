@@ -181,18 +181,29 @@ func WriteBodyReader(r io.Reader, send func([]byte) error) error {
 		return nil
 	}
 	buf := make([]byte, MaxFragmentBytes)
+	emptyReads := 0
 	for {
-		n, err := io.ReadFull(r, buf)
+		n, err := r.Read(buf)
+		if n < 0 || n > len(buf) {
+			return ErrMalformed
+		}
 		if n > 0 {
+			emptyReads = 0
 			if sendErr := send(append([]byte(nil), buf[:n]...)); sendErr != nil {
 				return sendErr
 			}
 		}
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
+		if err == io.EOF {
 			return nil
 		}
 		if err != nil {
 			return err
+		}
+		if n == 0 {
+			emptyReads++
+			if emptyReads == 100 {
+				return io.ErrNoProgress
+			}
 		}
 	}
 }

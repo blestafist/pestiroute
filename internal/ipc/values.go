@@ -10,6 +10,7 @@ import (
 
 	"github.com/blestafist/pestiroute/internal/core"
 	gen "github.com/blestafist/pestiroute/internal/ipc/gen"
+	"golang.org/x/net/http/httpguts"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -552,11 +553,17 @@ func httpHeadersTo(in http.Header) (map[string]*gen.StringList, error) {
 	out := make(map[string]*gen.StringList, len(in))
 	var size uint64
 	for k, values := range in {
+		if !httpguts.ValidHeaderFieldName(k) {
+			return nil, ErrMalformed
+		}
 		if uint64(len(k)) > MaxHTTPHeaderBytes-size {
 			return nil, ErrMalformed
 		}
 		size += uint64(len(k))
 		for _, v := range values {
+			if !httpguts.ValidHeaderFieldValue(v) {
+				return nil, ErrMalformed
+			}
 			if uint64(len(v)) > MaxHTTPHeaderBytes-size {
 				return nil, ErrMalformed
 			}
@@ -573,11 +580,17 @@ func httpHeadersFrom(in map[string]*gen.StringList) (http.Header, error) {
 		if list == nil {
 			return nil, ErrMalformed
 		}
+		if !httpguts.ValidHeaderFieldName(k) {
+			return nil, ErrMalformed
+		}
 		if uint64(len(k)) > MaxHTTPHeaderBytes-size {
 			return nil, ErrMalformed
 		}
 		size += uint64(len(k))
 		for _, v := range list.Values {
+			if !httpguts.ValidHeaderFieldValue(v) {
+				return nil, ErrMalformed
+			}
 			if uint64(len(v)) > MaxHTTPHeaderBytes-size {
 				return nil, ErrMalformed
 			}

@@ -516,6 +516,43 @@ func TestM6HTTPMetadataAndBodyCarriers(t *testing.T) {
 	}
 }
 
+type gatedHTTPBodyReader struct {
+	release <-chan struct{}
+	sent    bool
+}
+
+func (r *gatedHTTPBodyReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		return copy(p, []byte("x")), nil
+	}
+	<-r.release
+	return 0, io.EOF
+}
+
+func TestM6HTTPBodyReaderForwardsBeforeNextRead(t *testing.T) {
+	release := make(chan struct{})
+	first := make(chan []byte, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- WriteBodyReader(&gatedHTTPBodyReader{release: release}, func(chunk []byte) error { first <- append([]byte(nil), chunk...); return nil })
+	}()
+	select {
+	case got := <-first:
+		if !bytes.Equal(got, []byte("x")) {
+			t.Fatalf("first chunk = %q", got)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		<-done
+		t.Fatal("writer waited for the reader's later data or EOF")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestM6CodecRejectsUnknownEnumsAndInvalidPresence(t *testing.T) {
 	if _, err := HealthFrom(&gen.Health{State: "future"}); !errors.Is(err, ErrMalformed) {
 		t.Fatal("unknown health enum accepted")

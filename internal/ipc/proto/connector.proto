@@ -38,6 +38,12 @@ message InputComplete {}
 message HTTPRequest { string method = 1; string url = 2; string host = 3; map<string,StringList> headers = 4; optional int64 content_length = 5; }
 message HTTPResponse { int32 status_code = 1; map<string,StringList> headers = 2; optional int64 content_length = 3; }
 message HTTPBodyComplete {}
+message HTTPFrame {
+  uint64 epoch = 1;
+  uint64 call_id = 2;
+  string invocation_id = 3;
+  oneof payload { RecordFragment record = 4; BodyChunk body = 5; }
+}
 message CredentialLookup { string name = 1; }
 message CredentialValue { bytes value = 1; }
 message LogRecord { string level = 1; string message = 2; map<string,string> attributes = 3; }
@@ -54,4 +60,5 @@ service Connector {
 
 service HostServices {
   rpc CredentialGet(stream RecordFragment) returns (stream RecordFragment);
+  rpc HTTPDo(stream HTTPFrame) returns (stream HTTPFrame);
 }

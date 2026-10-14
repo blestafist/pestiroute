@@ -309,6 +309,7 @@ var Connector_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	HostServices_CredentialGet_FullMethodName = "/pestiroute.connector.v1.HostServices/CredentialGet"
+	HostServices_HTTPDo_FullMethodName        = "/pestiroute.connector.v1.HostServices/HTTPDo"
 )
 
 // HostServicesClient is the client API for HostServices service.
@@ -316,6 +317,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type HostServicesClient interface {
 	CredentialGet(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RecordFragment, RecordFragment], error)
+	HTTPDo(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HTTPFrame, HTTPFrame], error)
 }
 
 type hostServicesClient struct {
@@ -339,11 +341,25 @@ func (c *hostServicesClient) CredentialGet(ctx context.Context, opts ...grpc.Cal
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostServices_CredentialGetClient = grpc.BidiStreamingClient[RecordFragment, RecordFragment]
 
+func (c *hostServicesClient) HTTPDo(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HTTPFrame, HTTPFrame], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &HostServices_ServiceDesc.Streams[1], HostServices_HTTPDo_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[HTTPFrame, HTTPFrame]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostServices_HTTPDoClient = grpc.BidiStreamingClient[HTTPFrame, HTTPFrame]
+
 // HostServicesServer is the server API for HostServices service.
 // All implementations must embed UnimplementedHostServicesServer
 // for forward compatibility.
 type HostServicesServer interface {
 	CredentialGet(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error
+	HTTPDo(grpc.BidiStreamingServer[HTTPFrame, HTTPFrame]) error
 	mustEmbedUnimplementedHostServicesServer()
 }
 
@@ -356,6 +372,9 @@ type UnimplementedHostServicesServer struct{}
 
 func (UnimplementedHostServicesServer) CredentialGet(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error {
 	return status.Errorf(codes.Unimplemented, "method CredentialGet not implemented")
+}
+func (UnimplementedHostServicesServer) HTTPDo(grpc.BidiStreamingServer[HTTPFrame, HTTPFrame]) error {
+	return status.Errorf(codes.Unimplemented, "method HTTPDo not implemented")
 }
 func (UnimplementedHostServicesServer) mustEmbedUnimplementedHostServicesServer() {}
 func (UnimplementedHostServicesServer) testEmbeddedByValue()                      {}
@@ -385,6 +404,13 @@ func _HostServices_CredentialGet_Handler(srv interface{}, stream grpc.ServerStre
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostServices_CredentialGetServer = grpc.BidiStreamingServer[RecordFragment, RecordFragment]
 
+func _HostServices_HTTPDo_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(HostServicesServer).HTTPDo(&grpc.GenericServerStream[HTTPFrame, HTTPFrame]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostServices_HTTPDoServer = grpc.BidiStreamingServer[HTTPFrame, HTTPFrame]
+
 // HostServices_ServiceDesc is the grpc.ServiceDesc for HostServices service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -396,6 +422,12 @@ var HostServices_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "CredentialGet",
 			Handler:       _HostServices_CredentialGet_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "HTTPDo",
+			Handler:       _HostServices_HTTPDo_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

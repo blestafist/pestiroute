@@ -47,6 +47,7 @@ type invocation struct {
 	cancel      context.CancelFunc
 	callbacks   map[uint64]struct{}
 	credentials core.CredentialAccess
+	transport   core.HTTPDoer
 	revoked     bool
 }
 
@@ -65,6 +66,10 @@ func (r *invocationRegistry) begin(parent context.Context, accountID string) (st
 }
 
 func (r *invocationRegistry) beginWithCredentials(parent context.Context, accountID string, credentials core.CredentialAccess) (string, context.Context, error) {
+	return r.beginWithServices(parent, accountID, credentials, nil)
+}
+
+func (r *invocationRegistry) beginWithServices(parent context.Context, accountID string, credentials core.CredentialAccess, transport core.HTTPDoer) (string, context.Context, error) {
 	if err := parent.Err(); err != nil {
 		return "", nil, err
 	}
@@ -82,7 +87,7 @@ func (r *invocationRegistry) beginWithCredentials(parent context.Context, accoun
 	}
 	id := hex.EncodeToString(raw[:])
 	ctx, cancel := context.WithCancel(parent)
-	inv := &invocation{id: id, epoch: r.epoch, accountID: accountID, ctx: ctx, cancel: cancel, callbacks: make(map[uint64]struct{}), credentials: credentials}
+	inv := &invocation{id: id, epoch: r.epoch, accountID: accountID, ctx: ctx, cancel: cancel, callbacks: make(map[uint64]struct{}), credentials: credentials, transport: transport}
 	r.active[id] = inv
 	go func() {
 		<-ctx.Done()
