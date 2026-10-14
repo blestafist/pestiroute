@@ -533,6 +533,13 @@ inputDone:
 	}
 	statusCode := int32(207)
 	head := &gen.HeadFrame{Protocol: start.Request.Payload.Protocol, ContentType: "application/octet-stream", HttpStatus: &statusCode, Headers: map[string]*gen.StringList{"X-Fixture": {Values: []string{"fixed"}}}}
+	if s.mode == "execute-incremental-before-head" {
+		chunk, err := ipc.BodyChunkTo([]byte("early"))
+		if err != nil {
+			return err
+		}
+		return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Body{Body: chunk}})
+	}
 	if err := sendExecuteRecord(stream, epoch, invocationID, 0, "HeadFrame", head); err != nil {
 		return err
 	}
@@ -551,19 +558,57 @@ inputDone:
 		return stream.Context().Err()
 	}
 	if len(body) > 0 {
-		if err := ipc.WriteBody(body, uint64(len(body)), func(chunk []byte) error {
+		writeBody := func(chunk []byte) error {
 			b, err := ipc.BodyChunkTo(chunk)
 			if err != nil {
 				return err
 			}
 			return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Body{Body: b}})
-		}); err != nil {
+		}
+		if s.mode == "execute-incremental" {
+			if len(body) <= ipc.MaxFragmentBytes {
+				return status.Error(codes.InvalidArgument, "incremental fixture requires multiple chunks")
+			}
+			if err := writeBody(body[:ipc.MaxFragmentBytes]); err != nil {
+				return err
+			}
+			if _, err := NewCredentialClient(childHostServices(), epoch, invocationID).Get(stream.Context(), "token"); err != nil {
+				return status.Error(codes.PermissionDenied, "incremental gate denied")
+			}
+			if err := ipc.WriteBody(body[ipc.MaxFragmentBytes:], uint64(len(body)-ipc.MaxFragmentBytes), writeBody); err != nil {
+				return err
+			}
+		} else if err := ipc.WriteBody(body, uint64(len(body)), writeBody); err != nil {
 			return err
 		}
 	}
 	inputTokens := int64(12)
 	complete := &gen.CompleteFrame{Outcome: string(core.OutcomeSucceeded), Usage: &gen.UsageReport{InputTokens: &inputTokens, Source: string(core.UsageProvider), Completeness: string(core.UsageComplete)}}
-	return sendExecuteRecord(stream, epoch, invocationID, 2, "CompleteFrame", complete)
+	switch s.mode {
+	case "execute-incremental-failed":
+		complete.Outcome = string(core.OutcomeFailed)
+		complete.Error = ipc.GatewayErrorTo(&core.GatewayError{Code: "fixture_failed", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnsafe, Message: "fixture failed"})
+	case "execute-incremental-cancelled":
+		complete.Outcome = string(core.OutcomeCancelled)
+		complete.Error = ipc.GatewayErrorTo(&core.GatewayError{Code: "fixture_cancelled", Category: core.CategoryCancelled, RetryDisposition: core.RetryUnsafe, Message: "fixture cancelled"})
+	case "execute-incremental-incomplete":
+		complete.Outcome = string(core.OutcomeIncomplete)
+		complete.Error = ipc.GatewayErrorTo(&core.GatewayError{Code: "fixture_incomplete", Category: core.CategoryInternal, RetryDisposition: core.RetryUnknown, Message: "fixture incomplete"})
+	}
+	if err := sendExecuteRecord(stream, epoch, invocationID, 2, "CompleteFrame", complete); err != nil {
+		return err
+	}
+	if s.mode == "execute-incremental-after-complete" {
+		chunk, err := ipc.BodyChunkTo([]byte("late"))
+		if err != nil {
+			return err
+		}
+		return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Body{Body: chunk}})
+	}
+	if s.mode == "execute-incremental-duplicate-complete" {
+		return sendExecuteRecord(stream, epoch, invocationID, 2, "CompleteFrame", complete)
+	}
+	return nil
 }
 
 func sameExecuteIdentity(f *gen.ExecuteFrame, epoch uint64, invocationID string) bool {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -16,6 +17,155 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+type executeGateCredentials struct {
+	called  chan struct{}
+	release chan struct{}
+}
+
+func (c executeGateCredentials) Get(ctx context.Context, name string) ([]byte, error) {
+	if name != "token" {
+		return nil, context.Canceled
+	}
+	select {
+	case c.called <- struct{}{}:
+	default:
+	}
+	select {
+	case <-c.release:
+		return []byte("released"), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestM6ExecuteIncrementalBodyArrivesBeforeProducerCompletes(t *testing.T) {
+	p := startProcess(t, "execute-incremental", startupTimeout)
+	c, err := p.ConnectComponent(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.Repeat([]byte{0x80}, 2*ipc.MaxFragmentBytes+17)
+	copy(body[ipc.MaxFragmentBytes-1:], []byte("€\x00\xff"))
+	gate := executeGateCredentials{called: make(chan struct{}, 1), release: make(chan struct{})}
+	response, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1", Body: body}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, core.InvocationServices{Credentials: gate, Transport: authTransport{}, Logger: slog.Default()})
+	if gatewayErr != nil || response.Stream == nil {
+		t.Fatalf("Execute response=%+v error=%+v", response, gatewayErr)
+	}
+	defer response.Stream.Close()
+	if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+		t.Fatalf("Head=%+v err=%v", frame, err)
+	}
+	first, err := response.Stream.Next(context.Background())
+	if err != nil || first.Type != core.FrameBody || !bytes.Equal(first.Body.Data, body[:ipc.MaxFragmentBytes]) {
+		t.Fatalf("first partial Body=%+v err=%v", first, err)
+	}
+	select {
+	case <-gate.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("child did not reach its post-partial-body gate")
+	}
+	close(gate.release)
+	output := append([]byte(nil), first.Body.Data...)
+	for {
+		frame, err := response.Stream.Next(context.Background())
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch frame.Type {
+		case core.FrameBody:
+			output = append(output, frame.Body.Data...)
+		case core.FrameComplete:
+			if frame.Complete.Outcome != core.OutcomeSucceeded || frame.Complete.Usage == nil || frame.Complete.Usage.InputTokens == nil || *frame.Complete.Usage.InputTokens != 12 {
+				t.Fatalf("Complete=%+v", frame.Complete)
+			}
+		default:
+			t.Fatalf("unexpected frame: %+v", frame)
+		}
+	}
+	if !bytes.Equal(output, body) {
+		t.Fatalf("opaque body changed: got %d bytes want %d", len(output), len(body))
+	}
+}
+
+func TestM6ExecuteIncrementalTerminalOutcomesAndMalformedOrder(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want core.Outcome
+	}{
+		{"execute-incremental-failed", core.OutcomeFailed},
+		{"execute-incremental-cancelled", core.OutcomeCancelled},
+		{"execute-incremental-incomplete", core.OutcomeIncomplete},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			p := startProcess(t, tc.mode, startupTimeout)
+			c, err := p.ConnectComponent(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			response, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1", Body: []byte("body")}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, core.InvocationServices{})
+			if gatewayErr != nil || response.Stream == nil {
+				t.Fatalf("Execute response=%+v error=%+v", response, gatewayErr)
+			}
+			defer response.Stream.Close()
+			for _, typ := range []core.FrameType{core.FrameHead, core.FrameBody} {
+				frame, err := response.Stream.Next(context.Background())
+				if err != nil || frame.Type != typ {
+					t.Fatalf("frame=%+v err=%v want %s", frame, err, typ)
+				}
+			}
+			frame, err := response.Stream.Next(context.Background())
+			if err != nil || frame.Type != core.FrameComplete || frame.Complete.Outcome != tc.want || frame.Complete.Usage == nil || frame.Complete.Usage.InputTokens == nil || *frame.Complete.Usage.InputTokens != 12 || frame.Complete.Error == nil {
+				t.Fatalf("Complete=%+v err=%v", frame, err)
+			}
+		})
+	}
+	for _, mode := range []string{"execute-incremental-before-head", "execute-incremental-after-complete", "execute-incremental-duplicate-complete"} {
+		t.Run(mode, func(t *testing.T) {
+			p := startProcess(t, mode, startupTimeout)
+			c, err := p.ConnectComponent(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			response, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1", Body: []byte("body")}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, core.InvocationServices{Credentials: authCredentials{account: "account"}, Transport: authTransport{}, Logger: slog.Default()})
+			if mode == "execute-incremental-before-head" {
+				if gatewayErr == nil || response.Stream != nil {
+					t.Fatalf("accepted body before Head: response=%+v error=%+v", response, gatewayErr)
+				}
+				return
+			}
+			if gatewayErr != nil || response.Stream == nil {
+				t.Fatalf("Execute response=%+v error=%+v", response, gatewayErr)
+			}
+			defer response.Stream.Close()
+			_, err = response.Stream.Next(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for {
+				_, err = response.Stream.Next(context.Background())
+				if err != nil {
+					break
+				}
+			}
+			if err == nil || errors.Is(err, io.EOF) {
+				t.Fatalf("accepted invalid trailing frame sequence: %v", err)
+			}
+		})
+	}
+}
 
 func TestM6ExecuteFixedRoundTripsRequestResponseAndEOF(t *testing.T) {
 	input := append([]byte{0, 0xff, '\n'}, bytes.Repeat([]byte{0, 1, 0xfe, 'x'}, 40<<10)...)
