@@ -142,9 +142,10 @@ func (s *testServices) ForAttempt(scope AttemptScope) InvocationServices {
 
 type dispatchConnector struct {
 	registryComponent
-	caps  map[CapabilityScope]CapabilityResult
-	calls []ExecutionRequest
-	creds []string
+	caps   map[CapabilityScope]CapabilityResult
+	calls  []ExecutionRequest
+	creds  []string
+	scopes []AttemptScope
 }
 
 type concurrentRouteCall struct {
@@ -258,8 +259,9 @@ func (c *dispatchConnector) Capabilities(_ context.Context, scope CapabilityScop
 	return c.caps[scope].Clone()
 }
 
-func (c *dispatchConnector) Execute(ctx context.Context, in ExecutionRequest, _ AttemptScope, services InvocationServices) (ExecutionResponse, *GatewayError) {
+func (c *dispatchConnector) Execute(ctx context.Context, in ExecutionRequest, scope AttemptScope, services InvocationServices) (ExecutionResponse, *GatewayError) {
 	c.calls = append(c.calls, in)
+	c.scopes = append(c.scopes, scope)
 	credential, err := services.Credentials.Get(ctx, "token")
 	if err != nil {
 		return ExecutionResponse{}, &GatewayError{Code: "credential_missing", Category: CategoryInternal, Message: "Credential missing"}
@@ -317,7 +319,7 @@ func TestDispatchRouteRegistryEligibilityAndScopedServices(t *testing.T) {
 		}
 	}
 	routes, err := NewRouteTable([]Route{
-		{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: protocol, Mode: ModeNative, Model: "model-a"}, AccountID: "account-a"}, Adapter: "adapter", Connector: "connector-a"},
+		{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: protocol, Mode: ModeNative, Model: "model-a"}, AccountID: "account-a"}, Adapter: "adapter", Connector: "connector-a", MaxBodyBytes: 64},
 		{Identity: RouteIdentity{RouteLookupKey: RouteLookupKey{Protocol: protocol, Mode: ModeNative, Model: "model-b"}, AccountID: "account-a"}, Adapter: "adapter", Connector: "connector-b"},
 	}, registry)
 	if err != nil {
@@ -349,6 +351,13 @@ func TestDispatchRouteRegistryEligibilityAndScopedServices(t *testing.T) {
 		if len(connectors[i].calls) != 1 || connectors[i].calls[0].ID == "client-id" {
 			t.Fatalf("request identity was not runtime-owned: %+v", connectors[i].calls)
 		}
+		wantMax := int64(^uint64(0) >> 1)
+		if i == 0 {
+			wantMax = 64
+		}
+		if len(connectors[i].scopes) != 1 || connectors[i].scopes[0].MaxBodyBytes != wantMax {
+			t.Fatalf("runtime did not carry selected route body bound: %+v, want %d", connectors[i].scopes, wantMax)
+		}
 		if len(connectors[i].creds) != 1 || connectors[i].creds[0] != "account-a-secret" {
 			t.Fatalf("untrusted metadata selected credentials: %v", connectors[i].creds)
 		}
@@ -371,6 +380,22 @@ func TestDispatchRouteRegistryEligibilityAndScopedServices(t *testing.T) {
 	}
 	if err := registry.Close(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAttemptScopeMaxBodyBytesUnboundedUsesMaxInt64(t *testing.T) {
+	var got AttemptScope
+	d := &Dispatcher{AccountID: "selected", Target: targetFunc(func(_ context.Context, _ ExecutionRequest, scope AttemptScope) (ExecutionResponse, *GatewayError) {
+		got = scope
+		return ExecutionResponse{Stream: &scriptedStream{frames: []StreamFrame{head(), complete()}}}, nil
+	})}
+	response, gatewayErr := d.Execute(context.Background(), request())
+	if gatewayErr != nil {
+		t.Fatal(gatewayErr)
+	}
+	_ = response.Stream.Close()
+	if got.MaxBodyBytes != int64(^uint64(0)>>1) {
+		t.Fatalf("unbounded scope limit=%d", got.MaxBodyBytes)
 	}
 }
 

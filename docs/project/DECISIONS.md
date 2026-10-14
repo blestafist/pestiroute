@@ -432,6 +432,31 @@ These accepted ADRs explain the existing constraints and establish the internal 
   rejection at host/child assembly; verify Core forwards the selected route
   value and protobuf field 6 round-trips. No live provider call is relevant.
 
+### DEC-016 — Convey the Admitted Route Body Bound to Execute
+
+- **Status:** Accepted by user authorization on 2026-10-14.
+- **Context:** Execute sends opaque request-body chunks separately from its
+  typed start record. The child must reassemble only within Core's selected
+  route admission bound; the transport chunk/frame bounds are not that semantic
+  limit.
+- **Decision:** Add runtime-owned `MaxBodyBytes int64` to `core.AttemptScope`.
+  `Dispatcher.executeAttempt` populates it from the selected route's effective
+  body cap and normalizes absent or nonpositive caps to `math.MaxInt64` (the
+  unbounded sentinel). The external Execute binding carries it as additive
+  `ExecuteStart.max_body_bytes` field 3. Host and child reject request bodies
+  over the conveyed value before invoking the child Connector. This does not
+  change payload bytes, selection, retries, accounting, or provider behavior.
+- **Alternative rejected:** Infer the aggregate cap from transport frame size
+  or invent a fixed IPC payload limit; either would conflict with Core route
+  admission.
+- **Compatibility/migration:** This approved internal contract and protobuf
+  extension requires host and child to use the updated binding together.
+  `ExecuteStart` field 3 is additive and does not change the IPC major. No
+  production child composition is added by this decision; that remains M6-024.
+- **Verification:** Test route-bound and unbounded `AttemptScope` population,
+  exact-boundary transport, and over-bound rejection at both host and child
+  assembly. No live provider call is relevant.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |

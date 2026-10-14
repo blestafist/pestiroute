@@ -440,6 +440,143 @@ func (s *handshakeChild) Authenticate(stream grpc.BidiStreamingServer[gen.Record
 	return err
 }
 
+func (s *handshakeChild) Execute(stream grpc.BidiStreamingServer[gen.ExecuteFrame, gen.ExecuteFrame]) error {
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	if first == nil || first.Epoch == 0 || first.CallId != 1 || first.InvocationId == "" {
+		return status.Error(codes.InvalidArgument, "invalid execute identity")
+	}
+	epoch, invocationID := first.Epoch, first.InvocationId
+	r, ok := first.Payload.(*gen.ExecuteFrame_Record)
+	if !ok || r.Record == nil || r.Record.RecordType != "ExecuteStart" || r.Record.InvocationId != invocationID {
+		return status.Error(codes.InvalidArgument, "missing execute start")
+	}
+	a := ipc.NewAssembler(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 0, Type: "ExecuteStart"})
+	if err := a.Add(r.Record); err != nil {
+		return status.Error(codes.InvalidArgument, "malformed execute start")
+	}
+	for !a.Complete() {
+		f, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		if !sameExecuteIdentity(f, epoch, invocationID) {
+			return status.Error(codes.InvalidArgument, "execute identity mismatch")
+		}
+		r, ok := f.Payload.(*gen.ExecuteFrame_Record)
+		if !ok || r.Record == nil || r.Record.InvocationId != invocationID {
+			return status.Error(codes.InvalidArgument, "invalid execute start fragment")
+		}
+		if err := a.Add(r.Record); err != nil {
+			return status.Error(codes.InvalidArgument, "malformed execute start")
+		}
+	}
+	var start gen.ExecuteStart
+	if err := a.Decode(&start); err != nil || start.Request == nil || start.Scope == nil {
+		return status.Error(codes.InvalidArgument, "invalid execute start")
+	}
+	if start.MaxBodyBytes <= 0 {
+		return status.Error(codes.InvalidArgument, "invalid execute body limit")
+	}
+	var body []byte
+	for {
+		f, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return status.Error(codes.InvalidArgument, "missing input complete")
+		}
+		if err != nil {
+			return err
+		}
+		if !sameExecuteIdentity(f, epoch, invocationID) {
+			return status.Error(codes.InvalidArgument, "execute identity mismatch")
+		}
+		switch p := f.Payload.(type) {
+		case *gen.ExecuteFrame_Body:
+			chunk, err := ipc.BodyChunkFrom(p.Body)
+			if err != nil {
+				return status.Error(codes.InvalidArgument, "invalid body chunk")
+			}
+			if uint64(len(chunk)) > uint64(start.MaxBodyBytes)-uint64(len(body)) {
+				return status.Error(codes.InvalidArgument, "execute body exceeds admitted route limit")
+			}
+			body = append(body, chunk...)
+		case *gen.ExecuteFrame_Record:
+			if p.Record == nil || p.Record.InvocationId != invocationID || p.Record.RecordType != "InputComplete" || p.Record.RecordId != 1 {
+				return status.Error(codes.InvalidArgument, "invalid input terminator")
+			}
+			var end gen.InputComplete
+			if err := ipc.Reassemble(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: 1, Type: "InputComplete"}, []*gen.RecordFragment{p.Record}, &end); err != nil {
+				return status.Error(codes.InvalidArgument, "malformed input terminator")
+			}
+			goto inputDone
+		default:
+			return status.Error(codes.InvalidArgument, "unexpected execute frame")
+		}
+	}
+inputDone:
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		return status.Error(codes.InvalidArgument, "unexpected data after input complete")
+	}
+	if s.mode == "execute-stall" {
+		_, _ = fmt.Fprintln(os.Stderr, "execute-stall-called")
+		<-stream.Context().Done()
+		return stream.Context().Err()
+	}
+	if s.mode == "execute-error" {
+		ge := &core.GatewayError{Code: "rejected", Category: core.CategoryRateLimited, Retryable: true, RetryDisposition: core.RetrySafe, Provider: "fixture", OriginalError: "diagnostic", Message: "try later"}
+		return sendExecuteRecord(stream, epoch, invocationID, 0, "GatewayError", ipc.GatewayErrorTo(ge))
+	}
+	if s.mode == "execute-bad-epoch" {
+		return stream.Send(&gen.ExecuteFrame{Epoch: epoch + 1, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Record{Record: &gen.RecordFragment{Epoch: epoch + 1, CallId: 1, RecordId: 0, RecordType: "HeadFrame", TotalLength: 0, Final: true, InvocationId: invocationID}}})
+	}
+	statusCode := int32(207)
+	head := &gen.HeadFrame{Protocol: start.Request.Payload.Protocol, ContentType: "application/octet-stream", HttpStatus: &statusCode, Headers: map[string]*gen.StringList{"X-Fixture": {Values: []string{"fixed"}}}}
+	if err := sendExecuteRecord(stream, epoch, invocationID, 0, "HeadFrame", head); err != nil {
+		return err
+	}
+	if s.mode == "execute-head-stall" {
+		_, _ = fmt.Fprintln(os.Stderr, "execute-posthead-waiting")
+		if _, err := NewCredentialClient(childHostServices(), epoch, invocationID).Get(stream.Context(), "token"); err != nil {
+			return status.Error(codes.PermissionDenied, "execute callback denied before cancellation")
+		}
+		_, _ = fmt.Fprintln(os.Stderr, "execute-posthead-authorized")
+		<-stream.Context().Done()
+		if _, err := NewCredentialClient(childHostServices(), epoch, invocationID).Get(context.Background(), "token"); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "execute-posthead-revoked")
+		} else {
+			_, _ = fmt.Fprintln(os.Stderr, "execute-posthead-still-authorized")
+		}
+		return stream.Context().Err()
+	}
+	if len(body) > 0 {
+		if err := ipc.WriteBody(body, uint64(len(body)), func(chunk []byte) error {
+			b, err := ipc.BodyChunkTo(chunk)
+			if err != nil {
+				return err
+			}
+			return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Body{Body: b}})
+		}); err != nil {
+			return err
+		}
+	}
+	inputTokens := int64(12)
+	complete := &gen.CompleteFrame{Outcome: string(core.OutcomeSucceeded), Usage: &gen.UsageReport{InputTokens: &inputTokens, Source: string(core.UsageProvider), Completeness: string(core.UsageComplete)}}
+	return sendExecuteRecord(stream, epoch, invocationID, 2, "CompleteFrame", complete)
+}
+
+func sameExecuteIdentity(f *gen.ExecuteFrame, epoch uint64, invocationID string) bool {
+	return f != nil && f.Epoch == epoch && f.CallId == 1 && f.InvocationId == invocationID
+}
+
+func sendExecuteRecord(stream grpc.BidiStreamingServer[gen.ExecuteFrame, gen.ExecuteFrame], epoch uint64, invocationID string, recordID uint64, typ string, value proto.Message) error {
+	return ipc.WriteRecord(ipc.Identity{Epoch: epoch, CallID: 1, RecordID: recordID, Type: typ}, value, func(f *gen.RecordFragment) error {
+		f.InvocationId = invocationID
+		return stream.Send(&gen.ExecuteFrame{Epoch: epoch, CallId: 1, InvocationId: invocationID, Payload: &gen.ExecuteFrame_Record{Record: f}})
+	})
+}
+
 func childHostServices() gen.HostServicesClient {
 	socket := os.Getenv(hostServicesSocketEnv)
 	conn, err := grpc.NewClient("passthrough:///child-host-services", grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {

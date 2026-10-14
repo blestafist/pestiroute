@@ -108,6 +108,13 @@ opaque payload and is not a new global size ceiling. Connectors must not accept
 an estimate body larger than this bound; external bindings enforce it while
 reassembling the separately streamed body. See [DEC-015](../project/DECISIONS.md#dec-015--convey-the-admitted-route-body-bound-to-usage-estimation).
 
+`AttemptScope.MaxBodyBytes` is runtime-owned and carries the selected route's
+effective admitted request-body limit to `Execute`; an absent/nonpositive route
+cap is represented by `math.MaxInt64` (unbounded). It does not alter the opaque
+payload or add a global ceiling. An external binding must enforce this value
+while reassembling streamed request bytes before invoking the child Connector.
+See [DEC-016](../project/DECISIONS.md#dec-016--convey-the-admitted-route-body-bound-to-execute).
+
 `AuthUserAction` is the optional presentation-only value
 `{VerificationURI string, UserCode string, PollInterval time.Duration}`;
 `PollInterval` is positive when an action is present. Core validates the action

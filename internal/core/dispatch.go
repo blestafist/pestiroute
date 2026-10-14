@@ -22,9 +22,10 @@ var (
 
 // AttemptScope is runtime-owned; client metadata is never used for selection.
 type AttemptScope struct {
-	ID        string
-	AccountID string
-	Mode      string
+	ID           string
+	AccountID    string
+	Mode         string
+	MaxBodyBytes int64 // Runtime-owned effective admitted request-body limit; MaxInt64 means unbounded.
 }
 
 type Target interface {
@@ -230,7 +231,10 @@ func (d *Dispatcher) executeAttempt(ctx context.Context, in ExecutionRequest) (E
 		return ExecutionResponse{}, executionError(err)
 	}
 	in.ID = requestID
-	scope := AttemptScope{ID: attemptID, AccountID: d.AccountID, Mode: executionMode}
+	if routeMaxBodyBytes <= 0 {
+		routeMaxBodyBytes = int64(^uint64(0) >> 1)
+	}
+	scope := AttemptScope{ID: attemptID, AccountID: d.AccountID, Mode: executionMode, MaxBodyBytes: routeMaxBodyBytes}
 	result := AttemptResult{RequestID: requestID, Scope: scope, Route: route, Adapter: adapterID, Connector: connectorID, Outcome: OutcomeIncomplete, Usage: UsageReport{Source: UsageUnknown, Completeness: UsageUnknownCompleteness}, StartedAt: time.Now()}
 	var gatewayErr *GatewayError
 	var accountingEstimate ResolvedEstimate

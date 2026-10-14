@@ -238,6 +238,12 @@ committed rejection is delivered as the response and cannot trigger fallback
 or replacement. A pre-Head GatewayError has no stream/commit and is finalized
 once as failed (or cancelled for cancellation). M2 adds no automatic retry.
 
+`AttemptScope.MaxBodyBytes` is populated from the selected route's effective
+admitted body cap. Missing or nonpositive caps normalize to `math.MaxInt64`.
+Connectors and external bindings use it only to enforce this already-admitted
+request bound; it is not a new payload ceiling or a change to opaque bytes.
+See [DEC-016](../project/DECISIONS.md#dec-016--convey-the-admitted-route-body-bound-to-execute).
+
 For a delivered stream, the required sequence is `Head → Body* → Complete →
 EOF`. Core validates each frame and forwards it under bounded backpressure;
 the Adapter's Head handoff is the commit point. Cancellation/Close interrupts

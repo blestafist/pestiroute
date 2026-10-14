@@ -28,6 +28,7 @@ const (
 	Connector_Models_FullMethodName        = "/pestiroute.connector.v1.Connector/Models"
 	Connector_EstimateUsage_FullMethodName = "/pestiroute.connector.v1.Connector/EstimateUsage"
 	Connector_Authenticate_FullMethodName  = "/pestiroute.connector.v1.Connector/Authenticate"
+	Connector_Execute_FullMethodName       = "/pestiroute.connector.v1.Connector/Execute"
 	Connector_Close_FullMethodName         = "/pestiroute.connector.v1.Connector/Close"
 )
 
@@ -43,6 +44,7 @@ type ConnectorClient interface {
 	Models(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RecordFragment, RecordFragment], error)
 	EstimateUsage(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[EstimateFrame, RecordFragment], error)
 	Authenticate(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[RecordFragment, RecordFragment], error)
+	Execute(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecuteFrame, ExecuteFrame], error)
 	Close(ctx context.Context, in *RecordFragment, opts ...grpc.CallOption) (*RecordFragment, error)
 }
 
@@ -176,6 +178,19 @@ func (c *connectorClient) Authenticate(ctx context.Context, opts ...grpc.CallOpt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Connector_AuthenticateClient = grpc.BidiStreamingClient[RecordFragment, RecordFragment]
 
+func (c *connectorClient) Execute(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ExecuteFrame, ExecuteFrame], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Connector_ServiceDesc.Streams[8], Connector_Execute_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ExecuteFrame, ExecuteFrame]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Connector_ExecuteClient = grpc.BidiStreamingClient[ExecuteFrame, ExecuteFrame]
+
 func (c *connectorClient) Close(ctx context.Context, in *RecordFragment, opts ...grpc.CallOption) (*RecordFragment, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RecordFragment)
@@ -198,6 +213,7 @@ type ConnectorServer interface {
 	Models(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error
 	EstimateUsage(grpc.BidiStreamingServer[EstimateFrame, RecordFragment]) error
 	Authenticate(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error
+	Execute(grpc.BidiStreamingServer[ExecuteFrame, ExecuteFrame]) error
 	Close(context.Context, *RecordFragment) (*RecordFragment, error)
 	mustEmbedUnimplementedConnectorServer()
 }
@@ -232,6 +248,9 @@ func (UnimplementedConnectorServer) EstimateUsage(grpc.BidiStreamingServer[Estim
 }
 func (UnimplementedConnectorServer) Authenticate(grpc.BidiStreamingServer[RecordFragment, RecordFragment]) error {
 	return status.Errorf(codes.Unimplemented, "method Authenticate not implemented")
+}
+func (UnimplementedConnectorServer) Execute(grpc.BidiStreamingServer[ExecuteFrame, ExecuteFrame]) error {
+	return status.Errorf(codes.Unimplemented, "method Execute not implemented")
 }
 func (UnimplementedConnectorServer) Close(context.Context, *RecordFragment) (*RecordFragment, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Close not implemented")
@@ -325,6 +344,13 @@ func _Connector_Authenticate_Handler(srv interface{}, stream grpc.ServerStream) 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Connector_AuthenticateServer = grpc.BidiStreamingServer[RecordFragment, RecordFragment]
 
+func _Connector_Execute_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ConnectorServer).Execute(&grpc.GenericServerStream[ExecuteFrame, ExecuteFrame]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Connector_ExecuteServer = grpc.BidiStreamingServer[ExecuteFrame, ExecuteFrame]
+
 func _Connector_Close_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RecordFragment)
 	if err := dec(in); err != nil {
@@ -397,6 +423,12 @@ var Connector_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Authenticate",
 			Handler:       _Connector_Authenticate_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Execute",
+			Handler:       _Connector_Execute_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},
