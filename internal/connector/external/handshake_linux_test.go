@@ -227,6 +227,7 @@ func (s *handshakeChild) Descriptor(req *gen.RecordFragment, stream grpc.ServerS
 }
 
 func (s *handshakeChild) Init(stream grpc.ClientStreamingServer[gen.RecordFragment, gen.RecordFragment]) error {
+	_, _ = fmt.Fprintln(os.Stderr, "lifecycle-init-called")
 	if s.mode == "lifecycle-init-stall" {
 		<-stream.Context().Done()
 		return stream.Context().Err()

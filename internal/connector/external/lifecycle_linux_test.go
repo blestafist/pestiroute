@@ -460,3 +460,31 @@ func TestM6LifecycleCloseSuppressesRepeatedFailure(t *testing.T) {
 	}
 	assertProcessReaped(t, p)
 }
+
+func TestM6LifecycleConcurrentInitIsOnceOnly(t *testing.T) {
+	p := startProcess(t, "lifecycle-success", startupTimeout)
+	c, err := p.ConnectComponent(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	results := make(chan error, 2)
+	start := make(chan struct{})
+	for range 2 {
+		go func() { <-start; results <- c.Init(ctx, core.ComponentConfig{}) }()
+	}
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Shutdown waits for os/exec's stderr copier before counting diagnostics.
+	if got := strings.Count(p.Diagnostics(), "lifecycle-init-called"); got != 1 {
+		t.Fatalf("Init RPC count=%d, want one", got)
+	}
+}

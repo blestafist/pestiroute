@@ -261,7 +261,19 @@ func (s *Supervisor) fail() {
 func (s *Supervisor) get() (*Connector, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.current, s.ready && !s.failed && !s.closed
+	if !s.ready || s.failed || s.closed || s.current == nil || s.process == nil {
+		return s.current, false
+	}
+	// Failure becomes observable before the watcher goroutine necessarily runs.
+	// Never admit into that gap or infer readiness from the stale cached flag.
+	select {
+	case <-s.process.waitDone:
+		return s.current, false
+	case <-s.current.fatal:
+		return s.current, false
+	default:
+		return s.current, true
+	}
 }
 
 func (s *Supervisor) Health(ctx context.Context) core.Health {

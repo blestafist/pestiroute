@@ -5,6 +5,7 @@ package external
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -15,24 +16,36 @@ import (
 )
 
 func TestM6ShutdownDrainsAdmittedStreamAndStopsAdmission(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	p := startProcess(t, "execute-fixed", startupTimeout)
-	c, err := p.ConnectComponent(context.Background())
+	c, err := p.ConnectComponent(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Init(context.Background(), core.ComponentConfig{}); err != nil {
+	if err := c.Init(ctx, core.ComponentConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	response, gatewayErr := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt", AccountID: "account", Mode: core.ModeNative}, authServices())
-	if gatewayErr != nil {
-		t.Fatal(gatewayErr)
+	responses := make([]core.ExecutionResponse, 4)
+	for i := range responses {
+		response, gatewayErr := c.Execute(ctx, core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: fmt.Sprintf("attempt-%d", i), AccountID: "account", Mode: core.ModeNative}, authServices())
+		if gatewayErr != nil {
+			t.Fatal(gatewayErr)
+		}
+		if frame, err := response.Stream.Next(ctx); err != nil || frame.Type != core.FrameHead {
+			t.Fatalf("Head=%+v err=%v", frame, err)
+		}
+		responses[i] = response
 	}
-	if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
-		t.Fatalf("Head=%+v err=%v", frame, err)
+	fifth, cancelFifth := context.WithTimeout(ctx, 30*time.Millisecond)
+	_, fifthErr := c.Execute(fifth, core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "fifth", AccountID: "account", Mode: core.ModeNative}, authServices())
+	cancelFifth()
+	if fifthErr == nil || fifthErr.Category != core.CategoryTimeout {
+		t.Fatalf("fifth invocation should time out at bounded admission: %v", fifthErr)
 	}
 	dir, socket := p.dir, p.hostServices
 	closed := make(chan error, 1)
-	go func() { closed <- c.Close(context.Background()) }()
+	go func() { closed <- c.Close(ctx) }()
 	deadline := time.Now().Add(time.Second)
 	for {
 		c.mu.Lock()
@@ -46,7 +59,7 @@ func TestM6ShutdownDrainsAdmittedStreamAndStopsAdmission(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if got, unavailable := c.Execute(context.Background(), core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt-2", AccountID: "account", Mode: core.ModeNative}, authServices()); unavailable == nil || unavailable.Category != core.CategoryUnavailable || got.Stream != nil {
+	if got, unavailable := c.Execute(ctx, core.ExecutionRequest{Payload: core.RawPayload{Protocol: "test.v1"}}, core.AttemptScope{ID: "attempt-2", AccountID: "account", Mode: core.ModeNative}, authServices()); unavailable == nil || unavailable.Category != core.CategoryUnavailable || got.Stream != nil {
 		t.Fatalf("new invocation after cutoff: response=%+v error=%+v", got, unavailable)
 	}
 	select {
@@ -54,13 +67,22 @@ func TestM6ShutdownDrainsAdmittedStreamAndStopsAdmission(t *testing.T) {
 		t.Fatalf("Close did not drain active stream: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	for {
-		frame, err := response.Stream.Next(context.Background())
-		if err != nil {
-			t.Fatalf("active stream did not drain successfully: %v", err)
+	for i, response := range responses {
+		if i == len(responses)-1 {
+			select {
+			case err := <-closed:
+				t.Fatalf("Close completed before the last admitted stream: %v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
 		}
-		if frame.Type == core.FrameComplete {
-			break
+		for {
+			frame, err := response.Stream.Next(ctx)
+			if err != nil {
+				t.Fatalf("active stream did not drain successfully: %v", err)
+			}
+			if frame.Type == core.FrameComplete {
+				break
+			}
 		}
 	}
 	select {
@@ -79,7 +101,7 @@ func TestM6ShutdownDrainsAdmittedStreamAndStopsAdmission(t *testing.T) {
 			t.Fatalf("owned path %s remains: %v", path, err)
 		}
 	}
-	if _, err := response.Stream.Next(context.Background()); !errors.Is(err, io.EOF) {
+	if _, err := responses[0].Stream.Next(ctx); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next after drained Close=%v, want EOF", err)
 	}
 }

@@ -43,6 +43,7 @@ type Connector struct {
 	fatalOnce   sync.Once
 
 	gate               chan struct{}
+	initGate           chan struct{}
 	mu                 sync.Mutex
 	initialized        bool
 	unavailable        bool
@@ -69,7 +70,7 @@ func (p *Process) ConnectComponent(ctx context.Context) (*Connector, error) {
 	registry := newInvocationRegistry(p.epoch)
 	registry.secrets = p.secrets
 	hostServer := p.serveHostServices(serviceCtx, registry, controlClient)
-	c := &Connector{process: p, conn: conn, controlConn: controlConn, client: gen.NewConnectorClient(conn), control: controlClient, descriptor: descriptor.Clone(), epoch: p.epoch, invocations: registry, hostServer: hostServer, hostCancel: cancel, fatal: make(chan struct{}), gate: make(chan struct{}, 1)}
+	c := &Connector{process: p, conn: conn, controlConn: controlConn, client: gen.NewConnectorClient(conn), control: controlClient, descriptor: descriptor.Clone(), epoch: p.epoch, invocations: registry, hostServer: hostServer, hostCancel: cancel, fatal: make(chan struct{}), gate: make(chan struct{}, maxInvocations), initGate: make(chan struct{}, 1)}
 	probe := &gen.FlowIdentity{Epoch: p.epoch, InvocationId: "probe", Operation: "Execute", CallId: 1, Direction: "host_to_child", Sequence: 1}
 	response, err := controlClient.FlowControl(ctx, &gen.FlowControlRequest{Kind: gen.FlowControlKind_FLOW_CONTROL_PROBE, Identity: probe})
 	if err != nil || response == nil || response.Kind != gen.FlowControlKind_FLOW_CONTROL_PROBE || !proto.Equal(response.Identity, probe) {
@@ -109,6 +110,13 @@ func (c *Connector) stopForRecovery() {
 func (c *Connector) Init(ctx context.Context, config core.ComponentConfig) error {
 	ctx, cancel := boundedContext(ctx, initTimeout)
 	defer cancel()
+	// Initialization is once-only even when normal operations admit concurrently.
+	select {
+	case c.initGate <- struct{}{}:
+		defer func() { <-c.initGate }()
+	case <-ctx.Done():
+		return lifecycleError("Init", ctx.Err())
+	}
 	if err := c.acquire(ctx); err != nil {
 		return lifecycleError("Init", err)
 	}
@@ -441,9 +449,16 @@ func (c *Connector) closeOwned(ctx context.Context, done chan struct{}) {
 	defer cancel()
 	var err error
 	// Wait for already admitted operations and streams. Close has stopped new
-	// admission, so acquiring and releasing this gate marks a completed drain.
-	drained := c.acquireGate(bounded) == nil
-	if drained {
+	// admission. Every slot must be drained: one free slot says nothing about
+	// the other active streams. Release partial acquisitions on timeout too.
+	acquired := 0
+	for acquired < cap(c.gate) {
+		if c.acquireGate(bounded) != nil {
+			break
+		}
+		acquired++
+	}
+	for range acquired {
 		c.release()
 	}
 	c.invocations.close()
@@ -480,10 +495,23 @@ func (c *Connector) acquire(ctx context.Context) error {
 	if closing {
 		return errConnectorClosing
 	}
-	return c.acquireGate(ctx)
+	if err := c.acquireGate(ctx); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	closing = c.closing || c.unavailable
+	c.mu.Unlock()
+	if closing {
+		c.release()
+		return errConnectorClosing
+	}
+	return nil
 }
 
 func (c *Connector) acquireGate(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case c.gate <- struct{}{}:
 		return nil

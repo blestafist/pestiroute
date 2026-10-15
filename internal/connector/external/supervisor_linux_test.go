@@ -399,3 +399,25 @@ func TestM6SupervisorCloseCancelsRestart(t *testing.T) {
 		t.Fatalf("closed supervisor restarted: epoch %d -> %d", epoch, gotEpoch)
 	}
 }
+
+func TestM6SupervisorRejectsDeadGenerationBeforeWatcher(t *testing.T) {
+	for _, failure := range []string{"exit", "fatal"} {
+		t.Run(failure, func(t *testing.T) {
+			process := &Process{waitDone: make(chan struct{})}
+			connector := &Connector{fatal: make(chan struct{})}
+			s := &Supervisor{process: process, current: connector, ready: true}
+			if _, ready := s.get(); !ready {
+				t.Fatal("healthy generation rejected")
+			}
+			if failure == "exit" {
+				close(process.waitDone)
+			} else {
+				close(connector.fatal)
+			}
+			// Deliberately do not run watch: admission must reject synchronously.
+			if _, ready := s.get(); ready {
+				t.Fatal("dead generation admitted before watcher scheduling")
+			}
+		})
+	}
+}
