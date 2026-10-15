@@ -14,6 +14,7 @@ Work progresses from transparent request path to managed runtime under the [proj
 | M5.1 | Agent Protocol Connectors: Codex, Claude Code, Gemini CLI, ACP | Separate spike and estimate per protocol |
 | M5.2 | Local Runtime Connectors: Ollama, vLLM, llama.cpp | Separate spike and estimate per runtime |
 | M6 | External connector process runtime | 8–15 days after IPC spike |
+| M7 | Claude Code subscription connector research and feasibility | Research spike; implementation estimate after go/no-go |
 
 M3 completes a minimally viable native version for standalone use. M4 validates the core architectural assumption about translation. Support for external third-party plugins appears after M6.
 
@@ -99,6 +100,18 @@ authorization remain prerequisites; no capability is promoted by this decision.
 The [M6 plan](M6-EXTERNAL.md) and [active registry](TASKS.md#m6--external-plugin-runtime) stage transport selection before implementation. Compare stdio framing and gRPC over Unix socket on one scenario with a long stream, cancellation, and scoped reverse host-service calls (including incremental HTTP transport). After selection, implement handshake, process supervision, scoped host services, bounded queues, shutdown, and restart backoff. Pass the same native connector through the process boundary.
 
 **Done when:** a crashed connector does not terminate the gateway; a slow consumer does not cause unbounded memory growth; an incompatible contract version is rejected before execution; cancellation stops work and releases process resources. Conformance results for in-process and external implementations match. Already-started generation cannot be automatically restarted after a crash.
+
+## M7 · Claude Code Subscription Connector Research
+
+M7 is a bounded research and feasibility milestone for a Claude Code subscription-backed Connector. It decides whether a connector can be implemented against the existing Responses-to-Connector contract and records evidence for a separately planned implementation milestone. Research findings are not a support claim.
+
+Keep the client-facing protocol fixed to OpenAI Responses for this spike. Investigate the exact Claude Code client/backend version and source provenance, reuse license, authentication and account lifecycle, request/response framing, streaming, usage, errors, tool and reasoning behavior, statefulness, retry safety, and cancellation. Use public source evidence and sanitized non-secret fixtures. Any real-account or provider call requires its own explicitly authorized procedure and current review; planning M7 does not authorize live calls.
+
+Do not add provider branches or Claude-specific payload types to Core, change the v1 Connector contract, run a local Claude Code agent loop, or include WebUI, Antigravity/Gemini CLI, or ACP work. Record any semantic contract need as an ADR proposal before implementation.
+
+**Done when:** a research note pins exact source/client versions and licensing; the auth/account and wire behavior are mapped with evidence and unknowns; a capability matrix distinguishes supported, unsupported, and unknown; retry/statefulness and cancellation constraints are explicit; and a reviewed GO/NO-GO decision records the bounded implementation scope and estimate if GO. A NO-GO with evidence and rationale also completes M7. The milestone does not deliver a working Claude Code connector.
+
+See the [M7 task registry](TASKS.md#m7--claude-code-subscription-connector-research). Implementation tasks are planned only after the feasibility gate.
 
 ## First Vertical Slice
 

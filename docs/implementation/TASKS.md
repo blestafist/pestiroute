@@ -72,3 +72,17 @@ Completed rows and historical handoff: [archive](archive/TASKS-DONE.md).
 ## M6 — External Plugin Runtime
 
 All 33 M6 tasks (001–032 plus audit follow-up 033) are verified DONE and retained in the [completed registry](archive/TASKS-DONE.md#m6--external-plugin-runtime). See [acceptance/handoff](M6-HANDOFF.md), [offline operations](LOCAL-M6.md) and [integration guide](M6-INTEGRATION.md). The five older live gates above remain active under their existing requirements.
+
+## M7 — Claude Code Subscription Connector Research
+
+This milestone establishes whether a bounded Claude Code subscription Connector is feasible. It does not implement the Connector or authorize live-provider requests. Research should preserve the existing OpenAI Responses client boundary and Connector contract.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M7-001](tasks/M7-001.md) | READY | — | — | Pin Claude Code client/backend sources, versions and reuse licenses | — | [Research baseline](tasks/M7-001.md#verification) |
+| [M7-002](tasks/M7-002.md) | DRAFT | — | M7-001 | Map authentication, credential lifecycle and account identity | — | [Auth research](tasks/M7-002.md#verification) |
+| [M7-003](tasks/M7-003.md) | DRAFT | — | M7-001 | Map request, response and streaming protocol | — | [Wire research](tasks/M7-003.md#verification) |
+| [M7-004](tasks/M7-004.md) | DRAFT | — | M7-002, M7-003 | Assess capabilities, statefulness, retries and cancellation | — | [Capability matrix](tasks/M7-004.md#verification) |
+| [M7-005](tasks/M7-005.md) | DRAFT | — | M7-002, M7-003, M7-004 | Record reviewed feasibility decision and next-step scope | — | [Go/no-go handoff](tasks/M7-005.md#verification) |
+
+M7-001 is the only executable task initially. Downstream rows remain DRAFT until their dependencies are DONE. Create implementation task cards only after M7-005 establishes a GO decision and evidence-backed scope.

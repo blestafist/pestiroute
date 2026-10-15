@@ -4,7 +4,7 @@ Start with [CURRENT](CURRENT.md), then one selected row in [TASKS](TASKS.md) and
 
 | Group | Documents |
 | --- | --- |
-| Active planning | [M6 external runtime](M6-EXTERNAL.md), [ROADMAP](ROADMAP.md), [TASKS](TASKS.md), [card template](tasks/TEMPLATE.md) |
+| Active planning | [M6 external runtime](M6-EXTERNAL.md), [M7 Claude Code research](ROADMAP.md#m7--claude-code-subscription-connector-research), [ROADMAP](ROADMAP.md), [TASKS](TASKS.md), [card template](tasks/TEMPLATE.md) |
 | Shared specifications | [CONTRACT](CONTRACT.md), [CONFIGURATION](CONFIGURATION.md), [TESTING](TESTING.md), [STACK](STACK.md), [REFERENCES](REFERENCES.md), [TOOLING](TOOLING.md) |
 | Native/component bindings | [M1](M1-BINDING.md), [M2](M2-BINDING.md) |
 | Protected runtime/storage | [M3 runtime](M3-RUNTIME.md), [storage](M3-STORAGE.md), [auth](M3-AUTH.md), [config](M3-CONFIG.md) |
