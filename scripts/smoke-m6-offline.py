@@ -117,7 +117,7 @@ def main():
         admin("migrate")
         admin("account", "create", "--id", "account-a", "--connector", "upstream")
         admin("credential", "create", "--account", "account-a", "--id", "M6_SYNTHETIC_CREDENTIAL", data=b"synthetic-m6\n")
-        admin("policy", "create", "--id", "m6-policy", "--models", "model-a", "--connectors", "upstream", "--rpm", "30", "--tpm", "30000")
+        admin("policy", "create", "--id", "m6-policy", "--models", "gpt-5.4-mini", "--connectors", "upstream", "--rpm", "30", "--tpm", "30000")
         secret = re.search(rb"secret=([^\s]+)", admin("key", "create", "--policy", "m6-policy")).group(1).decode()
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
@@ -152,7 +152,7 @@ routes:
   - id: route-a
     protocol: openai.responses.v1
     mode: native
-    model: model-a
+    model: gpt-5.4-mini
     adapter: pestiroute.responses.native
     policy: standard
     budget: {{unknown_estimate: reserve, conservative_tokens: 100}}
@@ -205,12 +205,12 @@ policies: {{standard: m6-policy}}
 
             eventually(lambda: probe("/readyz"), 35)
             original = eventually(remember_child)
-            request = b'{"model":"model-a","input":"offline","future":[1,  2]}'
+            request = b'{"model":"gpt-5.4-mini","input":"offline","future":[1,  2]}'
             assert post(request) == (200, reply)
             assert seen == [request], "request bytes changed"
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
             try:
-                conn.request("POST", "/v1/responses", b'{"model":"model-a","stream":true,"input":"offline"}', {"Authorization": "Bearer " + secret, "Content-Type": "application/json"})
+                conn.request("POST", "/v1/responses", b'{"model":"gpt-5.4-mini","stream":true,"input":"offline"}', {"Authorization": "Bearer " + secret, "Content-Type": "application/json"})
                 response = conn.getresponse()
                 assert response.status == 200
                 assert response.read(len(first)) == first, "first SSE bytes not delivered before completion"
@@ -221,7 +221,7 @@ policies: {{standard: m6-policy}}
                 release_stream.set()
                 conn.close()
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                result = pool.submit(post, b'{"model":"model-a","input":"crash"}')
+                result = pool.submit(post, b'{"model":"gpt-5.4-mini","input":"crash"}')
                 assert crash_entered.wait(10), "request did not reach upstream"
                 os.kill(original, signal.SIGKILL)
                 status, _ = result.result(timeout=15)
