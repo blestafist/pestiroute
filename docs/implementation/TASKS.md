@@ -79,7 +79,7 @@ This milestone establishes whether a bounded Claude Code subscription Connector 
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M7-001](tasks/M7-001.md) | READY | — | — | Pin Claude Code client/backend sources, versions and reuse licenses | — | [Research baseline](tasks/M7-001.md#verification) |
+| [M7-001](tasks/M7-001.md) | DONE | GPT-6 Luna (M7-001 worker) / ses_ec00c9f31ffebm71U5Egt2AHBR (reviewer) / Planner closure | — | Pin Claude Code client/backend sources, versions and reuse licenses | Source baseline pins Claude Code CLI 2.1.300/release commit; backend protocol/version unavailable; published usage, billing and terms statements inventoried; reviewer PASS ses_ec00c9f31ffebm71U5Egt2AHBR | [Research baseline](tasks/M7-001.md#verification) |
 | [M7-002](tasks/M7-002.md) | DRAFT | — | M7-001 | Map authentication, credential lifecycle and account identity | — | [Auth research](tasks/M7-002.md#verification) |
 | [M7-003](tasks/M7-003.md) | DRAFT | — | M7-001 | Map request, response and streaming protocol | — | [Wire research](tasks/M7-003.md#verification) |
 | [M7-004](tasks/M7-004.md) | DRAFT | — | M7-002, M7-003 | Assess capabilities, statefulness, retries and cancellation | — | [Capability matrix](tasks/M7-004.md#verification) |
