@@ -98,6 +98,7 @@ def main():
     upstream.daemon_threads = True
     threading.Thread(target=upstream.serve_forever, daemon=True).start()
     gateway = None
+    secret = ""
     groups, socket_dirs = set(), set()
     temporary = tempfile.TemporaryDirectory(prefix="m6-offline-")
     try:
@@ -128,41 +129,42 @@ storage: {{driver: sqlite, path: "{db}"}}
 secrets: {{master_key_file: "{key}"}}
 connectors:
   - id: upstream
-kind: connector
-implementation: pestiroute.responses.native
-protocols: [openai.responses.v1]
-settings:
-  base_url: "http://127.0.0.1:{upstream.server_port}/v1/responses"
-  upstream_protocol: openai.responses.v1
-  mode: native
-  credential_env: M6_SYNTHETIC_CREDENTIAL
-  max_request_body_bytes: 1048576
-  max_request_header_bytes: 8192
-  connect_timeout: 1s
-  tls_handshake_timeout: 1s
-  response_header_timeout: 10s
-  stream_idle_timeout: 10s
-  capabilities: {{llm.streaming: supported}}
-process:
-  executable: "{child}"
-  args: []
-  working_directory: "{directory}"
-  environment_allowlist: []
+    kind: connector
+    implementation: pestiroute.responses.native
+    protocols: [openai.responses.v1]
+    settings:
+      base_url: "http://127.0.0.1:{upstream.server_port}/v1/responses"
+      upstream_protocol: openai.responses.v1
+      mode: native
+      credential_env: M6_SYNTHETIC_CREDENTIAL
+      max_request_body_bytes: 1048576
+      max_request_header_bytes: 8192
+      connect_timeout: 1s
+      tls_handshake_timeout: 1s
+      response_header_timeout: 10s
+      stream_idle_timeout: 10s
+    process:
+      executable: "{child}"
+      args: []
+      working_directory: "{directory}"
+      environment_allowlist: []
 routes:
   - id: route-a
-protocol: openai.responses.v1
-mode: native
-model: model-a
-adapter: pestiroute.responses.native
-policy: standard
-budget: {{unknown_estimate: reserve, conservative_tokens: 100}}
-targets: [{{connector: upstream, account: account-a}}]
+    protocol: openai.responses.v1
+    mode: native
+    model: model-a
+    adapter: pestiroute.responses.native
+    policy: standard
+    budget: {{unknown_estimate: reserve, conservative_tokens: 100}}
+    targets: [{{connector: upstream, account: account-a}}]
 policies: {{standard: m6-policy}}
 ''')
         with (directory / "gateway.log").open("wb") as log:
             gateway = subprocess.Popen([str(binary), "-config-format", "yaml", "-config", str(config)], stdout=log, stderr=log, env=dict(os.environ, M6_SYNTHETIC_CREDENTIAL="synthetic-m6"))
 
             def probe(path):
+                if gateway.poll() is not None:
+                    raise RuntimeError("gateway exited before readiness")
                 conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
                 try:
                     conn.request("GET", path)
@@ -251,6 +253,15 @@ policies: {{standard: m6-policy}}
             logs = (directory / "gateway.log").read_bytes()
             assert secret.encode() not in logs and b"synthetic-m6" not in logs
         print("PASS: build/start, readiness, opaque JSON, early SSE, active crash without replay, new-work recovery, SQLite settlement, process/socket cleanup")
+    except Exception:
+        log_path = Path(temporary.name) / "gateway.log"
+        if log_path.exists():
+            diagnostic = log_path.read_text(errors="replace")[-8000:]
+            if secret:
+                diagnostic = diagnostic.replace(secret, "[virtual-key-redacted]")
+            diagnostic = diagnostic.replace("synthetic-m6", "[synthetic-secret-redacted]")
+            print("gateway diagnostics:\n" + diagnostic, file=sys.stderr)
+        raise
     finally:
         release_crash.set()
         release_stream.set()
