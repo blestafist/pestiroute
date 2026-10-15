@@ -111,7 +111,7 @@ Do not add provider branches or Claude-specific payload types to Core, change th
 
 **Done when:** a research note pins exact source/client versions and licensing; the auth/account and wire behavior are mapped with evidence and unknowns; a capability matrix distinguishes supported, unsupported, and unknown; retry/statefulness and cancellation constraints are explicit; and a reviewed GO/NO-GO decision records any justified implementation scope and estimate, or concrete blockers and revisit conditions. The M7-005 evidence-bound disposition is **NO-GO for implementation now**: source/reuse authority and backend protocol/capabilities are not established, and no legal determination is made. Revisit only after a separately authorized and reviewed evidence path resolves sufficient blockers; no implementation task is created by this disposition. A NO-GO with evidence and rationale completes the research milestone, not a working Connector.
 
-See the [M7 task registry](TASKS.md#m7--claude-code-subscription-connector-research). Implementation tasks are planned only after the feasibility gate.
+See the [M7 task registry](TASKS.md#m7--claude-code-subscription-connector-research). The unchanged M7-005 NO-GO permits user-authorized offline-deterministic implementation candidates to be registered as DRAFT under its revisit conditions; none may become READY until the M7-005 disposition is formally resolved by an accountable authority. Planning these candidates does not authorize live calls or change the feasibility disposition.
 
 ## First Vertical Slice
 
