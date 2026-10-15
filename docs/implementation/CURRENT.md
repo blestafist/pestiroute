@@ -6,11 +6,13 @@
 
 M5.1 and M5.2 handoffs are **conditionally accepted**, not fully DONE: [DEC-012/013](../project/DECISIONS.md) preserve unwaived live gates. Exact feature/evidence ceilings belong in [M4](M4-COMPATIBILITY.md), [Codex](M5.1-COMPATIBILITY.md) and [local-runtime](M5.2-COMPATIBILITY.md) matrices. Ollama and llama.cpp scoped live text gates completed; vLLM live evidence remains blocked. Tools/reasoning/parallel or compute cancellation are not promoted beyond their recorded scope. Historical completion/check evidence lives in [archived rows](archive/TASKS-DONE.md) and the stable task cards.
 
-## Immediate handoff: M6 implementation
+## Immediate handoff: M6 complete
 
-New branch `dev-m6` starts at that merged main revision. [M6-EXTERNAL](M6-EXTERNAL.md) scopes external Connector processes and [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selects gRPC over Unix socket. The /next19 batch is complete: 19/19 tasks verified DONE (CAP STOP; 18 committed on `dev-m6`: pushed `59c40ca`, `05fbc6c`, `7f7389e`, `a19bad9`; outgoing `dc77253`, `69331c3`, `ca9d8cb`, `2c83fa3`, `6f3cf1e`, `8dd8f8e`, `414c13e`, `2775317`, `a1bb824`, `5795145`, `7883e9c`, `6e03171`, `b0605f3`, `b967975`; [M6-029](tasks/M6-029.md) verified DONE pending commit). Candidates 030–032 remain DRAFT with no further candidate preparation or dispatch until next batch authorization.
+`dev-m6` completes the external Connector runtime; [PR #14](https://github.com/blestafist/pestiroute/pull/14) targets the merged baseline above. All 33 tasks (001–032 plus audit follow-up 033) are verified DONE in the [archive](archive/TASKS-DONE.md#m6--external-plugin-runtime). Source `fcb9f390268c42536690f370dc6ec6c742c967bb` passed [exact-head hosted CI](https://github.com/blestafist/pestiroute/actions/runs/38710537528): focused uncached race tests, both clean-checkout CLI procedures and serialized shared checks. The evidence-only handoff commit is checked again by CI.
 
-Use one card per Worker/Reviewer session and one verified task per commit through existing `/next N`. The M6 plan is not authorization to execute older live gates. No new MCP/plugin is required; transport libraries/generators are selected and pinned through the spikes. Existing server configuration does not establish machine-local connections.
+The native Responses Connector runs in a supervised Linux child behind the same Core interface. Four concurrent operations, invocation/account/epoch isolation, bounded incremental IPC/reverse HTTP, cancellation, finite drain/reaping, safe accounting and recovery for new work are verified. Final audit fixed serialized admission and stale readiness before watcher scheduling. See [acceptance and limits](M6-HANDOFF.md), [operations](LOCAL-M6.md) and [minimal integration/example](M6-INTEGRATION.md). Core has no concrete connector/adapter or IPC imports. This is trusted same-user crash isolation, not an OS sandbox; generic Models/EstimateUsage child helpers currently receive no host services. Gateway `/readyz` is not aggregate connector health.
+
+No M6 blocker remains. A later milestone needs its own scoped plan. Retained live gates below are separate work, not implicitly authorized by M6 closure. No new MCP/plugin is required.
 
 ## Open gates carried forward
 
@@ -26,6 +28,6 @@ None is an M6 dependency. Preserve the isolated operator credential store and pr
 
 ## Checks and operations
 
-Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). M6-004 ran it successfully on the execution checkout; see its card for focused race checks and raw transport measurements.
+Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M6 closure runs this exact command; local Unix-socket tests are blocked by the execution sandbox, while local build/vet and pure admission regression passed.
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.

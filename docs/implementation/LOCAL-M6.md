@@ -29,7 +29,7 @@ tuple, then launches the gateway executable. It verifies:
   Captured logs contain neither the virtual key nor the synthetic upstream secret.
 
 Expected final output starts with `PASS: build/start`. Any failed assertion or
-deadline exits nonzero. The script makes bounded **new** requests on HTTP 503
+deadline exits nonzero. The script makes bounded **new** requests on HTTP 503 or pre-dispatch HTTP 400 `unsupported_target`
 while waiting for recovery; it never retries the crashed invocation. Gateway
 `/readyz` currently reports the startup/accounting flag, not aggregate live
 connector health. Dispatch separately checks the connector's Health; a ready

@@ -16,9 +16,11 @@ Start implementation from [AGENTS.md](../AGENTS.md), then [CURRENT.md](implement
 | Document | Owns |
 | --- | --- |
 | [Current](implementation/CURRENT.md) | Verified state, immediate focus, blockers, available commands |
-| [Tasks](implementation/TASKS.md) | Active registry and [M6 candidates](implementation/TASKS.md#m6--external-plugin-runtime); DONE dependency rows in [archive](implementation/archive/TASKS-DONE.md) |
+| [Tasks](implementation/TASKS.md) | Active registry and [M6 handoff](implementation/TASKS.md#m6--external-plugin-runtime); DONE dependency rows in [archive](implementation/archive/TASKS-DONE.md) |
 | [Implementation index](implementation/README.md) | Grouped specs, bindings, operations, compatibility and stable evidence paths |
-| [M6 external runtime plan](implementation/M6-EXTERNAL.md) | Transport comparison, scoped service/process binding gates and bounded implementation candidates |
+| [M6 integration and operations](implementation/M6-INTEGRATION.md) | Minimal child composition, supported versions/services and offline operations |
+| [M6 acceptance/handoff](implementation/M6-HANDOFF.md) | Roadmap-to-test evidence, limitations and retained gates |
+| [M6 external runtime plan](implementation/M6-EXTERNAL.md) | Transport decision, process/runtime scope and links to implementation evidence |
 | [Task template](implementation/tasks/TEMPLATE.md) | Planner's format for bounded task cards in `implementation/tasks/` |
 | [Roadmap](implementation/ROADMAP.md) | Milestones and acceptance gates; not a task checklist |
 | [Stack](implementation/STACK.md) | Toolchain, libraries, build and operational conventions |

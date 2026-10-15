@@ -6,6 +6,10 @@ Implement [M6](ROADMAP.md#m6--external-plugin-runtime): the existing native Resp
 
 Start from merged main `bea67fe` (PR #13), not the old M5.2 branch. Conditional acceptance under DEC-012/013 carries forward without converting incomplete live gates into DONE. M6 uses child binaries and deterministic loopback fake upstreams; no provider inference, GPU, model download or OAuth refresh is required.
 
+## Completion
+
+All 33 M6 tasks (001–032 plus audit follow-up 033) are accepted. [M6-HANDOFF](M6-HANDOFF.md) maps roadmap gates to exact evidence and limitations; [LOCAL-M6](LOCAL-M6.md) and [integration](M6-INTEGRATION.md) own reproducible operations/example instructions. The gate descriptions below retain the original implementation sequence.
+
 ## Existing seams to reuse
 
 | Owner | Existing seam | M6 responsibility |

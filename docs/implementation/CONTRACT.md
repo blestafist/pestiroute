@@ -153,7 +153,7 @@ revision-checked atomic write. The write acknowledgement covers both envelope
 and expiry, and failed/stale writes expose no candidate as persisted success.
 Profile-specific bindings may require a nonzero, future expiry for successful
 credential results. This additive optional field is covered by
-[DEC-010](../project/DECISIONS.md#dec-010-carry-credential-expiry-with-auth-results).
+[DEC-010](../project/DECISIONS.md#dec-010--carry-credential-expiry-with-auth-results).
 
 For `Authenticate` with `AuthRequest.Action=refresh`, that existing action is
 the provider-neutral selector for auth-scoped credential access: the selected
