@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
@@ -44,11 +45,19 @@ type protectedSecrets struct {
 }
 
 type protectedConnector struct {
-	ID             string         `yaml:"id"`
-	Kind           string         `yaml:"kind"`
-	Implementation string         `yaml:"implementation"`
-	Protocols      []string       `yaml:"protocols"`
-	Settings       nativeSettings `yaml:"settings"`
+	ID             string            `yaml:"id"`
+	Kind           string            `yaml:"kind"`
+	Implementation string            `yaml:"implementation"`
+	Protocols      []string          `yaml:"protocols"`
+	Settings       nativeSettings    `yaml:"settings"`
+	Process        *protectedProcess `yaml:"process,omitempty"`
+}
+
+type protectedProcess struct {
+	Executable           string   `yaml:"executable"`
+	Args                 []string `yaml:"args"`
+	WorkingDirectory     string   `yaml:"working_directory"`
+	EnvironmentAllowlist []string `yaml:"environment_allowlist"`
 }
 
 // settings remain connector-owned; this shape is the selected native connector's schema.
@@ -317,6 +326,14 @@ func validateProtectedConfig(c protectedConfig) error {
 		if strings.TrimSpace(item.ID) == "" || item.Kind != "connector" || len(item.Protocols) != 1 || item.Protocols[0] != responsesProtocol {
 			return fmt.Errorf("%s has invalid identity, kind, implementation, or protocols", prefix)
 		}
+		if item.Process != nil {
+			if item.Implementation != "pestiroute.responses.native" {
+				return fmt.Errorf("%s.process is supported only for pestiroute.responses.native", prefix)
+			}
+			if err := validateProtectedProcess(prefix+".process", *item.Process); err != nil {
+				return err
+			}
+		}
 		if _, exists := connectors[item.ID]; exists {
 			return fmt.Errorf("duplicate connector id %q", item.ID)
 		}
@@ -446,6 +463,27 @@ func validateProtectedConfig(c protectedConfig) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateProtectedProcess(prefix string, process protectedProcess) error {
+	if !filepath.IsAbs(process.Executable) {
+		return fmt.Errorf("%s.executable must be an absolute path", prefix)
+	}
+	info, err := os.Stat(process.Executable)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+		return fmt.Errorf("%s.executable must be an existing executable file", prefix)
+	}
+	if !filepath.IsAbs(process.WorkingDirectory) {
+		return fmt.Errorf("%s.working_directory must be an absolute path", prefix)
+	}
+	info, err = os.Stat(process.WorkingDirectory)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("%s.working_directory must be an existing directory", prefix)
+	}
+	if len(process.EnvironmentAllowlist) != 0 {
+		return fmt.Errorf("%s.environment_allowlist must be empty", prefix)
 	}
 	return nil
 }

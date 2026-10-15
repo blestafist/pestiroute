@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blestafist/pestiroute/internal/connector/external"
 	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
@@ -78,6 +79,9 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 	for _, item := range p.Connectors {
 		s := item.Settings
 		component := topologyComponent{ID: core.InstanceID(item.ID), Implementation: item.Implementation, Kind: core.ComponentConnector}
+		if item.Process != nil {
+			component.Process = &external.ProcessConfig{Executable: item.Process.Executable, Args: append([]string(nil), item.Process.Args...), WorkingDirectory: item.Process.WorkingDirectory}
+		}
 		switch item.Implementation {
 		case "pestiroute.responses.native":
 			component.Endpoint, component.CredentialEnv = s.BaseURL, s.CredentialEnv
