@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 	"github.com/blestafist/pestiroute/internal/ipc"
@@ -126,6 +127,11 @@ func executeGatewayError(err error, deliveredOrAmbiguous bool, callerCtx context
 	}
 	if callerCtx != nil && errors.Is(callerCtx.Err(), context.DeadlineExceeded) {
 		return &core.GatewayError{Code: "connector_timeout", Category: core.CategoryTimeout, RetryDisposition: core.RetryUnknown, Message: "External connector execution timed out"}
+	}
+	if callerCtx != nil && status.Code(err) == codes.DeadlineExceeded {
+		if deadline, ok := callerCtx.Deadline(); ok && !time.Now().Before(deadline) {
+			return &core.GatewayError{Code: "connector_timeout", Category: core.CategoryTimeout, RetryDisposition: core.RetryUnknown, Message: "External connector execution timed out"}
+		}
 	}
 	if errors.Is(err, ipc.ErrMalformed) || errors.Is(err, errCreditIdentity) || errors.Is(err, errCreditReplay) {
 		return &core.GatewayError{Code: "connector_protocol_error", Category: core.CategoryInvalidRequest, RetryDisposition: core.RetryUnsafe, Message: "External connector returned a malformed execution stream"}
@@ -396,6 +402,14 @@ func (s *executeResponseStream) fail(err error) (core.StreamFrame, error) {
 	if parentErr := s.ctx.Err(); parentErr != nil {
 		s.Close()
 		return core.StreamFrame{}, parentErr
+	}
+	// gRPC may surface the deadline status just before its parent Context has
+	// propagated cancellation to this stream wrapper.
+	if status.Code(err) == codes.DeadlineExceeded {
+		if deadline, ok := s.ctx.Deadline(); ok && !time.Now().Before(deadline) {
+			s.Close()
+			return core.StreamFrame{}, context.DeadlineExceeded
+		}
 	}
 	if errors.Is(err, io.EOF) {
 		err = ipc.ErrMalformed

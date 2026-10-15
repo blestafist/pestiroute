@@ -106,6 +106,18 @@ func NewChildFlowControl(epoch uint64, hostControl flowControlCaller) (*ChildFlo
 	return &ChildFlowControl{epoch: epoch, client: hostControl, lane: newControlLane(), inbound: make(map[creditIdentity]int), outbound: make(map[creditIdentity]struct{}), lastSeq: make(map[creditStream]uint64), controlSeq: make(map[creditStream]uint64), pending: make(map[creditStream]bool), cancel: make(map[string]context.CancelFunc), changed: make(chan struct{})}, nil
 }
 
+// SetProcessEpoch is used once by the child handshake before the host probes
+// or grants flow-control credit. Invocation state must not yet exist.
+func (c *ChildFlowControl) SetProcessEpoch(epoch uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if epoch == 0 || c.closed || len(c.cancel) != 0 || len(c.inbound) != 0 || len(c.outbound) != 0 {
+		return errCreditIdentity
+	}
+	c.epoch = epoch
+	return nil
+}
+
 // DialChildFlowControl opens the dedicated child→host control connection. The
 // returned server handler is registered on the child's Connector service.
 func DialChildFlowControl(ctx context.Context, hostServicesSocket string, epoch uint64) (*ChildFlowControl, *grpc.ClientConn, error) {
