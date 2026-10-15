@@ -80,9 +80,9 @@ This milestone establishes whether a bounded Claude Code subscription Connector 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
 | [M7-001](tasks/M7-001.md) | DONE | GPT-6 Luna (M7-001 worker) / ses_ec00c9f31ffebm71U5Egt2AHBR (reviewer) / Planner closure | — | Pin Claude Code client/backend sources, versions and reuse licenses | Source baseline pins Claude Code CLI 2.1.300/release commit; backend protocol/version unavailable; published usage, billing and terms statements inventoried; reviewer PASS ses_ec00c9f31ffebm71U5Egt2AHBR | [Research baseline](tasks/M7-001.md#verification) |
-| [M7-002](tasks/M7-002.md) | DRAFT | — | M7-001 | Map authentication, credential lifecycle and account identity | — | [Auth research](tasks/M7-002.md#verification) |
+| [M7-002](tasks/M7-002.md) | DONE | GPT-6 Luna (M7-002 worker) / ses_ebf94a223ffe6OME8Fats8p5tr (reviewer) / Planner closure | M7-001 | Map authentication, credential lifecycle and account identity | Pinned-source auth lifecycle and host-owned auth comparison mapped with explicit unknowns; structural gaps documented; reviewer PASS ses_ebf94a223ffe6OME8Fats8p5tr | `git diff --check`, manual verification against pinned sources; [Auth research](tasks/M7-002.md#verification) |
 | [M7-003](tasks/M7-003.md) | DRAFT | — | M7-001 | Map request, response and streaming protocol | — | [Wire research](tasks/M7-003.md#verification) |
 | [M7-004](tasks/M7-004.md) | DRAFT | — | M7-002, M7-003 | Assess capabilities, statefulness, retries and cancellation | — | [Capability matrix](tasks/M7-004.md#verification) |
 | [M7-005](tasks/M7-005.md) | DRAFT | — | M7-002, M7-003, M7-004 | Record reviewed feasibility decision and next-step scope | — | [Go/no-go handoff](tasks/M7-005.md#verification) |
 
-M7-001 is the only executable task initially. Downstream rows remain DRAFT until their dependencies are DONE. Create implementation task cards only after M7-005 establishes a GO decision and evidence-backed scope.
+M7-001 and M7-002 are DONE. M7-003 remains DRAFT (depends on M7-001); M7-004 and M7-005 remain DRAFT pending prerequisite completion. Create implementation task cards only after M7-005 establishes a GO decision and evidence-backed scope.
