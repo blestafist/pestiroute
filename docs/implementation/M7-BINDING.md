@@ -68,17 +68,20 @@ once and the adapter must not translate it again.
 Read upstream SSE incrementally with bounded buffering and strict UTF-8,
 `event:`/`data:` framing. Parse only the documented candidate Messages event
 set: `message_start`, `content_block_start`, `content_block_delta`,
-`message_delta`, and `message_stop`. A malformed frame, invalid JSON, invalid
-event order/index, unsupported delta, or unknown event fails the attempt; do
-not silently skip it or report successful completion. EOF before
-`message_stop` is incomplete and must not produce `Complete`. No success may
-be fabricated for an empty or truncated stream.
+`content_block_stop`, `message_delta`, and `message_stop`. The native
+`content_block_stop` event delimits completion of its indexed content block;
+preserve its ordering when mapping block lifecycle events. A malformed frame,
+invalid JSON, invalid event order/index, unsupported delta, or unknown event
+fails the attempt; do not silently skip it or report successful completion.
+EOF before `message_stop` is incomplete and must not produce `Complete`.
+No success may be fabricated for an empty or truncated stream.
 
 Map `message_start` to the Responses response head and initial metadata;
-content-block start/delta events to incremental output-item/content-part
-events; `message_delta` to final item/response metadata and stop reason; and
-`message_stop` to the terminal Responses completion event. Preserve block
-indices and ordering. Emit `Head` once, then each available `Body` frame as
+content-block start/delta/stop events to incremental output-item/content-part
+events, including the native `content_block_stop` delimiter; `message_delta`
+to final item/response metadata and stop reason; and `message_stop` to the
+terminal Responses completion event. Preserve block indices and ordering.
+Emit `Head` once, then each available `Body` frame as
 soon as parsed, without waiting for upstream EOF; only after valid terminal
 `message_stop` emit exactly one `Complete`, followed by EOF. The first output
 `Body` must be deliverable before upstream completion. A valid terminal event

@@ -1,0 +1,5 @@
+event: message_start
+data: {"type":"message_start","message":{"id":"synthetic_truncated","type":"message","role":"assistant","model":"synthetic-model","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Truncated"}}

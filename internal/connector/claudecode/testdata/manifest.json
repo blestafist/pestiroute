@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "provenance": "Locally generated synthetic fixtures only; not provider proof, not live captures, and not authorization or interoperability evidence.",
+  "files": {
+    "http-400.json": "a77aa825da4fa246339c4a84586e6aa596086e30cb516c50338b5d29d5349894",
+    "http-401.json": "84fa3d6a2d9199059613e70ddb09f694b9018234c9d0ad3032d60a47c1484a6d",
+    "http-403.json": "1bbf5c9268c975ce458252d610395bcd4dfe498f5317c5202678f3df39469cc2",
+    "http-429.json": "c2e59b1262aee5ce82490d7b6ee75c00c63f36f6ffe81accd24e5a46349c7422",
+    "http-500.json": "178eae58e3d75a6fb9fa2f4463cbbe1cc3b8dcd869852173119464fba4111618",
+    "messages-request.json": "db18a014bb2554086ee610eb4c39ddca68ff4ada691f889c77dd9cb0faeb4d87",
+    "oauth-authorize.url": "b3a41e962c97b42d69cad93a365bc26ffb78576c1240513a47b278b0d7a8f5dc",
+    "oauth-exchange-response.json": "420bf401af45d5231186acf2c46f7be0bedfde95a51f0c050a05b458b59021cd",
+    "oauth-exchange.json": "e817d8bbcec9f2b2652097c6ad6c1fec9f6ab1e1165ca50c46c1332d65e91b84",
+    "oauth-refresh-response.json": "4d243e9d5ed70f192b15956c1fe03a7606320cc4f2cb0d07998032e25e79fd6a",
+    "oauth-refresh.json": "920265ea837b22726a6fadeab60a6d08ea81c3b0deba368f2c05646149bf14d6",
+    "stream-error.sse": "81d279ddfa9051c64af95f52dbb8f41e9d6e3e174df83b5acfb02ce4e114ed60",
+    "stream-invalid-utf8.sse": "61ae2747b19a22b63bc03e9809f0673a97c582642dad5c8f3cae35ee131d9d80",
+    "stream-malformed.sse": "b14ae0eaacdb8585bce5155a93e6aec1f16cb1173d23df9cda2c39a364681406",
+    "stream-midstream-disconnect.sse": "4f3f383865eefb6b327f3ae8d69198aecc4b646d01f25bacf4aff45d7ddc8c61",
+    "stream-premature-eof.sse": "914d388199e66198512266adcc4f170e8a606730d3e14ca015390ec5abdf6360",
+    "stream-text.sse": "1dd181a0b777688bd1c32ec45e8e2938d0a8b79b8a2cd260ea4079a2118dbcb7",
+    "stream-thinking.sse": "c56c2c1382850f3f053175c25a71bc768c7a527fd524edc4f4d46009595798ac",
+    "stream-tools.sse": "d5cc1ad4a09ef18f7a173f45ce38ae0dbd744f40a7d4aa47a5824322945208c3",
+    "stream-usage.sse": "e0dc3b4514ba3a2ef16dd5ac3e1dd16aa1b8470b2e89f14b89637e88e2f20962"
+  }
+}
