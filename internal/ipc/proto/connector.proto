@@ -1,0 +1,116 @@
+syntax = "proto3";
+package pestiroute.connector.v1;
+option go_package = "github.com/blestafist/pestiroute/internal/ipc/gen;ipcgen";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+// Every message below is a logical typed record. Transport envelopes and
+// opaque body chunks are deliberately separate from these values.
+message Version { uint32 major = 1; uint32 minor = 2; }
+message Descriptor { string id = 1; string kind = 2; string implementation_version = 3; repeated Version api_versions = 4; repeated string protocols = 5; repeated string operations = 6; string connector_type = 7; repeated string auth_methods = 8; }
+message ComponentConfig { bytes data = 1; }
+message Health { string state = 1; string diagnostic = 2; }
+message CapabilityScope { string protocol = 1; string mode = 2; string model = 3; string account_id = 4; }
+message CapabilityValue { string key = 1; string state = 2; }
+message CapabilityResult { repeated CapabilityValue values = 1; }
+message ModelQuery { string protocol = 1; string mode = 2; string account_id = 3; }
+message ModelInfo { string id = 1; repeated CapabilityValue capabilities = 2; optional bool available = 3; }
+message ModelsResult { bool supported = 1; repeated ModelInfo models = 2; }
+message RawPayload { string protocol = 1; string content_type = 2; }
+message UsageQuery { string protocol = 1; string mode = 2; string model = 3; string account_id = 4; RawPayload payload = 5; int64 max_body_bytes = 6; }
+message UsageReport { optional int64 input_tokens = 1; optional int64 output_tokens = 2; optional int64 reasoning_tokens = 3; optional int64 cached_tokens = 4; string source = 5; string completeness = 6; }
+message EstimateResult { bool supported = 1; bool known = 2; UsageReport usage = 3; string method = 4; }
+message AuthRequest { string account_id = 1; string action = 2; bytes state = 3; }
+message AuthUserAction { string verification_uri = 1; string user_code = 2; int64 poll_interval_ns = 3; }
+message AuthResult { bool supported = 1; bytes state = 2; string next_action = 3; AuthUserAction user_action = 4; map<string,bytes> credentials = 5; google.protobuf.Timestamp credential_expires_at = 6; }
+message RequestMetadata { map<string,StringList> headers = 1; optional bool streaming = 2; bool affinity_known = 3; bool session_bound = 4; int64 ingress_header_bytes = 5; map<string,bytes> extensions = 6; }
+message StringList { repeated string values = 1; }
+message ExecutionRequest { string id = 1; string model = 2; repeated string capabilities = 3; RequestMetadata metadata = 4; RawPayload payload = 5; }
+message AttemptScope { string id = 1; string account_id = 2; string mode = 3; }
+message GatewayError { string code = 1; string category = 2; bool retryable = 3; string retry_disposition = 4; string provider = 5; string original_error = 6; string message = 7; optional int64 retry_after_ns = 8; }
+message HeadFrame { string protocol = 1; string content_type = 2; optional int32 http_status = 3; map<string,StringList> headers = 4; GatewayError error = 5; }
+message CompleteFrame { string outcome = 1; UsageReport usage = 2; GatewayError error = 3; }
+message StreamFrame { string type = 1; HeadFrame head = 2; reserved 3; CompleteFrame complete = 4; }
+message CapabilitySet { repeated string values = 1; }
+message RecordFragment { uint64 epoch = 1; uint64 call_id = 2; uint64 record_id = 3; string record_type = 4; uint64 total_length = 5; uint64 offset = 6; uint64 sequence = 7; bool final = 8; bytes data = 9; string invocation_id = 10; }
+message BodyChunk { bytes data = 1; }
+message ExecuteStart { ExecutionRequest request = 1; AttemptScope scope = 2; int64 max_body_bytes = 3; }
+message InputComplete {}
+message HTTPRequest { string method = 1; string url = 2; string host = 3; map<string,StringList> headers = 4; optional int64 content_length = 5; }
+message HTTPResponse { int32 status_code = 1; map<string,StringList> headers = 2; optional int64 content_length = 3; }
+message HTTPBodyComplete {}
+message HTTPFrame {
+  uint64 epoch = 1;
+  uint64 call_id = 2;
+  string invocation_id = 3;
+  oneof payload { RecordFragment record = 4; BodyChunk body = 5; }
+  uint64 data_sequence = 6;
+}
+message EstimateFrame {
+  uint64 epoch = 1;
+  uint64 call_id = 2;
+  string invocation_id = 3;
+  oneof payload { RecordFragment record = 4; BodyChunk body = 5; }
+}
+message ExecuteFrame {
+  uint64 epoch = 1;
+  uint64 call_id = 2;
+  string invocation_id = 3;
+  oneof payload { RecordFragment record = 4; BodyChunk body = 5; }
+  uint64 data_sequence = 6;
+}
+enum FlowControlKind {
+  FLOW_CONTROL_UNSPECIFIED = 0;
+  FLOW_CONTROL_RESERVE = 1;
+  FLOW_CONTROL_GRANT = 2;
+  FLOW_CONTROL_ACK = 3;
+  FLOW_CONTROL_CANCEL = 4;
+  FLOW_CONTROL_CLOSE = 5;
+  FLOW_CONTROL_PROBE = 6;
+}
+message FlowIdentity {
+  uint64 epoch = 1;
+  string invocation_id = 2;
+  string operation = 3;
+  uint64 call_id = 4;
+  string direction = 5;
+  uint64 sequence = 6;
+}
+message FlowControlRequest {
+  FlowControlKind kind = 1;
+  FlowIdentity identity = 2;
+  uint32 frames = 3;
+  uint32 application_bytes = 4;
+  repeated FlowIdentity acknowledgements = 5;
+}
+message FlowControlResponse {
+  FlowControlKind kind = 1;
+  FlowIdentity identity = 2;
+  uint32 frames = 3;
+  uint32 application_bytes = 4;
+}
+message CredentialLookup { string name = 1; }
+message CredentialValue { bytes value = 1; }
+message LogRecord { string level = 1; string message = 2; map<string,string> attributes = 3; }
+message Handshake { string protocol_id = 1; Version ipc_version = 2; }
+
+service Connector {
+  rpc Handshake(RecordFragment) returns (stream RecordFragment);
+  rpc Descriptor(RecordFragment) returns (stream RecordFragment);
+  rpc Init(stream RecordFragment) returns (RecordFragment);
+  rpc Health(RecordFragment) returns (stream RecordFragment);
+  rpc Capabilities(stream RecordFragment) returns (stream RecordFragment);
+  rpc Models(stream RecordFragment) returns (stream RecordFragment);
+  rpc EstimateUsage(stream EstimateFrame) returns (stream RecordFragment);
+  rpc Authenticate(stream RecordFragment) returns (stream RecordFragment);
+  rpc Execute(stream ExecuteFrame) returns (stream ExecuteFrame);
+  rpc Close(RecordFragment) returns (RecordFragment);
+  rpc FlowControl(FlowControlRequest) returns (FlowControlResponse);
+}
+
+service HostServices {
+  rpc CredentialGet(stream RecordFragment) returns (stream RecordFragment);
+  rpc HTTPDo(stream HTTPFrame) returns (stream HTTPFrame);
+  rpc Log(stream RecordFragment) returns (google.protobuf.Empty);
+  rpc FlowControl(FlowControlRequest) returns (FlowControlResponse);
+}

@@ -18,5 +18,17 @@ jobs:
           cache: false
       - name: Download Go dependencies
         run: go mod download
+      - name: External admission and aggregate stalled-stream regression
+        env:
+          GOTOOLCHAIN: local
+          GOPROXY: off
+          GOSUMDB: off
+        run: go test -race -v -count=1 ./internal/connector/external -run 'TestM6(ResponsesChildAggregate|LifecycleConcurrent|ShutdownDrains|SupervisorRejects|SupervisorRestarts)'
+      - name: Offline external-process operations
+        run: python3 scripts/smoke-m6-offline.py
+      - name: Standalone example interoperability
+        run: python3 scripts/smoke-m6-offline.py --child-package ./examples/external-connector
       - name: Shared checks
+        env:
+          GOFLAGS: -p=1
         run: ./scripts/check.sh

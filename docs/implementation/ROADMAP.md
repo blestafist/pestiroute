@@ -96,7 +96,7 @@ authorization remain prerequisites; no capability is promoted by this decision.
 
 ## M6 · External Plugin Runtime
 
-Compare stdio framing and gRPC over Unix socket on one scenario with a long stream and cancellation. After selection, implement handshake, process supervision, scoped host services, bounded queues, shutdown, and restart backoff. Pass the same native connector through the process boundary.
+The [M6 plan](M6-EXTERNAL.md) and [active registry](TASKS.md#m6--external-plugin-runtime) stage transport selection before implementation. Compare stdio framing and gRPC over Unix socket on one scenario with a long stream, cancellation, and scoped reverse host-service calls (including incremental HTTP transport). After selection, implement handshake, process supervision, scoped host services, bounded queues, shutdown, and restart backoff. Pass the same native connector through the process boundary.
 
 **Done when:** a crashed connector does not terminate the gateway; a slow consumer does not cause unbounded memory growth; an incompatible contract version is rejected before execution; cancellation stops work and releases process resources. Conformance results for in-process and external implementations match. Already-started generation cannot be automatically restarted after a crash.
 

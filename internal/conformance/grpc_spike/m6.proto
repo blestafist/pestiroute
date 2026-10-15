@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package pestiroute.m6.spike.v1;
+option go_package = "github.com/blestafist/pestiroute/internal/conformance/grpc_spike;grpcspike";
+
+message Frame {
+  uint64 correlation = 1;
+  uint32 kind = 2;
+  bytes data = 3;
+}
+
+service Bridge {
+  rpc Execute(stream Frame) returns (stream Frame);
+}

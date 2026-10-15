@@ -48,7 +48,7 @@ The complete document index and glossary are in [docs/README.md](docs/README.md)
 | Decision status and unresolved tradeoffs | `docs/project/DECISIONS.md` |
 | Milestone outcomes | `docs/implementation/ROADMAP.md` |
 | Actual state and immediate handoff | `docs/implementation/CURRENT.md` |
-| Task status, owner, dependencies, result, primary check | `docs/implementation/TASKS.md` |
+| Task status, owner, dependencies, result, primary check | Active `docs/implementation/TASKS.md`; DONE rows in `docs/implementation/archive/TASKS-DONE.md` (one row per ID) |
 | One task's scope, acceptance and verification evidence | `docs/implementation/tasks/<ID>.md` |
 | Technical specification | Relevant implementation document |
 
@@ -58,7 +58,7 @@ Accepted constraints bind implementation. Proposed interfaces and libraries are 
 
 ## Planning and Execution
 
-- Use the registry rules in TASKS and the single task-card template. Each task delivers one bounded, independently verifiable result with explicit dependencies.
+- Use the registry rules in TASKS and the single task-card template. Archived DONE rows remain registered dependencies; load only referenced rows/cards, and move reopened rows back to the active registry. Each task delivers one bounded, independently verifiable result with explicit dependencies.
 - Planner creates cards just ahead of execution. Keep distant work at roadmap level until evidence supports decomposition; do not create placeholder cards for every future feature.
 - Before starting a registered task, confirm READY status and completed dependencies, then set ACTIVE and an identifiable owner. Preserve unrelated edits and avoid expanding into adjacent tasks.
 - Prefer a working client-to-fake-backend slice over speculative frameworks. Add directories and abstractions when a scoped feature needs them.

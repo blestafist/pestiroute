@@ -17,7 +17,7 @@
 | D07 | Proposed | Go, `net/http`, single module | Provides minimal infrastructure for M0–M3 |
 | D08 | Proposed | SQLite for single-node state | Enables self-hosted deployment without separate database |
 | D09 | Accepted | `Head / Body / Complete` as the v1 transport stream | DEC-004 fixes lifecycle semantics without an LLM event model |
-| D10 | Proposed | gRPC over Unix socket for IPC | Will validate overhead and host-service lifecycle in M6 |
+| D10 | Accepted | gRPC over Unix socket for external Connector IPC | DEC-014 selects the bidirectional typed transport after matched M6 spikes; production binding remains for M6-006 |
 | D11 | Accepted | Model rewrite is not a native passthrough | Requires body modification to be explicit |
 | D12 | Proposed | CLI for initial admin operations | Enables account/key management without UI milestone |
 | D13 | Accepted | Client Protocol Adapters own client request parsing, protocol validation, envelope creation, and client response formatting | Supports multiple northbound protocols without protocol structures or conversions in Core; provider-specific translation remains in connectors |
@@ -25,6 +25,7 @@
 | D15 | Accepted | CONTRACT.md owns the v1 Adapter–Core Runtime–Connector boundary; semantic changes require ADR | Prevents per-provider API growth and undocumented compatibility breaks; see DEC-004 |
 | D16 | Proposed | M3 protected startup loads its master key from a permission-checked external file | Keeps key material out of SQLite and configuration/environment surfaces; see DEC-005 |
 | D18 | Accepted | Defer official Anthropic verification as an M4 completion prerequisite only after offline gates pass; retain it before production release | Human governance accepted the narrow deferral on 2026-10-04 and authorized the documentation batch; separates offline implementation quality from official-provider entitlement; see DEC-008 |
+| D19 | Accepted | External Connector IPC uses a host-owned epoch credit broker and a dedicated priority control lane | Enforces aggregate queue ceilings across independent data sockets; see DEC-017 |
 
 ## Contract ADRs
 
@@ -351,6 +352,120 @@ These accepted ADRs explain the existing constraints and establish the internal 
   capability declarations unchanged, verify the at-most-3B vLLM limit and
   authorization boundary, retain older live gates, and check links/statuses.
   No live request is part of this decision.
+
+### DEC-014 — Select gRPC over Unix Socket for External Connector IPC
+
+- **Status:** Accepted as the technical transport selection under M6-005; the
+  production wire/process binding is not yet specified or implemented.
+- **Context:** M6-002 fixed one 16 MiB opaque streaming workload, callback
+  behavior, concurrency, cancellation and queue/frame budgets. M6-003 and
+  M6-004 ran disposable framed-stdio and gRPC/Unix-socket child prototypes on
+  that workload, with ten measured repetitions after warmup on the same Linux
+  x86_64 host (Go 1.27.1, 11th Gen Intel Core i5-1135G7, 8 logical CPUs,
+  32,458,596 KiB RAM). Full raw measurements, commands, limitations and
+  reviewer records remain in the [spike cards](../implementation/tasks/M6-003.md#completion-evidence)
+  and [M6-004](../implementation/tasks/M6-004.md#completion-evidence).
+- **Decision:** Use gRPC bidirectional streaming over a private Unix-domain
+  socket for the first external Connector runtime. It naturally supplies
+  typed, generated messages and duplex RPC needed for invocation-scoped reverse
+  credential/HTTP/logging services while one execution stream is active. Keep
+  framing, protobuf/gRPC code and dependencies outside `internal/core`; Core
+  continues to speak only the existing language-neutral v1 component contract.
+  M6-006 defines the actual binding and version handshake before any production
+  implementation.
+- **Evidence and tradeoff:** Both prototypes passed opaque-byte parity, early
+  delivery, reverse credential and HTTP callback parity, joint cancellation,
+  bounded queues, saturation and child cleanup within the common limits. The
+  measured stdio median was 11.069 ms first Body, 49.679 ms completion and
+  0.716 ms reap, at 315.05–324.57 MiB/s; gRPC medians were 19.902 ms first
+  Body, 284.234 ms completion, 2.053 ms reap and 56.53 MiB/s. Peak observed
+  retained queue was 82,970 B/2 frames for stdio and 82,986 B/2 frames for
+  gRPC; both remained well below the shared bounds. gRPC's additional latency,
+  CPU, dependencies and generator/tooling are real costs. Select it because
+  generated typed duplex RPC and transport-managed cancellation/versionable
+  messages reduce the bespoke protocol machinery and semantic drift risk at
+  this boundary; the observed 16 MiB completion time remains within the
+  scenario's 10-second repetition deadline. These are one-host prototype
+  measurements, not production SLO or cross-platform evidence.
+- **Alternative rejected:** Framed stdio is simpler to launch and materially
+  faster/lighter in this measurement, but requires a project-owned framing,
+  multiplexing, reverse-call, control-progress and compatibility protocol on
+  stdin/stdout. Retain the spike and its raw evidence as a frozen comparison;
+  do not maintain two production transports or infer stdio production support.
+- **Compatibility and migration:** No CONTRACT, API, `StreamFrame`, retry,
+  capability, credential authority, or lifecycle semantic change. Keep
+  component API major/minor, IPC wire/schema version, protocol identifier, and
+  implementation version distinct; M6-006 must define explicit incompatibility
+  rejection before Init/Execute and additive evolution rules. Initial support
+  is Linux with Unix-domain sockets only; other OSes and socket security
+  behavior remain unverified. Migration is limited to the disposable spikes:
+  downstream production work starts from the M6-006 binding, not either spike
+  implementation. Pin runtime/module and protoc/plugin versions, commit
+  reproducibly generated code with its exact regeneration command, and keep
+  code-generation tools/dependencies out of Core; production pins and supported
+  Go/tooling matrix are fixed with the binding/build task.
+- **Verification:** Reproduce the card's stdio, gRPC and common-control race
+  commands; compare all shared workload/budget rows and failure limits; review
+  this record against CONTRACT/M2-BINDING and synchronized STACK/M6-EXTERNAL.
+  M6-005 reviewer must accept the selection and M6-006 scope before binding
+  work is promoted. No real provider or live service call is relevant.
+
+### DEC-015 — Convey the Admitted Route Body Bound to Usage Estimation
+
+- **Status:** Accepted by user authorization on 2026-10-14.
+- **Context:** External `EstimateUsage` receives opaque request bytes separately
+  from its fragmented typed query. The child needs the runtime's already
+  admitted body ceiling to reassemble those bytes without inventing an IPC
+  limit or trusting a child-selected value.
+- **Decision:** Add runtime-owned `MaxBodyBytes int64` to `core.UsageQuery`.
+  Core populates it from the selected route's effective admitted body limit;
+  the protobuf binding carries it as additive field 6. The host and child both
+  enforce the bound before passing the complete opaque body to the Connector.
+  This changes no payload semantics, accounting policy, or provider behavior.
+- **Alternative rejected:** Infer a maximum from the frame size or use a fixed
+  IPC cap; either would reject bodies Core admitted or make transport ceilings
+  masquerade as semantic limits.
+- **Compatibility/migration:** This is an approved internal contract extension
+  and protobuf wire addition. Existing components and operation behavior remain
+  valid; the new external RPC is available only when both host and child use
+  this binding. Protobuf field 6 is additive and does not change the IPC major.
+- **Verification:** Test exact-boundary body preservation and over-bound
+  rejection at host/child assembly; verify Core forwards the selected route
+  value and protobuf field 6 round-trips. No live provider call is relevant.
+
+### DEC-016 — Convey the Admitted Route Body Bound to Execute
+
+- **Status:** Accepted by user authorization on 2026-10-14.
+- **Context:** Execute sends opaque request-body chunks separately from its
+  typed start record. The child must reassemble only within Core's selected
+  route admission bound; the transport chunk/frame bounds are not that semantic
+  limit.
+- **Decision:** Add runtime-owned `MaxBodyBytes int64` to `core.AttemptScope`.
+  `Dispatcher.executeAttempt` populates it from the selected route's effective
+  body cap and normalizes absent or nonpositive caps to `math.MaxInt64` (the
+  unbounded sentinel). The external Execute binding carries it as additive
+  `ExecuteStart.max_body_bytes` field 3. Host and child reject request bodies
+  over the conveyed value before invoking the child Connector. This does not
+  change payload bytes, selection, retries, accounting, or provider behavior.
+- **Alternative rejected:** Infer the aggregate cap from transport frame size
+  or invent a fixed IPC payload limit; either would conflict with Core route
+  admission.
+- **Compatibility/migration:** This approved internal contract and protobuf
+  extension requires host and child to use the updated binding together.
+  `ExecuteStart` field 3 is additive and does not change the IPC major. No
+  production child composition is added by this decision; that remains M6-024.
+- **Verification:** Test route-bound and unbounded `AttemptScope` population,
+  exact-boundary transport, and over-bound rejection at both host and child
+  assembly. No live provider call is relevant.
+
+### DEC-017 — Enforce Aggregate IPC Backpressure with a Host-Owned Epoch Broker
+
+- **Status:** Accepted by the M6-020 planner resolution; IPC-only semantic extension, not a Core API change.
+- **Context:** Execute and reverse HTTP use independent gRPC connections. HTTP/2 flow-control windows are peer-configurable and cannot enforce shared per-invocation/process limits across both sockets; an independent real-transport probe sent 257 x 64 KiB frames without receiver `Recv()` despite an 84 KiB server initial window.
+- **Decision:** The host owns an epoch-bound `CreditBroker` with 64 frames / 4 MiB per invocation and 256 frames / 16 MiB per process. Every streamed data envelope (Execute and HTTPDo, either direction; BodyChunk or RecordFragment) carries a monotonic sequence. A producer must reserve one frame and its application bytes before sending; host-issued reservations are authoritative and the receiver returns credit only after delivery/assembly consumption. Identity binds epoch, invocation, operation, call, direction and sequence. Reject stale, replayed, missing, oversized or unreserved data. Use separate control RPC connections for broker Reserve/Ack and prioritized Cancel/Close, with a combined 64-message / 256 KiB cap and bounded/coalesced ACKs. Cancellation revokes reservations without waiting for data credits. gRPC windows alone are not an enforcement mechanism.
+- **Alternatives rejected:** Tune HTTP/2 initial windows (peer-controlled, connection-local); maintain independent per-socket/per-stream budgets (cannot enforce aggregate cross-socket limits); buffer complete responses (breaks incremental delivery); or change Core/provider APIs (unnecessary).
+- **Compatibility / impact:** Add `FlowControl` RPCs and frame sequence fields to the generated IPC schema; require IPC minor >=1 before Init/Execute. IPC major remains 1 because the addition is minor-version gated; old children are rejected rather than used without broker semantics. No Core contract, provider API, or native child composition change; child helper integration is defined here, production root remains M6-024.
+- **Verification:** Real gRPC tests must prove cross-socket shared limits with large peer windows, tiny-frame count limits, reserve-before-send, partial-read ACK release, stale/replay rejection, control progress under saturation and reservation cleanup on cancellation. Synchronize this ADR with M6-BINDING and M6-EXTERNAL; regenerate protobuf bindings using pinned tools.
 
 ## Questions Before Implementation
 

@@ -16,9 +16,15 @@ The proposed stack is designed for a single self-hosted process with simple depl
 | Metrics | Prometheus client | Counters, gauges, and latency histograms for operational monitoring |
 | Testing | `testing`, `httptest`, Go fuzzing, and race detector | Most protocol validation runs locally |
 | Packaging | Go binary and container | Convenient deployment on servers or local machines |
-| External connectors | Tentatively gRPC + Protobuf over Unix socket | Versioning, streaming, and cancellation through typed transport |
+| External connectors | gRPC + Protobuf over Unix socket (DEC-014; binding pending M6-006) | Typed bidirectional streaming and cancellation for invocation-scoped host services |
 
-HTTP, YAML and SQLite choices are implemented; SQLite is validated on Linux/amd64. Metrics, container packaging and external transport remain roadmap choices. The IPC choice is finalized after a real streaming comparison in M6.
+HTTP, YAML and SQLite choices are implemented; SQLite is validated on Linux/amd64. Metrics and container packaging remain roadmap choices. M6-005 selected gRPC over Unix socket from matched disposable prototypes; production binding and dependency pins remain for M6-006. Initial IPC evidence is Linux-only; no other OS support is claimed.
+
+External IPC uses protobuf/gRPC code and pinned runtime/generator dependencies
+only at the process-boundary packages; `internal/core` remains transport-neutral.
+Commit generated bindings and their exact regeneration command. Keep component
+API versions, IPC schema/protocol versions, and implementation versions
+independent; see [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc).
 
 ## HTTP and Streaming
 

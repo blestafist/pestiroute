@@ -24,6 +24,7 @@ import (
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	anthropic "github.com/blestafist/pestiroute/internal/connector/anthropic"
 	"github.com/blestafist/pestiroute/internal/connector/codex"
+	"github.com/blestafist/pestiroute/internal/connector/external"
 	connector "github.com/blestafist/pestiroute/internal/connector/responses"
 	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
@@ -62,23 +63,24 @@ type config struct {
 }
 
 type topologyComponent struct {
-	ID             core.InstanceID    `json:"id"`
-	Implementation string             `json:"implementation"`
-	Kind           core.ComponentKind `json:"kind"`
-	Endpoint       string             `json:"endpoint,omitempty"`
-	CredentialEnv  string             `json:"credential_env,omitempty"`
-	MaxBodyBytes   int64              `json:"max_request_body_bytes,omitempty"`
-	MaxHeaderBytes int64              `json:"max_request_header_bytes,omitempty"`
-	ConnectTimeout string             `json:"connect_timeout,omitempty"`
-	TLSTimeout     string             `json:"tls_handshake_timeout,omitempty"`
-	HeaderTimeout  string             `json:"response_header_timeout,omitempty"`
-	IdleTimeout    string             `json:"stream_idle_timeout,omitempty"`
-	Model          string             `json:"-"`
-	AccountID      string             `json:"-"`
-	Profile        string             `json:"-"`
-	AuthMode       string             `json:"-"`
-	RuntimeProfile string             `json:"-"`
-	Capabilities   map[string]string  `json:"-"`
+	ID             core.InstanceID         `json:"id"`
+	Implementation string                  `json:"implementation"`
+	Kind           core.ComponentKind      `json:"kind"`
+	Endpoint       string                  `json:"endpoint,omitempty"`
+	CredentialEnv  string                  `json:"credential_env,omitempty"`
+	MaxBodyBytes   int64                   `json:"max_request_body_bytes,omitempty"`
+	MaxHeaderBytes int64                   `json:"max_request_header_bytes,omitempty"`
+	ConnectTimeout string                  `json:"connect_timeout,omitempty"`
+	TLSTimeout     string                  `json:"tls_handshake_timeout,omitempty"`
+	HeaderTimeout  string                  `json:"response_header_timeout,omitempty"`
+	IdleTimeout    string                  `json:"stream_idle_timeout,omitempty"`
+	Model          string                  `json:"-"`
+	AccountID      string                  `json:"-"`
+	Profile        string                  `json:"-"`
+	AuthMode       string                  `json:"-"`
+	RuntimeProfile string                  `json:"-"`
+	Capabilities   map[string]string       `json:"-"`
+	Process        *external.ProcessConfig `json:"-"`
 }
 
 type topologyRoute struct {
@@ -102,6 +104,23 @@ type topologyRoute struct {
 type secret string
 
 const responsesProtocol = "openai.responses.v1"
+
+// externalProcessCleanupTimeout matches the binding's 30s close/drain plus 5s
+// terminate/reap bound, with an orchestration margin shared by supervisors.
+const externalProcessCleanupTimeout = 36 * time.Second
+
+const externalProcessCleanupWait = externalProcessCleanupTimeout + time.Second
+
+type protectedExternalConnector struct{ *external.Supervisor }
+
+// Close lets bounded child termination/reaping outlive the gateway request-drain context.
+func (c protectedExternalConnector) Close(context.Context) error {
+	ctx, cancel := context.WithTimeout(context.Background(), externalProcessCleanupTimeout)
+	defer cancel()
+	return c.Supervisor.Close(ctx)
+}
+
+var _ core.Connector = protectedExternalConnector{}
 
 func (secret) String() string   { return "[REDACTED]" }
 func (secret) GoString() string { return "[REDACTED]" }
@@ -602,10 +621,20 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	var closeOnce sync.Once
 	closeDone := make(chan struct{})
 	var closeErr error
+	var transportOwners []core.Component
 	closeComponents := func(ctx context.Context) error {
 		closeOnce.Do(func() {
 			go func() {
-				closeErr = registry.Close(ctx)
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), externalProcessCleanupWait)
+				defer cleanupCancel()
+				_ = registry.Close(ctx)
+				// Wait for Registry's one concurrent close pass to finish. External
+				// wrappers use the binding cleanup context; other components retain
+				// the caller's request-drain context.
+				closeErr = registry.Close(cleanupCtx)
+				for _, owner := range transportOwners {
+					closeErr = errors.Join(closeErr, owner.Close(context.Background()))
+				}
 				if persistentDB != nil {
 					closeErr = errors.Join(closeErr, persistentDB.Close())
 				}
@@ -619,7 +648,9 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		case <-closeDone:
 			return closeErr
 		case <-ctx.Done():
-			return ctx.Err()
+			// The request budget bounds drain, not child termination/reaping.
+			<-closeDone
+			return closeErr
 		}
 	}
 	cleanup := func() { _ = closeComponents(context.Background()) }
@@ -652,7 +683,17 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		}
 	}
 	for _, item := range c.Components {
-		instance := construct(item)
+		var instance core.Component
+		if item.Process != nil {
+			supervisor, err := external.StartSupervisor(context.Background(), *item.Process)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("start external connector %q: %w", item.ID, err)
+			}
+			instance = protectedExternalConnector{Supervisor: supervisor}
+		} else {
+			instance = construct(item)
+		}
 		var cfg any
 		if item.Kind == core.ComponentAdapter {
 			cfg = adapterConfig{MaxBodyBytes: maxBody, MaxHeaderBytes: maxHeader}
@@ -679,6 +720,9 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			}, Model: route.Model, AccountID: route.Account, Capabilities: capabilities, AuthMode: item.AuthMode, RuntimeProfile: item.RuntimeProfile})}
 		}
 		if err := registry.Register(item.ID, instance, item.Kind); err != nil {
+			if supervisor, ok := instance.(protectedExternalConnector); ok {
+				_ = supervisor.Close(context.Background())
+			}
 			cleanup()
 			return nil, nil, err
 		}
@@ -716,6 +760,22 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			return nil, nil, fmt.Errorf("connector %q is unavailable", route.Connector)
 		}
 		managed, ok := component.(interface{ HTTPDoer() core.HTTPDoer })
+		if !ok {
+			for _, item := range c.Components {
+				if item.ID != route.Connector || item.Process == nil {
+					continue
+				}
+				owner := connector.NewConnector()
+				if err := owner.Init(context.Background(), componentConfigs[route.Connector]); err != nil {
+					cleanup()
+					return nil, nil, fmt.Errorf("initialize external connector transport for %q: %w", route.Connector, err)
+				}
+				transportOwners = append(transportOwners, owner)
+				managed = owner
+				ok = true
+				break
+			}
+		}
 		if !ok {
 			cleanup()
 			return nil, nil, fmt.Errorf("connector %q has no scoped transport", route.Connector)

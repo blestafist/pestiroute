@@ -22,9 +22,10 @@ var (
 
 // AttemptScope is runtime-owned; client metadata is never used for selection.
 type AttemptScope struct {
-	ID        string
-	AccountID string
-	Mode      string
+	ID           string
+	AccountID    string
+	Mode         string
+	MaxBodyBytes int64 // Runtime-owned effective admitted request-body limit; MaxInt64 means unbounded.
 }
 
 type Target interface {
@@ -134,6 +135,7 @@ func (d *Dispatcher) executeAttempt(ctx context.Context, in ExecutionRequest) (E
 	}
 	var connector Connector
 	var route RouteIdentity
+	var routeMaxBodyBytes int64
 	var adapterID, connectorID InstanceID
 	var authorization CandidateAuthorization
 	_, principalPresent := TrustedPrincipalFromContext(ctx)
@@ -170,6 +172,7 @@ func (d *Dispatcher) executeAttempt(ctx context.Context, in ExecutionRequest) (E
 		if err != nil {
 			return ExecutionResponse{}, &GatewayError{Code: "unsupported_target", Category: CategoryUnsupportedFeature, Message: "Unsupported execution target"}
 		}
+		routeMaxBodyBytes = selection.Route.MaxBodyBytes
 		if selection.Route.MaxBodyBytes > 0 && int64(len(in.Payload.Body)) > selection.Route.MaxBodyBytes ||
 			selection.Route.MaxHeaderBytes > 0 && (in.Metadata.IngressHeaderBytes == 0 || in.Metadata.IngressHeaderBytes > selection.Route.MaxHeaderBytes) {
 			return ExecutionResponse{}, &GatewayError{Code: "invalid_request", Category: CategoryInvalidRequest, Message: "Request too large for target limits"}
@@ -228,7 +231,10 @@ func (d *Dispatcher) executeAttempt(ctx context.Context, in ExecutionRequest) (E
 		return ExecutionResponse{}, executionError(err)
 	}
 	in.ID = requestID
-	scope := AttemptScope{ID: attemptID, AccountID: d.AccountID, Mode: executionMode}
+	if routeMaxBodyBytes <= 0 {
+		routeMaxBodyBytes = int64(^uint64(0) >> 1)
+	}
+	scope := AttemptScope{ID: attemptID, AccountID: d.AccountID, Mode: executionMode, MaxBodyBytes: routeMaxBodyBytes}
 	result := AttemptResult{RequestID: requestID, Scope: scope, Route: route, Adapter: adapterID, Connector: connectorID, Outcome: OutcomeIncomplete, Usage: UsageReport{Source: UsageUnknown, Completeness: UsageUnknownCompleteness}, StartedAt: time.Now()}
 	var gatewayErr *GatewayError
 	var accountingEstimate ResolvedEstimate
@@ -237,9 +243,14 @@ func (d *Dispatcher) executeAttempt(ctx context.Context, in ExecutionRequest) (E
 			return ExecutionResponse{}, &GatewayError{Code: "accounting_unavailable", Category: CategoryUnavailable, Message: "Request accounting is unavailable"}
 		}
 		principal, _ := authorization.AccountingIdentity()
+		maxBodyBytes := routeMaxBodyBytes
+		if maxBodyBytes <= 0 {
+			// A zero route cap is unbounded; carry the largest representable byte count.
+			maxBodyBytes = int64(^uint64(0) >> 1)
+		}
 		accountingEstimate, gatewayErr = ResolveEstimate(ctx, connector, UsageQuery{
 			Protocol: in.Payload.Protocol, Mode: scope.Mode, Model: in.Model,
-			AccountID: scope.AccountID, Payload: in.Payload,
+			AccountID: scope.AccountID, MaxBodyBytes: maxBodyBytes, Payload: in.Payload,
 		}, d.Services.ForAttempt(scope), d.Budget)
 		if gatewayErr != nil {
 			return ExecutionResponse{}, gatewayErr

@@ -102,7 +102,7 @@ Do not add a broad skills bundle or change the existing RTK/Ponytail setup for p
 - Current `.opencode/opencode.json` uses the native v2 `mcp.servers` shape; the five `.opencode/agents/*.md` definitions use native `permissions` rules and supported modes. `.opencode/commands/next.md` uses the v2 project command path, positional `$1`, and current-session execution with the `orchestrator` agent. The command is a prompt workflow, not a hard scheduler or a durable unattended job.
 - OpenCode V2 itself does not provide built-in LSP tools. Go semantic navigation and diagnostics here come from the separate official `gopls mcp` server, not a built-in `lsp` action.
 - Before enabling any candidate plugin/hook, test its **v2 plugin API** and the command/agent permissions on the installed version. A working v1 hook is not evidence of v2 compatibility. In particular, do not migrate an RTK output hook by copying its v1 file; validate its new entrypoint and output behavior on a disposable task first.
-- The earlier OpenCode v2.0.18 registry check exposed `next`, all five project agents, and `context7`. The historical inventory and new gopls check are separate below; plugins were not rechecked. See [CURRENT](CURRENT.md) for actual capabilities. This tooling inspection did not execute `/next` or validate an unattended task cycle. The initial planning card at that historical check was M2-001. The current executable design card is [M3-001](tasks/M3-001.md); dependent cards need actual-result and readiness review.
+- The earlier OpenCode v2.0.18 registry check exposed `next`, all five project agents, and `context7`. The historical inventory and new gopls check are separate below; plugins were not rechecked. See [CURRENT](CURRENT.md) for actual capabilities. This tooling inspection did not execute `/next` or validate an unattended task cycle. The initial planning card at that historical check was M2-001. That later historical design card was [M3-001](tasks/M3-001.md); consult [CURRENT](CURRENT.md) for the current executable card.
 
 ## gopls MCP for M2
 
@@ -201,3 +201,7 @@ References: [OpenCode v2 migration](https://opencode.ai/v2/docs/migrate-v1/), [c
 ## M5.2 tooling gate
 
 [M5.2-LOCAL](M5.2-LOCAL.md) uses the existing Context7/gopls, shell/Git, pinned Go and artifact tooling; no new MCP/plugin is required. Runtime/model/hardware availability is recorded separately by M5.2-007. Normal checks remain loopback-fixture-only, without GPUs, models or container runtime requirements. Real Ollama/vLLM/llama.cpp setup is an explicit operator prerequisite for independent smoke gates, not an automatic installation by /next. Keep external-process supervision and IPC tooling in M6. Configured servers are not proof of current connections or successful tool calls.
+
+## M6 tooling gate
+
+[M6-EXTERNAL](M6-EXTERNAL.md#tooling-and-retained-gates) needs no new MCP/plugin. Reuse Context7/gopls and shell/Git/Go. M6-003/004 establish actual prototype-tool availability and exact pinned dependencies; M6-005 selects the production IPC stack and M6-006 fixes reproducible generation/build commands. Do not install or assume a speculative gRPC toolchain before its card is ready. Deterministic child-process/loopback tests remain independent of provider credentials, models and GPU access.
