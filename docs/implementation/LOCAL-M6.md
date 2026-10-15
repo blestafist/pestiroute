@@ -42,7 +42,7 @@ same `connectors[].process` fields: absolute `executable`, literal `args`, absol
 existing `working_directory`, and empty `environment_allowlist`. Omit `process`
 to keep the in-process implementation. Protected startup currently permits the
 native Responses implementation in this external path; it is not arbitrary
-executable discovery. See the forthcoming M6-031 integration guide and the normative
+executable discovery. See [integration](M6-INTEGRATION.md) and the normative
 [binding](M6-BINDING.md#ownership-topology-versions).
 
 The native YAML profile still requires `settings.credential_env` to name a

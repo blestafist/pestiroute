@@ -24,3 +24,5 @@ jobs:
         run: ./scripts/check.sh
       - name: Offline external-process operations
         run: python3 scripts/smoke-m6-offline.py
+      - name: Standalone example interoperability
+        run: python3 scripts/smoke-m6-offline.py --child-package ./examples/external-connector
