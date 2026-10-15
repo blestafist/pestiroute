@@ -25,6 +25,8 @@ const (
 	closeTimeout = 30 * time.Second
 )
 
+var errConnectorClosing = errors.New("external connector is closing or unavailable")
+
 // Connector is the lifecycle-only host proxy for one verified child process.
 type Connector struct {
 	process     *Process
@@ -409,9 +411,6 @@ func readEstimateRecord(stream grpc.BidiStreamingClient[gen.EstimateFrame, gen.R
 func (c *Connector) Close(ctx context.Context) error {
 	c.mu.Lock()
 	c.closing = true
-	c.invocations.close()
-	c.hostCancel()
-	c.hostServer.Stop()
 	if !c.closeStarted {
 		c.closeStarted = true
 		c.closeDone = make(chan struct{})
@@ -440,22 +439,22 @@ func (c *Connector) Close(ctx context.Context) error {
 func (c *Connector) closeOwned(ctx context.Context, done chan struct{}) {
 	bounded, cancel := boundedContext(ctx, closeTimeout)
 	defer cancel()
-	acquired := c.acquire(bounded) == nil
 	var err error
-	if acquired {
-		defer c.release()
-		c.mu.Lock()
-		alreadyUnavailable := c.unavailable
-		c.mu.Unlock()
-		if !alreadyUnavailable {
-			shutdownErr := c.process.Shutdown(bounded, c.closeRPC)
-			connErr := c.conn.Close()
-			controlErr := c.controlConn.Close()
-			err = errors.Join(lifecycleError("Close", shutdownErr), lifecycleError("connection close", connErr), lifecycleError("control connection close", controlErr))
-		}
-	} else {
-		// Even when admission could not drain before the caller's deadline, the
-		// supervisor still owns terminating/reaping the process group.
+	// Wait for already admitted operations and streams. Close has stopped new
+	// admission, so acquiring and releasing this gate marks a completed drain.
+	drained := c.acquireGate(bounded) == nil
+	if drained {
+		c.release()
+	}
+	c.invocations.close()
+	c.hostCancel()
+	c.hostServer.Stop()
+	c.mu.Lock()
+	alreadyUnavailable := c.unavailable
+	c.mu.Unlock()
+	if !alreadyUnavailable {
+		// An expired drain context makes Process.Shutdown skip graceful Close
+		// and begin process-group termination immediately.
 		shutdownErr := c.process.Shutdown(bounded, c.closeRPC)
 		connErr := c.conn.Close()
 		controlErr := c.controlConn.Close()
@@ -475,6 +474,16 @@ func (c *Connector) closeRPC(ctx context.Context) error {
 }
 
 func (c *Connector) acquire(ctx context.Context) error {
+	c.mu.Lock()
+	closing := c.closing || c.unavailable
+	c.mu.Unlock()
+	if closing {
+		return errConnectorClosing
+	}
+	return c.acquireGate(ctx)
+}
+
+func (c *Connector) acquireGate(ctx context.Context) error {
 	select {
 	case c.gate <- struct{}{}:
 		return nil

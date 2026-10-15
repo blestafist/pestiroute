@@ -4,6 +4,7 @@ package external
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,127 @@ func TestM6SupervisorPublicationCloseOrdering(t *testing.T) {
 		t.Fatal("generation published after Close")
 	}
 	s.mu.Unlock()
+}
+
+func TestM6ShutdownSupervisorCloseWaitsForSharedCompletion(t *testing.T) {
+	s, err := StartSupervisor(context.Background(), processConfig("lifecycle-close-delay-fail"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Init(context.Background(), core.ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.RLock()
+	p, dir := s.process, s.process.dir
+	s.mu.RUnlock()
+	short, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+	if err := s.Close(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first Close=%v, want caller deadline", err)
+	}
+
+	long, cancelLong := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLong()
+	second := make(chan error, 1)
+	go func() { second <- s.Close(long) }()
+	select {
+	case err := <-second:
+		t.Fatalf("second Close returned before cleanup completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("resources were removed before child Close finished: %v", err)
+	}
+	var closeErr error
+	select {
+	case closeErr = <-second:
+		if closeErr == nil {
+			t.Fatal("supervisor reported success for child Close failure")
+		}
+	case <-long.Done():
+		t.Fatalf("second Close did not observe completion: %v", long.Err())
+	}
+	if err := s.Close(context.Background()); err == nil || err.Error() != closeErr.Error() {
+		t.Fatalf("repeated Close error=%v, want stable result %v", err, closeErr)
+	}
+	assertProcessReaped(t, p)
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("supervisor returned before owned directory cleanup: %v", err)
+	}
+}
+
+func TestM6ShutdownSupervisorWaitsForOrderlyDescendantExit(t *testing.T) {
+	s, err := StartSupervisor(context.Background(), processConfig("supervisor-orderly-descendant"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Init(context.Background(), core.ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.RLock()
+	p := s.process
+	s.mu.RUnlock()
+	waitForDiagnostic(t, p, "descendant-started")
+	started := time.Now()
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < 250*time.Millisecond || elapsed >= 2*time.Second {
+		t.Fatalf("orderly descendant drain elapsed %s; expected natural exit within grace", elapsed)
+	}
+	if !strings.Contains(p.Diagnostics(), "descendant-orderly-exit") || strings.Contains(p.Diagnostics(), "descendant-term") {
+		t.Fatalf("descendant was terminated before its orderly exit: %q", p.Diagnostics())
+	}
+	assertProcessReaped(t, p)
+}
+
+func TestM6ShutdownSupervisorWaitsPastSafetyDeadlineForCleanup(t *testing.T) {
+	s, err := StartSupervisor(context.Background(), processConfig("supervisor-ignore-term-descendant"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Init(context.Background(), core.ComponentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.closeWaitLimit = 75 * time.Millisecond
+	p, dir := s.process, s.process.dir
+	s.mu.Unlock()
+	waitForDiagnostic(t, p, "descendant-started")
+	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := s.Close(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first Close=%v, want caller deadline", err)
+	}
+
+	long, cancelLong := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLong()
+	second := make(chan error, 1)
+	go func() { second <- s.Close(long) }()
+	select {
+	case err := <-second:
+		t.Fatalf("Supervisor.Close completed before Connector cleanup: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("owned directory disappeared before process-group cleanup: %v", err)
+	}
+	var closeErr error
+	select {
+	case closeErr = <-second:
+		if !errors.Is(closeErr, context.DeadlineExceeded) {
+			t.Fatalf("safety-limit result=%v, want stable deadline error", closeErr)
+		}
+	case <-long.Done():
+		t.Fatalf("cleanup did not finish: %v", long.Err())
+	}
+	if err := s.Close(context.Background()); err == nil || err.Error() != closeErr.Error() {
+		t.Fatalf("repeated Close error=%v, want stable result %v", err, closeErr)
+	}
+	assertProcessReaped(t, p)
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("Supervisor.Close completed before owned directory cleanup: %v", err)
+	}
 }
 
 func TestM6SupervisorValidInvalidRequestDoesNotRestart(t *testing.T) {

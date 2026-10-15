@@ -55,21 +55,24 @@ var errSupervisorUnavailable = &core.GatewayError{Code: "connector_unavailable",
 // generations. A generation is published only after handshake, Descriptor and
 // Init have all succeeded.
 type Supervisor struct {
-	mu         sync.RWMutex
-	cfg        ProcessConfig
-	component  core.ComponentConfig
-	descriptor core.Descriptor
-	current    *Connector
-	process    *Process
-	ctx        context.Context
-	cancel     context.CancelFunc
-	epoch      uint64
-	budget     restartBudget
-	ready      bool
-	failed     bool
-	closed     bool
-	started    bool
-	watchers   sync.WaitGroup
+	mu             sync.RWMutex
+	cfg            ProcessConfig
+	component      core.ComponentConfig
+	descriptor     core.Descriptor
+	current        *Connector
+	process        *Process
+	ctx            context.Context
+	cancel         context.CancelFunc
+	epoch          uint64
+	budget         restartBudget
+	ready          bool
+	failed         bool
+	closed         bool
+	started        bool
+	closeDone      chan struct{}
+	closeErr       error
+	closeWaitLimit time.Duration // test hook; zero uses the production drain plus termination bound.
+	watchers       sync.WaitGroup
 }
 
 func StartSupervisor(ctx context.Context, cfg ProcessConfig) (*Supervisor, error) {
@@ -338,26 +341,53 @@ func (s *supervisedStream) Close() error { return s.stream.Close() }
 
 func (s *Supervisor) Close(ctx context.Context) error {
 	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil
+	if s.closeDone == nil {
+		s.closeDone = make(chan struct{})
+		s.closed, s.ready = true, false
+		s.cancel()
+		c, p, done := s.current, s.process, s.closeDone
+		go s.closeOwned(c, p, done)
 	}
-	s.closed, s.ready = true, false
-	s.cancel()
-	c, p := s.current, s.process
+	done := s.closeDone
 	s.mu.Unlock()
-	var closeErr error
-	if c != nil && p != nil {
-		closeErr = c.Close(ctx)
-	}
-	done := make(chan struct{})
-	go func() { s.watchers.Wait(); close(done) }()
 	select {
 	case <-done:
-		return closeErr
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.closeErr
 	case <-ctx.Done():
-		return errors.Join(closeErr, ctx.Err())
+		return ctx.Err()
 	}
+}
+
+func (s *Supervisor) closeOwned(c *Connector, p *Process, done chan struct{}) {
+	limit := s.closeWaitLimit
+	if limit <= 0 {
+		limit = closeTimeout + 5*time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	var closeErr error
+	if c != nil && p != nil {
+		_ = c.Close(ctx)
+		c.mu.Lock()
+		connectorDone := c.closeDone
+		c.mu.Unlock()
+		if connectorDone != nil {
+			<-connectorDone
+		}
+		c.mu.Lock()
+		closeErr = c.closeErr
+		c.mu.Unlock()
+	}
+	s.watchers.Wait()
+	if err := ctx.Err(); err != nil {
+		closeErr = errors.Join(closeErr, ctx.Err())
+	}
+	s.mu.Lock()
+	s.closeErr = closeErr
+	close(done)
+	s.mu.Unlock()
 }
 
 var _ core.Connector = (*Supervisor)(nil)

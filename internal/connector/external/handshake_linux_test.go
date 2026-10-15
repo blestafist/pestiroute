@@ -145,7 +145,7 @@ func serveHandshakeChild(socket, mode, marker, attemptMarker string) {
 		os.Exit(31)
 	}
 	server := grpc.NewServer()
-	gen.RegisterConnectorServer(server, &handshakeChild{mode: mode, marker: marker, attemptMarker: attemptMarker})
+	gen.RegisterConnectorServer(server, &handshakeChild{mode: mode, marker: marker, attemptMarker: attemptMarker, server: server})
 	if err := server.Serve(listener); err != nil {
 		os.Exit(32)
 	}
@@ -156,6 +156,7 @@ type handshakeChild struct {
 	mode          string
 	marker        string
 	attemptMarker string
+	server        *grpc.Server
 	flowMu        sync.Mutex
 	flow          *ChildFlowControl
 	flowConn      *grpc.ClientConn
@@ -872,10 +873,16 @@ func receiveBidiRecord(stream grpc.BidiStreamingServer[gen.RecordFragment, gen.R
 
 func (s *handshakeChild) Close(context.Context, *gen.RecordFragment) (*gen.RecordFragment, error) {
 	_, _ = fmt.Fprintln(os.Stderr, "lifecycle-close-called")
-	if s.mode == "lifecycle-close-delay" {
+	if s.mode == "supervisor-orderly-descendant" {
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			s.server.GracefulStop()
+		}()
+	}
+	if s.mode == "lifecycle-close-delay" || s.mode == "lifecycle-close-delay-fail" {
 		time.Sleep(350 * time.Millisecond)
 	}
-	if s.mode == "lifecycle-close-fail" {
+	if s.mode == "lifecycle-close-fail" || s.mode == "lifecycle-close-delay-fail" {
 		return nil, status.Error(codes.Internal, "private child error")
 	}
 	return &gen.RecordFragment{}, nil

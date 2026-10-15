@@ -24,14 +24,21 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	ctx, cancel := context.WithCancel(ctx)
 	if err := c.acquire(ctx); err != nil {
 		cancel()
+		if errors.Is(err, errConnectorClosing) {
+			return core.ExecutionResponse{}, &core.GatewayError{Code: "connector_unavailable", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "External connector is closing or unavailable"}
+		}
 		return core.ExecutionResponse{}, executeGatewayError(err, false, callerCtx)
 	}
 	c.mu.Lock()
 	valid := !c.closing && !c.unavailable && c.initialized && req.Payload.Protocol != "" && scope.ID != "" && scope.AccountID != "" && validMode(scope.Mode)
+	closing := c.closing || c.unavailable
 	c.mu.Unlock()
 	if !valid {
 		cancel()
 		c.release()
+		if closing {
+			return core.ExecutionResponse{}, &core.GatewayError{Code: "connector_unavailable", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "External connector is closing or unavailable"}
+		}
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "invalid_request", Category: core.CategoryInvalidRequest, RetryDisposition: core.RetryUnsafe, Message: "Invalid or unavailable execution request"}
 	}
 	if scope.MaxBodyBytes <= 0 {
@@ -386,6 +393,10 @@ func (s *executeResponseStream) Next(ctx context.Context) (core.StreamFrame, err
 }
 
 func (s *executeResponseStream) fail(err error) (core.StreamFrame, error) {
+	if parentErr := s.ctx.Err(); parentErr != nil {
+		s.Close()
+		return core.StreamFrame{}, parentErr
+	}
 	if errors.Is(err, io.EOF) {
 		err = ipc.ErrMalformed
 	}

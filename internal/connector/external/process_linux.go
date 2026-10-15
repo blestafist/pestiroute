@@ -280,33 +280,40 @@ func (p *Process) shutdown(ctx context.Context, closeChild func(context.Context)
 	drainCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	drainErr := closeChild(drainCtx)
 	cancel()
+	terminationDeadline := time.Now().Add(5 * time.Second)
 	termNow := drainErr != nil || ctx.Err() != nil
+	reaped := false
 	if !termNow {
-		if wait(p.waitDone, 2*time.Second) && !p.groupExists() {
+		orderlyDeadline := time.Now().Add(2 * time.Second)
+		reaped, groupGone := p.waitOrderlyExit(ctx, orderlyDeadline)
+		if reaped && groupGone {
 			return errors.Join(drainErr, p.cleanup())
 		}
 	}
-	reaped, groupGone := false, false
+	groupGone := false
 	if p.groupExists() {
 		if err := syscall.Kill(-p.PID(), syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 			drainErr = errors.Join(drainErr, err)
 		}
 		termAt := time.Now()
-		if p.waitGroupGoneUntil(termAt.Add(2*time.Second)) != nil {
+		termDeadline := termAt.Add(2 * time.Second)
+		if termDeadline.After(terminationDeadline) {
+			termDeadline = terminationDeadline
+		}
+		if p.waitGroupGoneUntil(termDeadline) != nil {
 			_ = syscall.Kill(-p.PID(), syscall.SIGKILL)
 		}
-		deadline := termAt.Add(5 * time.Second)
-		reaped = waitUntil(p.waitDone, deadline)
+		reaped = waitUntil(p.waitDone, terminationDeadline)
 		if !reaped {
 			drainErr = errors.Join(drainErr, errors.New("child was not reaped within 5 seconds"))
 		}
-		if err := p.waitGroupGoneUntil(deadline); err != nil {
+		if err := p.waitGroupGoneUntil(terminationDeadline); err != nil {
 			drainErr = errors.Join(drainErr, err)
 		} else {
 			groupGone = true
 		}
 	} else {
-		reaped = wait(p.waitDone, 5*time.Second)
+		reaped = waitUntil(p.waitDone, terminationDeadline)
 		groupGone = !p.groupExists()
 		if !reaped {
 			drainErr = errors.Join(drainErr, errors.New("child was not reaped within 5 seconds"))
@@ -316,6 +323,39 @@ func (p *Process) shutdown(ctx context.Context, closeChild func(context.Context)
 		return errors.Join(drainErr, p.cleanup())
 	}
 	return drainErr
+}
+
+func (p *Process) waitOrderlyExit(ctx context.Context, deadline time.Time) (bool, bool) {
+	done := p.waitDone
+	reaped := false
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	for {
+		if !reaped {
+			select {
+			case <-done:
+				reaped = true
+				done = nil
+			default:
+			}
+		}
+		groupGone := !p.groupExists()
+		if reaped && groupGone {
+			return true, true
+		}
+		select {
+		case <-done:
+			reaped = true
+			done = nil
+		case <-ctx.Done():
+			return reaped, groupGone
+		case <-timer.C:
+			return reaped, !p.groupExists()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (p *Process) abort(cause error) error {

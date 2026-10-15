@@ -37,6 +37,27 @@ func TestM6ProcessChild(t *testing.T) {
 		}
 	}
 	if strings.HasPrefix(mode, "handshake-") || strings.HasPrefix(mode, "lifecycle-") || strings.HasPrefix(mode, "auth-") || strings.HasPrefix(mode, "execute-") || strings.HasPrefix(mode, "supervisor-") {
+		if mode == "supervisor-ignore-term-descendant" {
+			cmd := exec.Command("/bin/sh", "-c", "trap '' TERM; while :; do /bin/sleep 1; done")
+			if err := cmd.Start(); err != nil {
+				os.Exit(36)
+			}
+			_, _ = fmt.Fprintln(os.Stderr, "descendant-started")
+			caught := make(chan os.Signal, 1)
+			signalNotify(caught)
+			go func() {
+				for range caught {
+				}
+			}()
+		}
+		if mode == "supervisor-orderly-descendant" {
+			cmd := exec.Command("/bin/sh", "-c", "trap 'echo descendant-term >&2; exit' TERM; /bin/sleep 0.35; echo descendant-orderly-exit >&2")
+			cmd.Stderr = os.Stderr
+			if err := cmd.Start(); err != nil {
+				os.Exit(35)
+			}
+			_, _ = fmt.Fprintln(os.Stderr, "descendant-started")
+		}
 		if mode == "handshake-wrong-peer" {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestM6ProcessChild$", "--", "--mode", "handshake-valid")
 			cmd.Env = os.Environ()
@@ -89,6 +110,17 @@ func TestM6ProcessChild(t *testing.T) {
 	}
 	conn.Close()
 	if mode == "ignore-term" {
+		c := make(chan os.Signal, 1)
+		signalNotify(c)
+		for range c {
+		}
+	}
+	if mode == "tree-ignore-term" {
+		cmd := exec.Command("/bin/sh", "-c", "trap '' TERM; while :; do /bin/sleep 1; done")
+		if err := cmd.Start(); err != nil {
+			os.Exit(34)
+		}
+		_, _ = fmt.Fprintln(os.Stderr, "descendant-started")
 		c := make(chan os.Signal, 1)
 		signalNotify(c)
 		for range c {
@@ -216,7 +248,7 @@ func TestM6ProcessBoundsDiagnostics(t *testing.T) {
 	}
 }
 
-func TestM6ProcessReapsGroup(t *testing.T) {
+func TestM6ShutdownKillsProcessGroup(t *testing.T) {
 	p := startProcess(t, "ignore-term", 3*time.Second)
 	started := time.Now()
 	err := p.Shutdown(context.Background(), func(context.Context) error { return errors.New("close timeout") })
@@ -228,6 +260,21 @@ func TestM6ProcessReapsGroup(t *testing.T) {
 	}
 	if err := syscall.Kill(-p.PID(), 0); !errors.Is(err, syscall.ESRCH) {
 		t.Fatalf("process group remains: %v", err)
+	}
+}
+
+func TestM6ShutdownKillsDescendantProcessGroup(t *testing.T) {
+	p := startProcess(t, "tree-ignore-term", 3*time.Second)
+	waitForDiagnostic(t, p, "descendant-started")
+	started := time.Now()
+	if err := p.Shutdown(context.Background(), func(context.Context) error { return errors.New("close timeout") }); err == nil {
+		t.Fatal("expected shutdown to report close timeout")
+	}
+	if elapsed := time.Since(started); elapsed < 1900*time.Millisecond || elapsed > 6*time.Second {
+		t.Fatalf("process-tree TERM/KILL cleanup took %s", elapsed)
+	}
+	if err := syscall.Kill(-p.PID(), 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("descendant process group remains: %v", err)
 	}
 }
 
