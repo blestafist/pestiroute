@@ -29,7 +29,7 @@ type backpressureFixture struct {
 }
 
 func TestConformanceBackpressure(t *testing.T) {
-	for _, name := range []string{"native-loopback", "anthropic-translation", "scripted"} {
+	for _, name := range []string{"native-loopback", "external-native", "anthropic-translation", "scripted"} {
 		t.Run(name, func(t *testing.T) {
 			bf := newBackpressureFixture(t, name)
 			t.Cleanup(bf.close)
@@ -195,7 +195,13 @@ func newBackpressureFixture(t *testing.T, name string) backpressureFixture {
 	terminalSent := make(chan struct{})
 	sent = append(sent, terminalSent)
 	steps = append(steps, fakeupstream.Step{Data: terminal, Sent: terminalSent})
-	fx, _ := nativeCustomFixture(t, fakeupstream.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: steps})
+	response := fakeupstream.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: steps}
+	var fx fixture
+	if name == "external-native" {
+		fx, _ = externalNativeFixture(t, response)
+	} else {
+		fx, _ = nativeCustomFixture(t, response)
+	}
 	streaming := true
 	fx.request.Metadata.Streaming = &streaming
 	sentCount := 0

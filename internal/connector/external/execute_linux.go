@@ -31,15 +31,18 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		return core.ExecutionResponse{}, executeGatewayError(err, false, callerCtx)
 	}
 	c.mu.Lock()
-	valid := !c.closing && !c.unavailable && c.initialized && req.Payload.Protocol != "" && scope.ID != "" && scope.AccountID != "" && validMode(scope.Mode)
+	initialized := c.initialized
+	valid := !c.closing && !c.unavailable && req.Payload.Protocol != "" && scope.ID != "" && scope.AccountID != "" && validMode(scope.Mode)
 	closing := c.closing || c.unavailable
 	c.mu.Unlock()
+	if closing || !initialized {
+		cancel()
+		c.release()
+		return core.ExecutionResponse{}, &core.GatewayError{Code: "connector_unavailable", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "External connector is unavailable (not initialized or closing)"}
+	}
 	if !valid {
 		cancel()
 		c.release()
-		if closing {
-			return core.ExecutionResponse{}, &core.GatewayError{Code: "connector_unavailable", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "External connector is closing or unavailable"}
-		}
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "invalid_request", Category: core.CategoryInvalidRequest, RetryDisposition: core.RetryUnsafe, Message: "Invalid or unavailable execution request"}
 	}
 	if scope.MaxBodyBytes <= 0 {

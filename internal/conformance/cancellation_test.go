@@ -345,6 +345,28 @@ type cancellationFixture struct {
 func cancellationFixtures() []cancellationFixture {
 	return []cancellationFixture{
 		{name: "anthropic-translation", translated: true, new: translationCancellationFixture},
+		{name: "external-native", new: func(t *testing.T, gate <-chan struct{}, sent chan<- struct{}) fixture {
+			var steps []fakeupstream.Step
+			var release chan struct{}
+			var firstGate <-chan struct{}
+			if gate == nil {
+				release = make(chan struct{})
+				firstGate = release
+			}
+			steps = append(steps, fakeupstream.Step{Gate: firstGate, Data: incrementalFirst})
+			if gate != nil {
+				steps = append(steps, fakeupstream.Step{Gate: gate, Waiting: sent, Data: incrementalTerminal})
+			} else {
+				steps = append(steps, fakeupstream.Step{Data: incrementalTerminal})
+			}
+			fx, _ := externalNativeFixture(t, fakeupstream.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Steps: steps})
+			streaming := true
+			fx.request.Metadata.Streaming = &streaming
+			if release != nil {
+				fx.release = func() { close(release) }
+			}
+			return fx
+		}},
 		{name: "codex", new: func(t *testing.T, gate <-chan struct{}, sent chan<- struct{}) fixture {
 			var firstGate <-chan struct{}
 			var release chan struct{}

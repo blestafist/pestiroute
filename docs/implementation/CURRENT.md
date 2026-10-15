@@ -8,7 +8,7 @@ M5.1 and M5.2 handoffs are **conditionally accepted**, not fully DONE: [DEC-012/
 
 ## Immediate handoff: M6 implementation
 
-New branch `dev-m6` starts at that merged main revision. [M6-EXTERNAL](M6-EXTERNAL.md) scopes external Connector processes and [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selects gRPC over Unix socket. In ongoing /next batch, 18/19 tasks are verified DONE: 17 committed on `dev-m6` (pushed `59c40ca`, `05fbc6c`, `7f7389e`, `a19bad9`; outgoing `dc77253`, `69331c3`, `ca9d8cb`, `2c83fa3`, `6f3cf1e`, `8dd8f8e`, `414c13e`, `2775317`, `a1bb824`, `5795145`, `7883e9c`, `6e03171`, `b0605f3`), and [M6-028](tasks/M6-028.md) verified DONE ready for commit verification. Up to 1 task remains under original /next19 cap without backlog expansion. Next candidate preparation paused after M6-028 closure until commit; candidates 029–032 remain DRAFT with no further dispatch or READY prep.
+New branch `dev-m6` starts at that merged main revision. [M6-EXTERNAL](M6-EXTERNAL.md) scopes external Connector processes and [DEC-014](../project/DECISIONS.md#dec-014--select-grpc-over-unix-socket-for-external-connector-ipc) selects gRPC over Unix socket. The /next19 batch is complete: 19/19 tasks verified DONE (CAP STOP; 18 committed on `dev-m6`: pushed `59c40ca`, `05fbc6c`, `7f7389e`, `a19bad9`; outgoing `dc77253`, `69331c3`, `ca9d8cb`, `2c83fa3`, `6f3cf1e`, `8dd8f8e`, `414c13e`, `2775317`, `a1bb824`, `5795145`, `7883e9c`, `6e03171`, `b0605f3`, `b967975`; [M6-029](tasks/M6-029.md) verified DONE pending commit). Candidates 030–032 remain DRAFT with no further candidate preparation or dispatch until next batch authorization.
 
 Use one card per Worker/Reviewer session and one verified task per commit through existing `/next N`. The M6 plan is not authorization to execute older live gates. No new MCP/plugin is required; transport libraries/generators are selected and pinned through the spikes. Existing server configuration does not establish machine-local connections.
 
@@ -26,6 +26,6 @@ None is an M6 dependency. Preserve the isolated operator credential store and pr
 
 ## Checks and operations
 
-Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. M6-004 ran it successfully on the execution checkout; see its card for focused race checks and raw transport measurements.
+Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). M6-004 ran it successfully on the execution checkout; see its card for focused race checks and raw transport measurements.
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.

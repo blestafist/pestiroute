@@ -53,7 +53,7 @@ func TestConformanceOpacity(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		new  func(*testing.T, [][]byte) (fixture, func() []byte)
-	}{{"native-loopback", nativeOpaqueFixture}, {"codex", codexOpaqueFixture}, {"scripted", scriptedOpaqueFixture}} {
+	}{{"native-loopback", nativeOpaqueFixture}, {"codex", codexOpaqueFixture}, {"scripted", scriptedOpaqueFixture}, {"external-native", externalOpaqueFixture}} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx, captured := tc.new(t, parts)
 			t.Cleanup(fx.close)
@@ -84,7 +84,7 @@ func TestConformanceIncremental(t *testing.T) {
 		name     string
 		scripted bool
 		new      func(*testing.T, <-chan struct{}, chan<- struct{}) fixture
-	}{{name: "native-loopback", new: nativeGatedFixture}, {name: "codex", new: codexGatedFixture}, {name: "scripted", scripted: true, new: scriptedGatedFixture}} {
+	}{{name: "native-loopback", new: nativeGatedFixture}, {name: "codex", new: codexGatedFixture}, {name: "scripted", scripted: true, new: scriptedGatedFixture}, {name: "external-native", new: externalGatedFixture}} {
 		t.Run(tc.name, func(t *testing.T) {
 			gate, waiting := make(chan struct{}), make(chan struct{}, 1)
 			fx := tc.new(t, gate, waiting)
@@ -350,6 +350,10 @@ func TestConformance(t *testing.T) {
 		{name: "codex", new: codexFixture},
 		{name: "anthropic-translation", new: translationFixture},
 		{name: "scripted", new: scriptedFixture},
+		{name: "external-native", new: func(t *testing.T) fixture {
+			fx, _ := externalNativeFixture(t, fakeupstream.Response{Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed","opaque":{"native":true}}`)})
+			return fx
+		}},
 	}
 	scenarios := []scenario{
 		{name: "valid-success", mandatory: true, run: runBaseline},
@@ -391,6 +395,10 @@ func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 		{name: "codex", new: codexFixture},
 		{name: "anthropic-translation", new: translationFixture},
 		{name: "scripted", new: scriptedFixture},
+		{name: "external-native", new: func(t *testing.T) fixture {
+			fx, _ := externalNativeFixture(t, fakeupstream.Response{Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed","opaque":{"native":true}}`)})
+			return fx
+		}},
 	}
 	for _, f := range factories {
 		t.Run(f.name, func(t *testing.T) {
@@ -456,16 +464,13 @@ func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 			} else if err != nil || otherModels.Supported || len(otherModels.Models) != 0 {
 				t.Fatalf("cross-account Models result=%+v error=%v", otherModels, err)
 			}
-			usageQuery := core.UsageQuery{}
-			if fx.translated || fx.codex {
-				usageQuery = core.UsageQuery{Protocol: protocol, Mode: fx.scope.Mode, Model: fx.request.Model, AccountID: fx.scope.AccountID}
-			}
+			usageQuery := core.UsageQuery{Protocol: protocol, Mode: fx.scope.Mode, Model: fx.request.Model, AccountID: fx.scope.AccountID}
 			if result, err := fx.connector.EstimateUsage(context.Background(), usageQuery, services); err != nil || result.Supported != fx.translated || result.Known || result.Usage != nil {
 				t.Fatalf("unsupported usage estimate fabricated result=%+v error=%v", result, err)
 			}
-			authRequest := core.AuthRequest{}
+			authRequest := core.AuthRequest{AccountID: fx.scope.AccountID, Action: "start"}
 			if fx.codex {
-				authRequest.AccountID = account
+				authRequest.Action = ""
 			}
 			if result, err := fx.connector.Authenticate(context.Background(), authRequest, services); err != nil || result.Supported || result.State != "" || len(result.Credentials) != 0 {
 				t.Fatalf("unsupported authentication fabricated result=%+v error=%v", result, err)
@@ -493,7 +498,10 @@ func TestConformanceLifecycleAndScopedServices(t *testing.T) {
 }
 
 func TestConformanceFailedInitIsUnavailable(t *testing.T) {
-	for _, f := range []factory{{name: "native-loopback", new: nativeFixture}, {name: "codex", new: codexFixture}, {name: "anthropic-translation", new: translationFixture}, {name: "scripted", new: scriptedFixture}} {
+	for _, f := range []factory{{name: "native-loopback", new: nativeFixture}, {name: "codex", new: codexFixture}, {name: "anthropic-translation", new: translationFixture}, {name: "scripted", new: scriptedFixture}, {name: "external-native", new: func(t *testing.T) fixture {
+		fx, _ := externalNativeFixture(t, fakeupstream.Response{Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"status":"completed","opaque":{"native":true}}`)})
+		return fx
+	}}} {
 		t.Run(f.name, func(t *testing.T) {
 			fx := f.new(t)
 			t.Cleanup(fx.close)
