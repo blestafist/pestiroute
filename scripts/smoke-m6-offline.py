@@ -237,7 +237,9 @@ policies: {{standard: m6-policy}}
                 status, body = post(request)
                 if status == 503:
                     return False
-                assert (status, body) == (200, reply), "new work failed after recovery"
+                if status == 400 and json.loads(body).get("error", {}).get("code") == "unsupported_target":
+                    return False  # Route selection rejected this NEW request before dispatch.
+                assert (status, body) == (200, reply), f"new work failed after recovery: status={status} body={body!r}"
                 return True
             eventually(recovered, 35)
             assert len(seen) == 4, "active request replayed"
