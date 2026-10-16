@@ -12,7 +12,7 @@ import (
 	"github.com/blestafist/pestiroute/internal/core"
 )
 
-const messagesURL = "https://api.anthropic.com/v1/messages?beta=true"
+const messagesURL = "https://api.anthropic.invalid/v1/messages?beta=true"
 
 type messagesRequest struct {
 	Model       string          `json:"model"`

@@ -26,12 +26,11 @@ remain in [M6-HANDOFF](M6-HANDOFF.md) and [LOCAL-M6](LOCAL-M6.md).
 ### M8 lane
 
 [Claude Code execution/integration](M8-CLAUDE-INTEGRATION.md), branch `dev-m8`.
-[M8-001](tasks/M8-001.md) is DONE: integration binding and draft ADR recorded in
-[M8-BINDING](M8-BINDING.md). M8-002/003 remain DRAFT: no further M8 task can proceed
-under existing authority; blocked by lack of accountable offline scope authorization,
-an enforceable fake-only transport boundary (`core.HTTPDoer` redirect/proxy isolation),
-and an authoritative beta-header source/value. Live/provider work and production routes
-remain strictly unauthorized.
+[M8-001](tasks/M8-001.md) and [M8-002](tasks/M8-002.md) are DONE: public Execute
+connects to package-private offline fake transport (`api.anthropic.invalid`,
+`synthetic-beta`, redirect/proxy fail-closed). Next candidate is [M8-003](tasks/M8-003.md)
+(DRAFT; synthetic lifecycle follow-up; no preparation before commit).
+Live/provider work, real credentials, and production routing remain strictly unauthorized.
 
 ### M9 lane
 
