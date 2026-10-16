@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -68,7 +69,7 @@ func TestPublicExecuteSyntheticMessagesStream(t *testing.T) {
 		t.Fatal(ge)
 	}
 	seenHead, seenBody := false, false
-	for {
+	for range 16 {
 		frame, err := response.Stream.Next(context.Background())
 		if err != nil {
 			t.Fatal(err)
@@ -87,12 +88,204 @@ func TestPublicExecuteSyntheticMessagesStream(t *testing.T) {
 			t.Fatalf("unexpected frame: %+v", frame)
 		}
 	}
+	t.Fatal("stream did not complete within 16 frames")
 complete:
 	if _, err := response.Stream.Next(context.Background()); err != io.EOF {
 		t.Fatalf("stream end = %v, want EOF", err)
 	}
 	if !body.closed {
 		t.Fatal("successful response body was not closed")
+	}
+}
+
+func TestClaudePublicExecuteDeliversIncrementallyWithBackpressure(t *testing.T) {
+	reader := &eventReader{events: []string{
+		streamStart,
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"early\"}}\n\n",
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n",
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+	}}
+	calls := 0
+	c := initializedClaudeConnector(t)
+	response, ge := c.Execute(context.Background(), sampleExecuteRequest(), core.AttemptScope{Mode: core.ModeTranslation}, core.InvocationServices{
+		Transport: offlineFakeDoer(func(*http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: reader}, nil
+		}), Credentials: fixtureCredentials(`{"access_token":"synthetic-access"}`),
+	})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer response.Stream.Close()
+	if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead || reader.reads != 1 {
+		t.Fatalf("Head=(%+v,%v) reads=%d", frame, err, reader.reads)
+	}
+	if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameBody || reader.reads != 1 {
+		t.Fatalf("initial Body=(%+v,%v) reads=%d", frame, err, reader.reads)
+	}
+	// The next upstream event yields two downstream frames; the queued frame must
+	// be delivered before another upstream read (bounded backpressure).
+	if _, err := response.Stream.Next(context.Background()); err != nil || reader.reads != 2 {
+		t.Fatalf("content start read count=%d err=%v", reader.reads, err)
+	}
+	if _, err := response.Stream.Next(context.Background()); err != nil || reader.reads != 2 {
+		t.Fatalf("queued Body caused read-ahead: reads=%d err=%v", reader.reads, err)
+	}
+	for range 16 {
+		frame, err := response.Stream.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameBody && strings.Contains(string(frame.Body.Data), `"delta":"early"`) {
+			if reader.reads != 3 || calls != 1 {
+				t.Fatalf("early output waited for upstream finish: reads=%d calls=%d", reader.reads, calls)
+			}
+			return
+		}
+	}
+	t.Fatal("incremental response frame not observed within 16 frames")
+}
+
+func TestClaudePublicExecuteCancellationAndRepeatedCloseNeverRedispatch(t *testing.T) {
+	c := initializedClaudeConnector(t)
+	body := newBlockingReadCloser(streamStart)
+	calls := 0
+	response, ge := c.Execute(context.Background(), sampleExecuteRequest(), core.AttemptScope{Mode: core.ModeTranslation}, core.InvocationServices{
+		Transport: offlineFakeDoer(func(*http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: body}, nil
+		}), Credentials: fixtureCredentials(`{"access_token":"synthetic-access"}`),
+	})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	if _, err := response.Stream.Next(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := response.Stream.Next(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	blocked := make(chan error, 1)
+	go func() { _, err := response.Stream.Next(ctx); blocked <- err }()
+	select {
+	case <-body.entered:
+	case <-time.After(time.Second):
+		cancel()
+		_ = response.Stream.Close()
+		t.Fatal("stream did not enter blocked body read")
+	}
+	cancel()
+	select {
+	case err := <-blocked:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("blocked Next=%v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		_ = response.Stream.Close()
+		t.Fatal("cancellation did not unblock body read")
+	}
+	for range 3 {
+		if err := response.Stream.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 || body.closes.Load() != 1 {
+		t.Fatalf("transport calls=%d body closes=%d, want 1/1", calls, body.closes.Load())
+	}
+	if _, err := response.Stream.Next(context.Background()); err != io.EOF {
+		t.Fatalf("Next after cancel/Close=%v, want EOF", err)
+	}
+}
+
+func TestClaudePublicExecuteRejectsOverLimitEventWithOneFailureCompletion(t *testing.T) {
+	oversized := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"" + strings.Repeat("x", maxSSEBytes) + "\"}}\n\n"
+	body := &trackedBody{Reader: strings.NewReader(streamStart + oversized)}
+	c := initializedClaudeConnector(t)
+	calls := 0
+	response, ge := c.Execute(context.Background(), sampleExecuteRequest(), core.AttemptScope{Mode: core.ModeTranslation}, core.InvocationServices{
+		Transport: offlineFakeDoer(func(*http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: body}, nil
+		}), Credentials: fixtureCredentials(`{"access_token":"synthetic-access"}`),
+	})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer response.Stream.Close()
+	if frame, err := response.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+		t.Fatalf("first frame=(%+v,%v), want Head", frame, err)
+	}
+	completes := 0
+	for range 16 {
+		frame, err := response.Stream.Next(context.Background())
+		if err == io.EOF {
+			if completes != 1 || calls != 1 || !body.closed {
+				t.Fatalf("completions=%d calls=%d body closed=%v", completes, calls, body.closed)
+			}
+			if _, err := response.Stream.Next(context.Background()); err != io.EOF {
+				t.Fatalf("post-terminal Next=%v, want EOF", err)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameComplete {
+			completes++
+			if frame.Complete.Outcome != core.OutcomeFailed || frame.Complete.Error == nil || frame.Complete.Error.Code != "upstream_read_error" || frame.Complete.Usage == nil || frame.Complete.Usage.Source != core.UsageProvider || frame.Complete.Usage.Completeness != core.UsagePartial {
+				t.Fatalf("oversize completion=%+v", frame.Complete)
+			}
+		}
+	}
+	t.Fatalf("stream did not reach EOF within 16 frames (completions=%d)", completes)
+}
+
+func TestClaudePublicExecuteMalformedEventCompletesOnceAndCloses(t *testing.T) {
+	// A delta before content_block_start is a malformed event sequence.
+	body := &trackedBody{Reader: strings.NewReader(streamStart + "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"bad\"}}\n\n")}
+	calls := 0
+	c := initializedClaudeConnector(t)
+	response, ge := c.Execute(context.Background(), sampleExecuteRequest(), core.AttemptScope{Mode: core.ModeTranslation}, core.InvocationServices{
+		Transport: offlineFakeDoer(func(*http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: body}, nil
+		}), Credentials: fixtureCredentials(`{"access_token":"synthetic-access"}`),
+	})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer response.Stream.Close()
+	frame, err := response.Stream.Next(context.Background())
+	if err != nil || frame.Type != core.FrameHead {
+		t.Fatalf("first frame=(%+v,%v), want Head", frame, err)
+	}
+	completes := 0
+	sawEOF := false
+	for range 16 {
+		frame, err = response.Stream.Next(context.Background())
+		if err == io.EOF {
+			sawEOF = true
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type != core.FrameComplete {
+			continue
+		}
+		completes++
+		usage := frame.Complete.Usage
+		if frame.Complete.Outcome != core.OutcomeFailed || frame.Complete.Error == nil || frame.Complete.Error.Code != "invalid_response" || usage == nil || usage.Source != core.UsageProvider || usage.Completeness != core.UsagePartial || !sameCount(usage.InputTokens, int64Ptr(5)) || usage.OutputTokens != nil {
+			t.Fatalf("malformed-event completion=%+v", frame.Complete)
+		}
+	}
+	if !sawEOF || completes != 1 || calls != 1 || !body.closed {
+		t.Fatalf("EOF=%v completions=%d calls=%d body closed=%v, want true/1/1/true", sawEOF, completes, calls, body.closed)
+	}
+	if _, err := response.Stream.Next(context.Background()); err != io.EOF {
+		t.Fatalf("post-terminal Next=%v, want EOF", err)
 	}
 }
 
