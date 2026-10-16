@@ -128,35 +128,46 @@ For an authorized offline state-machine candidate, `start` creates a
 cryptographically random verifier, S256 challenge, and unpredictable state;
 constructs an authorization URL with response type `code`, configured
 redirect URI, scope, challenge/method, and state; and returns it only through a
-safe `AuthUserAction` projection where the flow actually requires operator
-interaction. **The authorization-code/PKCE candidate cannot currently express
-its browser interaction under v1:** `AuthUserAction` requires both a
-verification URI and a non-empty user code, while the source evidence provides
-no device/user code. Do not invent a code or put state/PKCE material in that
-field.
+safe `AuthUserAction` projection. This browser action has the HTTPS authorization
+URL, empty `UserCode`, and zero `PollInterval`; do not invent a device code. The
+URL necessarily carries the public challenge and state parameters needed by the
+authorization protocol, but the verifier and credentials never enter
+presentation. `AuthRequest.CallbackInput` provides the separate, transient
+manual-paste path authorized by [DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input); `AuthRequest.State` remains only the runtime-loaded opaque Connector continuation state ([M3-AUTH](M3-AUTH.md#binding-the-existing-operation)).
 
-There is a second, independent contract limitation: the OAuth redirect returns
-an authorization `code` and `state`, but `AuthRequest` has no callback-input
-fields. Its `State` is only the runtime-loaded opaque Connector continuation
-state; it is not client-supplied callback data ([M3-AUTH](M3-AUTH.md#binding-the-existing-operation)).
-The runtime resolves a continuation from its protected session row before
-invocation, and client-supplied state is prohibited there. Therefore `continue`
-cannot receive or validate the redirect's code/state under the current
-contract. Do not invent a callback endpoint, overload `AuthRequest.State`, or
-repurpose opaque continuation bytes as callback parameters.
+Keep verifier, expected state, and exact redirect URI in encrypted opaque
+Connector continuation state. On `continue`, the runtime supplies pasted
+callback input separately, bounded to 1–4096 printable ASCII bytes and never
+logged or persisted. The Connector alone parses it, rejects malformed or
+ambiguous input. The protected configured redirect URI must be absolute, have a
+non-empty authority, and have no query, fragment, or userinfo. Compare the
+callback's raw scheme, raw authority, and escaped
+path byte-for-byte with it, without normalization; reject userinfo, fragment,
+malformed authority/escaping, and any mismatch. Strictly decode the query and
+require exactly one non-empty, case-sensitive `code` and one non-empty,
+case-sensitive `state`; reject duplicate keys, malformed encoding, OAuth error
+parameters, and all unexpected parameters. Compare state after exactly one
+strict query-decoding pass, byte-for-byte with protected expected state before
+exchanging, and use the exact configured URI in the exchange. Fail closed
+without reflecting or logging callback input, code, or provider error details.
+The durable continuation claim makes each invoked attempt single-use; invalid or
+ambiguous attempts consume it, and no automatic poll loop, retry, or replay is
+allowed.
 
-These limitations are documented, not resolved by this offline specification.
-The OAuth PKCE implementation remains blocked pending a separately reviewed
-ADR/contract resolution; no authentication capability is promoted. Keep
-verifier, expected state, and redirect URI in encrypted opaque Connector
-continuation state, never in presentation fields, logs, or client-supplied
-state. Until a callback input path is authorized, the described code exchange
-is not implementable as an existing-contract `continue`. No automatic poll
-loop or exchange retry is allowed. Any future auth flow must follow
+DEC-019 resolves the two contract expressiveness blockers and grants bounded
+offline implementation authorization only for M7-016, M7-010, and M7-013. It
+does not establish live interoperability, provider registration, entitlement,
+or promote `auth.oauth` beyond `unknown`. The OAuth PKCE connector
+implementation remains blocked on generic Go/admin/protobuf plumbing in
+[M7-016](tasks/M7-016.md) before [M7-010](tasks/M7-010.md) can proceed. The
+callback field, coordinator, admin input, and IPC implementation are not
+implemented by this specification change. Any future auth flow must follow
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
 and [M3-AUTH](M3-AUTH.md): one explicit continuation per call, fixed runtime
 session expiry, and conservative invalidation on cancellation/ambiguous
-outcome.
+outcome. DEC-018 remains controlling: no live provider calls, login, real
+credential handling/persistence, traffic capture, binary reverse engineering,
+or production routing is authorized by this documentation change.
 
 On a trusted successful exchange, return one opaque named credential bundle
 containing the access token and refresh token; return absolute

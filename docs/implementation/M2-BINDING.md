@@ -116,9 +116,18 @@ type ModelInfo struct { ID string; Capabilities map[Capability]CapabilityState; 
 type ModelsResult struct { Supported bool; Models []ModelInfo }
 type UsageQuery struct { Protocol string; Mode string; Model string; AccountID string; MaxBodyBytes int64; Payload RawPayload }
 type EstimateResult struct { Supported bool; Known bool; Usage *UsageReport; Method string }
-type AuthRequest struct { AccountID string; Action string; State []byte }
+type AuthRequest struct { AccountID string; Action string; State []byte; CallbackInput string }
 type AuthResult struct { Supported bool; State string; NextAction string; Credentials map[string][]byte }
 ```
+
+`CallbackInput` is an additive, transient client callback URL for an explicit
+`continue`; it is bounded to 1–4096 printable ASCII bytes when non-empty, is
+separate from runtime-loaded opaque `State`, and is never logged or persisted.
+It is empty on `start`/`refresh`. The generic Connector alone parses it under
+the strict redirect/query/state rules in [DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input)
+and [CONTRACT](CONTRACT.md#connector-contract). The Core/coordinator Go field
+and transport implementation remain pending [M7-016](tasks/M7-016.md); this
+binding update does not claim those source changes exist.
 
 Missing capability entries mean `unknown`; only explicit `supported` satisfies
 a request, and matching is exact across Adapter and selected Connector scope.
