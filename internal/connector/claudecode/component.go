@@ -3,11 +3,13 @@ package claudecode
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -19,18 +21,45 @@ const (
 )
 
 type componentConfig struct {
-	Profile string `json:"profile"`
+	Profile string      `json:"profile"`
+	OAuth   oauthConfig `json:"oauth"`
+}
+
+type oauthConfig struct {
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	RedirectURI           string `json:"redirect_uri"`
+	ClientID              string `json:"client_id"`
+	Scope                 string `json:"scope"`
+}
+
+type Options struct {
+	Clock   func() time.Time
+	Entropy io.Reader
 }
 
 type Connector struct {
-	mu     sync.Mutex
-	state  core.HealthState
-	closed bool
+	mu      sync.Mutex
+	state   core.HealthState
+	closed  bool
+	cfg     componentConfig
+	clock   func() time.Time
+	entropy io.Reader
 }
 
 var _ core.Connector = (*Connector)(nil)
 
-func NewConnector() *Connector { return &Connector{state: core.HealthUnavailable} }
+func NewConnector() *Connector { return NewConnectorWithOptions(Options{}) }
+
+func NewConnectorWithOptions(options Options) *Connector {
+	if options.Clock == nil {
+		options.Clock = time.Now
+	}
+	if options.Entropy == nil {
+		options.Entropy = rand.Reader
+	}
+	return &Connector{state: core.HealthUnavailable, clock: options.Clock, entropy: options.Entropy}
+}
 
 func (c *Connector) Descriptor() core.Descriptor {
 	return core.Descriptor{
@@ -63,6 +92,10 @@ func (c *Connector) Init(ctx context.Context, config core.ComponentConfig) error
 	if cfg.Profile != profile {
 		return fmt.Errorf("Claude Code connector profile must be %q", profile)
 	}
+	if cfg.OAuth != (oauthConfig{}) && !validOAuthConfig(cfg.OAuth) {
+		return errors.New("invalid Claude Code OAuth configuration")
+	}
+	c.cfg = cfg
 	c.state = core.HealthReady
 	return nil
 }
@@ -118,7 +151,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	}
 }
 
-func (c *Connector) Authenticate(ctx context.Context, _ core.AuthRequest, _ core.InvocationServices) (core.AuthResult, *core.GatewayError) {
+func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
 	c.mu.Lock()
 	ready := c.state == core.HealthReady
 	c.mu.Unlock()
@@ -128,7 +161,22 @@ func (c *Connector) Authenticate(ctx context.Context, _ core.AuthRequest, _ core
 	if ge := contextError(ctx); ge != nil {
 		return core.AuthResult{}, ge
 	}
-	return core.AuthResult{Supported: false}, nil
+	c.mu.Lock()
+	cfg := c.cfg.OAuth
+	c.mu.Unlock()
+	if cfg == (oauthConfig{}) {
+		return core.AuthResult{Supported: false}, nil
+	}
+	switch req.Action {
+	case "start":
+		return c.authStart(ctx, cfg)
+	case "continue":
+		return c.authContinue(ctx, cfg, req, services)
+	case "refresh":
+		return c.authRefresh(ctx, cfg, services)
+	default:
+		return core.AuthResult{}, &core.GatewayError{Code: "invalid_auth_action", Category: core.CategoryInvalidRequest, Message: "Authentication action is invalid"}
+	}
 }
 
 func (c *Connector) Models(ctx context.Context, query core.ModelQuery, _ core.InvocationServices) (core.ModelsResult, *core.GatewayError) {

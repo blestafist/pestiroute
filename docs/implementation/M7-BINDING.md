@@ -158,10 +158,11 @@ DEC-019 resolves the two contract expressiveness blockers and grants bounded
 offline implementation authorization only for M7-016, M7-010, and M7-013. It
 does not establish live interoperability, provider registration, entitlement,
 or promote `auth.oauth` beyond `unknown`. Generic Go/admin/protobuf plumbing is
-implemented by [M7-016](tasks/M7-016.md); the OAuth PKCE Connector remains
-pending [M7-010](tasks/M7-010.md). The callback field, coordinator, admin input,
-and IPC implementation are offline candidate plumbing, not provider or
-production support. Any future auth flow must follow
+implemented by [M7-016](tasks/M7-016.md); offline OAuth PKCE is implemented by
+[M7-010](tasks/M7-010.md). The callback field, coordinator, admin input, IPC
+implementation, and Connector are offline candidate work only, not provider or
+production support. The Connector remains uncomposed and `auth.oauth` remains
+`unknown`. Any future auth flow must follow
 [DEC-009](../project/DECISIONS.md#dec-009--separate-safe-user-actions-from-opaque-auth-state)
 and [M3-AUTH](M3-AUTH.md): one explicit continuation per call, fixed runtime
 session expiry, and conservative invalidation on cancellation/ambiguous

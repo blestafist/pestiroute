@@ -127,8 +127,9 @@ It is empty on `start`/`refresh`. The generic Connector alone parses it under
 the strict redirect/query/state rules in [DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input)
 and [CONTRACT](CONTRACT.md#connector-contract). The generic Core/coordinator
 field, admin input, and IPC transport plumbing are implemented by
-[M7-016](tasks/M7-016.md). Connector-specific OAuth PKCE remains pending
-[M7-010](tasks/M7-010.md).
+[M7-016](tasks/M7-016.md). Offline Connector OAuth PKCE implementation is complete
+in [M7-010](tasks/M7-010.md); it remains uncomposed, with capabilities `unknown`
+and no live or production support implied.
 
 Missing capability entries mean `unknown`; only explicit `supported` satisfies
 a request, and matching is exact across Adapter and selected Connector scope.

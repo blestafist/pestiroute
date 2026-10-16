@@ -166,7 +166,9 @@ exchanging, and uses the exact configured URI in the exchange. Invalid
 callbacks fail closed without reflecting or logging input, code, or provider
 error details. Generic Go Core/coordinator, admin-input, and protobuf/IPC field
 plumbing was implemented by [M7-016](tasks/M7-016.md); Connector-specific OAuth
-PKCE implementation remains pending [M7-010](tasks/M7-010.md). See
+offline Connector PKCE implementation is complete under [M7-010](tasks/M7-010.md),
+but it remains an uncomposed candidate: capabilities stay `unknown`, and this
+does not establish live interoperability, credential persistence, or routing. See
 [DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input).
 
 `AuthResult.CredentialExpiresAt *time.Time` is optional absolute expiry metadata

@@ -73,8 +73,10 @@ consume the claimed continuation and are not retried. Stale or consumed sessions
 fail before Connector work.
 
 The generic `AuthRequest` field, coordinator/admin input, and protobuf/IPC
-mapping are implemented by [M7-016](tasks/M7-016.md). Connector-specific OAuth
-PKCE remains pending [M7-010](tasks/M7-010.md).
+mapping are implemented by [M7-016](tasks/M7-016.md). Offline Connector OAuth
+PKCE is implemented by [M7-010](tasks/M7-010.md); this candidate is uncomposed,
+does not promote capabilities beyond `unknown`, and does not imply live or
+production support.
 
 Start and Continue return the optional `UserAction` on the transient
 `AuthSession` result, separately from its runtime-owned session handle and
