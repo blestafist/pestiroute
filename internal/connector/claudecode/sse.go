@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/blestafist/pestiroute/internal/core"
@@ -22,7 +23,7 @@ type sseEvent struct {
 	data []byte
 }
 type sseReader struct {
-	r             io.Reader
+	r             io.ReadCloser
 	buf           [4096]byte
 	pos, n        int
 	err           error
@@ -32,7 +33,7 @@ type sseReader struct {
 	eofDispatched bool
 }
 
-func newSSEReader(r io.Reader) *sseReader { return &sseReader{r: r} }
+func newSSEReader(r io.ReadCloser) *sseReader { return &sseReader{r: r} }
 func (s *sseReader) next(ctx context.Context) (sseEvent, error) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -150,6 +151,10 @@ func (s *sseReader) dispatch() (sseEvent, error) {
 
 type messagesStream struct {
 	r                                 *sseReader
+	mu                                sync.Mutex
+	closed                            bool
+	closeOnce                         sync.Once
+	closeErr                          error
 	phase                             uint8
 	started, block, tool, stopped     bool
 	index, next                       int
@@ -166,30 +171,62 @@ type messagesStream struct {
 	retained        int
 }
 
-func newMessagesStream(r io.Reader) *messagesStream {
+// newMessagesStream takes ownership of r; Close must unblock an active Read.
+func newMessagesStream(r io.ReadCloser) *messagesStream {
 	return &messagesStream{r: newSSEReader(r), outputs: make([]map[string]any, 0)}
 }
-func (s *messagesStream) Close() error { s.phase = 3; return nil }
+func (s *messagesStream) Close() error {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
+		s.closeErr = s.r.r.Close()
+	})
+	return s.closeErr
+}
+
+func (s *messagesStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *messagesStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if err := ctx.Err(); err != nil {
+		_ = s.Close()
 		return core.StreamFrame{}, err
 	}
+	stop := context.AfterFunc(ctx, func() { _ = s.Close() })
+	defer stop()
 	if s.phase == 3 {
+		return core.StreamFrame{}, io.EOF
+	}
+	if s.isClosed() {
 		return core.StreamFrame{}, io.EOF
 	}
 	if s.phase == 0 {
 		s.phase = 1
 		e, err := s.r.next(ctx)
+		if ctx.Err() != nil {
+			_ = s.Close()
+			return core.StreamFrame{}, ctx.Err()
+		}
+		if s.isClosed() {
+			return core.StreamFrame{}, context.Canceled
+		}
 		if err == nil && e.name == "message_start" {
 			err = s.consume(e)
 		}
 		if err != nil || e.name != "message_start" {
 			failure := &core.GatewayError{Code: "invalid_response", Category: core.CategoryUnavailable, Message: "Upstream response did not start a valid message"}
+			outcome := core.OutcomeFailed
 			if err == io.EOF {
 				failure.Code = "incomplete_response"
 				failure.Message = "Upstream response ended before message_start"
+			} else if err != nil {
+				failure, outcome = readFailure(err)
 			}
-			s.terminal = &core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: core.OutcomeFailed, Error: failure, Usage: s.usage(core.UsagePartial)}}
+			s.terminal = &core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: outcome, Error: failure, Usage: s.usage(core.UsagePartial)}}
 			return core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: protocol, ContentType: "text/event-stream", Error: failure}}, nil
 		}
 		return core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: protocol, ContentType: "text/event-stream"}}, nil
@@ -201,19 +238,30 @@ func (s *messagesStream) Next(ctx context.Context) (core.StreamFrame, error) {
 		f := *s.terminal
 		s.terminal = nil
 		s.phase = 3
+		_ = s.Close()
 		return f, nil
 	}
 	for {
 		e, err := s.r.next(ctx)
+		if ctx.Err() != nil {
+			_ = s.Close()
+			return core.StreamFrame{}, ctx.Err()
+		}
+		if s.isClosed() {
+			return core.StreamFrame{}, context.Canceled
+		}
 		if err != nil {
 			code, msg := "incomplete_response", "Upstream response ended before message_stop"
+			category := core.CategoryUnavailable
+			outcome := core.OutcomeIncomplete
 			if err != io.EOF {
-				code, msg = "invalid_response", "Upstream stream was invalid"
+				failure, failureOutcome := readFailure(err)
+				return s.fail(failure.Code, failure.Message, failure.Category, failureOutcome), nil
 			}
-			return s.fail(code, msg), nil
+			return s.fail(code, msg, category, outcome), nil
 		}
 		if err = s.consume(e); err != nil {
-			return s.fail("invalid_response", "Upstream response was invalid"), nil
+			return s.fail("invalid_response", "Upstream response was invalid", core.CategoryUnavailable, core.OutcomeFailed), nil
 		}
 		if len(s.pending) > 0 {
 			return body(s.pop()), nil
@@ -222,6 +270,7 @@ func (s *messagesStream) Next(ctx context.Context) (core.StreamFrame, error) {
 			f := *s.terminal
 			s.terminal = nil
 			s.phase = 3
+			_ = s.Close()
 			return f, nil
 		}
 	}
@@ -230,9 +279,21 @@ func (s *messagesStream) pop() []byte { b := s.pending[0]; s.pending = s.pending
 func body(b []byte) core.StreamFrame {
 	return core.StreamFrame{Type: core.FrameBody, Body: &core.BodyFrame{Data: b}}
 }
-func (s *messagesStream) fail(code, msg string) core.StreamFrame {
+func (s *messagesStream) fail(code, msg string, category core.ErrorCategory, outcome core.Outcome) core.StreamFrame {
 	s.phase = 3
-	return core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: core.OutcomeFailed, Error: &core.GatewayError{Code: code, Category: core.CategoryUnavailable, Message: msg}, Usage: s.usage(core.UsagePartial)}}
+	_ = s.Close()
+	return core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: outcome, Error: &core.GatewayError{Code: code, Category: category, Message: msg}, Usage: s.usage(core.UsagePartial)}}
+}
+
+func readFailure(err error) (*core.GatewayError, core.Outcome) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return &core.GatewayError{Code: "upstream_cancelled", Category: core.CategoryCancelled, Message: "Upstream stream was cancelled"}, core.OutcomeCancelled
+	case errors.Is(err, context.DeadlineExceeded):
+		return &core.GatewayError{Code: "upstream_timeout", Category: core.CategoryTimeout, Message: "Upstream stream timed out"}, core.OutcomeIncomplete
+	default:
+		return &core.GatewayError{Code: "upstream_read_error", Category: core.CategoryUnavailable, Message: "Upstream response could not be read"}, core.OutcomeFailed
+	}
 }
 func (s *messagesStream) usage(c core.UsageCompleteness) *core.UsageReport {
 	source := core.UsageProvider

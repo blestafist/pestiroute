@@ -53,7 +53,7 @@ func TestSSEFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			frames := collect(newMessagesStream(strings.NewReader(string(data))))
+			frames := collect(newMessagesStream(io.NopCloser(strings.NewReader(string(data)))))
 			if len(frames) == 0 || frames[len(frames)-1].Type != core.FrameComplete || frames[len(frames)-1].Complete.Outcome != core.OutcomeFailed {
 				t.Fatalf("expected failed terminal frame, got %#v", frames)
 			}
@@ -76,7 +76,7 @@ func TestSSEStreamsBeforeTerminalAndBoundsFinalProjection(t *testing.T) {
 	stream := prefix + "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
 		fmt.Sprintf("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":%q}}\n\n", large) +
 		fmt.Sprintf("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":%q}}\n\n", large)
-	s = newMessagesStream(strings.NewReader(stream))
+	s = newMessagesStream(io.NopCloser(strings.NewReader(stream)))
 	seenDelta := false
 	for range 20 {
 		f, err := s.Next(context.Background())
@@ -112,10 +112,11 @@ type countReader struct {
 }
 
 func (r *countReader) Read(p []byte) (int, error) { r.reads++; return r.Reader.Read(p) }
+func (r *countReader) Close() error               { return nil }
 
 func checkStream(t *testing.T, name string, data []byte) {
 	t.Helper()
-	frames := collect(newMessagesStream(strings.NewReader(string(data))))
+	frames := collect(newMessagesStream(io.NopCloser(strings.NewReader(string(data)))))
 	if len(frames) < 3 || frames[0].Type != core.FrameHead || frames[len(frames)-1].Type != core.FrameComplete || frames[len(frames)-1].Complete.Outcome != core.OutcomeSucceeded {
 		var terminal any
 		if len(frames) > 0 && frames[len(frames)-1].Complete != nil {
