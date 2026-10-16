@@ -217,6 +217,10 @@ func validateConnectorSettingsFields(root *yaml.Node) error {
 			for _, key := range []string{"base_url", "upstream_protocol", "mode", "credential_env", "max_request_body_bytes", "max_request_header_bytes", "connect_timeout", "tls_handshake_timeout", "response_header_timeout", "stream_idle_timeout"} {
 				allowed[key] = true
 			}
+		case "pestiroute.chat-completions.native":
+			for _, key := range []string{"base_url", "upstream_protocol", "mode", "credential_env", "max_request_body_bytes", "max_request_header_bytes", "connect_timeout", "tls_handshake_timeout", "response_header_timeout", "stream_idle_timeout"} {
+				allowed[key] = true
+			}
 		case "pestiroute.anthropic.messages":
 			allowed["model"], allowed["account_id"], allowed["credential_id"] = true, true, true
 		case "pestiroute.codex.responses":
@@ -323,11 +327,12 @@ func validateProtectedConfig(c protectedConfig) error {
 	connectors := make(map[string]struct{}, len(c.Connectors))
 	for i, item := range c.Connectors {
 		prefix := fmt.Sprintf("connectors[%d]", i)
-		if strings.TrimSpace(item.ID) == "" || item.Kind != "connector" || len(item.Protocols) != 1 || item.Protocols[0] != responsesProtocol {
+		protocol := implementationProtocol(item.Implementation)
+		if strings.TrimSpace(item.ID) == "" || item.Kind != "connector" || len(item.Protocols) != 1 || protocol != "" && item.Protocols[0] != protocol {
 			return fmt.Errorf("%s has invalid identity, kind, implementation, or protocols", prefix)
 		}
 		if item.Process != nil {
-			if item.Implementation != "pestiroute.responses.native" {
+			if item.Implementation != responsesImplementation {
 				return fmt.Errorf("%s.process is supported only for pestiroute.responses.native", prefix)
 			}
 			if err := validateProtectedProcess(prefix+".process", *item.Process); err != nil {
@@ -338,11 +343,21 @@ func validateProtectedConfig(c protectedConfig) error {
 			return fmt.Errorf("duplicate connector id %q", item.ID)
 		}
 		switch item.Implementation {
-		case "pestiroute.responses.native":
+		case responsesImplementation:
 			if item.Settings.Model != "" || item.Settings.AccountID != "" || item.Settings.CredentialID != "" {
 				return fmt.Errorf("%s.settings has fields not supported by native connector", prefix)
 			}
 			if err := validateNativeSettings(prefix+".settings", item.Settings); err != nil {
+				return err
+			}
+		case chatImplementation:
+			if item.Process != nil {
+				return fmt.Errorf("%s.process is not supported by the in-process Chat connector", prefix)
+			}
+			if item.Settings.Model != "" || item.Settings.AccountID != "" || item.Settings.CredentialID != "" || item.Settings.Profile != "" || item.Settings.RuntimeProfile != "" || item.Settings.AuthMode != "" || len(item.Settings.Capabilities) != 0 {
+				return fmt.Errorf("%s.settings has fields not supported by native Chat connector", prefix)
+			}
+			if err := validateChatSettings(prefix+".settings", item.Settings); err != nil {
 				return err
 			}
 		case "pestiroute.anthropic.messages":
@@ -373,7 +388,11 @@ func validateProtectedConfig(c protectedConfig) error {
 	for i := range c.Routes {
 		route := &c.Routes[i]
 		prefix := fmt.Sprintf("routes[%d]", i)
-		if strings.TrimSpace(route.ID) == "" || route.Protocol != responsesProtocol || (route.Mode != "native" && route.Mode != "translation") || strings.TrimSpace(route.Model) == "" || route.Adapter != "pestiroute.responses.native" {
+		adapter := responsesImplementation
+		if route.Protocol == chatProtocol {
+			adapter = chatImplementation
+		}
+		if strings.TrimSpace(route.ID) == "" || (route.Protocol != responsesProtocol && route.Protocol != chatProtocol) || (route.Mode != "native" && (route.Protocol != responsesProtocol || route.Mode != "translation")) || strings.TrimSpace(route.Model) == "" || route.Adapter != adapter {
 			return fmt.Errorf("%s has invalid identity, protocol, mode, model, or adapter", prefix)
 		}
 		if _, exists := seenRoutes[route.ID]; exists {
@@ -417,6 +436,9 @@ func validateProtectedConfig(c protectedConfig) error {
 			for _, connector := range c.Connectors {
 				if connector.ID != target.Connector {
 					continue
+				}
+				if implementationProtocol(connector.Implementation) != route.Protocol {
+					return fmt.Errorf("%s target %q implementation does not match route protocol", prefix, target.Connector)
 				}
 				if connector.Implementation == "pestiroute.anthropic.messages" {
 					translationTarget = true
@@ -598,6 +620,39 @@ func validateNativeSettings(prefix string, s nativeSettings) error {
 		}
 	}
 	return nil
+}
+
+func validateChatSettings(prefix string, s nativeSettings) error {
+	u, err := url.Parse(s.BaseURL)
+	if err != nil || u == nil || u.Host == "" || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(s.BaseURL, "#") || !strings.HasSuffix(u.EscapedPath(), "/v1/chat/completions") || (u.Scheme != "https" && (u.Scheme != "http" || !isLoopbackHost(u.Hostname()))) {
+		return fmt.Errorf("%s.base_url must be absolute HTTPS or numeric-loopback HTTP and end in /v1/chat/completions", prefix)
+	}
+	if s.UpstreamProtocol != chatProtocol || s.Mode != "native" || strings.TrimSpace(s.CredentialEnv) == "" || strings.Contains(s.CredentialEnv, "=") {
+		return fmt.Errorf("%s has invalid protocol, mode, or credential_env", prefix)
+	}
+	if value, ok := os.LookupEnv(s.CredentialEnv); !ok || value == "" {
+		return fmt.Errorf("%s credential_env is unset or empty", prefix)
+	}
+	if s.MaxRequestBodyBytes <= 0 || s.MaxRequestHeaderBytes <= 0 {
+		return fmt.Errorf("%s request limits must be positive", prefix)
+	}
+	for _, item := range []struct{ name, value string }{{"connect_timeout", s.ConnectTimeout}, {"tls_handshake_timeout", s.TLSHandshakeTimeout}, {"response_header_timeout", s.ResponseHeaderTimeout}, {"stream_idle_timeout", s.StreamIdleTimeout}} {
+		if err := positiveDuration(prefix+"."+item.name, item.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func implementationProtocol(implementation string) string {
+	switch implementation {
+	case responsesImplementation, "pestiroute.anthropic.messages", "pestiroute.codex.responses", "pestiroute.responses.local":
+		return responsesProtocol
+	case chatImplementation:
+		return chatProtocol
+	default:
+		return ""
+	}
 }
 
 func validateBudget(prefix string, b routeBudget) error {
