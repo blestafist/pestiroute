@@ -21,8 +21,10 @@ import (
 	"syscall"
 	"time"
 
+	chatadapter "github.com/blestafist/pestiroute/internal/adapter/chatcompletions"
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	anthropic "github.com/blestafist/pestiroute/internal/connector/anthropic"
+	chatconnector "github.com/blestafist/pestiroute/internal/connector/chatcompletions"
 	"github.com/blestafist/pestiroute/internal/connector/codex"
 	"github.com/blestafist/pestiroute/internal/connector/external"
 	connector "github.com/blestafist/pestiroute/internal/connector/responses"
@@ -104,6 +106,9 @@ type topologyRoute struct {
 type secret string
 
 const responsesProtocol = "openai.responses.v1"
+const chatProtocol = "openai.chat-completions.v1"
+const responsesImplementation = "pestiroute.responses.native"
+const chatImplementation = "pestiroute.chat-completions.native"
 
 // externalProcessCleanupTimeout matches the binding's 30s close/drain plus 5s
 // terminate/reap bound, with an orchestration margin shared by supervisors.
@@ -420,8 +425,11 @@ func validateTopology(c *config) error {
 	c.Credentials = make(map[string]secret)
 	for i := range c.Components {
 		component := &c.Components[i]
-		if component.ID == "" || component.Implementation != "pestiroute.responses.native" || (component.Kind != core.ComponentAdapter && component.Kind != core.ComponentConnector) {
+		if component.ID == "" || (component.Kind != core.ComponentAdapter && component.Kind != core.ComponentConnector) || (component.Implementation != responsesImplementation && component.Implementation != chatImplementation) {
 			return fmt.Errorf("component %d requires a valid id, implementation, and kind", i)
+		}
+		if component.Implementation == chatImplementation && component.Process != nil {
+			return fmt.Errorf("component %q process configuration is not supported by the in-process Chat implementation", component.ID)
 		}
 		if _, exists := components[component.ID]; exists {
 			return fmt.Errorf("duplicate component instance ID %q", component.ID)
@@ -437,7 +445,11 @@ func validateTopology(c *config) error {
 			return fmt.Errorf("connector component %q requires endpoint, credential_env, and positive limits", component.ID)
 		}
 		endpoint, err := url.Parse(component.Endpoint)
-		if err != nil || endpoint == nil || endpoint.Host == "" || endpoint.Opaque != "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.ForceQuery || strings.Contains(component.Endpoint, "#") || !strings.HasSuffix(endpoint.EscapedPath(), "/v1/responses") || (endpoint.Scheme != "https" && (endpoint.Scheme != "http" || !isLoopbackHost(endpoint.Hostname()))) {
+		pathSuffix := "/v1/responses"
+		if component.Implementation == chatImplementation {
+			pathSuffix = "/v1/chat/completions"
+		}
+		if err != nil || endpoint == nil || endpoint.Host == "" || endpoint.Opaque != "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.ForceQuery || strings.Contains(component.Endpoint, "#") || !strings.HasSuffix(endpoint.EscapedPath(), pathSuffix) || (endpoint.Scheme != "https" && (endpoint.Scheme != "http" || !isLoopbackHost(endpoint.Hostname()))) {
 			return fmt.Errorf("component %q has invalid endpoint", component.ID)
 		}
 		for _, entry := range []struct{ name, value string }{{"connect_timeout", component.ConnectTimeout}, {"tls_handshake_timeout", component.TLSTimeout}, {"response_header_timeout", component.HeaderTimeout}, {"stream_idle_timeout", component.IdleTimeout}} {
@@ -462,7 +474,11 @@ func validateTopology(c *config) error {
 	}
 	seen := make(map[core.RouteIdentity]struct{}, len(c.Routes))
 	for _, route := range c.Routes {
-		if route.Protocol != responsesProtocol || route.Mode != core.ModeNative || route.Model == "" || route.Account == "" || route.Adapter == "" || route.Connector == "" {
+		adapterImpl, connectorImpl := responsesImplementation, responsesImplementation
+		if route.Protocol == chatProtocol {
+			adapterImpl, connectorImpl = chatImplementation, chatImplementation
+		}
+		if (route.Protocol != responsesProtocol && route.Protocol != chatProtocol) || route.Mode != core.ModeNative || route.Model == "" || route.Account == "" || route.Adapter == "" || route.Connector == "" {
 			return errors.New("route requires supported protocol, native mode, model, account, adapter, and connector")
 		}
 		identity := core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: route.Protocol, Mode: route.Mode, Model: route.Model}, AccountID: route.Account}
@@ -475,6 +491,11 @@ func validateTopology(c *config) error {
 		}
 		if components[route.Connector] != core.ComponentConnector {
 			return fmt.Errorf("route connector instance %q is missing or has the wrong kind", route.Connector)
+		}
+		for _, component := range c.Components {
+			if component.ID == route.Adapter && component.Implementation != adapterImpl || component.ID == route.Connector && component.Implementation != connectorImpl {
+				return fmt.Errorf("route protocol %q does not match component implementations", route.Protocol)
+			}
 		}
 		for capability, state := range route.Capabilities {
 			if capability == "" || (state != core.Supported && state != core.Unsupported && state != core.Unknown) {
@@ -537,7 +558,13 @@ func handlerWithLifecycle(c config, ready, draining *atomic.Bool, finalize func(
 func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult)) (http.Handler, func(context.Context) error, error) {
 	return composeHandlerWithFactory(c, ready, draining, finalize, func(item topologyComponent) core.Component {
 		if item.Kind == core.ComponentAdapter {
+			if item.Implementation == chatImplementation {
+				return chatadapter.NewAdapter()
+			}
 			return adapter.NewAdapter()
+		}
+		if item.Implementation == chatImplementation {
+			return chatconnector.NewConnector()
 		}
 		if item.Implementation == "pestiroute.anthropic.messages" {
 			return anthropic.NewConnector()
@@ -697,6 +724,22 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		var cfg any
 		if item.Kind == core.ComponentAdapter {
 			cfg = adapterConfig{MaxBodyBytes: maxBody, MaxHeaderBytes: maxHeader}
+		} else if item.Implementation == chatImplementation {
+			route := connectorRoutes[item.ID]
+			capabilities := make(map[core.Capability]core.CapabilityState, len(item.Capabilities)+len(route.Capabilities))
+			for capability, state := range route.Capabilities {
+				capabilities[capability] = state
+			}
+			for capability, state := range item.Capabilities {
+				capabilities[core.Capability(capability)] = core.CapabilityState(state)
+			}
+			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(struct {
+				Endpoint              string                                   `json:"endpoint"`
+				Model                 string                                   `json:"model"`
+				AccountID             string                                   `json:"account_id"`
+				MaxRequestHeaderBytes int64                                    `json:"max_request_header_bytes"`
+				Capabilities          map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
+			}{item.Endpoint, route.Model, route.Account, item.MaxHeaderBytes, capabilities})}
 		} else if item.Implementation == "pestiroute.anthropic.messages" {
 			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(anthropicInit{Model: item.Model, AccountID: item.AccountID})}
 		} else if item.Implementation == "pestiroute.codex.responses" {
@@ -734,8 +777,9 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	credentials := make(map[string]map[string]string)
 	models := make(map[string]topologyRoute)
 	for _, item := range c.Routes {
-		if _, ok := models[item.Model]; !ok {
-			models[item.Model] = item
+		key := routeDispatchKey(item.Protocol, item.Model)
+		if _, ok := models[key]; !ok {
+			models[key] = item
 		}
 		limits := connectorLimits[item.Connector]
 		routes = append(routes, core.Route{Identity: core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: item.Protocol, Mode: item.Mode, Model: item.Model}, AccountID: item.Account}, Adapter: item.Adapter, Connector: item.Connector, CandidateGroup: item.CandidateGroup, MaxBodyBytes: limits.MaxBodyBytes, MaxHeaderBytes: limits.MaxHeaderBytes, Requirements: item.Requirements})
@@ -762,11 +806,22 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		managed, ok := component.(interface{ HTTPDoer() core.HTTPDoer })
 		if !ok {
 			for _, item := range c.Components {
-				if item.ID != route.Connector || item.Process == nil {
+				if item.ID != route.Connector || item.Process == nil && item.Implementation != chatImplementation {
 					continue
 				}
 				owner := connector.NewConnector()
-				if err := owner.Init(context.Background(), componentConfigs[route.Connector]); err != nil {
+				ownerConfig := componentConfigs[route.Connector]
+				if item.Implementation == chatImplementation {
+					connect, _ := time.ParseDuration(item.ConnectTimeout)
+					tlsHandshake, _ := time.ParseDuration(item.TLSTimeout)
+					responseHeader, _ := time.ParseDuration(item.HeaderTimeout)
+					streamIdle, _ := time.ParseDuration(item.IdleTimeout)
+					ownerConfig = core.ComponentConfig{Data: mustJSON(responsesInit{Transport: connector.Config{
+						Endpoint: item.Endpoint, ConnectTimeout: connect, TLSHandshakeTimeout: tlsHandshake,
+						ResponseHeaderTimeout: responseHeader, StreamIdleTimeout: streamIdle,
+					}, Model: route.Model, AccountID: route.Account})}
+				}
+				if err := owner.Init(context.Background(), ownerConfig); err != nil {
 					cleanup()
 					return nil, nil, fmt.Errorf("initialize external connector transport for %q: %w", route.Connector, err)
 				}
@@ -833,7 +888,8 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 	dispatchers := make(map[string]*core.Dispatcher, len(models))
 	protocolAdapters := make(map[string]core.ProtocolAdapter, len(models))
 	for _, route := range c.Routes {
-		if _, exists := dispatchers[route.Model]; exists {
+		key := routeDispatchKey(route.Protocol, route.Model)
+		if _, exists := dispatchers[key]; exists {
 			continue
 		}
 		component, _, ok := registry.Admit(context.Background(), route.Adapter)
@@ -841,8 +897,8 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			cleanup()
 			return nil, nil, fmt.Errorf("adapter %q is unavailable", route.Adapter)
 		}
-		protocolAdapters[route.Model] = component.(core.ProtocolAdapter)
-		dispatchers[route.Model] = &core.Dispatcher{
+		protocolAdapters[key] = component.(core.ProtocolAdapter)
+		dispatchers[key] = &core.Dispatcher{
 			Routes: table, Services: services, Policies: policyStore, Accounts: accountAuthorizer,
 			Accounting: accounting, Budget: route.Budget, BudgetPolicy: route.BudgetPolicy,
 			Mode:    route.Mode,
@@ -851,53 +907,69 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			OnAccountingFailure: func() { accountingFailed.Store(true); ready.Store(false) },
 		}
 	}
-	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
-		if draining.Load() {
-			http.Error(w, "gateway is shutting down", http.StatusServiceUnavailable)
-			return
-		}
-		protocolAdapter := firstAdapter(protocolAdapters)
-		if accountingFailed.Load() {
-			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, &core.GatewayError{Code: "accounting_unavailable", Category: core.CategoryUnavailable, Message: "Request accounting is unavailable"}, core.ExecutionResponse{})
-			return
-		}
-		if keyStore != nil {
-			token, ok := adapter.BearerToken(r)
-			if !ok {
-				_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, &core.GatewayError{Code: "invalid_api_key", Category: core.CategoryUnauthenticated, Message: "Invalid API key"}, core.ExecutionResponse{})
+	registerInference := func(path, protocol string) {
+		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
+			if draining.Load() {
+				http.Error(w, "gateway is shutting down", http.StatusServiceUnavailable)
 				return
 			}
-			principal, err := keyStore.Verify(r.Context(), token)
-			token = ""
-			if err != nil {
-				gatewayErr := &core.GatewayError{Code: "invalid_api_key", Category: core.CategoryUnauthenticated, Message: "Invalid API key"}
-				if !errors.Is(err, sqlite.ErrInvalidVirtualKey) && !errors.Is(err, sqlite.ErrVirtualKeyNotFound) && !errors.Is(err, sqlite.ErrVirtualKeyDisabled) && !errors.Is(err, sqlite.ErrVirtualKeyRevoked) {
-					gatewayErr = &core.GatewayError{Code: "authentication_unavailable", Category: core.CategoryUnavailable, Message: "Authentication unavailable"}
+			protocolAdapter := firstAdapterForProtocol(protocolAdapters, protocol)
+			if protocolAdapter == nil {
+				http.NotFound(w, r)
+				return
+			}
+			encode := func(pa core.ProtocolAdapter, gatewayErr *core.GatewayError, response core.ExecutionResponse) {
+				if protocol == chatProtocol {
+					_ = pa.Encode(r.Context(), core.ClientResponse{Transport: chatadapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, response)
+				} else {
+					_ = pa.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, response)
 				}
-				_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
+			}
+			if accountingFailed.Load() {
+				encode(protocolAdapter, &core.GatewayError{Code: "accounting_unavailable", Category: core.CategoryUnavailable, Message: "Request accounting is unavailable"}, core.ExecutionResponse{})
 				return
 			}
-			r = r.WithContext(core.WithTrustedPrincipal(r.Context(), principal))
-		}
-		req, gatewayErr := protocolAdapter.Decode(r.Context(), core.ClientRequest{Transport: r})
-		if gatewayErr != nil {
-			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
-			return
-		}
-		dispatch := dispatchers[req.Model]
-		if dispatch == nil {
-			gatewayErr = &core.GatewayError{Code: "unsupported_target", Category: core.CategoryUnsupportedFeature, Message: "Unsupported execution target"}
-			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
-			return
-		}
-		protocolAdapter = protocolAdapters[req.Model]
-		if gatewayErr := adapter.ValidateRequestLimits(r, int64(len(req.Payload.Body)), maxBody, maxHeader); gatewayErr != nil {
-			_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, core.ExecutionResponse{})
-			return
-		}
-		resp, gatewayErr := dispatch.Execute(r.Context(), req)
-		_ = protocolAdapter.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, resp)
-	})
+			if keyStore != nil {
+				token, ok := adapter.BearerToken(r)
+				if !ok {
+					encode(protocolAdapter, &core.GatewayError{Code: "invalid_api_key", Category: core.CategoryUnauthenticated, Message: "Invalid API key"}, core.ExecutionResponse{})
+					return
+				}
+				principal, err := keyStore.Verify(r.Context(), token)
+				token = ""
+				if err != nil {
+					gatewayErr := &core.GatewayError{Code: "invalid_api_key", Category: core.CategoryUnauthenticated, Message: "Invalid API key"}
+					if !errors.Is(err, sqlite.ErrInvalidVirtualKey) && !errors.Is(err, sqlite.ErrVirtualKeyNotFound) && !errors.Is(err, sqlite.ErrVirtualKeyDisabled) && !errors.Is(err, sqlite.ErrVirtualKeyRevoked) {
+						gatewayErr = &core.GatewayError{Code: "authentication_unavailable", Category: core.CategoryUnavailable, Message: "Authentication unavailable"}
+					}
+					encode(protocolAdapter, gatewayErr, core.ExecutionResponse{})
+					return
+				}
+				r = r.WithContext(core.WithTrustedPrincipal(r.Context(), principal))
+			}
+			req, gatewayErr := protocolAdapter.Decode(r.Context(), core.ClientRequest{Transport: r})
+			if gatewayErr != nil {
+				encode(protocolAdapter, gatewayErr, core.ExecutionResponse{})
+				return
+			}
+			key := routeDispatchKey(protocol, req.Model)
+			dispatch := dispatchers[key]
+			if dispatch == nil {
+				gatewayErr = &core.GatewayError{Code: "unsupported_target", Category: core.CategoryUnsupportedFeature, Message: "Unsupported execution target"}
+				encode(protocolAdapter, gatewayErr, core.ExecutionResponse{})
+				return
+			}
+			protocolAdapter = protocolAdapters[key]
+			if gatewayErr := adapter.ValidateRequestLimits(r, int64(len(req.Payload.Body)), maxBody, maxHeader); gatewayErr != nil {
+				encode(protocolAdapter, gatewayErr, core.ExecutionResponse{})
+				return
+			}
+			resp, gatewayErr := dispatch.Execute(r.Context(), req)
+			encode(protocolAdapter, gatewayErr, resp)
+		})
+	}
+	registerInference("/v1/responses", responsesProtocol)
+	registerInference("/v1/chat/completions", chatProtocol)
 	return mux, closeComponents, nil
 }
 
@@ -1095,12 +1167,16 @@ func (r sqliteCredentialReader) GetCredential(ctx context.Context, accountID, id
 	return core.RuntimeCredential{Value: value, ExpiresAt: credential.ExpiresAt}, nil
 }
 
-func firstAdapter(adapters map[string]core.ProtocolAdapter) core.ProtocolAdapter {
+func firstAdapterForProtocol(adapters map[string]core.ProtocolAdapter, protocol string) core.ProtocolAdapter {
 	for _, value := range adapters {
-		return value
+		if value.Protocol() == protocol {
+			return value
+		}
 	}
 	return nil
 }
+
+func routeDispatchKey(protocol, model string) string { return protocol + "\x00" + model }
 
 type adapterConfig struct {
 	MaxBodyBytes   int64 `json:"max_body_bytes"`

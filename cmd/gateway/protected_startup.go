@@ -83,10 +83,15 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 			component.Process = &external.ProcessConfig{Executable: item.Process.Executable, Args: append([]string(nil), item.Process.Args...), WorkingDirectory: item.Process.WorkingDirectory}
 		}
 		switch item.Implementation {
-		case "pestiroute.responses.native":
+		case responsesImplementation:
 			component.Endpoint, component.CredentialEnv = s.BaseURL, s.CredentialEnv
 			component.Capabilities = s.Capabilities
 			component.MaxBodyBytes, component.MaxHeaderBytes = s.MaxRequestBodyBytes, s.MaxRequestHeaderBytes
+			component.ConnectTimeout, component.TLSTimeout = s.ConnectTimeout, s.TLSHandshakeTimeout
+			component.HeaderTimeout, component.IdleTimeout = s.ResponseHeaderTimeout, s.StreamIdleTimeout
+		case chatImplementation:
+			component.Endpoint, component.CredentialEnv = s.BaseURL, s.CredentialEnv
+			component.MaxBodyBytes, component.MaxHeaderBytes = min(p.Server.MaxRequestBytes, s.MaxRequestBodyBytes), s.MaxRequestHeaderBytes
 			component.ConnectTimeout, component.TLSTimeout = s.ConnectTimeout, s.TLSHandshakeTimeout
 			component.HeaderTimeout, component.IdleTimeout = s.ResponseHeaderTimeout, s.StreamIdleTimeout
 		case "pestiroute.anthropic.messages":
@@ -112,7 +117,7 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 		}
 		components = append(components, component)
 	}
-	adapterAdded := false
+	adapterAdded := make(map[string]bool)
 	routes := make([]topologyRoute, 0, len(p.Routes))
 	for _, route := range p.Routes {
 		maxAttempts := 1
@@ -128,9 +133,13 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 				}
 			}
 		}
-		if !adapterAdded {
-			components = append(components, topologyComponent{ID: "responses-adapter", Implementation: "pestiroute.responses.native", Kind: core.ComponentAdapter})
-			adapterAdded = true
+		adapterID, adapterImpl := "responses-adapter", responsesImplementation
+		if route.Protocol == chatProtocol {
+			adapterID, adapterImpl = "chat-adapter", chatImplementation
+		}
+		if !adapterAdded[adapterID] {
+			components = append(components, topologyComponent{ID: core.InstanceID(adapterID), Implementation: adapterImpl, Kind: core.ComponentAdapter})
+			adapterAdded[adapterID] = true
 		}
 		budget := core.RouteBudget{UnknownEstimate: route.Budget.UnknownEstimate}
 		if route.Budget.ConservativeTokens != nil {
@@ -151,7 +160,7 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 				}
 			}
 			routes = append(routes, topologyRoute{Protocol: route.Protocol, Mode: mode, Model: route.Model, Account: target.Account,
-				Adapter: "responses-adapter", Connector: core.InstanceID(target.Connector), Budget: budget, BudgetPolicy: route.Budget.UnknownEstimate, RouteID: route.ID, CandidateGroup: route.ID, Requirements: requirements,
+				Adapter: core.InstanceID(adapterID), Connector: core.InstanceID(target.Connector), Budget: budget, BudgetPolicy: route.Budget.UnknownEstimate, RouteID: route.ID, CandidateGroup: route.ID, Requirements: requirements,
 				RetryMaxAttempts: maxAttempts, RetryDeadline: retryDeadline})
 		}
 	}
