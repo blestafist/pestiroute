@@ -92,7 +92,7 @@ card and authority. Later phases remain in the plan until decomposition is justi
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M8-001](tasks/M8-001.md) | READY | — | M7-013 | Bind scoped Claude execution, lifecycle, and enablement decisions | — | [Design verification](tasks/M8-001.md#verification) |
+| [M8-001](tasks/M8-001.md) | DONE | GPT-6 Luna (M8-001 worker) / ses_eb97adc7cffeJKggMCppVKni1a (reviewer) / Planner closure | M7-013 | Bind scoped Claude execution, lifecycle, and enablement decisions | Offline execution binding and ADR proposal completed in M8-BINDING.md; downstream tasks remain DRAFT pending offline scope authority and transport/beta resolution; reviewer PASS ses_eb97adc7cffeJKggMCppVKni1a | `TMPDIR=/tmp/pestiroute-m8.mIzAVt/opencode GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/claudecode` && `git diff --check`; [evidence](tasks/M8-001.md#completion-evidence) |
 | [M8-002](tasks/M8-002.md) | DRAFT | — | M8-001 | Connect public Execute to a reviewed synthetic Messages transport | — | [Execution verification](tasks/M8-002.md#verification) |
 | [M8-003](tasks/M8-003.md) | DRAFT | — | M8-002 | Prove public execution lifecycle, bounds, and accounting | — | [Lifecycle verification](tasks/M8-003.md#verification) |
 
