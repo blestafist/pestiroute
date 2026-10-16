@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -95,6 +96,69 @@ complete:
 	}
 	if !body.closed {
 		t.Fatal("successful response body was not closed")
+	}
+}
+
+func TestExecuteToolHistoryDispatchesSyntheticMessages(t *testing.T) {
+	request := core.ExecutionRequest{Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: []byte(`{"model":"synthetic-model","input":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"one\"}"},{"type":"function_call","call_id":"call_2","name":"lookup","arguments":"{\"q\":\"two\"}"},{"type":"function_call_output","call_id":"call_1","output":"one"},{"type":"function_call_output","call_id":"call_2","output":"two"}]}`)}}
+	calls := 0
+	c := initializedClaudeConnector(t)
+	response, ge := c.Execute(context.Background(), request, core.AttemptScope{Mode: core.ModeTranslation}, core.InvocationServices{
+		Transport: offlineFakeDoer(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if r.URL.Host != "api.anthropic.invalid" || r.Header.Get("anthropic-beta") != "synthetic-beta" {
+				t.Fatalf("unexpected synthetic target: %s %v", r.URL, r.Header)
+			}
+			var got messagesRequest
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Messages) != 2 || len(got.Messages[0].Content) != 2 || got.Messages[0].Content[1].ID != "call_2" || len(got.Messages[1].Content) != 2 || got.Messages[1].Content[0].ToolUseID != "call_1" {
+				t.Fatalf("dispatched tool history = %+v", got.Messages)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(streamStart + "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\ndata: {\"type\":\"message_stop\"}\n\n"))}, nil
+		}),
+		Credentials: fixtureCredentials(`{"access_token":"synthetic-access"}`),
+	})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer response.Stream.Close()
+	for range 8 {
+		frame, err := response.Stream.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameComplete {
+			if calls != 1 || frame.Complete.Outcome != core.OutcomeSucceeded {
+				t.Fatalf("dispatches=%d completion=%+v", calls, frame.Complete)
+			}
+			return
+		}
+	}
+	t.Fatal("synthetic tool history stream did not complete")
+}
+
+func TestExecuteRejectsInvalidToolHistoryBeforeDispatch(t *testing.T) {
+	calls := 0
+	c := initializedClaudeConnector(t)
+	call := `{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"}`
+	result := `{"type":"function_call_output","call_id":"c1","output":"ok"}`
+	for _, input := range []string{
+		`[` + result + `]`,
+		`[` + call + `]`,
+		`[` + call + `,{"type":"message","role":"user","content":"interleaved"}]`,
+		`[` + call + `,{"type":"function_call","call_id":"c2","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"c1","output":"ok"},{"type":"function_call","call_id":"c3","name":"lookup","arguments":"{}"}]`,
+	} {
+		request := sampleExecuteRequest()
+		request.Payload.Body = []byte(`{"model":"synthetic-model","input":` + input + `}`)
+		_, ge := c.Execute(context.Background(), request, core.AttemptScope{Mode: core.ModeTranslation}, core.InvocationServices{
+			Transport:   offlineFakeDoer(func(*http.Request) (*http.Response, error) { calls++; return nil, nil }),
+			Credentials: fixtureCredentials(`{"access_token":"synthetic-access"}`),
+		})
+		if ge == nil || ge.Code != "unsupported_feature" || ge.Category != core.CategoryUnsupportedFeature || calls != 0 {
+			t.Fatalf("Execute error=%+v dispatches=%d, want pre-dispatch unsupported_feature", ge, calls)
+		}
 	}
 }
 
