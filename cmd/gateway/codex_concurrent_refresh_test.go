@@ -420,11 +420,11 @@ func TestCodexAuthUncertaintyPersistenceFailureAndRestart(t *testing.T) {
 		t.Fatalf("failed reauthentication start: %v", err)
 	}
 	time.Sleep(1100 * time.Millisecond)
-	if _, err = coordinator.Continue(context.Background(), failed.ID); err != nil {
+	if _, err = coordinator.Continue(context.Background(), failed.ID, ""); err != nil {
 		t.Fatalf("failed reauthentication poll: %v", err)
 	}
 	time.Sleep(1100 * time.Millisecond)
-	if _, err = coordinator.Continue(context.Background(), failed.ID); !errors.Is(err, core.ErrAuthPersistence) {
+	if _, err = coordinator.Continue(context.Background(), failed.ID, ""); !errors.Is(err, core.ErrAuthPersistence) {
 		t.Fatalf("failed reauthentication persistence error=%v", err)
 	}
 	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE account_id='account-a' AND kind='refresh' AND lifecycle='uncertain'`).Scan(&quarantined); err != nil || quarantined != 1 {
@@ -454,7 +454,7 @@ func TestCodexAuthUncertaintyPersistenceFailureAndRestart(t *testing.T) {
 	if _, err = credentials.Update(context.Background(), stored); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = coordinator.Continue(context.Background(), stale.ID); !errors.Is(err, core.ErrAuthRevisionMismatch) {
+	if _, err = coordinator.Continue(context.Background(), stale.ID, ""); !errors.Is(err, core.ErrAuthRevisionMismatch) {
 		t.Fatalf("stale reauthentication error=%v", err)
 	}
 	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE account_id='account-a' AND kind='refresh' AND lifecycle='uncertain'`).Scan(&quarantined); err != nil || quarantined != 1 {
@@ -465,11 +465,11 @@ func TestCodexAuthUncertaintyPersistenceFailureAndRestart(t *testing.T) {
 		t.Fatalf("explicit reauthentication start: %v", err)
 	}
 	time.Sleep(1100 * time.Millisecond)
-	if _, err = coordinator.Continue(context.Background(), started.ID); err != nil {
+	if _, err = coordinator.Continue(context.Background(), started.ID, ""); err != nil {
 		t.Fatalf("explicit reauthentication continuation: %v", err)
 	}
 	time.Sleep(1100 * time.Millisecond)
-	if _, err = coordinator.Continue(context.Background(), started.ID); err != nil {
+	if _, err = coordinator.Continue(context.Background(), started.ID, ""); err != nil {
 		t.Fatalf("explicit reauthentication exchange: %v", err)
 	}
 	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE account_id='account-a' AND kind='refresh' AND lifecycle='uncertain'`).Scan(&quarantined); err != nil || quarantined != 0 {
@@ -531,7 +531,7 @@ func TestCodexAuthUncertaintyRestartConsumesClaimedContinuation(t *testing.T) {
 	if err = db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = coordinator.Continue(context.Background(), started.ID); !errors.Is(err, core.ErrAuthUnavailable) {
+	if _, err = coordinator.Continue(context.Background(), started.ID, ""); !errors.Is(err, core.ErrAuthUnavailable) {
 		t.Fatalf("claimed continuation was replayable after restart: %v", err)
 	}
 	if calls.Load() != 1 {

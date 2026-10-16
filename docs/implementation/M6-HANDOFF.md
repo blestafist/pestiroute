@@ -58,8 +58,9 @@ generation replay is introduced.
 
 DEC-019's additive `AuthRequest.CallbackInput` is a later contract/specification
 change, not part of the shipped M6 Go/protobuf implementation. Generic Core,
-coordinator and IPC field plumbing remains pending M7-016; do not infer it from
-this M6 completion evidence or the synchronized M6 binding text.
+coordinator/admin and IPC field plumbing is implemented by M7-016 in the current
+repository; do not infer it from M6 completion evidence. Connector-specific
+OAuth PKCE remains pending M7-010.
 
 The older M4-036, M4-041, M5.1-049, M5.1-051 and M5.2-025 live gates retain their
 existing statuses, authority requirements and evidence ceilings in

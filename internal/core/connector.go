@@ -44,6 +44,8 @@ type AuthRequest struct {
 	AccountID string
 	Action    string
 	State     []byte
+	// CallbackInput is transient untrusted input for continue, separate from State.
+	CallbackInput string
 }
 
 type AuthResult struct {

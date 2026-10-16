@@ -123,7 +123,7 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 	if len(ciphertext) == 0 || strings.Contains(string(ciphertext), "private-opaque-state") {
 		t.Fatal("interactive state was not protected at rest")
 	}
-	advanced, err := coordinator.Continue(ctx, session.ID)
+	advanced, err := coordinator.Continue(ctx, session.ID, "")
 	if err != nil || advanced.ExpiresAt != session.ExpiresAt {
 		t.Fatalf("continue advance %#v err=%v", advanced, err)
 	}
@@ -133,7 +133,7 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 	if strings.Contains(string(ciphertext), "private-next-state") {
 		t.Fatal("advanced opaque state persisted in plaintext")
 	}
-	if _, err = coordinator.Continue(ctx, session.ID); err != nil {
+	if _, err = coordinator.Continue(ctx, session.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err = store.GetAuthSession(ctx, session.ID, time.Now()); !errors.Is(err, core.ErrAuthUnavailable) {
@@ -178,7 +178,7 @@ func TestSQLiteAuthCoordinatorStoreEndToEnd(t *testing.T) {
 	if _, err = credentials.Update(ctx, row); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = coordinator.Continue(ctx, staleSession.ID); !errors.Is(err, core.ErrAuthRevisionMismatch) {
+	if _, err = coordinator.Continue(ctx, staleSession.ID, ""); !errors.Is(err, core.ErrAuthRevisionMismatch) {
 		t.Fatalf("stale session error=%v", err)
 	}
 	if err = db.QueryRow(`SELECT COUNT(*) FROM auth_sessions WHERE id=? AND lifecycle='consumed' AND ciphertext IS NULL`, staleSession.ID).Scan(&rowCount); err != nil || rowCount != 1 {
@@ -275,7 +275,7 @@ func TestSQLiteAuthCoordinatorQuarantineCanRecoverThroughInteractiveAuth(t *test
 	if err != nil {
 		t.Fatalf("Start could not begin explicit reauthentication: %v", err)
 	}
-	if _, err := coordinator.Continue(ctx, authSession.ID); err != nil {
+	if _, err := coordinator.Continue(ctx, authSession.ID, ""); err != nil {
 		t.Fatalf("Continue could not replace quarantined credentials: %v", err)
 	}
 	if quarantined, err := sessions.HasQuarantinedRefresh(ctx, "account"); err != nil || quarantined {

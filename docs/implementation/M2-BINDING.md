@@ -125,9 +125,10 @@ type AuthResult struct { Supported bool; State string; NextAction string; Creden
 separate from runtime-loaded opaque `State`, and is never logged or persisted.
 It is empty on `start`/`refresh`. The generic Connector alone parses it under
 the strict redirect/query/state rules in [DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input)
-and [CONTRACT](CONTRACT.md#connector-contract). The Core/coordinator Go field
-and transport implementation remain pending [M7-016](tasks/M7-016.md); this
-binding update does not claim those source changes exist.
+and [CONTRACT](CONTRACT.md#connector-contract). The generic Core/coordinator
+field, admin input, and IPC transport plumbing are implemented by
+[M7-016](tasks/M7-016.md). Connector-specific OAuth PKCE remains pending
+[M7-010](tasks/M7-010.md).
 
 Missing capability entries mean `unknown`; only explicit `supported` satisfies
 a request, and matching is exact across Adapter and selected Connector scope.

@@ -72,8 +72,9 @@ each invoked attempt one-time: invalid callback attempts and ambiguous outcomes
 consume the claimed continuation and are not retried. Stale or consumed sessions
 fail before Connector work.
 
-The generic `AuthRequest` field, coordinator support, and protobuf/IPC mapping
-are specification-only here and remain pending [M7-016](tasks/M7-016.md).
+The generic `AuthRequest` field, coordinator/admin input, and protobuf/IPC
+mapping are implemented by [M7-016](tasks/M7-016.md). Connector-specific OAuth
+PKCE remains pending [M7-010](tasks/M7-010.md).
 
 Start and Continue return the optional `UserAction` on the transient
 `AuthSession` result, separately from its runtime-owned session handle and

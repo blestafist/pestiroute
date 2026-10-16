@@ -164,9 +164,10 @@ parameter. It compares the state value after exactly one strict query-decoding
 pass, byte-for-byte with expected state in protected continuation state before
 exchanging, and uses the exact configured URI in the exchange. Invalid
 callbacks fail closed without reflecting or logging input, code, or provider
-error details. Go Core/coordinator and protobuf/IPC field implementation remains
-pending [M7-016](tasks/M7-016.md); this contract update does not claim it is
-implemented. See [DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input).
+error details. Generic Go Core/coordinator, admin-input, and protobuf/IPC field
+plumbing was implemented by [M7-016](tasks/M7-016.md); Connector-specific OAuth
+PKCE implementation remains pending [M7-010](tasks/M7-010.md). See
+[DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input).
 
 `AuthResult.CredentialExpiresAt *time.Time` is optional absolute expiry metadata
 for the candidate credential generation, derived by the Connector from its

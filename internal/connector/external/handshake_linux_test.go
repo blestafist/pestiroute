@@ -439,10 +439,10 @@ func (s *handshakeChild) Authenticate(stream grpc.BidiStreamingServer[gen.Record
 	if err != nil {
 		return err
 	}
-	if req.AccountId != "account" || (req.Action != "start" && req.Action != "continue" && req.Action != "refresh") {
+	if req.AccountId != "account" || (req.Action != "start" && req.Action != "continue" && req.Action != "refresh") || req.Action != "continue" && req.CallbackInput != "" {
 		return status.Error(codes.InvalidArgument, "invalid auth request")
 	}
-	if s.mode == "auth-continue" && (len(req.State) != (90<<10)+2 || !bytes.Equal(req.State[:2], []byte{0, 0xff})) {
+	if s.mode == "auth-continue" && (len(req.State) != (90<<10)+2 || !bytes.Equal(req.State[:2], []byte{0, 0xff}) || req.CallbackInput != "https://example.test/callback?code=synthetic") {
 		return status.Error(codes.InvalidArgument, "invalid opaque continuation")
 	}
 	if s.mode == "auth-stall" {

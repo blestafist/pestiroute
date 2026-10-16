@@ -101,9 +101,9 @@ DEC-019's `AuthRequest.CallbackInput` is part of the existing complete typed
 bound is validated by the runtime before dispatch; protobuf transport preserves
 the field exactly and does not parse or normalize callback URLs. The field is
 transient: implementations must not persist or log it. The Go request field,
-coordinator plumbing, and protobuf field mapping are not present in the M6
-baseline and are pending [M7-016](tasks/M7-016.md); this specification does not
-claim deployed wire support.
+coordinator/admin plumbing, and protobuf field mapping were implemented by
+[M7-016](tasks/M7-016.md) after the M6 baseline. This records repository
+implementation, not production deployment or provider interoperability.
 
 Every reverse call carries an unguessable invocation ID plus process epoch and monotonically unique call ID. Host validates all three against a live invocation; it obtains selected account and instance from its own invocation record, never from child-supplied account fields. Calls from stale epochs, completed/cancelled invocations, unknown calls, or mismatched account authority fail closed. Close/cancel revokes authority before acknowledgement; late results are discarded. Callback deadlines are bounded by the parent invocation deadline and service-specific limits. At most 8 outstanding callbacks per invocation and 32 per process; cancellation/control uses a separate reserved control path and progresses while data queues are full.
 

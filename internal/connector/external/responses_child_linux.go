@@ -221,6 +221,9 @@ func (s *ConnectorChild) Authenticate(stream grpc.BidiStreamingServer[gen.Record
 	if err != nil {
 		return err
 	}
+	if value.Action != "continue" && value.CallbackInput != "" {
+		return ipc.ErrMalformed
+	}
 	ctx, cancel := context.WithCancel(stream.Context())
 	if err = s.flow.RegisterInvocation(invocation, cancel); err != nil {
 		cancel()

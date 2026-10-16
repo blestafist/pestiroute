@@ -47,7 +47,7 @@ func TestM6AuthenticateRoundTripsOpaqueContinuationAndCandidates(t *testing.T) {
 				t.Fatal("opaque continuation state changed")
 			}
 		}},
-		{"auth-continue", core.AuthRequest{AccountID: "account", Action: "continue", State: append([]byte{0, 0xff}, make([]byte, 90<<10)...)}, func(t *testing.T, got core.AuthResult) {
+		{"auth-continue", core.AuthRequest{AccountID: "account", Action: "continue", State: append([]byte{0, 0xff}, make([]byte, 90<<10)...), CallbackInput: "https://example.test/callback?code=synthetic"}, func(t *testing.T, got core.AuthResult) {
 			want := append([]byte{0, 0xff}, make([]byte, 70<<10)...)
 			if !got.Supported || got.NextAction != "" || !bytes.Equal(got.Credentials["access"], want) || got.CredentialExpiresAt == nil || !got.CredentialExpiresAt.Equal(time.Date(2030, 2, 3, 3, 5, 6, 7, time.UTC)) {
 				t.Fatalf("continue candidate result did not round-trip: supported=%v next=%q keys=%v expiry=%v", got.Supported, got.NextAction, mapKeys(got.Credentials), got.CredentialExpiresAt)
@@ -96,7 +96,7 @@ func TestM6AuthenticateRejectsInvalidAndUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, req := range []core.AuthRequest{{AccountID: "account", Action: "bogus"}, {Action: "start"}} {
+	for _, req := range []core.AuthRequest{{AccountID: "account", Action: "bogus"}, {Action: "start"}, {AccountID: "account", Action: "start", CallbackInput: "secret"}, {AccountID: "account", Action: "refresh", CallbackInput: "secret"}} {
 		if _, gatewayErr := c.Authenticate(context.Background(), req, core.InvocationServices{}); gatewayErr == nil || gatewayErr.Category != core.CategoryInvalidRequest {
 			t.Fatalf("invalid request was not rejected: %+v", gatewayErr)
 		}

@@ -137,7 +137,10 @@ func (c *AuthCoordinator) Start(ctx context.Context, accountID string) (AuthSess
 	return session, nil
 }
 
-func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthSession, error) {
+func (c *AuthCoordinator) Continue(ctx context.Context, sessionID, callbackInput string) (AuthSession, error) {
+	if callbackInput != "" && !printableASCII(callbackInput, 1, 4096, true) {
+		return AuthSession{}, ErrAuthUnavailable
+	}
 	session, state, err := c.store.GetAuthSession(ctx, sessionID, c.clock())
 	if err != nil {
 		return AuthSession{}, ErrAuthUnavailable
@@ -166,6 +169,14 @@ func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthS
 		}
 		return AuthSession{}, err
 	}
+	if services.Logger != nil {
+		secrets := newSecretSet(nil)
+		if callbackInput != "" {
+			secrets.add([]byte(callbackInput))
+		}
+		secrets.add(state)
+		services.Logger = slog.New(redactingHandler{next: services.Logger.Handler(), secrets: secrets})
+	}
 	if account.ConnectorID != session.ConnectorID || creds.Revision != session.Revision {
 		if c.discardSession(session) != nil {
 			return AuthSession{}, ErrAuthPersistence
@@ -188,7 +199,7 @@ func (c *AuthCoordinator) Continue(ctx context.Context, sessionID string) (AuthS
 		_ = c.discardSession(session)
 		return AuthSession{}, err
 	}
-	result, callErr := connector.Authenticate(ctx, AuthRequest{AccountID: account.ID, Action: "continue", State: state}, services)
+	result, callErr := connector.Authenticate(ctx, AuthRequest{AccountID: account.ID, Action: "continue", State: state, CallbackInput: callbackInput}, services)
 	if callErr != nil || !result.Supported || !validNextAction(result.NextAction) {
 		if c.discardSession(session) != nil {
 			return AuthSession{}, ErrAuthPersistence
@@ -408,8 +419,13 @@ func (c *AuthCoordinator) lockAccount(ctx context.Context, id string) (func(), e
 func validNextAction(action string) bool { return action == "" || action == "continue" }
 func validAuthUserAction(result AuthResult) bool {
 	action := result.UserAction
-	if action == nil || !result.Supported || result.NextAction != "continue" || action.PollInterval <= 0 ||
-		!printableASCII(action.VerificationURI, 1, 2048, false) || !printableASCII(action.UserCode, 1, 256, true) {
+	if action == nil || !result.Supported || result.NextAction != "continue" ||
+		!printableASCII(action.VerificationURI, 1, 2048, false) {
+		return false
+	}
+	deviceCode := printableASCII(action.UserCode, 1, 256, true) && action.PollInterval > 0
+	browserRedirect := action.UserCode == "" && action.PollInterval == 0
+	if !deviceCode && !browserRedirect {
 		return false
 	}
 	u, err := url.Parse(action.VerificationURI)
