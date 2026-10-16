@@ -105,6 +105,6 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M9-001](tasks/M9-001.md) | READY | — | — | Bind native Chat adapter/Connector, framing, capabilities, and protected routing | — | [Binding verification](tasks/M9-001.md#verification) |
+| [M9-001](tasks/M9-001.md) | DONE | GPT-6 Luna (M9-001 worker) | — | Bind native Chat adapter/Connector, framing, capabilities, and protected routing | [Native Chat Completions binding](M9-BINDING.md) | [Binding verification](tasks/M9-001.md#verification) |
 | [M9-002](tasks/M9-002.md) | DRAFT | — | M9-001 | Implement native Chat adapter and fake-backend transport slice | — | [Slice verification](tasks/M9-002.md#verification) |
 | [M9-003](tasks/M9-003.md) | DRAFT | — | M9-002 | Expose protected Chat endpoint with explicit protocol routing and accounting | — | [Gateway verification](tasks/M9-003.md#verification) |
