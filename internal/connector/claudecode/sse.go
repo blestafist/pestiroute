@@ -338,7 +338,7 @@ func (s *messagesStream) consume(e sseEvent) error {
 				Input    json.RawMessage `json:"input"`
 			} `json:"content_block"`
 		}
-		if !s.started || s.block || s.stopped || json.Unmarshal(e.data, &v) != nil || v.Index == nil || *v.Index != s.next || *v.Index >= 64 {
+		if !s.started || s.block || s.stopped || s.stopReason != "" || json.Unmarshal(e.data, &v) != nil || v.Index == nil || *v.Index != s.next || *v.Index >= 64 {
 			return errors.New("bad block start")
 		}
 		s.index = *v.Index
@@ -447,6 +447,18 @@ func (s *messagesStream) consume(e sseEvent) error {
 		if !s.block || json.Unmarshal(e.data, &v) != nil || v.Index == nil || *v.Index != s.index {
 			return errors.New("bad block stop")
 		}
+		if s.tool {
+			arguments := s.arguments.String()
+			if arguments == "" {
+				// Messages starts tool blocks with {}, even when no deltas follow.
+				arguments = "{}"
+				s.arguments.WriteString(arguments)
+			}
+			var object map[string]json.RawMessage
+			if !uniqueJSON([]byte(arguments)) || json.Unmarshal([]byte(arguments), &object) != nil || object == nil {
+				return errors.New("invalid tool arguments")
+			}
+		}
 		s.pending = append(s.pending, s.finishItem())
 		s.block = false
 		s.next++
@@ -459,7 +471,7 @@ func (s *messagesStream) consume(e sseEvent) error {
 				Output *int64 `json:"output_tokens"`
 			} `json:"usage"`
 		}
-		if !s.started || s.block || json.Unmarshal(e.data, &v) != nil || badCount(v.Usage.Output) || v.Delta.Stop == nil || s.stopReason != "" {
+		if !s.started || s.block || json.Unmarshal(e.data, &v) != nil || badCount(v.Usage.Output) || v.Delta.Stop == nil || *v.Delta.Stop == "" || s.stopReason != "" {
 			return errors.New("bad message_delta")
 		}
 		s.output = v.Usage.Output

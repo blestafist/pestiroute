@@ -298,15 +298,12 @@ func contentBlocks(raw json.RawMessage) ([]textBlock, error) {
 					return nil, fmt.Errorf("image field")
 				}
 			}
-			var image struct {
-				URL string `json:"url"`
-			}
-			var imageFields map[string]json.RawMessage
-			if json.Unmarshal(f["image_url"], &imageFields) != nil || imageFields == nil || len(imageFields) != 1 || json.Unmarshal(imageFields["url"], &image.URL) != nil {
+			var imageURL string
+			if json.Unmarshal(f["image_url"], &imageURL) != nil {
 				return nil, fmt.Errorf("image")
 			}
-			media, data, ok := strings.Cut(strings.TrimPrefix(image.URL, "data:"), ";base64,")
-			if !ok || !strings.HasPrefix(image.URL, "data:") || (media != "image/jpeg" && media != "image/png" && media != "image/gif" && media != "image/webp") {
+			media, data, ok := strings.Cut(strings.TrimPrefix(imageURL, "data:"), ";base64,")
+			if !ok || !strings.HasPrefix(imageURL, "data:") || (media != "image/jpeg" && media != "image/png" && media != "image/gif" && media != "image/webp") {
 				return nil, fmt.Errorf("image URL")
 			}
 			decoded, err := base64.StdEncoding.DecodeString(data)

@@ -37,6 +37,100 @@ func TestTranslateMessagesRequest(t *testing.T) {
 	}
 }
 
+func TestTranslateResponsesImageURL(t *testing.T) {
+	request := core.ExecutionRequest{Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: []byte(`{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,aW1hZ2U="}]}]}`)}}
+	out, ge := translateRequest(request, "offline-token", "synthetic-beta")
+	if ge != nil {
+		t.Fatalf("Responses image URL rejected: %v", ge)
+	}
+	var wire messagesRequest
+	if err := json.Unmarshal(out.Body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	source := wire.Messages[0].Content[0].Source
+	if source == nil || source.Type != "base64" || source.MediaType != "image/png" || source.Data != "aW1hZ2U=" {
+		t.Fatalf("image source changed: %+v", source)
+	}
+}
+
+func TestSSERejectsContentAfterStopReason(t *testing.T) {
+	stream := streamStart +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":0}}\n\n" +
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"late\"}}\n\n" +
+		"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+	assertInvalidStream(t, stream)
+}
+
+func TestSSERejectsEmptyStopReason(t *testing.T) {
+	stream := streamStart +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"\"},\"usage\":{\"output_tokens\":0}}\n\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":0}}\n\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+	assertInvalidStream(t, stream)
+}
+
+func TestSSEToolArgumentsMustBeJSONObject(t *testing.T) {
+	for _, arguments := range []string{`{"incomplete":`, `[]`, `null`, `{"x":1,"x":2}`} {
+		t.Run(arguments, func(t *testing.T) {
+			data, _ := json.Marshal(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "input_json_delta", "partial_json": arguments}})
+			stream := streamStart +
+				"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_offline\",\"name\":\"lookup\",\"input\":{}}}\n\n" +
+				"data: " + string(data) + "\n\n" +
+				"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+				"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":3}}\n\n" +
+				"data: {\"type\":\"message_stop\"}\n\n"
+			assertInvalidStream(t, stream)
+		})
+	}
+}
+
+func TestSSEToolWithoutArgumentDeltas(t *testing.T) {
+	stream := streamStart +
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_offline\",\"name\":\"lookup\",\"input\":{}}}\n\n" +
+		"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":3}}\n\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+	s := newMessagesStream(io.NopCloser(strings.NewReader(stream)))
+	defer s.Close()
+	frames := collect(s)
+	if len(frames) == 0 || frames[len(frames)-1].Complete == nil || frames[len(frames)-1].Complete.Outcome != core.OutcomeSucceeded {
+		t.Fatal("empty tool argument object did not complete")
+	}
+	var body strings.Builder
+	for _, frame := range frames {
+		if frame.Body != nil {
+			body.Write(frame.Body.Data)
+		}
+	}
+	names, payloads := responseEvents(t, body.String())
+	for i, name := range names {
+		if name == "response.function_call_arguments.done" && payloads[i]["arguments"] == "{}" {
+			return
+		}
+	}
+	t.Fatal("empty initial tool input was not preserved as {}")
+}
+
+func assertInvalidStream(t *testing.T, stream string) {
+	t.Helper()
+	s := newMessagesStream(io.NopCloser(strings.NewReader(stream)))
+	defer s.Close()
+	frames := collect(s)
+	if len(frames) == 0 {
+		t.Fatal("stream emitted no frames")
+	}
+	last := frames[len(frames)-1]
+	if last.Type != core.FrameComplete || last.Complete.Outcome != core.OutcomeFailed || last.Complete.Error == nil {
+		t.Fatalf("invalid stream was not failed: %+v", last)
+	}
+	for _, frame := range frames {
+		if frame.Body != nil && strings.Contains(string(frame.Body.Data), "response.completed") {
+			t.Fatal("invalid stream emitted successful completion")
+		}
+	}
+}
+
 func TestSSEFixtures(t *testing.T) {
 	for _, name := range []string{"stream-text.sse", "stream-tools.sse", "stream-thinking.sse", "stream-usage.sse"} {
 		t.Run(name, func(t *testing.T) {
