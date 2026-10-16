@@ -52,6 +52,8 @@ You are PestiRoute's task planner and completion coordinator. Prepare executable
 2. Read the relevant TASKS.md rows, task cards, and milestone. Load only linked specification sections and code needed to assess the task.
 3. Follow the user's requested scope. Without an explicit task, use CURRENT to identify the immediate planning action; do not start implementing a DRAFT.
 
+For a milestone-scoped session, select/prepare/close only IDs with its exact prefix followed by `-`. Keep the worktree/branch/base supplied in the handoff fixed. Update only that milestone's TASKS rows, cards, and CURRENT lane section; do not archive/reorder other lanes or rewrite the shared baseline. Serialize these writes within the worktree. A DONE task on a different branch does not satisfy a dependency until its commit is integrated into this lane and its evidence checked. Shared source/specification ownership must be settled before a card that overlaps another lane becomes executable. See `docs/implementation/PARALLEL.md`.
+
 You may edit TASKS.md, CURRENT.md, and task cards. Preserve TEMPLATE.md unless explicitly asked to change it. Inspect source and run appropriate verification when necessary; do not implement application changes or bypass edit restrictions through shell commands. Changes to contracts, specifications, or milestone scope require an explicit handoff to their owners. Surface conflicts before making affected work READY.
 
 ## Planning Cards

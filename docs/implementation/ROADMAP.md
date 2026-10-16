@@ -15,6 +15,8 @@ Work progresses from transparent request path to managed runtime under the [proj
 | M5.2 | Local Runtime Connectors: Ollama, vLLM, llama.cpp | Separate spike and estimate per runtime |
 | M6 | External connector process runtime | 8–15 days after IPC spike |
 | M7 | Claude Code subscription connector research and bounded offline candidates | Research spike plus separately gated offline candidates; no live support claim |
+| M8 | Claude Code execution and gateway integration | Design/execution slices, then separately gated live evidence |
+| M9 | Native Chat Completions client compatibility | Independent adapter/Connector and protected gateway slices |
 
 M3 completes a minimally viable native version for standalone use. M4 validates the core architectural assumption about translation. Support for external third-party plugins appears after M6.
 
@@ -112,6 +114,38 @@ Do not add provider branches or Claude-specific payload types to Core, change th
 **Done when:** a research note pins exact source/client versions and licensing; the auth/account and wire behavior are mapped with evidence and unknowns; a capability matrix distinguishes supported, unsupported, and unknown; retry/statefulness and cancellation constraints are explicit; and a reviewed GO/NO-GO decision records any justified implementation scope and estimate, or concrete blockers and revisit conditions. The M7-005 evidence-bound disposition is **NO-GO for implementation now**: source/reuse authority and backend protocol/capabilities are not established, and no legal determination is made. Revisit only after a separately authorized and reviewed evidence path resolves sufficient blockers; no implementation task is created by this disposition. A NO-GO with evidence and rationale completes the research milestone, not a working Connector.
 
 See the [M7 task registry](TASKS.md#m7--claude-code-subscription-connector-research). By [DEC-018](../project/DECISIONS.md#dec-018--authorize-bounded-offline-m7-candidate-work), accountable user direction resolves the M7-005 revisit condition only for offline synthetic implementation and testing of the already registered M7-009 through M7-013 candidates; this does not expand M7 or overturn M7-005's factual evidence-bound NO-GO. M7-007's specification and M7-008's synthetic fixtures predate this explicit authorization; their earlier completion is not represented as previously authorized implementation. Candidates retain their registered dependencies, status and review. No live provider/network calls, login, real credential handling or persistence, traffic capture, binary reverse engineering, legal determination, or production routing is authorized. Every capability remains `Unknown`; the connector stays non-routable and default-gated. Live access and any later routing/support claim require separate authority, evidence and review.
+
+## M8 · Claude Code Execution and Gateway Integration
+
+[Plan and acceptance](M8-CLAUDE-INTEGRATION.md): connect the M7 candidate to scoped
+execution, prove public IO/lifecycle guarantees, complete agent semantics, and
+integrate protected gateway routing only within reviewed enablement gates.
+Separate live authorization and evidence remain prerequisites to a production
+support claim. M7's NO-GO findings and DEC-018/019 ceilings are not overturned by
+planning. M8-001 audits the binding and required decisions before implementation.
+
+**Done when:** a reviewed capability matrix and operator procedure are supported
+by public execution, protected gateway, failure/accounting, and applicable live
+evidence; default disablement and explicit enabling are tested. Offline completion
+alone does not satisfy unresolved live acceptance. No provider logic enters Core.
+
+## M9 · Chat Completions Client Compatibility
+
+[Plan and acceptance](M9-CHAT-COMPLETIONS.md): expose a protected native
+`POST /v1/chat/completions` path with its own adapter and compatible Connector.
+Start with fake-backend JSON/SSE, then tools/multi-round behavior, usage, limits,
+and a reproducible client smoke. Chat-to-Responses translation, UI, and new
+provider OAuth are outside this milestone.
+
+**Done when:** native JSON/SSE bytes and IDs survive the protected gateway,
+first chunks arrive before completion, disconnects cancel upstream, key/policy
+and capability checks precede dispatch, usage settles once, and deterministic
+agent workflows plus existing Responses regressions pass. Record the exact
+supported subset; native transport is not a universal provider support claim.
+
+M8 and M9 can proceed in [independent OpenCode worktrees](PARALLEL.md), starting
+with M8-001 and M9-001. They have no cross-milestone live dependency. Shared
+specifications and gateway integration need explicit ownership and serial review.
 
 ## First Vertical Slice
 

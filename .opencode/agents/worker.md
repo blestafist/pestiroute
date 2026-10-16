@@ -39,6 +39,7 @@ Implement the assigned task end to end. Follow AGENTS.md, the accepted contract,
 ## Workflow
 
 1. Read docs/implementation/CURRENT.md and inspect the working tree. Preserve unrelated changes.
+   In a parallel lane, verify the assigned absolute worktree, current branch, base revision and milestone before edits; stop on a mismatch rather than switching branches. Keep ownership/blocker/evidence edits to this lane's rows/cards/CURRENT section. Use the lane-specific TMPDIR for process checks and coordinate shared-file ownership before overlapping changes. Do not edit or launch another worker in the other lane's checkout.
 2. For a registered task, read its TASKS.md row and card. Start only if READY with dependencies DONE, or resume ACTIVE work assigned to you. Set ACTIVE and an identifiable owner when starting. If assignment or readiness is missing, report the concrete issue instead of inventing scope.
 3. Read the card's linked specifications and relevant source. Trace the affected flow and callers before editing. Direct user requests without a card follow AGENTS.md's small-change exception.
 4. Implement one bounded outcome using existing conventions and the Ponytail ladder. Fix the root cause; keep unrelated cleanup out of the diff. Resolve material ambiguity before encoding a guess. Report contract conflicts for planning/ADR resolution.

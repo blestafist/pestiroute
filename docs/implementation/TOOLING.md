@@ -205,3 +205,18 @@ References: [OpenCode v2 migration](https://opencode.ai/v2/docs/migrate-v1/), [c
 ## M6 tooling gate
 
 [M6-EXTERNAL](M6-EXTERNAL.md#tooling-and-retained-gates) needs no new MCP/plugin. Reuse Context7/gopls and shell/Git/Go. M6-003/004 establish actual prototype-tool availability and exact pinned dependencies; M6-005 selects the production IPC stack and M6-006 fixes reproducible generation/build commands. Do not install or assume a speculative gRPC toolchain before its card is ready. Deterministic child-process/loopback tests remain independent of provider credentials, models and GPU access.
+
+## Parallel milestone sessions
+
+The [parallel OpenCode workflow](PARALLEL.md) adds milestone filtering to the
+existing `/next` command: `/next 10 M8` and `/next 10 M9` in separate worktrees.
+It changes project command/agent instructions, keeps current model selections
+and `.opencode/opencode.json` MCP configuration, and adds no concurrency schema
+key or new plugin. One writer/planner/Git sequence remains serial per checkout;
+independent checkouts may progress simultaneously. Isolate TMPDIR for process
+checks and coordinate shared gateway/specification edits before implementation.
+
+These are documented OpenCode session instructions, not a background scheduler
+or a claim of live validation against an installed OpenCode binary in this cloud
+host. Inspect the developer's installed command discovery/version if invocation
+syntax differs; do not grant broad new permissions to work around it.
