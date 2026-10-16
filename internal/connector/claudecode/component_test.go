@@ -57,7 +57,7 @@ func TestComponentLifecycleDescriptorAndCapabilities(t *testing.T) {
 	if err := d.Validate(core.ComponentConnector); err != nil {
 		t.Fatal(err)
 	}
-	if d.ID != componentID || d.Protocols[0] != protocol || d.ConnectorType != "api" || d.AuthMethods[0] != "oauth" || len(d.Operations) != 0 {
+	if d.ID != componentID || d.Protocols[0] != protocol || d.ConnectorType != "api" || d.AuthMethods[0] != "oauth" || len(d.Operations) != 1 || d.Operations[0] != "authenticate" {
 		t.Fatalf("unexpected descriptor: %+v", d)
 	}
 	capabilities := []core.Capability{"llm.streaming", "llm.tools", "llm.reasoning", "auth.oauth", "usage.exact"}

@@ -66,7 +66,7 @@ func (c *Connector) Descriptor() core.Descriptor {
 		ID: componentID, Kind: core.ComponentConnector, ImplementationVersion: "1.0.0",
 		APIVersions:   []core.APIVersion{{Major: 1, Minor: 0}},
 		Protocols:     []string{protocol},
-		ConnectorType: "api", AuthMethods: []string{"oauth"},
+		ConnectorType: "api", AuthMethods: []string{"oauth"}, Operations: []string{"authenticate"},
 	}.Clone()
 }
 
