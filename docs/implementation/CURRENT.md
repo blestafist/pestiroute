@@ -33,15 +33,17 @@ are not authorized by this planning handoff.
 ### M9 lane
 
 [Chat Completions client compatibility](M9-CHAT-COMPLETIONS.md), branch `dev-m9`.
-[M9-001](tasks/M9-001.md) is DONE: native adapter/Connector binding accepted at
-[M9-BINDING.md](M9-BINDING.md). Next: plan and prepare [M9-002](tasks/M9-002.md) (DRAFT)
-for native Chat adapter and transport slice implementation.
+[M9-001](tasks/M9-001.md) and [M9-002](tasks/M9-002.md) are DONE (native Chat adapter,
+connector, and fake-backend conformance slice verified). Next: [M9-003](tasks/M9-003.md)
+(DRAFT) for protected endpoint routing, accounting, and composition.
 Lane `TMPDIR=/tmp/pestiroute-m9.rH7sMT`, `GOFLAGS=-p=1`. Shared file ownership: M9 owns
-`internal/adapter/chatcompletions/**`, `docs/implementation/M9-*`, and `tasks/M9-*`;
-M8 owns `internal/connector/claudecode/**` and M8 docs. Shared gateway/config
-(`cmd/gateway/main.go`, `internal/config/`) and `CONTRACT.md` edits remain deferred to
-M9-003 and require cross-lane sequencing. The endpoint is not implemented yet;
-this lane does not wait for Claude provider access.
+`internal/adapter/chatcompletions/**`, `internal/connector/chatcompletions/**`,
+conformance Chat tests, `docs/implementation/M9-*`, and `tasks/M9-*`; M8 owns
+`internal/connector/claudecode/**` and M8 docs. Shared gateway/config
+(`cmd/gateway/main.go`, `cmd/gateway/yaml_config.go`, `cmd/gateway/protected_startup.go`,
+`internal/config/`) and `CONTRACT.md` edits remain deferred to M9-003 and require
+cross-lane sequencing. The endpoint is not implemented yet; this lane does not wait
+for Claude provider access.
 
 Use [separate worktrees and milestone filters](PARALLEL.md): `/next 10 M8` and
 `/next 10 M9`. Keep lane-specific TASKS/CURRENT updates and shared gateway/spec
