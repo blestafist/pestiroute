@@ -26,6 +26,7 @@
 | D16 | Proposed | M3 protected startup loads its master key from a permission-checked external file | Keeps key material out of SQLite and configuration/environment surfaces; see DEC-005 |
 | D18 | Accepted | Defer official Anthropic verification as an M4 completion prerequisite only after offline gates pass; retain it before production release | Human governance accepted the narrow deferral on 2026-10-04 and authorized the documentation batch; separates offline implementation quality from official-provider entitlement; see DEC-008 |
 | D19 | Accepted | External Connector IPC uses a host-owned epoch credit broker and a dedicated priority control lane | Enforces aggregate queue ceilings across independent data sockets; see DEC-017 |
+| D20 | Accepted | M7 offline synthetic candidate work is authorized only within DEC-018's strict limits | Accountable user resolution permits registered offline work, without changing M7-005 evidence or live gates; see DEC-018 |
 
 ## Contract ADRs
 
@@ -466,6 +467,16 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Alternatives rejected:** Tune HTTP/2 initial windows (peer-controlled, connection-local); maintain independent per-socket/per-stream budgets (cannot enforce aggregate cross-socket limits); buffer complete responses (breaks incremental delivery); or change Core/provider APIs (unnecessary).
 - **Compatibility / impact:** Add `FlowControl` RPCs and frame sequence fields to the generated IPC schema; require IPC minor >=1 before Init/Execute. IPC major remains 1 because the addition is minor-version gated; old children are rejected rather than used without broker semantics. No Core contract, provider API, or native child composition change; child helper integration is defined here, production root remains M6-024.
 - **Verification:** Real gRPC tests must prove cross-socket shared limits with large peer windows, tiny-frame count limits, reserve-before-send, partial-read ACK release, stale/replay rejection, control progress under saturation and reservation cleanup on cancellation. Synchronize this ADR with M6-BINDING and M6-EXTERNAL; regenerate protobuf bindings using pinned tools.
+
+### DEC-018 — Authorize Bounded Offline M7 Candidate Work
+
+- **Status:** Accepted by the accountable user direction in this task assignment on 2026-10-16; limited to the scope below.
+- **Context:** M7-005 recorded an evidence-bound NO-GO for implementation on the available evidence. It found no established source/reuse authorization or backend protocol, kept all assessed capabilities unknown, and required separately accountable authorization before reconsideration. M7-007's offline binding and M7-008's synthetic fixtures were completed before this explicit authorization; their prior completion is historical work, not evidence that authorization existed at the time.
+- **Decision:** Preserve M7-005's factual NO-GO findings and its unmet live/evidence gates. The user authorizes offline-only synthetic implementation and testing of the already registered bounded candidates M7-009 through M7-013, with no M7 milestone expansion. Each candidate retains its own task scope, dependencies, readiness and review. This is not legal advice, a determination of rights, permission to use Claude services, or a finding of live feasibility.
+- **Prohibitions:** No live provider/network calls, login, real credential handling or persistence, traffic capture, binary reverse engineering, or legal determination. Capabilities remain `Unknown` (including OAuth); synthetic results cannot promote them. The connector remains non-routable and default-gated; no production composition or support claim is authorized. Separate live authorization, evidence and review gates remain mandatory before any live work or routing decision.
+- **Alternatives rejected:** Treat offline synthetic tests as provider evidence, reinterpret M7-005 as technically impossible/permanently closed, or infer prior authorization for M7-007/M7-008. Each would overstate evidence or authority.
+- **Compatibility / impact:** Documentation/governance only. No v1 contract, runtime, connector, capability, routing, milestone, or production behavior changes. This bounded authorization resolves the M7-005 accountable-authority revisit condition only for the listed offline candidates.
+- **Verification:** Audit synchronized ROADMAP, TASKS, CURRENT and this ADR; confirm historical sequencing is explicit, live/credential/routability/capability prohibitions are consistent, and relative links/anchors and `git diff --check` pass. No runtime or live-provider check is authorized or required.
 
 ## Questions Before Implementation
 

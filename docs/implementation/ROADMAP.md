@@ -14,7 +14,7 @@ Work progresses from transparent request path to managed runtime under the [proj
 | M5.1 | Agent Protocol Connectors: Codex, Claude Code, Gemini CLI, ACP | Separate spike and estimate per protocol |
 | M5.2 | Local Runtime Connectors: Ollama, vLLM, llama.cpp | Separate spike and estimate per runtime |
 | M6 | External connector process runtime | 8–15 days after IPC spike |
-| M7 | Claude Code subscription connector research and feasibility | Research spike; implementation estimate after go/no-go |
+| M7 | Claude Code subscription connector research and bounded offline candidates | Research spike plus separately gated offline candidates; no live support claim |
 
 M3 completes a minimally viable native version for standalone use. M4 validates the core architectural assumption about translation. Support for external third-party plugins appears after M6.
 
@@ -111,7 +111,7 @@ Do not add provider branches or Claude-specific payload types to Core, change th
 
 **Done when:** a research note pins exact source/client versions and licensing; the auth/account and wire behavior are mapped with evidence and unknowns; a capability matrix distinguishes supported, unsupported, and unknown; retry/statefulness and cancellation constraints are explicit; and a reviewed GO/NO-GO decision records any justified implementation scope and estimate, or concrete blockers and revisit conditions. The M7-005 evidence-bound disposition is **NO-GO for implementation now**: source/reuse authority and backend protocol/capabilities are not established, and no legal determination is made. Revisit only after a separately authorized and reviewed evidence path resolves sufficient blockers; no implementation task is created by this disposition. A NO-GO with evidence and rationale completes the research milestone, not a working Connector.
 
-See the [M7 task registry](TASKS.md#m7--claude-code-subscription-connector-research). The unchanged M7-005 NO-GO permits user-authorized offline-deterministic implementation candidates to be registered as DRAFT under its revisit conditions; none may become READY until the M7-005 disposition is formally resolved by an accountable authority. Planning these candidates does not authorize live calls or change the feasibility disposition.
+See the [M7 task registry](TASKS.md#m7--claude-code-subscription-connector-research). By [DEC-018](../project/DECISIONS.md#dec-018--authorize-bounded-offline-m7-candidate-work), accountable user direction resolves the M7-005 revisit condition only for offline synthetic implementation and testing of the already registered M7-009 through M7-013 candidates; this does not expand M7 or overturn M7-005's factual evidence-bound NO-GO. M7-007's specification and M7-008's synthetic fixtures predate this explicit authorization; their earlier completion is not represented as previously authorized implementation. Candidates retain their registered dependencies, status and review. No live provider/network calls, login, real credential handling or persistence, traffic capture, binary reverse engineering, legal determination, or production routing is authorized. Every capability remains `Unknown`; the connector stays non-routable and default-gated. Live access and any later routing/support claim require separate authority, evidence and review.
 
 ## First Vertical Slice
 
