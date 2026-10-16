@@ -47,11 +47,28 @@ func TestAdminAuthScriptedCLIAndRestart(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	browserRedirect := false
 	connector := &integratedAuthConnector{call: func(req core.AuthRequest) core.AuthResult {
 		switch req.Action {
 		case "start":
-			return core.AuthResult{Supported: true, State: "opaque-state-marker", NextAction: "continue", UserAction: &core.AuthUserAction{VerificationURI: "https://auth.example.test/device", UserCode: "ABCD-EFGH", PollInterval: 5 * time.Second}}
+			action := &core.AuthUserAction{VerificationURI: "https://auth.example.test/device", UserCode: "ABCD-EFGH", PollInterval: 5 * time.Second}
+			state := "opaque-state-marker"
+			if browserRedirect {
+				action = &core.AuthUserAction{VerificationURI: "https://auth.example.test/authorize"}
+				state = "opaque-browser-state-marker"
+			}
+			return core.AuthResult{Supported: true, State: state, NextAction: "continue", UserAction: action}
 		case "continue":
+			switch string(req.State) {
+			case "opaque-state-marker":
+				if req.CallbackInput != "https://callback.example.test/?code=callback-secret-marker" {
+					t.Error("callback input missing or changed")
+				}
+			case "opaque-next-marker", "opaque-browser-state-marker":
+				if req.CallbackInput != "" {
+					t.Error("legacy empty continuation input changed")
+				}
+			}
 			if string(req.State) == "opaque-state-marker" {
 				return core.AuthResult{Supported: true, State: "opaque-next-marker", NextAction: "continue", UserAction: &core.AuthUserAction{VerificationURI: "https://auth.example.test/device", UserCode: "IJKL-MNOP", PollInterval: 2500 * time.Millisecond}}
 			}
@@ -62,17 +79,20 @@ func TestAdminAuthScriptedCLIAndRestart(t *testing.T) {
 		return core.AuthResult{}
 	}}
 	registry := newAdminAuthRegistry(t, "auth-connector", connector)
-	run := func(args ...string) (string, error) {
+	runWithInput := func(input string, args ...string) (string, error) {
 		var out, stderr bytes.Buffer
 		full := append([]string{"--db", dbPath, "--master-key", keyPath}, args...)
-		err := runAdmin(adminEnvironment{ctx: ctx, args: full, stdout: &out, stderr: &stderr, authRegistry: registry})
+		err := runAdmin(adminEnvironment{ctx: ctx, args: full, stdin: strings.NewReader(input), stdout: &out, stderr: &stderr, authRegistry: registry})
 		combined := out.String() + stderr.String()
-		for _, secret := range []string{"opaque-state-marker", "opaque-next-marker", "original-secret", "rotated-secret-marker", "refreshed-secret-marker", "master-key-marker", strings.Repeat("9", 32)} {
+		for _, secret := range []string{"opaque-state-marker", "opaque-next-marker", "original-secret", "rotated-secret-marker", "refreshed-secret-marker", "master-key-marker", "callback-secret-marker", strings.Repeat("9", 32)} {
 			if strings.Contains(combined+errorString(err), secret) {
 				t.Fatalf("secret leaked: %q", secret)
 			}
 		}
 		return combined, err
+	}
+	run := func(args ...string) (string, error) {
+		return runWithInput("", args...)
 	}
 	started, err := run("auth", "start", "--account", "acct")
 	if err != nil {
@@ -87,7 +107,7 @@ func TestAdminAuthScriptedCLIAndRestart(t *testing.T) {
 	if session == "" || !strings.Contains(started, "expires_at=") || !strings.Contains(started, `verification_uri="https://auth.example.test/device" user_code="ABCD-EFGH" interval_seconds=5`) {
 		t.Fatalf("start guidance: %q", started)
 	}
-	advanced, err := run("auth", "continue", "--session", session)
+	advanced, err := runWithInput("https://callback.example.test/?code=callback-secret-marker\n", "auth", "continue", "--session", session, "--callback-stdin")
 	if err != nil || !strings.Contains(advanced, "session="+session) || !strings.Contains(advanced, `user_code="IJKL-MNOP" interval_seconds=2.5`) {
 		t.Fatalf("continue=%q err=%v", advanced, err)
 	}
@@ -101,6 +121,11 @@ func TestAdminAuthScriptedCLIAndRestart(t *testing.T) {
 	refreshed, err := run("auth", "refresh", "--account", "acct")
 	if err != nil || !strings.Contains(refreshed, "revision=3") {
 		t.Fatalf("refresh=%q err=%v", refreshed, err)
+	}
+	browserRedirect = true
+	redirect, err := run("auth", "start", "--account", "acct")
+	if err != nil || !strings.Contains(redirect, `verification_uri="https://auth.example.test/authorize"`) || strings.Contains(redirect, "user_code") || strings.Contains(redirect, "interval_seconds") {
+		t.Fatalf("browser redirect guidance=%q err=%v", redirect, err)
 	}
 
 	// Distinct runAdmin invocations reopen SQLite; the continuation state is durable.

@@ -1,8 +1,10 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -258,13 +260,15 @@ func TestAuthCoordinatorUserActionProjectionAndRejection(t *testing.T) {
 		}
 	})
 	for name, action := range map[string]*AuthUserAction{
-		"scheme":       {VerificationURI: "http://example.test", UserCode: "code", PollInterval: time.Second},
-		"userinfo":     {VerificationURI: "https://user@example.test", UserCode: "code", PollInterval: time.Second},
-		"space":        {VerificationURI: "https://example.test/a b", UserCode: "code", PollInterval: time.Second},
-		"long URI":     {VerificationURI: "https://example.test/" + strings.Repeat("x", 2049), UserCode: "code", PollInterval: time.Second},
-		"code control": {VerificationURI: "https://example.test", UserCode: "bad\ncode", PollInterval: time.Second},
-		"long code":    {VerificationURI: "https://example.test", UserCode: strings.Repeat("x", 257), PollInterval: time.Second},
-		"interval":     {VerificationURI: "https://example.test", UserCode: "code", PollInterval: 0},
+		"scheme":                {VerificationURI: "http://example.test", UserCode: "code", PollInterval: time.Second},
+		"userinfo":              {VerificationURI: "https://user@example.test", UserCode: "code", PollInterval: time.Second},
+		"space":                 {VerificationURI: "https://example.test/a b", UserCode: "code", PollInterval: time.Second},
+		"long URI":              {VerificationURI: "https://example.test/" + strings.Repeat("x", 2049), UserCode: "code", PollInterval: time.Second},
+		"code control":          {VerificationURI: "https://example.test", UserCode: "bad\ncode", PollInterval: time.Second},
+		"long code":             {VerificationURI: "https://example.test", UserCode: strings.Repeat("x", 257), PollInterval: time.Second},
+		"interval":              {VerificationURI: "https://example.test", UserCode: "code", PollInterval: 0},
+		"code without interval": {VerificationURI: "https://example.test", UserCode: "code"},
+		"interval without code": {VerificationURI: "https://example.test", PollInterval: time.Second},
 	} {
 		t.Run("start rejects "+name, func(t *testing.T) {
 			connector := &authCoordinatorTestConnector{respond: func(AuthRequest) (AuthResult, *GatewayError) {
@@ -276,6 +280,17 @@ func TestAuthCoordinatorUserActionProjectionAndRejection(t *testing.T) {
 			}
 		})
 	}
+	t.Run("browser redirect action", func(t *testing.T) {
+		action := &AuthUserAction{VerificationURI: "https://example.test/authorize"}
+		connector := &authCoordinatorTestConnector{respond: func(AuthRequest) (AuthResult, *GatewayError) {
+			return AuthResult{Supported: true, State: "opaque", NextAction: "continue", UserAction: action}, nil
+		}}
+		c, _ := newAuthCoordinatorTest(t, connector, "a")
+		session, err := c.Start(context.Background(), "a")
+		if err != nil || session.UserAction == nil || *session.UserAction != *action {
+			t.Fatalf("session=%+v err=%v", session, err)
+		}
+	})
 	for name, result := range map[string]AuthResult{
 		"completed":   {Supported: true, UserAction: valid},
 		"unsupported": {UserAction: valid, NextAction: "continue"},
@@ -300,7 +315,7 @@ func TestAuthCoordinatorUserActionProjectionAndRejection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, err := c.Continue(context.Background(), session.ID); err == nil || got.ID != "" || len(store.sessions) != 0 || len(store.states) != 0 {
+		if got, err := c.Continue(context.Background(), session.ID, ""); err == nil || got.ID != "" || len(store.sessions) != 0 || len(store.states) != 0 {
 			t.Fatalf("session=%+v err=%v remaining=%d", got, err, len(store.sessions))
 		}
 	})
@@ -316,7 +331,7 @@ func TestAuthCoordinatorUserActionProjectionAndRejection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		continued, err := c.Continue(context.Background(), started.ID)
+		continued, err := c.Continue(context.Background(), started.ID, "")
 		if err != nil || continued.UserAction == nil || *continued.UserAction != *valid {
 			t.Fatalf("session=%+v err=%v", continued, err)
 		}
@@ -333,6 +348,56 @@ func TestAuthCoordinatorUserActionProjectionAndRejection(t *testing.T) {
 			t.Fatalf("err=%v quarantine=%q", err, store.quarantine)
 		}
 	})
+}
+
+func TestAuthCoordinatorCallbackInputBoundsAndSeparation(t *testing.T) {
+	const callback = " https://example.test/callback?code=synthetic-auth-code&state=synthetic-callback-state "
+	const opaqueState = "opaque-secret-state"
+	var logs bytes.Buffer
+	var invocationLogger *slog.Logger
+	var calls []AuthRequest
+	connector := &authCoordinatorTestConnector{
+		checkServices: func(services InvocationServices) { invocationLogger = services.Logger },
+		respond: func(req AuthRequest) (AuthResult, *GatewayError) {
+			req.State = append([]byte(nil), req.State...)
+			calls = append(calls, req)
+			if req.Action == "start" {
+				return AuthResult{Supported: true, State: opaqueState, NextAction: "continue"}, nil
+			}
+			invocationLogger.Info(req.CallbackInput, "request", req, "opaque_state", string(req.State))
+			return AuthResult{Supported: true}, nil
+		},
+	}
+	c, store := newAuthCoordinatorTest(t, connector, "a")
+	c.services = authServicesFunc(func(AttemptScope) InvocationServices {
+		return InvocationServices{Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	})
+	session, err := c.Start(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{strings.Repeat("x", 4097), "bad\ninput", "bad\u0080"} {
+		if _, err := c.Continue(context.Background(), session.ID, input); !errors.Is(err, ErrAuthUnavailable) {
+			t.Fatalf("invalid callback input accepted: %v", err)
+		}
+	}
+	if len(calls) != 1 || len(store.sessions) != 1 {
+		t.Fatalf("invalid input reached connector or claimed session: calls=%d sessions=%d", len(calls), len(store.sessions))
+	}
+	if _, err := c.Continue(context.Background(), session.ID, callback); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || calls[1].CallbackInput != callback || string(calls[1].State) != opaqueState {
+		t.Fatalf("callback/state not forwarded separately: request=%+v", calls[1])
+	}
+	for _, secret := range []string{callback, "synthetic-auth-code", "synthetic-callback-state", opaqueState} {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatalf("authentication secret reached connector logger: %q", secret)
+		}
+	}
+	if strings.Contains(logs.String(), "https://example.test/callback") {
+		t.Fatalf("callback URL reached connector logger: %s", logs.String())
+	}
 }
 
 func TestAuthCoordinatorRefreshCoalescesSameAccount(t *testing.T) {
@@ -410,7 +475,7 @@ func TestAuthCoordinatorInteractiveSessionUsesOpaqueStoredState(t *testing.T) {
 	if session.ID == "" || session.ID == "opaque-state" || string(s.states[session.ID]) != "opaque-state" {
 		t.Fatalf("session/state = %#v / %q", session, s.states[session.ID])
 	}
-	if _, err := c.Continue(context.Background(), session.ID); err != nil {
+	if _, err := c.Continue(context.Background(), session.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.sessions[session.ID]; ok {
@@ -445,7 +510,7 @@ func TestAuthCoordinatorPersistsCredentialExpiry(t *testing.T) {
 					var session AuthSession
 					session, err = c.Start(context.Background(), "a")
 					if err == nil {
-						_, err = c.Continue(context.Background(), session.ID)
+						_, err = c.Continue(context.Background(), session.ID, "")
 					}
 				case "refresh":
 					_, err = c.Refresh(context.Background(), "a")
@@ -654,7 +719,7 @@ func TestAuthCoordinatorRejectsStaleContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.credentials["a"] = AuthCredentials{Revision: 2, Valid: true}
-	if _, err = c.Continue(context.Background(), session.ID); !errors.Is(err, ErrAuthRevisionMismatch) {
+	if _, err = c.Continue(context.Background(), session.ID, ""); !errors.Is(err, ErrAuthRevisionMismatch) {
 		t.Fatalf("continue error=%v", err)
 	}
 	if _, ok := s.sessions[session.ID]; ok {
@@ -733,10 +798,10 @@ func TestAuthCoordinatorContinueAdvancesOpaqueStateThenFinishes(t *testing.T) {
 		t.Fatal(err)
 	}
 	expiry := session.ExpiresAt
-	if next, err := c.Continue(context.Background(), session.ID); err != nil || next.ExpiresAt != expiry || string(store.states[session.ID]) != "state-two" {
+	if next, err := c.Continue(context.Background(), session.ID, ""); err != nil || next.ExpiresAt != expiry || string(store.states[session.ID]) != "state-two" {
 		t.Fatalf("advance result=%#v state=%q err=%v", next, store.states[session.ID], err)
 	}
-	if _, err := c.Continue(context.Background(), session.ID); err != nil {
+	if _, err := c.Continue(context.Background(), session.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := store.sessions[session.ID]; ok || string(store.credentials["a"].Values["token"]) != "complete" {
@@ -768,9 +833,9 @@ func TestAuthCoordinatorConcurrentContinueReloadsStateUnderAccountLock(t *testin
 		t.Fatal(err)
 	}
 	errs := make(chan error, 2)
-	go func() { _, e := c.Continue(context.Background(), session.ID); errs <- e }()
+	go func() { _, e := c.Continue(context.Background(), session.ID, ""); errs <- e }()
 	<-entered
-	go func() { _, e := c.Continue(context.Background(), session.ID); errs <- e }()
+	go func() { _, e := c.Continue(context.Background(), session.ID, ""); errs <- e }()
 	close(release)
 	for range 2 {
 		if err := <-errs; err != nil {
@@ -829,7 +894,7 @@ func TestAuthCoordinatorContinueConnectorFailureConsumesAndSanitizes(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = c.Continue(context.Background(), session.ID); err == nil || strings.Contains(err.Error(), "private-state") || strings.Contains(err.Error(), "secret-value") {
+	if _, err = c.Continue(context.Background(), session.ID, ""); err == nil || strings.Contains(err.Error(), "private-state") || strings.Contains(err.Error(), "secret-value") {
 		t.Fatalf("continue leaked connector data: %v", err)
 	}
 	if _, ok := store.sessions[session.ID]; ok {
@@ -877,7 +942,7 @@ func TestAuthCoordinatorContinueClaimFailureSuppressesProviderCall(t *testing.T)
 		t.Fatal(err)
 	}
 	store.claimErr = errors.New("controlled claim storage failure")
-	if _, err := c.Continue(context.Background(), session.ID); !errors.Is(err, ErrAuthPersistence) {
+	if _, err := c.Continue(context.Background(), session.ID, ""); !errors.Is(err, ErrAuthPersistence) {
 		t.Fatalf("claim error=%v", err)
 	}
 	if connector.calls != 1 {

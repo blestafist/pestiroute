@@ -963,6 +963,7 @@ type AuthRequest struct {
 	AccountId     string                 `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
 	Action        string                 `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"`
 	State         []byte                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	CallbackInput string                 `protobuf:"bytes,4,opt,name=callback_input,json=callbackInput,proto3" json:"callback_input,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1016,6 +1017,13 @@ func (x *AuthRequest) GetState() []byte {
 		return x.State
 	}
 	return nil
+}
+
+func (x *AuthRequest) GetCallbackInput() string {
+	if x != nil {
+		return x.CallbackInput
+	}
+	return ""
 }
 
 type AuthUserAction struct {
@@ -3037,12 +3045,13 @@ const file_connector_proto_rawDesc = "" +
 	"\tsupported\x18\x01 \x01(\bR\tsupported\x12\x14\n" +
 	"\x05known\x18\x02 \x01(\bR\x05known\x12:\n" +
 	"\x05usage\x18\x03 \x01(\v2$.pestiroute.connector.v1.UsageReportR\x05usage\x12\x16\n" +
-	"\x06method\x18\x04 \x01(\tR\x06method\"Z\n" +
+	"\x06method\x18\x04 \x01(\tR\x06method\"\x81\x01\n" +
 	"\vAuthRequest\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x01 \x01(\tR\taccountId\x12\x16\n" +
 	"\x06action\x18\x02 \x01(\tR\x06action\x12\x14\n" +
-	"\x05state\x18\x03 \x01(\fR\x05state\"\x82\x01\n" +
+	"\x05state\x18\x03 \x01(\fR\x05state\x12%\n" +
+	"\x0ecallback_input\x18\x04 \x01(\tR\rcallbackInput\"\x82\x01\n" +
 	"\x0eAuthUserAction\x12)\n" +
 	"\x10verification_uri\x18\x01 \x01(\tR\x0fverificationUri\x12\x1b\n" +
 	"\tuser_code\x18\x02 \x01(\tR\buserCode\x12(\n" +

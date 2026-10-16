@@ -217,13 +217,13 @@ func EstimateFrom(v *gen.EstimateResult) (core.EstimateResult, error) {
 	return core.EstimateResult{Supported: v.Supported, Known: v.Known, Usage: UsageFrom(v.Usage), Method: v.Method}, nil
 }
 func AuthRequestTo(v core.AuthRequest) *gen.AuthRequest {
-	return &gen.AuthRequest{AccountId: v.AccountID, Action: v.Action, State: append([]byte(nil), v.State...)}
+	return &gen.AuthRequest{AccountId: v.AccountID, Action: v.Action, State: append([]byte(nil), v.State...), CallbackInput: v.CallbackInput}
 }
 func AuthRequestFrom(v *gen.AuthRequest) (core.AuthRequest, error) {
 	if v == nil {
 		return core.AuthRequest{}, ErrMalformed
 	}
-	return core.AuthRequest{AccountID: v.AccountId, Action: v.Action, State: append([]byte(nil), v.State...)}, nil
+	return core.AuthRequest{AccountID: v.AccountId, Action: v.Action, State: append([]byte(nil), v.State...), CallbackInput: v.CallbackInput}, nil
 }
 func AuthResultTo(v core.AuthResult) *gen.AuthResult {
 	o := &gen.AuthResult{Supported: v.Supported, State: []byte(v.State), NextAction: v.NextAction, Credentials: cloneBytesMap(v.Credentials)}

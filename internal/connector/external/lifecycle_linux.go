@@ -343,7 +343,7 @@ func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, serv
 	}
 	defer c.release()
 	c.mu.Lock()
-	valid := !c.closing && !c.unavailable && c.initialized && req.AccountID != "" && (req.Action == "start" || req.Action == "continue" || req.Action == "refresh")
+	valid := !c.closing && !c.unavailable && c.initialized && req.AccountID != "" && (req.Action == "start" || req.Action == "continue" || req.Action == "refresh") && (req.Action == "continue" || req.CallbackInput == "")
 	c.mu.Unlock()
 	if !valid {
 		return core.AuthResult{}, &core.GatewayError{Code: "invalid_request", Category: core.CategoryInvalidRequest, RetryDisposition: core.RetryUnsafe, Message: "Invalid or unavailable authentication request"}

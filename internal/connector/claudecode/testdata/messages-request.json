@@ -1,0 +1,1 @@
+{"model":"synthetic-model","max_tokens":64,"stream":true,"system":"Synthetic system instruction.","messages":[{"role":"user","content":"Synthetic prompt."}],"tools":[{"name":"synthetic_tool","description":"Synthetic tool.","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}]}

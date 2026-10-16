@@ -1,2 +1,3 @@
 # SSE fixtures intentionally retain CRLF line endings and blank event delimiters at EOF.
 internal/connector/codex/testdata/responses/*.sse whitespace=blank-at-eol,space-before-tab,cr-at-eol,-blank-at-eof
+internal/connector/claudecode/testdata/*.sse whitespace=blank-at-eol,space-before-tab,cr-at-eol,-blank-at-eof

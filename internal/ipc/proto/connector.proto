@@ -20,7 +20,7 @@ message RawPayload { string protocol = 1; string content_type = 2; }
 message UsageQuery { string protocol = 1; string mode = 2; string model = 3; string account_id = 4; RawPayload payload = 5; int64 max_body_bytes = 6; }
 message UsageReport { optional int64 input_tokens = 1; optional int64 output_tokens = 2; optional int64 reasoning_tokens = 3; optional int64 cached_tokens = 4; string source = 5; string completeness = 6; }
 message EstimateResult { bool supported = 1; bool known = 2; UsageReport usage = 3; string method = 4; }
-message AuthRequest { string account_id = 1; string action = 2; bytes state = 3; }
+message AuthRequest { string account_id = 1; string action = 2; bytes state = 3; string callback_input = 4; }
 message AuthUserAction { string verification_uri = 1; string user_code = 2; int64 poll_interval_ns = 3; }
 message AuthResult { bool supported = 1; bytes state = 2; string next_action = 3; AuthUserAction user_action = 4; map<string,bytes> credentials = 5; google.protobuf.Timestamp credential_expires_at = 6; }
 message RequestMetadata { map<string,StringList> headers = 1; optional bool streaming = 2; bool affinity_known = 3; bool session_bound = 4; int64 ingress_header_bytes = 5; map<string,bytes> extensions = 6; }

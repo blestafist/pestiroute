@@ -372,7 +372,7 @@ func TestM6GoValueConvertersParity(t *testing.T) {
 	if got, err := EstimateFrom(decodeRecord(t, EstimateTo(estimate))); err != nil || !reflect.DeepEqual(got, estimate) {
 		t.Fatalf("estimate parity: %v", err)
 	}
-	authRequest := core.AuthRequest{AccountID: large, Action: "continue", State: body}
+	authRequest := core.AuthRequest{AccountID: large, Action: "continue", State: body, CallbackInput: " https://example.invalid/callback?code=synthetic "}
 	if got, err := AuthRequestFrom(decodeRecord(t, AuthRequestTo(authRequest))); err != nil || !reflect.DeepEqual(got, authRequest) {
 		t.Fatalf("auth request parity: %v", err)
 	}

@@ -1,0 +1,1 @@
+{"grant_type":"authorization_code","client_id":"SYNTHETIC_CLIENT","code":"SYNTHETIC_AUTH_CODE","state":"SYNTHETIC_STATE","redirect_uri":"http://127.0.0.1:9999/callback","code_verifier":"SYNTHETIC_VERIFIER"}

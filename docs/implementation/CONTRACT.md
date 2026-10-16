@@ -117,16 +117,20 @@ See [DEC-016](../project/DECISIONS.md#dec-016--convey-the-admitted-route-body-bo
 
 `AuthUserAction` is the optional presentation-only value
 `{VerificationURI string, UserCode string, PollInterval time.Duration}`;
-`PollInterval` is positive when an action is present. Core validates the action
+for a device-code action, `UserCode` is 1–256 printable ASCII bytes without
+controls and `PollInterval` is positive. A browser-redirect action instead has
+an empty `UserCode` and zero `PollInterval`; mixed/partial combinations are
+invalid. Core validates the action
 before exposing it: `VerificationURI` is 1–2048 printable ASCII bytes (no
 spaces/control bytes), an absolute HTTPS URI with a host and no userinfo;
-`UserCode` is 1–256 printable ASCII bytes (no controls, including terminal
-escape/newline). `AuthResult` contains
+the URI may contain the public OAuth challenge/state needed to open the browser,
+but never a PKCE verifier or credential. `AuthResult` contains
 `Supported`, opaque `State`, `NextAction`, optional `UserAction *AuthUserAction`,
 and candidate `Credentials`. The projection is never continuation state or a
 credential. Neither presentation field may contain device-auth identifiers,
-PKCE material, tokens, or raw provider responses. A Connector needing operator interaction returns
-the safe action separately from its opaque state. `UserAction` is valid only
+PKCE verifier material, tokens, or raw provider responses. A Connector needing
+operator interaction returns the safe action separately from its opaque state.
+`UserAction` is valid only
 with `Supported=true` and `NextAction=continue`; it is invalid on completed,
 unsupported, or refresh results. A nil action with `continue` remains valid for
 legacy opaque continuations that require no operator interaction. A Connector
@@ -142,6 +146,30 @@ state. Invalid action results fail closed: discard all result fields before
 exposure or credential/state persistence. On a claimed continuation, consume
 the session/claim as for other invalid results; refresh remains quarantined if
 its invoked result is invalid or incomplete.
+
+`AuthRequest` also carries additive `CallbackInput string`, a transient client
+input for manual browser-redirect continuation. It is 1–4096 printable ASCII
+bytes when present, may be empty, and is allowed only with `Action=continue`;
+Core bounds and forwards it separately from `State`, never logs or persists it,
+and does not parse provider callback formats. `State` remains exclusively the
+runtime-loaded opaque Connector continuation. For callback validation, the
+configured redirect URI is absolute, has a non-empty authority, and has no
+query, fragment, or userinfo. The Connector compares the callback's raw scheme,
+raw authority, and escaped path byte-for-byte with that URI, without
+normalization; it rejects userinfo, fragment, malformed authority/escaping,
+and mismatch. It strictly parses the query, requiring exactly one non-empty,
+case-sensitive `code` and one non-empty, case-sensitive `state`; it rejects
+duplicate keys, malformed encoding, OAuth error parameters, and any unexpected
+parameter. It compares the state value after exactly one strict query-decoding
+pass, byte-for-byte with expected state in protected continuation state before
+exchanging, and uses the exact configured URI in the exchange. Invalid
+callbacks fail closed without reflecting or logging input, code, or provider
+error details. Generic Go Core/coordinator, admin-input, and protobuf/IPC field
+plumbing was implemented by [M7-016](tasks/M7-016.md); Connector-specific OAuth
+offline Connector PKCE implementation is complete under [M7-010](tasks/M7-010.md),
+but it remains an uncomposed candidate: capabilities stay `unknown`, and this
+does not establish live interoperability, credential persistence, or routing. See
+[DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input).
 
 `AuthResult.CredentialExpiresAt *time.Time` is optional absolute expiry metadata
 for the candidate credential generation, derived by the Connector from its

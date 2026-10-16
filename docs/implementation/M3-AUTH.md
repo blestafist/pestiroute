@@ -1,14 +1,14 @@
 # M3 Provider-Neutral Authentication Runtime Binding
 
 This note fixes the M3 runtime ownership convention for the existing v1
-Connector `Authenticate` operation. It adds no Connector fields or semantic
-operation; [CONTRACT.md](CONTRACT.md) remains authoritative. Provider endpoint,
-scope, exchange, and response formats stay inside the Connector. M3 proves the
-runtime with scripted Connectors, not live OAuth flows.
+Connector `Authenticate` operation. The additive callback-input field is defined
+in [CONTRACT.md](CONTRACT.md); it adds no operation or provider-specific API.
+Provider endpoint, scope, exchange, and response formats stay inside the
+Connector. M3 proves the runtime with scripted Connectors, not live OAuth flows.
 
 ## Binding the existing operation
 
-The binding is `AuthRequest{AccountID, Action, State}` and
+The binding is `AuthRequest{AccountID, Action, State, CallbackInput}` and
 `AuthResult{Supported, State, NextAction, UserAction, Credentials,
 CredentialExpiresAt}`. `UserAction` is an optional
 `*AuthUserAction{VerificationURI, UserCode, PollInterval}` safe presentation
@@ -27,10 +27,11 @@ enough to skip a refresh.
 | `AuthRequest.AccountID` | Runtime-selected account ID, set by the caller and never accepted from client state. |
 | `AuthRequest.Action` | Exactly `start`, `continue`, or `refresh`. Other values fail before Connector invocation. `refresh` is runtime/internal only. |
 | `AuthRequest.State` | For `start` and `refresh`, empty. For `continue`, the Connector's opaque state bytes loaded from the runtime's protected session row. Never client-supplied or a database handle. |
+| `AuthRequest.CallbackInput` | Optional client-supplied manual callback URL, only on `continue`; when non-empty, 1–4096 printable ASCII bytes. Bound at the runtime trust boundary, forwarded separately from `State`, never logged or persisted. Empty on `start`/`refresh`; reject non-empty input there. Runtime does not parse it. |
 | `AuthResult.Supported` | `false` means do not accept returned state/credentials. If the method was invoked, it is not evidence that no network exchange occurred; retain/quarantine any refresh marker and invalidate the interactive continuation conservatively. |
 | `AuthResult.State` | Opaque Connector state bytes encoded in the existing string field; persist as bytes without parsing. Empty means no continuation state. |
 | `AuthResult.NextAction` | Empty means the flow ended; otherwise exactly `continue`. The runtime creates/retains a session only for `continue`. It does not infer provider-specific actions. |
-| `AuthResult.UserAction` | Optional safe presentation projection, valid only when `Supported=true` and `NextAction=continue`. Core validates before exposing: URI is 1–2048 printable ASCII bytes without spaces/control bytes, absolute HTTPS with host and no userinfo; code is 1–256 printable ASCII bytes without controls; interval is positive. It never contains device-auth identifiers, PKCE material, tokens, or raw response/state. Core returns it transiently with the auth session and never persists it. |
+| `AuthResult.UserAction` | Optional safe presentation projection, valid only when `Supported=true` and `NextAction=continue`. Core validates before exposing: URI is 1–2048 printable ASCII bytes without spaces/control bytes, absolute HTTPS with host and no userinfo. Device-code action has a 1–256 printable-ASCII code and positive interval; browser-redirect action has empty code and zero interval; mixed/partial forms are invalid. The URI may carry public OAuth challenge/state required to open the browser, but presentation never contains a PKCE verifier, credential, device-auth identifier, token, or raw response/state. Core returns it transiently and never persists it. |
 | `AuthResult.Credentials` | Candidate account credentials returned by the Connector. Runtime validates and atomically persists them; they are not success until that write is acknowledged. |
 | `AuthResult.CredentialExpiresAt` | Optional absolute expiry for the candidate credential generation, sourced by the Connector from its trusted exchange response. Nil is compatible with existing credentials/profiles without expiry. If present, persist it in the same revision-CAS transaction as the encrypted bundle; acknowledgment covers both. The selected profile may require nonzero, future expiry. Runtime never parses tokens/JWTs to derive it. |
 
@@ -49,6 +50,33 @@ discards returned state and fails closed. Expiry is runtime-owned, fixed at star
 and checked before every
 continuation; an extension requires a future explicit policy, not a provider
 response.
+
+For a manual browser callback, the caller passes the pasted URL as
+`CallbackInput` to `AuthCoordinator.Continue`; it is transient untrusted input,
+not the session handle or `AuthRequest.State`. Enforce its byte bound before
+Connector invocation and reject invalid bounds before claiming; exclude the
+input from logs, storage, errors, and returned presentation. The configured
+redirect URI must be absolute, have a non-empty authority, and have no query,
+fragment, or userinfo. The Connector
+strictly parses callback input and compares its raw scheme, raw authority, and
+escaped path byte-for-byte with that configured URI, without normalization; it
+rejects userinfo, fragment, malformed authority/escaping, and mismatch. Strict
+query decoding requires exactly one non-empty, case-sensitive `code` and one
+non-empty, case-sensitive `state`; duplicate keys, malformed encoding, OAuth
+error parameters, and all unexpected parameters are rejected. The Connector
+compares state after exactly one strict query-decoding pass, byte-for-byte with
+protected expected state before exchange, and uses the exact configured URI in
+the exchange. Invalid callbacks fail closed without reflecting/logging input,
+code, or provider error details. The existing durable continuation claim makes
+each invoked attempt one-time: invalid callback attempts and ambiguous outcomes
+consume the claimed continuation and are not retried. Stale or consumed sessions
+fail before Connector work.
+
+The generic `AuthRequest` field, coordinator/admin input, and protobuf/IPC
+mapping are implemented by [M7-016](tasks/M7-016.md). Offline Connector OAuth
+PKCE is implemented by [M7-010](tasks/M7-010.md); this candidate is uncomposed,
+does not promote capabilities beyond `unknown`, and does not imply live or
+production support.
 
 Start and Continue return the optional `UserAction` on the transient
 `AuthSession` result, separately from its runtime-owned session handle and

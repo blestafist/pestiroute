@@ -88,13 +88,22 @@ Record-fragment queue occupancy is bounded independently of the logical record's
 | `ModelQuery`, `ModelInfo`, `ModelsResult` | Query strings and complete result/list are fragmented typed records. Map entries preserve explicit supported/unsupported/unknown; missing is unknown. Optional `Available` preserves nil versus false. `Supported` remains separate from empty result. |
 | `UsageQuery` | Query/scope fields, runtime-owned `MaxBodyBytes` selected route limit, plus RawPayload protocol/content type are fragmented as one typed record; `Payload.Body` uses its separate streamed attachment and is reassembled only within that conveyed limit. Account remains host-selected and validated against invocation authority. See [DEC-015](../project/DECISIONS.md#dec-015--convey-the-admitted-route-body-bound-to-usage-estimation). |
 | `EstimateResult` | `Supported`, `Known`, optional UsageReport, Method; nil usage is not zero. Result is streamed in bounded records/fragments and reconstructed atomically; no method-string aggregate cap is added. |
-| `AuthRequest` / `AuthResult` | All fields including action, opaque state, candidate credential map, optional user action and optional absolute expiry timestamp. State is carried as bytes and converted to/from the Go string without text coercion. Expiry is UTC instant with protobuf timestamp validity; no inference from credential bytes. `PollInterval` preserves duration nanoseconds. |
+| `AuthRequest` / `AuthResult` | All fields including action, opaque state, transient `CallbackInput`, candidate credential map, optional user action and optional absolute expiry timestamp. `CallbackInput` is the 1–4096-byte printable-ASCII pasted callback string, empty outside explicit continuation; preserve its exact ASCII bytes without URL normalization, presentation, or logging. State is carried as bytes and converted to/from the Go string without text coercion. Expiry is UTC instant with protobuf timestamp validity; no inference from credential bytes. `PollInterval` preserves duration nanoseconds. |
 | `ExecutionResponse`, `Stream`, `InvocationServices`, `HTTPDoer`, `CredentialAccess`, `slog.Logger` | Not values on the wire. ExecutionResponse is represented by the Execute stream; invocation services are reverse RPCs. |
 | Errors and Go interfaces | Go `error`, `Stream`, `CredentialAccess`, `HTTPDoer`, logger, contexts, and interface handles are never serialized. Structured GatewayError fields use the common fragmented typed record. Init/Close transport status uses a gRPC status code and fixed bounded status text only; interfaces become scoped RPCs. |
 
 Each outer fragment envelope is validated before append (frame size, identity/type, sequence, offset/length arithmetic, and end marker). Only after full-record reassembly is the inner typed protobuf decoded and validated (enum, required presence, field semantics, and duplicate/unknown required controls); decoding never silently normalizes contract distinctions. These checks do not impose an aggregate-record limit. Map order is not semantic; repeated values retain order. A slot's bytes are produced/consumed only by that extension's separately declared and negotiated codec; generic code never claims arbitrary Go `any` values are serializable. A codec absent from the negotiated declaration is not invoked.
 
 ## Reverse services and authority
+
+DEC-019's `AuthRequest.CallbackInput` is part of the existing complete typed
+`AuthRequest` record, not a new RPC or body stream. Its printable-ASCII byte
+bound is validated by the runtime before dispatch; protobuf transport preserves
+the field exactly and does not parse or normalize callback URLs. The field is
+transient: implementations must not persist or log it. The Go request field,
+coordinator/admin plumbing, and protobuf field mapping were implemented by
+[M7-016](tasks/M7-016.md) after the M6 baseline. This records repository
+implementation, not production deployment or provider interoperability.
 
 Every reverse call carries an unguessable invocation ID plus process epoch and monotonically unique call ID. Host validates all three against a live invocation; it obtains selected account and instance from its own invocation record, never from child-supplied account fields. Calls from stale epochs, completed/cancelled invocations, unknown calls, or mismatched account authority fail closed. Close/cancel revokes authority before acknowledgement; late results are discarded. Callback deadlines are bounded by the parent invocation deadline and service-specific limits. At most 8 outstanding callbacks per invocation and 32 per process; cancellation/control uses a separate reserved control path and progresses while data queues are full.
 

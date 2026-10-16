@@ -1564,6 +1564,36 @@ policies: {standard: policy-id-a}
 	}
 }
 
+func TestClaudeCodeConfigurationFailsClosedAsUncomposed(t *testing.T) {
+	path := t.TempDir() + "/gateway.yaml"
+	config := `version: 1
+server: {listen: "127.0.0.1:8080", max_request_bytes: 1048576, shutdown_timeout: 5s}
+storage: {driver: sqlite, path: ./data/gateway.db}
+secrets: {master_key_file: ./secrets/master.key}
+connectors:
+  - id: claude
+    kind: connector
+    implementation: pestiroute.claudecode.messages
+    protocols: [openai.responses.v1]
+routes:
+  - id: candidate
+    protocol: openai.responses.v1
+    mode: translation
+    model: candidate
+    adapter: pestiroute.responses.native
+    policy: standard
+    budget: {unknown_estimate: reserve, conservative_tokens: 4096}
+    targets: [{connector: claude, account: synthetic}]
+policies: {standard: policy-id}
+`
+	if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadConfig([]string{"-config-format", "yaml", "-config", path}); err == nil || !strings.Contains(err.Error(), "unsupported connector implementation") {
+		t.Fatalf("Claude Code configuration error = %v, want fail-closed unsupported implementation", err)
+	}
+}
+
 func TestYAMLRejectsAmbiguousProtocolModelGroupsButAllowsSameRouteTargets(t *testing.T) {
 	t.Setenv("PESTIROUTE_AMBIGUITY_NATIVE_KEY", "synthetic-native")
 	path := t.TempDir() + "/gateway.yaml"

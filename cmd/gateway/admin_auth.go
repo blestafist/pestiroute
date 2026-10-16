@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"errors"
@@ -24,7 +25,7 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 		args = args[1:]
 	}
 	if len(args) == 0 || isHelp(args[0]) {
-		_, _ = io.WriteString(env.stdout, "usage: gateway admin [--db PATH] [--master-key PATH] auth [--debug] <start --account ID|continue --session ID|refresh --account ID>\n")
+		_, _ = io.WriteString(env.stdout, "usage: gateway admin [--db PATH] [--master-key PATH] auth [--debug] <start --account ID|continue --session ID [--callback-stdin]|refresh --account ID>\n")
 		return nil
 	}
 	if args[0] != "start" && args[0] != "continue" && args[0] != "refresh" {
@@ -32,11 +33,27 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	}
 	fs := adminFlags("auth " + args[0])
 	accountID, sessionID := fs.String("account", "", "account ID"), fs.String("session", "", "opaque continuation handle")
+	callbackStdin := fs.Bool("callback-stdin", false, "read a pasted callback URL from stdin")
 	if err := parseAdminFlags(fs, args[1:]); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || args[0] == "continue" && (*sessionID == "" || *accountID != "") || args[0] != "continue" && (*accountID == "" || *sessionID != "") {
+	if fs.NArg() != 0 || args[0] == "continue" && (*sessionID == "" || *accountID != "") || args[0] != "continue" && (*accountID == "" || *sessionID != "") || args[0] != "continue" && *callbackStdin {
 		return errors.New("admin: invalid auth command arguments")
+	}
+	var callbackInput string
+	if *callbackStdin {
+		if env.stdin == nil {
+			return errors.New("admin: invalid callback input")
+		}
+		input, err := bufio.NewReaderSize(io.LimitReader(env.stdin, 4098), 4098).ReadString('\n')
+		if err != nil && err != io.EOF {
+			return errors.New("admin: invalid callback input")
+		}
+		callbackInput = strings.TrimSuffix(input, "\n")
+		callbackInput = strings.TrimSuffix(callbackInput, "\r")
+		if len(callbackInput) > 4096 {
+			return errors.New("admin: invalid callback input")
+		}
 	}
 	accounts, credentials := sqlite.NewAccounts(db), sqlite.NewCredentials(db)
 	registry := env.authRegistry
@@ -76,7 +93,7 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	case "start":
 		session, err = coordinator.Start(env.ctx, *accountID)
 	case "continue":
-		session, err = coordinator.Continue(env.ctx, *sessionID)
+		session, err = coordinator.Continue(env.ctx, *sessionID, callbackInput)
 	case "refresh":
 		var updated core.AuthCredentials
 		updated, err = coordinator.Refresh(env.ctx, *accountID)
@@ -131,7 +148,11 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	}
 	_, _ = fmt.Fprintf(env.stdout, "authentication requires continuation session=%s expires_at=%s\n", session.ID, session.ExpiresAt.UTC().Format(time.RFC3339))
 	if action := session.UserAction; action != nil {
-		_, _ = fmt.Fprintf(env.stdout, "verification_uri=%q user_code=%q interval_seconds=%g\n", action.VerificationURI, action.UserCode, action.PollInterval.Seconds())
+		if action.UserCode == "" && action.PollInterval == 0 {
+			_, _ = fmt.Fprintf(env.stdout, "verification_uri=%q\n", action.VerificationURI)
+		} else {
+			_, _ = fmt.Fprintf(env.stdout, "verification_uri=%q user_code=%q interval_seconds=%g\n", action.VerificationURI, action.UserCode, action.PollInterval.Seconds())
+		}
 	}
 	return nil
 }
