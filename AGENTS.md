@@ -62,6 +62,7 @@ Accepted constraints bind implementation. Proposed interfaces and libraries are 
 - Planner creates cards just ahead of execution. Keep distant work at roadmap level until evidence supports decomposition; do not create placeholder cards for every future feature.
 - Before starting a registered task, confirm READY status and completed dependencies, then set ACTIVE and an identifiable owner. Preserve unrelated edits and avoid expanding into adjacent tasks.
 - Prefer a working client-to-fake-backend slice over speculative frameworks. Add directories and abstractions when a scoped feature needs them.
+- Parallel OpenCode sessions use separate worktrees and exact milestone filters; see [workflow](docs/implementation/PARALLEL.md). Keep one writer per checkout, lane-specific TASKS/CURRENT edits, separate TMPDIR values for process tests, and explicit ownership of shared files. A task completed on another branch is not an integrated dependency. Never switch branches underneath a running session or push a lane to main.
 - If blocked, record the concrete reason and what unblocks it in the card, set BLOCKED, and summarize only the immediate impact in CURRENT.
 - On completion, record actual result and primary check in TASKS, concise verification evidence in the card, and update CURRENT if focus, commands, blockers, or capabilities changed. Mark DONE only when acceptance is verified.
 

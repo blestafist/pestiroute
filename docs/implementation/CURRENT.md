@@ -6,13 +6,40 @@
 
 M5.1 and M5.2 handoffs are **conditionally accepted**, not fully DONE: [DEC-012/013](../project/DECISIONS.md) preserve unwaived live gates. Exact feature/evidence ceilings belong in [M4](M4-COMPATIBILITY.md), [Codex](M5.1-COMPATIBILITY.md) and [local-runtime](M5.2-COMPATIBILITY.md) matrices. Ollama and llama.cpp scoped live text gates completed; vLLM live evidence remains blocked. Tools/reasoning/parallel or compute cancellation are not promoted beyond their recorded scope. Historical completion/check evidence lives in [archived rows](archive/TASKS-DONE.md) and the stable task cards.
 
-## M6 complete; M7 offline candidate implementation under DEC-018
+## M7 merged; next: independent M8 and M9 lanes
 
-`dev-m6` completed the external Connector runtime and was merged by [PR #14](https://github.com/blestafist/pestiroute/pull/14) as `1391227`. All 33 tasks (001–032 plus audit follow-up 033) are verified DONE in the [archive](archive/TASKS-DONE.md#m6--external-plugin-runtime). Source `05be332a5b5a1cc84d198175e17500c2930a562c` passed [exact-head hosted CI](https://github.com/blestafist/pestiroute/actions/runs/38712179217/attempts/2) and [PR CI](https://github.com/blestafist/pestiroute/actions/runs/38712189193): focused uncached race tests, both clean-checkout CLI procedures and serialized shared checks.
+[PR #15](https://github.com/blestafist/pestiroute/pull/15) merged to main as
+`1a76494113b20561cf5b04cf66c4ba0487e762c0`. Source `44f5a29` passed both
+[PR CI](https://github.com/blestafist/pestiroute/actions/runs/38951339646) and
+[branch CI](https://github.com/blestafist/pestiroute/actions/runs/38951332753):
+external admission regressions, both M6 CLI procedures, format/vet/unit/race/build.
+Review fixed Responses image URLs, malformed tool arguments, late SSE content,
+and fixture whitespace handling. All 16 M7 tasks are in the
+[completed registry](archive/TASKS-DONE.md#m7--claude-code-subscription-connector-research).
 
-The native Responses Connector runs in a supervised Linux child behind the same Core interface. Four concurrent operations, invocation/account/epoch isolation, bounded incremental IPC/reverse HTTP, cancellation, finite drain/reaping, safe accounting and recovery for new work are verified. Final audit fixed serialized admission and stale readiness before watcher scheduling. See [acceptance and limits](M6-HANDOFF.md), [operations](LOCAL-M6.md) and [minimal integration/example](M6-INTEGRATION.md). Core has no concrete connector/adapter or IPC imports. This is trusted same-user crash isolation, not an OS sandbox; generic Models/EstimateUsage child helpers currently receive no host services. Gateway `/readyz` is not aggregate connector health.
+The Claude connector is still an offline candidate: public Execute fails closed,
+gateway composition rejects it, capabilities remain Unknown, and no live support
+is claimed. DEC-018/019 and M7-005's unwaived live gates remain in force.
+M6 is complete; its external child runtime, acceptance and operational boundaries
+remain in [M6-HANDOFF](M6-HANDOFF.md) and [LOCAL-M6](LOCAL-M6.md).
 
-No M6 blocker remains. M7 research baseline tasks ([M7-001](tasks/M7-001.md) through M7-006) and authorized offline candidate tasks ([M7-007](tasks/M7-007.md) through [M7-016](tasks/M7-016.md)) are all DONE; [M7-013](tasks/M7-013.md) is DONE (reviewer PASS `ses_ebaa85905ffeURkQ7y2HLohFLR` / Planner closure). The bounded offline candidate objective is complete under DEC-018 and DEC-019. The connector remains strictly an offline candidate: it is uncomposed and non-routable in gateway configurations, with capabilities `Unknown`, no public execute transport seam (public Execute fails closed), and zero live routes or capability promotion. Any live testing requires explicit separate authorization, unblocked live prerequisites (including provisioned official credentials, network authorization, and security review), and is not claimed live ready. Live provider calls, login, real credential handling/persistence, traffic capture, binary reverse engineering, and production routing remain prohibited absent separate authorization and review.
+### M8 lane
+
+[Claude Code execution/integration](M8-CLAUDE-INTEGRATION.md), branch `dev-m8`.
+Start [M8-001](tasks/M8-001.md) (READY): settle the integration binding and scope
+decisions. M8-002/003 are DRAFT; live/provider work and enabling production routes
+are not authorized by this planning handoff.
+
+### M9 lane
+
+[Chat Completions client compatibility](M9-CHAT-COMPLETIONS.md), branch `dev-m9`.
+Start [M9-001](tasks/M9-001.md) (READY): define the native adapter/Connector binding.
+M9-002/003 are DRAFT. The endpoint is not implemented yet; this lane does not
+wait for Claude provider access.
+
+Use [separate worktrees and milestone filters](PARALLEL.md): `/next 10 M8` and
+`/next 10 M9`. Keep lane-specific TASKS/CURRENT updates and shared gateway/spec
+ownership explicit; a branch's completion is not evidence of integration on main.
 
 ## Open gates carried forward
 
@@ -28,6 +55,6 @@ None is an M6 dependency. Preserve the isolated operator credential store and pr
 
 ## Checks and operations
 
-Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M6 closure runs this exact command; local Unix-socket tests are blocked by the execution sandbox, while local build/vet and pure admission regression passed.
+Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. This cloud host lacks `/proc/<pid>/task/<tid>/children`, so existing process-inspection tests and M6 CLI smoke cannot fully pass locally; use hosted Linux CI for that gate. Parallel worktrees need distinct TMPDIR values as well as package serialization.
 
-M7 research started with [M7-001](tasks/M7-001.md) (DONE). [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.
+[Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.
