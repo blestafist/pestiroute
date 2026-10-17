@@ -37,7 +37,7 @@ var _ core.Connector = (*Connector)(nil)
 func NewConnector() *Connector { return &Connector{state: core.HealthUnavailable} }
 
 func (c *Connector) Descriptor() core.Descriptor {
-	return core.Descriptor{ID: componentID, Kind: core.ComponentConnector, ImplementationVersion: "1.0.0", APIVersions: []core.APIVersion{{Major: 1}}, Protocols: []string{protocol}, Operations: []string{"execute"}, ConnectorType: "api", AuthMethods: []string{"oauth"}}.Clone()
+	return core.Descriptor{ID: componentID, Kind: core.ComponentConnector, ImplementationVersion: "1.0.0", APIVersions: []core.APIVersion{{Major: 1}}, Protocols: []string{protocol}, Operations: []string{"execute", "authenticate"}, ConnectorType: "api", AuthMethods: []string{"oauth"}}.Clone()
 }
 
 func (c *Connector) Init(ctx context.Context, in core.ComponentConfig) error {
@@ -98,11 +98,14 @@ func (c *Connector) EstimateUsage(ctx context.Context, q core.UsageQuery, _ core
 	}
 	return core.EstimateResult{Supported: false, Known: false}, nil
 }
-func (c *Connector) Authenticate(ctx context.Context, _ core.AuthRequest, _ core.InvocationServices) (core.AuthResult, *core.GatewayError) {
-	if err := ctx.Err(); err != nil {
-		return core.AuthResult{}, contextError(err)
+func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
+	if e := c.validate(ctx, protocol, core.ModeTranslation); e != nil {
+		return core.AuthResult{}, e
 	}
-	return core.AuthResult{Supported: false}, nil
+	if req.Action != "refresh" || len(req.State) != 0 || req.CallbackInput != "" {
+		return core.AuthResult{Supported: false}, nil
+	}
+	return c.authenticateRefresh(ctx, services)
 }
 func (c *Connector) validate(ctx context.Context, p, m string) *core.GatewayError {
 	c.mu.Lock()

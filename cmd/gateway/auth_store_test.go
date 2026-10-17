@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,10 +11,155 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blestafist/pestiroute/internal/connector/antigravity"
 	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
+
+type antigravityExecuteCredentials struct {
+	value   []byte
+	expires time.Time
+}
+
+func (c antigravityExecuteCredentials) Get(ctx context.Context, name string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if name != "oauth" || !c.expires.After(time.Now()) {
+		return nil, core.ErrCredentialUnavailable
+	}
+	return append([]byte(nil), c.value...), nil
+}
+
+func TestSQLiteAuthCoordinatorStoreAntigravityEncryptedRefreshReloadExecute(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "auth.db")
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = sqlite.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	accounts, credentials, sessions := sqlite.NewAccounts(db), sqlite.NewCredentials(db), sqlite.NewAuthSessions(db)
+	if _, err = accounts.Create(ctx, sqlite.Account{ID: "antigravity-account", Connector: "antigravity", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(dir, "master.key")
+	if err = os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := []byte(`{"access_token":"SYNTHETIC_EXPIRED_ACCESS","refresh_token":"SYNTHETIC_ORIGINAL_REFRESH"}`)
+	envelope, err := secure.Seal(key, 1, "key-v1", "credentials", "credential", "antigravity-account", initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
+	if _, err = credentials.Create(ctx, sqlite.Credential{ID: "credential", AccountID: "antigravity-account", FormatVersion: envelope.FormatVersion, KeyVersion: envelope.KeyVersion, Nonce: envelope.Nonce, Ciphertext: envelope.Ciphertext, ExpiresAt: &expired}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := newSQLiteAuthCoordinatorStore(accounts, credentials, sessions, key, "key-v1", map[string]map[string]string{"antigravity-account": {"oauth": "credential"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connector := antigravity.NewConnector()
+	defer connector.Close(ctx)
+	transport, err := antigravity.NewOfflineTestTransport(
+		antigravity.OfflineTestResponse{StatusCode: http.StatusOK, Body: []byte(`{"access_token":"SYNTHETIC_ENCRYPTED_ROTATED_ACCESS","refresh_token":"SYNTHETIC_ENCRYPTED_ROTATED_REFRESH","expires_in":3600}`)},
+		antigravity.OfflineTestResponse{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: []byte("data: {\"response\":{\"done\":true}}\n\n")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := core.NewRegistry(map[core.ComponentKind]core.APIVersion{core.ComponentConnector: {Major: 1}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Register("antigravity", connector, core.ComponentConnector); err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Init(ctx, "antigravity", core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := core.NewAuthCoordinator(registry, store, authServicesFactoryFunc(func(core.AttemptScope) core.InvocationServices {
+		return core.InvocationServices{Transport: transport}
+	}), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := coordinator.Refresh(ctx, "antigravity-account")
+	if err != nil || refreshed.Revision != 2 || refreshed.ExpiresAt == nil || !refreshed.ExpiresAt.After(time.Now()) || len(refreshed.Values) != 1 {
+		t.Fatalf("refresh=%+v err=%v", refreshed, err)
+	}
+	if string(refreshed.Values["oauth"]) != `{"access_token":"SYNTHETIC_ENCRYPTED_ROTATED_ACCESS","refresh_token":"SYNTHETIC_ENCRYPTED_ROTATED_REFRESH"}` {
+		t.Fatalf("unexpected replacement oauth bundle %q", refreshed.Values["oauth"])
+	}
+	requests := transport.Requests()
+	if len(requests) != 1 || requests[0].URL != "https://oauth.synthetic.invalid/token" {
+		t.Fatalf("refresh requests=%+v", requests)
+	}
+	var storedCiphertext []byte
+	if err = db.QueryRow(`SELECT ciphertext FROM credentials WHERE id='credential'`).Scan(&storedCiphertext); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(storedCiphertext), "SYNTHETIC_ENCRYPTED_ROTATED") || string(storedCiphertext) == string(envelope.Ciphertext) {
+		t.Fatal("refresh generation was not replaced by encrypted ciphertext")
+	}
+	stored, err := credentials.Get(ctx, "antigravity-account", "credential")
+	if err != nil || stored.Revision != 2 || stored.ExpiresAt == nil || absDuration(stored.ExpiresAt.Sub(*refreshed.ExpiresAt)) > time.Millisecond {
+		t.Fatalf("stored revision/expiry=%+v err=%v", stored, err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	reloadedCredentials := sqlite.NewCredentials(db)
+	plain, err := reloadedCredentials.GetDecrypted(ctx, "antigravity-account", "credential", key)
+	if err != nil || string(plain) != string(refreshed.Values["oauth"]) {
+		t.Fatalf("reloaded credential=%q err=%v", plain, err)
+	}
+	stored, err = reloadedCredentials.Get(ctx, "antigravity-account", "credential")
+	if err != nil || stored.Revision != 2 || stored.ExpiresAt == nil || absDuration(stored.ExpiresAt.Sub(*refreshed.ExpiresAt)) > time.Millisecond {
+		t.Fatalf("reloaded revision/expiry=%+v err=%v", stored, err)
+	}
+	out, ge := connector.Execute(ctx, core.ExecutionRequest{Payload: core.RawPayload{Protocol: "openai.responses.v1", ContentType: "application/json", Body: []byte(`{"model":"gemini-2.5-pro","input":"synthetic prompt","stream":true}`)}}, core.AttemptScope{Mode: core.ModeTranslation}, core.InvocationServices{Transport: transport, Credentials: antigravityExecuteCredentials{value: plain, expires: *stored.ExpiresAt}})
+	if ge != nil {
+		t.Fatalf("Execute after decrypted reload: %v", ge)
+	}
+	defer out.Stream.Close()
+	requests = transport.Requests()
+	if len(requests) != 2 || requests[1].Header.Get("Authorization") != "Bearer SYNTHETIC_ENCRYPTED_ROTATED_ACCESS" {
+		t.Fatalf("Execute requests=%+v", requests)
+	}
+	for name, values := range requests[1].Header {
+		if strings.Contains(strings.ToLower(name), "refresh") || strings.Contains(strings.Join(values, " "), "SYNTHETIC_ENCRYPTED_ROTATED_REFRESH") {
+			t.Fatalf("refresh token leaked in request header %q", name)
+		}
+	}
+	if strings.Contains(string(requests[1].Body), "SYNTHETIC_ENCRYPTED_ROTATED_REFRESH") {
+		t.Fatalf("refresh token leaked in request body %q", requests[1].Body)
+	}
+	if requests[0].Method != http.MethodPost || requests[1].Method != http.MethodPost {
+		t.Fatalf("unexpected requests: %+v", requests)
+	}
+}
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
 
 type integratedAuthConnector struct {
 	core.Connector

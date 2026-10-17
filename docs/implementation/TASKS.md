@@ -120,7 +120,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M10 — Google Antigravity Connector
 
-[M10 brief](M10-ANTIGRAVITY.md). Branch `dev-m10-antigravity`; exact filter `/next 10 M10`. M10-001–007 DONE.
+[M10 brief](M10-ANTIGRAVITY.md). Branch `dev-m10-antigravity`; exact filter `/next 10 M10`. M10-001–008 DONE; M10-009 DRAFT (browser auth & gateway composition under user-granted gateway window).
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -131,6 +131,8 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | [M10-005](tasks/M10-005.md) | DONE | GPT-6 Luna (M10-005 worker) / ses_eb4ff2737ffeXzROhQfbTcVyMl (reviewer) / Planner closure | M10-004 | Publish Antigravity offline handoff and next auth/tools scope | Offline matrix/handoff published; fake-only scope, capability Unknowns, event omissions, and DRAFT research follow-ups verified | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/opencode GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/...` && `git diff --check`; [evidence](tasks/M10-005.md#completion-evidence) |
 | [M10-006](tasks/M10-006.md) | DONE | GPT-6 Luna (M10-006 worker) / ses_eb4f0317affeF68uEGHOSnlleP (reviewer) / Planner closure | M10-005 | Research and bind Antigravity tool calling, history, and thought-signature constraints | Tool candidate binding specified; signature-dependent replay BLOCKED; synthetic multi-round cases defined | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/opencode GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/...` && `git diff --check`; [evidence](tasks/M10-006.md#completion-evidence) |
 | [M10-007](tasks/M10-007.md) | DONE | GPT-6 Luna (M10-007 worker) / ses_eb4e7ab49ffeWmCMvj6vGqQBli (reviewer) / Planner closure | M10-005 | Research and bind Antigravity OAuth refresh lifecycle and Authenticate state machine | OAuth refresh candidate binding and single oauth layout specified; coordinator/Authenticate CAS preserved, live OAuth Unknown/Blocked | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/opencode GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/...` && `git diff --check`; [evidence](tasks/M10-007.md#completion-evidence) |
+| [M10-008](tasks/M10-008.md) | DONE | GPT-6 Luna (M10-008 worker) / ses_eb4be2accffeB5AVy9YALT2nBG (reviewer) / Planner closure | M10-007 | Implement offline OAuth refresh and credential bundle compatibility | Offline OAuth refresh, strict Execute credential parser, and real encrypted SQLite CAS/reload regression test verified | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/opencode GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/...` && `TMPDIR=/tmp/pestiroute-lane.hGmeZS/opencode GOFLAGS=-p=1 go test -count=1 ./cmd/gateway -run 'Antigravity'` && `git diff --check`; [evidence](tasks/M10-008.md#completion-evidence) |
+| [M10-009](tasks/M10-009.md) | DRAFT | — | M10-008 | Implement Antigravity browser-auth lifecycle (PKCE, kickoff/callback) and gateway composition | — | [Verification](tasks/M10-009.md#verification) |
 
 ## M11 — Administrative HTTP API
 

@@ -18,7 +18,7 @@ func TestFixturesIntegrity(t *testing.T) {
 	wantFiles := []string{
 		"request-positive.json", "stream-text.sse", "stream-usage.sse",
 		"stream-premature-eof.sse", "stream-malformed.sse", "http-401.json",
-		"http-403.json", "http-429.json", "http-500.json",
+		"http-403.json", "http-429.json", "http-500.json", "oauth-refresh-rotated.json",
 	}
 	manifestBytes, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
@@ -78,7 +78,14 @@ func checkSyntheticContent(t *testing.T, name string, data []byte) {
 	t.Helper()
 	content := string(data)
 	lower := strings.ToLower(content)
-	for _, marker := range []string{"bearer ", "access_token", "refresh_token", "client_secret", "api_key", "authorization:"} {
+	markers := []string{"bearer ", "access_token", "refresh_token", "client_secret", "api_key", "authorization:"}
+	if name == "oauth-refresh-rotated.json" {
+		markers = []string{"bearer ", "client_secret", "api_key", "authorization:"}
+		if !strings.Contains(content, "SYNTHETIC_") {
+			t.Errorf("%s lacks conspicuously synthetic token values", name)
+		}
+	}
+	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
 			t.Errorf("%s contains credential-like marker %q", name, marker)
 		}
@@ -100,6 +107,14 @@ func checkFixtureSemantics(t *testing.T, root string) {
 			t.Fatal(err)
 		}
 		return data
+	}
+	var refresh struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(read("oauth-refresh-rotated.json"), &refresh); err != nil || refresh.AccessToken != "SYNTHETIC_ROTATED_ACCESS_TOKEN" || refresh.RefreshToken != "SYNTHETIC_ROTATED_REFRESH_TOKEN" || refresh.ExpiresIn <= 0 {
+		t.Errorf("invalid synthetic OAuth refresh response: %+v (%v)", refresh, err)
 	}
 	var request struct {
 		Project string `json:"project"`

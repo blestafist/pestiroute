@@ -13,12 +13,36 @@ import (
 	"github.com/blestafist/pestiroute/internal/core"
 )
 
-type offlineTransport interface {
-	core.HTTPDoer
-	antigravityOfflineFakeOnly()
-}
 type oauthCredentials struct {
-	AccessToken string `json:"access_token"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+}
+
+func parseOAuthCredentials(raw []byte, requireRefresh bool) (oauthCredentials, bool) {
+	if !uniqueJSON(raw) {
+		return oauthCredentials{}, false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return oauthCredentials{}, false
+	}
+	for key := range fields {
+		if key != "access_token" && key != "refresh_token" {
+			return oauthCredentials{}, false
+		}
+	}
+	var result oauthCredentials
+	if json.Unmarshal(fields["access_token"], &result.AccessToken) != nil || strings.TrimSpace(result.AccessToken) == "" || strings.ContainsAny(result.AccessToken, "\r\n") {
+		return oauthCredentials{}, false
+	}
+	refreshRaw, hasRefresh := fields["refresh_token"]
+	if hasRefresh && (json.Unmarshal(refreshRaw, &result.RefreshToken) != nil || strings.TrimSpace(result.RefreshToken) == "" || strings.ContainsAny(result.RefreshToken, "\r\n")) {
+		return oauthCredentials{}, false
+	}
+	if requireRefresh && !hasRefresh {
+		return oauthCredentials{}, false
+	}
+	return result, true
 }
 
 func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
@@ -28,8 +52,8 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	c.mu.Lock()
 	cfg := c.cfg
 	c.mu.Unlock()
-	transport, ok := services.Transport.(offlineTransport)
-	if !ok || nilTransport(transport) {
+	transport, ok := offlineTestTransport(services.Transport)
+	if !ok {
 		return core.ExecutionResponse{}, unavailable()
 	}
 	mediaType, _, mediaErr := mime.ParseMediaType(req.Payload.ContentType)
@@ -50,10 +74,8 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if err != nil {
 		return core.ExecutionResponse{}, unauthenticated()
 	}
-	var creds oauthCredentials
-	d := json.NewDecoder(bytes.NewReader(secret))
-	d.DisallowUnknownFields()
-	if !uniqueJSON(secret) || d.Decode(&creds) != nil || d.Decode(new(any)) != io.EOF || strings.TrimSpace(creds.AccessToken) == "" || strings.ContainsAny(creds.AccessToken, "\r\n") {
+	creds, valid := parseOAuthCredentials(secret, false)
+	if !valid {
 		return core.ExecutionResponse{}, unauthenticated()
 	}
 	body, err := json.Marshal(map[string]any{
@@ -153,7 +175,18 @@ func closeResponse(r *http.Response) {
 		_ = r.Body.Close()
 	}
 }
-func nilTransport(t offlineTransport) bool {
+func offlineTestTransport(doer core.HTTPDoer) (core.HTTPDoer, bool) {
+	switch value := doer.(type) {
+	case *OfflineTestTransport:
+		return value, value != nil
+	case packageTestTransport:
+		return value, !nilTransport(value.doer)
+	default:
+		return nil, false
+	}
+}
+
+func nilTransport(t core.HTTPDoer) bool {
 	if t == nil {
 		return true
 	}

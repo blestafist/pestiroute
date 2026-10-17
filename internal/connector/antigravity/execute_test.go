@@ -92,7 +92,7 @@ func request(body string) core.ExecutionRequest {
 	return core.ExecutionRequest{Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: []byte(body)}}
 }
 func services(fake *fakeDoer) core.InvocationServices {
-	return core.InvocationServices{Transport: fake, Credentials: credentials{data: []byte(`{"access_token":"synthetic-token"}`)}}
+	return core.InvocationServices{Transport: packageTestDoer(fake), Credentials: credentials{data: []byte(`{"access_token":"synthetic-token"}`)}}
 }
 func response(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
@@ -248,7 +248,7 @@ func TestAdmissionRejectsBeforeDispatch(t *testing.T) {
 func TestCredentialAndHTTPFailures(t *testing.T) {
 	c := ready(t)
 	req := request(`{"model":"gemini-2.5-flash","input":"x","stream":true}`)
-	for _, raw := range [][]byte{nil, []byte(`{}`), []byte(`{"access_token":"x","refresh_token":"y"}`), []byte(`{"access_token":"x"} {}`)} {
+	for _, raw := range [][]byte{nil, []byte(`{}`), []byte(`{"access_token":"x","other":"y"}`), []byte(`{"access_token":"x","refresh_token":""}`), []byte(`{"access_token":"x","access_token":"y"}`), []byte(`{"access_token":"x"} {}`), []byte(`{"access_token":"x","refresh_token":4}`), []byte(`{"access_token":"x","REFRESH_TOKEN":"y"}`), []byte(`{"access_token":"x","refresh_token":"r","REFRESH_TOKEN":"y"}`), []byte(`{"ACCESS_TOKEN":"x","refresh_token":"r"}`)} {
 		f := &fakeDoer{response: response(200, "data: {}\n\n")}
 		svc := services(f)
 		svc.Credentials = credentials{data: raw}
@@ -257,6 +257,14 @@ func TestCredentialAndHTTPFailures(t *testing.T) {
 			t.Errorf("credentials %s: error=%v calls=%d", raw, ge, f.calls)
 		}
 	}
+	f := &fakeDoer{response: response(200, "data: {\"response\":{\"done\":true}}\n\n")}
+	svc := services(f)
+	svc.Credentials = credentials{data: []byte(`{"access_token":"SYNTHETIC_ACCESS","refresh_token":"SYNTHETIC_REFRESH"}`)}
+	out, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: core.ModeTranslation}, svc)
+	if ge != nil || f.calls != 1 || f.request == nil || f.request.Header.Get("Authorization") != "Bearer SYNTHETIC_ACCESS" {
+		t.Fatalf("oauth bundle dispatch: error=%v calls=%d", ge, f.calls)
+	}
+	_ = out.Stream.Close()
 	for status, category := range map[int]core.ErrorCategory{401: core.CategoryUnauthenticated, 403: core.CategoryUnauthenticated, 429: core.CategoryRateLimited, 500: core.CategoryUnavailable, 302: core.CategoryUnavailable} {
 		limited := &trackingBody{Reader: strings.NewReader(strings.Repeat("x", 20000))}
 		f := &fakeDoer{response: &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: limited}}
