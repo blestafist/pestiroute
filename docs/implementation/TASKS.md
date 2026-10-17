@@ -125,7 +125,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
 | [M10-001](tasks/M10-001.md) | DONE | GPT-6 Luna (M10-001 worker) | — | Pin current Antigravity source and authentication evidence | Dated official and pinned MIT plugin research; unsupported wire facts explicit | [git diff --check](tasks/M10-001.md#completion-evidence) |
-| [M10-002](tasks/M10-002.md) | DRAFT | — | M10-001 | Bind one Antigravity execution slice | — | [Verification](tasks/M10-002.md#verification) |
+| [M10-002](tasks/M10-002.md) | DONE | GPT-6 Luna (M10-002 worker) | M10-001 | Bind one Antigravity execution slice in M10-BINDING.md | Normative text/stream candidate binding, error/retry matrix, 403 unauthenticated mapping; no contract ADR needed | [git diff --check](tasks/M10-002.md#completion-evidence) |
 | [M10-003](tasks/M10-003.md) | DRAFT | — | M10-002 | Prepare provenance-labelled fixtures and slice decision | — | [Verification](tasks/M10-003.md#verification) |
 | [M10-004](tasks/M10-004.md) | DRAFT | — | M10-003 | Implement the minimal offline Antigravity vertical slice | — | [Verification](tasks/M10-004.md#verification) |
 | [M10-005](tasks/M10-005.md) | DRAFT | — | M10-004 | Publish Antigravity offline handoff and next auth/tools scope | — | [Verification](tasks/M10-005.md#verification) |
