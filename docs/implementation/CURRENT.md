@@ -34,7 +34,7 @@ the earlier CURRENT claim that it awaited review was stale.
 | --- | --- | --- | --- |
 | [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-001 | Current Antigravity research → bounded Connector slice; no Claude dependency |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
-| [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-003 (DONE) | WebUI shell, fixture adapter, account and key workflows complete; M12-004 DRAFT |
+| [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-004 (DONE) | WebUI shell, fixture adapter, account/key workflows, overview, usage, routing and diagnostics screens complete; M12-005 DRAFT |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
 
 Each has a dedicated worktree and `/next 10 M10` (or M11/M12/M13) filter.
@@ -45,9 +45,9 @@ features. All new branches start from the same accepted planning baseline.
 ### M12 — WebUI lane focus
 
 - Active branch: `dev-m12-webui` (worktree `/home/pestix/code/pestiroute-m12`)
-- Completed tasks: [M12-001](tasks/M12-001.md) (DONE), [M12-002](tasks/M12-002.md) (DONE), and [M12-003](tasks/M12-003.md) (DONE) — React 19/TS/Vite shell, responsive navigation, 6 route stubs, theme toggle, and fixture adapter with account/key workflows, write-only credentials, one-time secret modal, named revoke confirmation, CAS conflict UI, and rendered tri-state capability badges verified.
-- Next task: [M12-004](tasks/M12-004.md) (DRAFT) — overview usage routing and diagnostics screens; pending planning preparation.
-- Shared-file ownership: None for M12-001/002/003. Frontend tasks operate strictly within `web/**` and do not touch gateway runtime until M11-007 integrates on main.
+- Completed tasks: [M12-001](tasks/M12-001.md) (DONE), [M12-002](tasks/M12-002.md) (DONE), [M12-003](tasks/M12-003.md) (DONE), and [M12-004](tasks/M12-004.md) (DONE) — React 19/TS/Vite shell, responsive navigation, 6 route stubs, theme toggle, and fixture adapter with account/key workflows, write-only credentials, one-time secret modal, named revoke confirmation, CAS conflict UI, rendered tri-state capability badges, overview readiness, filterable/paginated usage ledger with attempt/fallback details, routing topology, settings/diagnostics, and session view-cache clearing verified.
+- Next task: [M12-005](tasks/M12-005.md) (DRAFT) — integrate accepted admin API and authentication (waits for M11-007 on main).
+- Shared-file ownership: None for M12-001/002/003/004. Frontend tasks operate strictly within `web/**` and do not touch gateway runtime until M11-007 integrates on main.
 
 
 ## Open gates carried forward
