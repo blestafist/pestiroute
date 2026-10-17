@@ -62,7 +62,7 @@ func TestClaudeCodeDefaultCompositionInitializesButHasNoRuntimeTransport(t *test
 func TestClaudeCodeCompositionProtectedAdmissionAndOfflineDispatch(t *testing.T) {
 	ctx := context.Background()
 	_, dbPath, keyPath := protectedFixture(t)
-	const accountID, connectorID, credentialID, model = "claude-account", "pestiroute.claudecode.messages", "oauth", "claude-fixture-model"
+	const accountID, connectorID, defaultCredentialID, credentialID, model = "claude-account", "pestiroute.claudecode.messages", "oauth", "custom-claude-credential", "claude-fixture-model"
 	const unwrappedAccount, unwrappedID, unwrappedModel = "claude-unwrapped-account", "claude-unwrapped", "claude-unwrapped-model"
 	db, err := sqlite.Open(dbPath)
 	if err != nil {
@@ -78,11 +78,11 @@ func TestClaudeCodeCompositionProtectedAdmissionAndOfflineDispatch(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, err := secure.Seal(key, 1, "v1", "credentials", credentialID, accountID, []byte(`{"access_token":"synthetic-old-access","refresh_token":"synthetic-old-refresh","expires_at":"2000-01-01T00:00:00Z"}`))
+	initial, err := secure.Seal(key, 1, "v1", "credentials", defaultCredentialID, accountID, []byte(`{"access_token":"synthetic-old-access","refresh_token":"synthetic-old-refresh","expires_at":"2000-01-01T00:00:00Z"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: credentialID, AccountID: accountID, FormatVersion: initial.FormatVersion, KeyVersion: initial.KeyVersion, Nonce: initial.Nonce, Ciphertext: initial.Ciphertext}); err != nil {
+	if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: defaultCredentialID, AccountID: accountID, FormatVersion: initial.FormatVersion, KeyVersion: initial.KeyVersion, Nonce: initial.Nonce, Ciphertext: initial.Ciphertext}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -130,13 +130,24 @@ func TestClaudeCodeCompositionProtectedAdmissionAndOfflineDispatch(t *testing.T)
 		t.Fatalf("complete synthetic Claude OAuth: %q err=%v", completed, err)
 	}
 	verifyDB := mustOpenAdminDB(t, dbPath)
-	storedCredential, err := sqlite.NewCredentials(verifyDB).Get(ctx, accountID, credentialID)
+	storedCredential, err := sqlite.NewCredentials(verifyDB).Get(ctx, accountID, defaultCredentialID)
 	if err != nil || storedCredential.ExpiresAt == nil || !storedCredential.ExpiresAt.After(time.Now()) {
 		t.Fatalf("OAuth flow did not persist fresh credentials: err=%v", err)
 	}
 	plain, err := secure.Open(key, secure.Envelope{FormatVersion: storedCredential.FormatVersion, KeyVersion: storedCredential.KeyVersion, Nonce: storedCredential.Nonce, Ciphertext: storedCredential.Ciphertext}, "credentials", storedCredential.ID, storedCredential.AccountID)
 	if err != nil || !strings.Contains(string(plain), accessToken) || strings.Contains(string(storedCredential.Ciphertext), accessToken) {
 		t.Fatal("OAuth callback credential was not encrypted in SQLite")
+	}
+	customEnvelope, err := secure.Seal(key, storedCredential.FormatVersion, storedCredential.KeyVersion, "credentials", credentialID, accountID, plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(verifyDB).Create(ctx, sqlite.Credential{ID: credentialID, AccountID: accountID, FormatVersion: customEnvelope.FormatVersion, KeyVersion: customEnvelope.KeyVersion, Nonce: customEnvelope.Nonce, Ciphertext: customEnvelope.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	storedCredential, err = sqlite.NewCredentials(verifyDB).Get(ctx, accountID, credentialID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := verifyDB.Close(); err != nil {
 		t.Fatal(err)
@@ -178,8 +189,16 @@ func TestClaudeCodeCompositionProtectedAdmissionAndOfflineDispatch(t *testing.T)
 	config := fixtureProtectedConfig(dbPath, keyPath, "127.0.0.1:0")
 	p := config.protected
 	p.Connectors = []protectedConnector{
-		{ID: connectorID, Kind: "connector", Implementation: "pestiroute.claudecode.messages", Protocols: []string{responsesProtocol}, Settings: nativeSettings{Model: model, AccountID: accountID}},
+		{ID: connectorID, Kind: "connector", Implementation: "pestiroute.claudecode.messages", Protocols: []string{responsesProtocol}, Settings: nativeSettings{Model: model, AccountID: accountID, CredentialID: credentialID}},
 		{ID: unwrappedID, Kind: "connector", Implementation: "pestiroute.claudecode.messages", Protocols: []string{responsesProtocol}, Settings: nativeSettings{Model: unwrappedModel, AccountID: unwrappedAccount}},
+	}
+	badConfig := config
+	badProtected := *p
+	badProtected.Connectors = append([]protectedConnector(nil), p.Connectors...)
+	badProtected.Connectors[0].Settings.CredentialID = "  "
+	badConfig.protected = &badProtected
+	if _, err := prepareProtectedConfig(ctx, badConfig); err == nil || !strings.Contains(err.Error(), "Claude Code credential_id cannot be whitespace") {
+		t.Fatalf("whitespace-only credential_id error = %v", err)
 	}
 	p.Routes = []protectedRoute{
 		{ID: "claude-route", Protocol: responsesProtocol, Mode: "translation", Model: model, Adapter: "pestiroute.responses.native", Policy: "standard", Budget: routeBudget{UnknownEstimate: "reserve", ConservativeTokens: ptrInt64(100)}, Targets: []routeTarget{{Connector: connectorID, Account: accountID}}},
@@ -199,6 +218,21 @@ func TestClaudeCodeCompositionProtectedAdmissionAndOfflineDispatch(t *testing.T)
 	prepared, err := prepareProtectedConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, component := range prepared.Components {
+		if component.ID == core.InstanceID(connectorID) && component.CredentialEnv != credentialID {
+			t.Fatalf("configured credential_id mapped to %q, want %q", component.CredentialEnv, credentialID)
+		}
+		if component.ID == core.InstanceID(unwrappedID) && component.CredentialEnv != "oauth" {
+			t.Fatalf("omitted credential_id default=%q, want oauth", component.CredentialEnv)
+		}
+	}
+	credentialRefs, err := configuredCredentialRefs(prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentialRefs[accountID]["oauth"] != credentialID || credentialRefs[unwrappedAccount]["oauth"] != defaultCredentialID {
+		t.Fatalf("credential reference projection custom=%v default=%v", credentialRefs[accountID], credentialRefs[unwrappedAccount])
 	}
 	keys := sqlite.NewVirtualKeys(prepared.runtimeDB)
 	issued, err := keys.Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
@@ -256,7 +290,14 @@ func TestClaudeCodeCompositionProtectedAdmissionAndOfflineDispatch(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = closeComponents(context.Background()) })
+	t.Cleanup(func() {
+		if closeComponents != nil {
+			_ = closeComponents(context.Background())
+		}
+		if prepared.runtimeDB != nil {
+			_ = prepared.runtimeDB.Close()
+		}
+	})
 	gateway := httptest.NewServer(h)
 	defer gateway.Close()
 	type gatewayResult struct {
@@ -364,7 +405,60 @@ func TestClaudeCodeCompositionProtectedAdmissionAndOfflineDispatch(t *testing.T)
 	if got := request(issued.Secret, body); got.Code == http.StatusOK || calls.Load() != 2 {
 		t.Fatalf("expired credential dispatched: status=%d calls=%d", got.Code, calls.Load())
 	}
-	requests, err := sqlite.NewLedger(prepared.runtimeDB).QueryRequests(ctx, sqlite.RequestFilter{Model: model, Limit: 20})
+	// Recompose the same protected route with the omitted setting to prove the
+	// default oauth record still resolves and executes, not just projects.
+	gateway.Close()
+	if err := closeComponents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	closeComponents = nil
+	if err := prepared.runtimeDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	prepared.runtimeDB = nil
+	defaultConfig := config
+	defaultProtected := *p
+	defaultProtected.Connectors = append([]protectedConnector(nil), p.Connectors...)
+	defaultProtected.Connectors[0].Settings.CredentialID = ""
+	defaultConfig.protected = &defaultProtected
+	defaultPrepared, err := prepareProtectedConfig(ctx, defaultConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var defaultComposed *claudeTestConnector
+	defaultHandler, closeDefaultComponents, err := composeHandlerWithFactory(defaultPrepared, &ready, &draining, nil, func(item topologyComponent) core.Component {
+		if item.Kind == core.ComponentAdapter {
+			return adapter.NewAdapter()
+		}
+		if item.ID == core.InstanceID(unwrappedID) {
+			return &claudeTestConnector{Connector: claudecode.NewConnector(), doer: &http.Client{}, model: unwrappedModel, account: unwrappedAccount, eligible: true}
+		}
+		if item.ID != core.InstanceID(connectorID) {
+			return responses.NewConnector()
+		}
+		defaultComposed = &claudeTestConnector{Connector: claudecode.NewConnector(), doer: transport, model: model, account: accountID}
+		return defaultComposed
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = closeDefaultComponents(context.Background())
+		_ = defaultPrepared.runtimeDB.Close()
+	}()
+	defaultComposed.eligible = true
+	for _, component := range defaultPrepared.Components {
+		if component.ID == core.InstanceID(connectorID) && component.CredentialEnv != defaultCredentialID {
+			t.Fatalf("empty credential_id mapped to %q, want oauth", component.CredentialEnv)
+		}
+	}
+	gateway = httptest.NewServer(defaultHandler)
+	defer gateway.Close()
+	defaultResult := request(issued.Secret, body)
+	if defaultResult.Code != http.StatusOK || !strings.Contains(defaultResult.Body, "offline reply") || !strings.Contains(defaultResult.Body, "response.completed") || calls.Load() != 3 {
+		t.Fatalf("default oauth fixture roundtrip status=%d calls=%d body=%s", defaultResult.Code, calls.Load(), defaultResult.Body)
+	}
+	requests, err := sqlite.NewLedger(defaultPrepared.runtimeDB).QueryRequests(ctx, sqlite.RequestFilter{Model: model, Limit: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,8 +481,8 @@ func TestClaudeCodeCompositionProtectedAdmissionAndOfflineDispatch(t *testing.T)
 			}
 		}
 	}
-	if success != 1 {
-		t.Fatalf("successful attempt settlements=%d, want exactly one", success)
+	if success != 2 {
+		t.Fatalf("successful attempt settlements=%d, want custom and default oauth attempts", success)
 	}
 	if failedDispatched != 1 {
 		t.Fatalf("malformed dispatched attempts settled=%d, want one; reasons=%v", failedDispatched, failureReasons)
