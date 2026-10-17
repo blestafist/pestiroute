@@ -1,0 +1,40 @@
+version: 1
+server:
+  listen: "0.0.0.0:8080"
+  max_request_bytes: 1048576
+  shutdown_timeout: 20s
+storage:
+  driver: sqlite
+  path: /var/lib/pestiroute/gateway.db
+secrets:
+  master_key_file: /etc/pestiroute/master.key
+connectors:
+  - id: example-upstream
+    kind: connector
+    implementation: pestiroute.responses.native
+    protocols: [openai.responses.v1]
+    settings:
+      base_url: https://api.example.invalid/v1/responses
+      upstream_protocol: openai.responses.v1
+      mode: native
+      credential_env: PESTIROUTE_EXAMPLE_CREDENTIAL
+      max_request_body_bytes: 1048576
+      max_request_header_bytes: 16384
+      connect_timeout: 5s
+      tls_handshake_timeout: 5s
+      response_header_timeout: 30s
+      stream_idle_timeout: 60s
+routes:
+  - id: example-route
+    protocol: openai.responses.v1
+    mode: native
+    model: example-model
+    adapter: pestiroute.responses.native
+    policy: example-policy
+    budget:
+      unknown_estimate: reject
+    targets:
+      - connector: example-upstream
+        account: example-account
+policies:
+  example-policy: example-policy
