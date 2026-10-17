@@ -124,7 +124,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M10-001](tasks/M10-001.md) | READY | — | — | Pin current Antigravity source and authentication evidence | — | [Verification](tasks/M10-001.md#verification) |
+| [M10-001](tasks/M10-001.md) | DONE | GPT-6 Luna (M10-001 worker) | — | Pin current Antigravity source and authentication evidence | Dated official and pinned MIT plugin research; unsupported wire facts explicit | [git diff --check](tasks/M10-001.md#completion-evidence) |
 | [M10-002](tasks/M10-002.md) | DRAFT | — | M10-001 | Bind one Antigravity execution slice | — | [Verification](tasks/M10-002.md#verification) |
 | [M10-003](tasks/M10-003.md) | DRAFT | — | M10-002 | Prepare provenance-labelled fixtures and slice decision | — | [Verification](tasks/M10-003.md#verification) |
 | [M10-004](tasks/M10-004.md) | DRAFT | — | M10-003 | Implement the minimal offline Antigravity vertical slice | — | [Verification](tasks/M10-004.md#verification) |
