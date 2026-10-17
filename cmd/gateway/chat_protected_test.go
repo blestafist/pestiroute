@@ -293,6 +293,35 @@ func chatRequestTo(t *testing.T, f *chatProtectedFixture, path, key, body string
 	return resp
 }
 
+func waitChatAccounting(t *testing.T, f *chatProtectedFixture, count int) []sqlite.RequestUsage {
+	t.Helper()
+	// The client can receive the complete body before the server consumes the
+	// terminal frame and persists accounting. Wait for persistence, not HTTP EOF.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ledger := sqlite.NewLedger(f.prepared.runtimeDB)
+	for {
+		requests, err := ledger.QueryRequests(ctx, sqlite.RequestFilter{Limit: 10})
+		if err != nil {
+			t.Fatalf("query Chat accounting: %v", err)
+		}
+		finished := len(requests) == count
+		for _, request := range requests {
+			if request.Request.FinishedAt == nil {
+				finished = false
+			}
+		}
+		if finished {
+			return requests
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Chat accounting did not finish: requests=%+v err=%v", requests, ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func TestChatProtectedGateway_JSON(t *testing.T) {
 	var request []byte
 	responseBody := []byte(chatResponse)
@@ -312,9 +341,9 @@ func TestChatProtectedGateway_JSON(t *testing.T) {
 	if err != nil || resp.StatusCode != http.StatusOK || !bytes.Equal(got, []byte(chatResponse)) || !bytes.Equal(request, []byte(chatRequest)) || resp.Header.Get("X-Fixture") != "preserved" {
 		t.Fatalf("Chat JSON status=%d body=%q request=%q err=%v", resp.StatusCode, got, request, err)
 	}
-	requests, err := sqlite.NewLedger(f.prepared.runtimeDB).QueryRequests(context.Background(), sqlite.RequestFilter{Limit: 10})
-	if err != nil || len(requests) != 1 || len(requests[0].Attempts) != 1 {
-		t.Fatalf("accounted requests=%+v err=%v", requests, err)
+	requests := waitChatAccounting(t, f, 1)
+	if len(requests) != 1 || len(requests[0].Attempts) != 1 {
+		t.Fatalf("accounted requests=%+v", requests)
 	}
 	a := requests[0].Attempts[0]
 	if a.Attempt.State != "succeeded" || a.Usage == nil || a.Usage.InputTokens == nil || *a.Usage.InputTokens != 3 || a.Usage.OutputTokens == nil || *a.Usage.OutputTokens != 2 || a.Reservation.State != "settled" {
@@ -324,9 +353,9 @@ func TestChatProtectedGateway_JSON(t *testing.T) {
 	resp = chatRequestTo(t, f, "/v1/chat/completions", f.key, chatRequest)
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
-	requests, err = sqlite.NewLedger(f.prepared.runtimeDB).QueryRequests(context.Background(), sqlite.RequestFilter{Limit: 10})
-	if err != nil || len(requests) != 2 || len(requests[1].Attempts) != 1 || requests[1].Attempts[0].Usage == nil || requests[1].Attempts[0].Usage.Source != "unknown" || requests[1].Attempts[0].Usage.InputTokens != nil {
-		t.Fatalf("missing usage was not unknown: requests=%+v err=%v", requests, err)
+	requests = waitChatAccounting(t, f, 2)
+	if len(requests) != 2 || len(requests[1].Attempts) != 1 || requests[1].Attempts[0].Usage == nil || requests[1].Attempts[0].Usage.Source != "unknown" || requests[1].Attempts[0].Usage.InputTokens != nil {
+		t.Fatalf("missing usage was not unknown: requests=%+v", requests)
 	}
 }
 
@@ -375,9 +404,9 @@ func TestChatProtectedGateway_SSE(t *testing.T) {
 	if err != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" || !bytes.Equal(gotTail, []byte(tail)) {
 		t.Fatalf("Chat SSE status=%d content-type=%q tail=%q err=%v", resp.StatusCode, resp.Header.Get("Content-Type"), gotTail, err)
 	}
-	requests, err := sqlite.NewLedger(f.prepared.runtimeDB).QueryRequests(context.Background(), sqlite.RequestFilter{Limit: 10})
-	if err != nil || len(requests) != 1 || len(requests[0].Attempts) != 1 {
-		t.Fatalf("SSE accounting requests=%+v err=%v", requests, err)
+	requests := waitChatAccounting(t, f, 1)
+	if len(requests) != 1 || len(requests[0].Attempts) != 1 {
+		t.Fatalf("SSE accounting requests=%+v", requests)
 	}
 	usage := requests[0].Attempts[0].Usage
 	if usage == nil || usage.InputTokens == nil || *usage.InputTokens != 3 || usage.OutputTokens == nil || *usage.OutputTokens != 2 || requests[0].Attempts[0].Reservation.State != "settled" {
