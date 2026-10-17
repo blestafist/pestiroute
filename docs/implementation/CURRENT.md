@@ -30,9 +30,9 @@ the earlier CURRENT claim that it awaited review was stale.
 
 ## Next independent lanes
 
-| Milestone | Branch | First READY task | Scope / dependency |
+| Milestone | Branch | First READY / active task | Scope / dependency |
 | --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-010 DONE (awaiting commit) | Verified explicit PASS (ses_eb46e053affeJb3k8CxqiU8S5t); M10-001–010 complete. Production connector ready for browser auth; tool declarations supported, but full tool calling (rounds, thought signatures, causal history) remains BLOCKED pending carrier/state specification |
+| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-011 DONE (awaiting commit) | Verified explicit PASS (ses_eb4542d06ffe2GP8AWkHJgZWk8); M10-001–011 complete. Production connector ready for browser auth with operator client/project prerequisites; tool declarations supported, but full tool calling (rounds, thought signatures, causal history) remains BLOCKED pending carrier/state specification. Next action: user sign-in; no new task |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
@@ -52,12 +52,12 @@ features. All new branches start from the same accepted planning baseline.
 | [M5.1-051](tasks/M5.1-051.md) | DRAFT/unrun: own READY assignment, explicit authority and independent review for encrypted-reasoning continuation |
 | [M5.2-025](tasks/M5.2-025.md) | BLOCKED: provisioned compatible GPU/runtime/model and separate operator authority; DEC-013 at-most-3B ceiling remains, historical 8B candidate is not authorization |
 
-M8-008 is also BLOCKED as described above. None is a dependency of independent new lanes. Preserve the isolated operator credential store and prior finite request budgets as ceilings, not permission. Credentials and private payloads stay out of repository evidence.
+M8-008 is also BLOCKED as described above. Antigravity live browser OAuth and real-transport inference remain deferred operator gates per [LOCAL-M10](LOCAL-M10.md). None is a dependency of independent new lanes. Preserve the isolated operator credential store and prior finite request budgets as ceilings, not permission. Credentials and private payloads stay out of repository evidence.
 
 ## Checks and operations
 
 Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. This cloud host lacks `/proc/<pid>/task/<tid>/children`, so existing process-inspection tests and M6 CLI smoke cannot fully pass locally; use hosted Linux CI for that gate. Parallel worktrees need distinct TMPDIR values as well as package serialization.
 
-M10-009 focused race/tests and vet pass; full check requires hosted Linux CI (cloud host lacks `/proc/.../children` and pinned Go 1.27.1 toolchain).
+M10-011 focused race/tests and vet pass; full check requires hosted Linux CI (cloud host lacks `/proc/.../children` and pinned Go 1.27.1 toolchain).
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.
