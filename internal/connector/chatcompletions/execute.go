@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -18,8 +20,10 @@ import (
 const maxEventBytes = 1 << 20
 
 func execute(ctx context.Context, cfg config, in core.ExecutionRequest, credential string, doer core.HTTPDoer) (core.ExecutionResponse, *core.GatewayError) {
-	req, e := http.NewRequestWithContext(ctx, http.MethodPost, cfg.Endpoint, io.NopCloser(bytes.NewReader(in.Payload.Body)))
+	requestCtx, cancel := context.WithCancel(ctx)
+	req, e := http.NewRequestWithContext(requestCtx, http.MethodPost, cfg.Endpoint, io.NopCloser(bytes.NewReader(in.Payload.Body)))
 	if e != nil {
+		cancel()
 		return core.ExecutionResponse{}, transportError(e)
 	}
 	req.GetBody = nil
@@ -30,18 +34,22 @@ func execute(ctx context.Context, cfg config, in core.ExecutionRequest, credenti
 	copyRequestHeaders(req.Header, in.Metadata.Headers)
 	req.Header.Set("Authorization", "Bearer "+credential)
 	if doer == nil {
+		cancel()
 		return core.ExecutionResponse{}, ge("transport_unavailable", core.CategoryUnavailable, "Runtime transport is unavailable")
 	}
 	resp, e := doer.Do(req)
 	if e != nil {
+		cancel()
 		return core.ExecutionResponse{}, transportError(e)
 	}
 	if resp == nil || resp.Body == nil {
+		cancel()
 		return core.ExecutionResponse{}, ge("upstream_unavailable", core.CategoryUnavailable, "Upstream returned no response")
 	}
 	for _, v := range resp.Header.Values("Content-Encoding") {
 		if !strings.EqualFold(strings.TrimSpace(v), "identity") {
 			resp.Body.Close()
+			cancel()
 			return core.ExecutionResponse{}, ge("unsupported_response_encoding", core.CategoryUnavailable, "Unsupported upstream response encoding")
 		}
 	}
@@ -52,9 +60,9 @@ func execute(ctx context.Context, cfg config, in core.ExecutionRequest, credenti
 		head.Error = rejection(status)
 	}
 	if strings.Contains(strings.ToLower(head.ContentType), "text/event-stream") {
-		return core.ExecutionResponse{Stream: newSSE(resp.Body, head)}, nil
+		return core.ExecutionResponse{Stream: newSSE(resp.Body, head, cancel, cfg.StreamIdleTimeout)}, nil
 	}
-	return core.ExecutionResponse{Stream: newJSONStream(resp.Body, head)}, nil
+	return core.ExecutionResponse{Stream: newJSONStream(resp.Body, head, cancel, cfg.StreamIdleTimeout)}, nil
 }
 
 func copyRequestHeaders(dst http.Header, src map[string][]string) {
@@ -205,16 +213,19 @@ func transportError(e error) *core.GatewayError {
 }
 
 type sseStream struct {
-	mu       sync.Mutex
-	body     io.ReadCloser
-	head     *core.HeadFrame
-	phase    int
-	pending  error
-	observer observer
+	mu          sync.Mutex
+	body        io.ReadCloser
+	head        *core.HeadFrame
+	phase       int
+	pending     error
+	observer    observer
+	cancel      context.CancelFunc
+	idleTimeout time.Duration
+	idleExpired atomic.Bool
 }
 
-func newSSE(body io.ReadCloser, head *core.HeadFrame) *sseStream {
-	return &sseStream{body: body, head: head}
+func newSSE(body io.ReadCloser, head *core.HeadFrame, cancel context.CancelFunc, idleTimeout time.Duration) *sseStream {
+	return &sseStream{body: body, head: head, cancel: cancel, idleTimeout: idleTimeout}
 }
 func (s *sseStream) Close() error {
 	s.mu.Lock()
@@ -223,7 +234,9 @@ func (s *sseStream) Close() error {
 		return nil
 	}
 	s.phase = 3
-	return s.body.Close()
+	err := s.body.Close()
+	s.cancel()
+	return err
 }
 func (s *sseStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if err := ctx.Err(); err != nil {
@@ -250,7 +263,21 @@ func (s *sseStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if s.pending != nil {
 		e, s.pending = s.pending, nil
 	} else {
+		var timer *time.Timer
+		var timerDone chan struct{}
+		if s.idleTimeout > 0 {
+			timerDone = make(chan struct{})
+			timer = time.AfterFunc(s.idleTimeout, func() {
+				defer close(timerDone)
+				s.idleExpired.Store(true)
+				_ = s.body.Close()
+				s.cancel()
+			})
+		}
 		n, e = s.body.Read(buf)
+		if timer != nil && !timer.Stop() {
+			<-timerDone
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -260,6 +287,12 @@ func (s *sseStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if ctx.Err() != nil {
 		return core.StreamFrame{}, ctx.Err()
 	}
+	if s.idleExpired.Load() {
+		s.phase = 2
+		done := &core.CompleteFrame{Outcome: core.OutcomeIncomplete, Error: ge("upstream_timeout", core.CategoryTimeout, "Upstream stream idle timeout"), Usage: unknown()}
+		s.cancel()
+		return core.StreamFrame{Type: core.FrameComplete, Complete: done}, nil
+	}
 	if n > 0 {
 		s.pending = e
 		s.observer.feed(buf[:n])
@@ -267,6 +300,7 @@ func (s *sseStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	}
 	s.phase = 2
 	_ = s.body.Close()
+	s.cancel()
 	done := s.observer.complete(e, s.head.Error)
 	return core.StreamFrame{Type: core.FrameComplete, Complete: done}, nil
 }

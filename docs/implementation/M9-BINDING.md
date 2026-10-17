@@ -51,6 +51,12 @@ request body to its configured Chat endpoint (default API path shape
 `/v1/chat/completions`). A URL is not proof of protocol support: initialization
 validates its Chat path/configuration; it does not probe or infer support from
 provider name. Exact protocol/model/account route selection remains Core-owned.
+Protected routing selects an Adapter/Connector by endpoint path and the resulting
+protocol/model route; it does not inspect request fields to detect a foreign
+protocol schema. In particular, a Chat-shaped JSON body with a matching model
+sent to `/v1/responses` is still an opaque Responses request and may dispatch on
+the Responses route. Chat validation applies only after `/v1/chat/completions`
+selects the Chat Adapter.
 
 ## Decode, admitted shapes and capability requirements
 
@@ -241,7 +247,9 @@ durations are required and positive. Reject every additional or
 Responses-specific setting; secrets are not literal YAML values. The server's
 `max_request_bytes` remains the ingress cap, while Connector body/header limits
 are enforced against the admitted body and original request headers before
-dispatch, as in M3.
+dispatch, as in M3. `stream_idle_timeout` bounds each upstream response-body
+read; on timeout the Chat stream closes/cancels upstream and completes as
+`incomplete` with `upstream_timeout`.
 
 The route's `adapter` is the built-in implementation ID, not an Adapter
 instance reference: the composition root registers the Chat Adapter under that
@@ -262,7 +270,8 @@ resource, or protocol-specific credential path: administrators continue to
 manage keys/accounts/policies through the existing local CLI and SQLite-backed
 state, and route topology remains startup YAML. A wrong/missing route,
 account, policy, component, or unsupported capability fails closed before
-provider dispatch; no cross-route to Responses. Shared gateway/config changes
+provider dispatch; path/protocol selection does not cross-route to Responses.
+This is routing isolation, not foreign-body-shape rejection. Shared gateway/config changes
 are M9-003 ownership; M9-001 changes no runtime schema or `CONTRACT.md`.
 
 M8 does not own M9 files. M9 owns this document/cards and new
