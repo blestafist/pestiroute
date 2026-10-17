@@ -32,7 +32,7 @@ the earlier CURRENT claim that it awaited review was stale.
 
 | Milestone | Branch | First READY task | Scope / dependency |
 | --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-003 DONE (M10-004 DRAFT) | Synthetic fixture corpus and slice decision complete; offline vertical slice implementation next |
+| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-004 DONE (M10-005 DRAFT) | Offline vertical slice implemented and verified; offline handoff/matrix documentation next |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
