@@ -129,6 +129,7 @@ func New(c Config) (http.Handler, error) {
 	api := http.NewServeMux()
 	registerReadHandlers(api, c)
 	registerAccountHandlers(api, c)
+	registerPolicyKeyHandlers(api, c)
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { writeError(w, 404, "not_found", "Not found") })
 	root := http.NewServeMux()
 	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

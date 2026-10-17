@@ -132,7 +132,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M11 — Administrative HTTP API
 
-[M11 brief](M11-ADMIN-API.md). Branch `dev-m11-admin-api`; exact filter `/next 10 M11`. Administrative HTTP binding frozen in M11-001; M11-002, M11-003, and M11-004 verified and DONE; M11-005 is next candidate (DRAFT).
+[M11 brief](M11-ADMIN-API.md). Branch `dev-m11-admin-api`; exact filter `/next 10 M11`. Administrative HTTP binding frozen in M11-001; M11-002, M11-003, M11-004, and M11-005 verified and DONE; M11-006 is next candidate (DRAFT).
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -140,7 +140,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | [M11-002](tasks/M11-002.md) | DONE | GPT-6 Luna (M11-002 worker) | M11-001 | Add opt-in authenticated admin listener | Opt-in authenticated admin listener implemented with RFC 6750 token validation, Host/Origin protection, TLS enforcement on non-loopback binds, and concurrent graceful shutdown; full pinned gate passed | `GOFLAGS=-p=1 ./scripts/check.sh`; [evidence](tasks/M11-002.md#completion-evidence) |
 | [M11-003](tasks/M11-003.md) | DONE | GPT-6 Luna (M11-003 worker) | M11-002 | Expose redacted status topology and ledger views | Legacy account redaction, shared M2 database, sub-millisecond bounds, and data-backed usage reads verified; independent reviewer full pinned gate PASS | [Verification](tasks/M11-003.md#verification) |
 | [M11-004](tasks/M11-004.md) | DONE | GPT-6 Luna (M11-004 worker) / ses_eb417d9ebffeXh81TJrhEweaKs (reviewer) | M11-003 | Expose account and write-only credential management | Account lifecycle and write-only credential operations verified; AES-256-GCM envelope encryption, CAS checks, transient buffer zeroing, and DEC-007 disablement verified; reviewer PASS ses_eb417d9ebffeXh81TJrhEweaKs | [Verification](tasks/M11-004.md#verification) |
-| [M11-005](tasks/M11-005.md) | DRAFT | — | M11-004 | Expose virtual-key and policy administration | — | [Verification](tasks/M11-005.md#verification) |
+| [M11-005](tasks/M11-005.md) | DONE | GPT-6 Luna (M11-005 worker) / ses_eb3e29284ffeAoQYH3WjFpp5Iv (reviewer) | M11-004 | Expose virtual-key and policy administration | Policy revisions and virtual key CRUD/reassign verified; CAS conflict and disable-only enforced; one-time secret emission, permanent revocation, and immediate inference admission verified; reviewer PASS ses_eb3e29284ffeAoQYH3WjFpp5Iv | `GOFLAGS=-p=1 ./scripts/check.sh`; [evidence](tasks/M11-005.md#completion-evidence) |
 | [M11-006](tasks/M11-006.md) | DRAFT | — | M11-004 | Bridge the existing auth coordinator to admin HTTP | — | [Verification](tasks/M11-006.md#verification) |
 | [M11-007](tasks/M11-007.md) | DRAFT | — | M11-005, M11-006 | Verify and publish the admin API integration handoff | — | [Verification](tasks/M11-007.md#verification) |
 

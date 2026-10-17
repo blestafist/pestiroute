@@ -33,7 +33,7 @@ the earlier CURRENT claim that it awaited review was stale.
 | Milestone | Branch | First READY task | Scope / dependency |
 | --- | --- | --- | --- |
 | [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-001 | Current Antigravity research → bounded Connector slice; no Claude dependency |
-| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-005 (DRAFT) | M11-004 DONE; accounts and write-only credentials verified; M11-005–007 remain DRAFT |
+| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-006 (DRAFT) | M11-005 DONE; virtual keys and policies verified; M11-006–007 remain DRAFT |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
 
