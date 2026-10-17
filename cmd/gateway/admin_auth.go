@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blestafist/pestiroute/internal/connector/claudecode"
 	"github.com/blestafist/pestiroute/internal/connector/codex"
 	"github.com/blestafist/pestiroute/internal/connector/responses"
 	"github.com/blestafist/pestiroute/internal/core"
@@ -73,9 +74,22 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	if err != nil {
 		return errors.New("admin: authentication unavailable")
 	}
-	transport := core.HTTPDoer(&http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}})
+	var connectorID string
+	useDefaultTransport := len(refs) > 0
+	for targetAccountID := range refs {
+		if err := db.QueryRowContext(env.ctx, `SELECT connector FROM accounts WHERE id=? AND enabled=1`, targetAccountID).Scan(&connectorID); err != nil {
+			return errors.New("admin: authentication connector is not configured")
+		}
+		if isClaudeCodeAuthConnector(connectorID) {
+			useDefaultTransport = false
+		}
+	}
+	var transport core.HTTPDoer
+	if useDefaultTransport {
+		transport = &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}}
+	}
 	if env.authServices != nil {
 		if testServices := env.authServices.ForAttempt(core.AttemptScope{AccountID: *accountID}); testServices.Transport != nil {
 			transport = testServices.Transport
@@ -164,7 +178,7 @@ func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db
 		}
 	}
 	account, err := accounts.Get(ctx, accountID)
-	if err != nil || !account.Enabled || account.ID != accountID || (account.Connector != "responses" && account.Connector != "codex") {
+	if err != nil || !account.Enabled || account.ID != accountID || (account.Connector != "responses" && account.Connector != "codex" && !isClaudeCodeAuthConnector(account.Connector)) {
 		return nil, errors.New("admin: authentication connector is not configured")
 	}
 	registry, err := core.NewRegistry(map[core.ComponentKind]core.APIVersion{core.ComponentConnector: {Major: 1}}, nil)
@@ -176,6 +190,9 @@ func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db
 	if account.Connector == "codex" {
 		connector = codex.NewConnector()
 		config = fmt.Appendf(nil, `{"model":"gpt-5.4-mini","account_id":%q,"profile":"codex-responses-http-sse-v1"}`, accountID)
+	} else if isClaudeCodeAuthConnector(account.Connector) {
+		connector = claudecode.NewConnector()
+		config = []byte(`{"profile":"claude-code-messages-v1","oauth":{"authorization_endpoint":"https://auth.synthetic.invalid/oauth/authorize","token_endpoint":"https://token.synthetic.invalid/oauth/token","redirect_uri":"http://127.0.0.1:9999/callback","client_id":"synthetic-client","scope":"synthetic:offline"}}`)
 	} else {
 		connector = responses.NewConnector()
 		// The built-in native Connector's authentication operation is unsupported;
@@ -233,7 +250,7 @@ func authCredentialRefs(ctx context.Context, db *sql.DB, accountID string, conti
 	if err := db.QueryRowContext(ctx, `SELECT connector FROM accounts WHERE id=? AND enabled=1`, accountID).Scan(&connector); err != nil {
 		return nil, errors.New("admin: authentication connector is not configured")
 	}
-	if connector == "codex" {
+	if connector == "codex" || isClaudeCodeAuthConnector(connector) {
 		credentialName = "oauth"
 	}
 	rows, err := db.QueryContext(ctx, `SELECT id FROM credentials WHERE account_id=? ORDER BY id`, accountID)
@@ -253,4 +270,8 @@ func authCredentialRefs(ctx context.Context, db *sql.DB, accountID string, conti
 		return nil, errors.New("admin: authentication requires exactly one configured credential")
 	}
 	return map[string]map[string]string{accountID: {credentialName: ids[0]}}, nil
+}
+
+func isClaudeCodeAuthConnector(connector string) bool {
+	return connector == "claudecode" || connector == "pestiroute.claudecode.messages"
 }

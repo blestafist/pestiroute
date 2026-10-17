@@ -105,6 +105,15 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 			component.Model, component.AccountID, component.Profile = s.Model, s.AccountID, s.Profile
 			component.CredentialEnv = "oauth"
 			component.MaxBodyBytes, component.MaxHeaderBytes = min(p.Server.MaxRequestBytes, 1<<20), 16<<10
+		case "pestiroute.claudecode.messages":
+			component.Model, component.AccountID, component.Profile = s.Model, s.AccountID, s.Profile
+			component.CredentialEnv = strings.TrimSpace(s.CredentialID)
+			if s.CredentialID == "" {
+				component.CredentialEnv = "oauth"
+			} else if component.CredentialEnv == "" {
+				return fail(db.Close, fmt.Errorf("connector %q: Claude Code credential_id cannot be whitespace", item.ID))
+			}
+			component.MaxBodyBytes, component.MaxHeaderBytes = min(p.Server.MaxRequestBytes, 1<<20), 16<<10
 		case "pestiroute.responses.local":
 			component.Endpoint, component.Model, component.AccountID = s.BaseURL, s.Model, s.AccountID
 			component.AuthMode, component.RuntimeProfile = s.AuthMode, localConnectorProfile(s.RuntimeProfile)

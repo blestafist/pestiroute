@@ -66,7 +66,7 @@ func (c *Connector) Descriptor() core.Descriptor {
 		ID: componentID, Kind: core.ComponentConnector, ImplementationVersion: "1.0.0",
 		APIVersions:   []core.APIVersion{{Major: 1, Minor: 0}},
 		Protocols:     []string{protocol},
-		ConnectorType: "api", AuthMethods: []string{"oauth"}, Operations: []string{"authenticate"},
+		ConnectorType: "api", AuthMethods: []string{"oauth"}, Operations: []string{"authenticate", "execute"},
 	}.Clone()
 }
 
@@ -129,26 +129,8 @@ func (c *Connector) Close(context.Context) error {
 	return nil
 }
 
-func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope, _ core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
-	c.mu.Lock()
-	ready := c.state == core.HealthReady
-	c.mu.Unlock()
-	if !ready {
-		return core.ExecutionResponse{}, unavailableError()
-	}
-	if ge := contextError(ctx); ge != nil {
-		return core.ExecutionResponse{}, ge
-	}
-	if req.Payload.Protocol != protocol {
-		return core.ExecutionResponse{}, &core.GatewayError{Code: "unsupported_protocol", Category: core.CategoryUnsupportedFeature, Message: "Unsupported response protocol"}
-	}
-	if scope.Mode != core.ModeTranslation {
-		return core.ExecutionResponse{}, &core.GatewayError{Code: "unsupported_mode", Category: core.CategoryUnsupportedFeature, Message: "Unsupported execution mode"}
-	}
-	return core.ExecutionResponse{}, &core.GatewayError{
-		Code: "connector_unavailable", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown,
-		Message: "Claude Code connector execution is unavailable",
-	}
+func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
+	return c.execute(ctx, req, scope, services)
 }
 
 func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {

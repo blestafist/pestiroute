@@ -6,50 +6,23 @@
 
 M5.1 and M5.2 handoffs are **conditionally accepted**, not fully DONE: [DEC-012/013](../project/DECISIONS.md) preserve unwaived live gates. Exact feature/evidence ceilings belong in [M4](M4-COMPATIBILITY.md), [Codex](M5.1-COMPATIBILITY.md) and [local-runtime](M5.2-COMPATIBILITY.md) matrices. Ollama and llama.cpp scoped live text gates completed; vLLM live evidence remains blocked. Tools/reasoning/parallel or compute cancellation are not promoted beyond their recorded scope. Historical completion/check evidence lives in [archived rows](archive/TASKS-DONE.md) and the stable task cards.
 
-## M7 merged; next: independent M8 and M9 lanes
+## Integrated offline baseline
 
-[PR #15](https://github.com/blestafist/pestiroute/pull/15) merged to main as
-`1a76494113b20561cf5b04cf66c4ba0487e762c0`. Source `44f5a29` passed both
-[PR CI](https://github.com/blestafist/pestiroute/actions/runs/38951339646) and
-[branch CI](https://github.com/blestafist/pestiroute/actions/runs/38951332753):
-external admission regressions, both M6 CLI procedures, format/vet/unit/race/build.
-Review fixed Responses image URLs, malformed tool arguments, late SSE content,
-and fixture whitespace handling. All 16 M7 tasks are in the
-[completed registry](archive/TASKS-DONE.md#m7--claude-code-subscription-connector-research).
+M7 research and M9 native Chat Completions (including M9-007 stream idle timeout
+and mixed-protocol isolation) are on main. M8-001–007 are accepted for offline
+integration under [DEC-020](../project/DECISIONS.md#dec-020--accept-m8-offline-integration-and-defer-live-enablement).
+See [M8-HANDOFF](M8-HANDOFF.md): synthetic Execute, OAuth/manual callback,
+encrypted credential lifecycle, tool history and protected fixture composition
+are implemented. Claude production routing remains disabled; YAML is rejected,
+endpoints are `.invalid`, default exchange transport is absent and capabilities
+remain Unknown. M8 is not fully live-verified.
 
-The Claude connector is still an offline candidate: public Execute fails closed,
-gateway composition rejects it, capabilities remain Unknown, and no live support
-is claimed. DEC-018/019 and M7-005's unwaived live gates remain in force.
-M6 is complete; its external child runtime, acceptance and operational boundaries
-remain in [M6-HANDOFF](M6-HANDOFF.md) and [LOCAL-M6](LOCAL-M6.md).
-
-### M8 lane
-
-[Claude Code execution/integration](M8-CLAUDE-INTEGRATION.md), branch `dev-m8`.
-Start [M8-001](tasks/M8-001.md) (READY): settle the integration binding and scope
-decisions. M8-002/003 are DRAFT; live/provider work and enabling production routes
-are not authorized by this planning handoff.
-
-### M9 lane
-
-[Chat Completions client compatibility](M9-CHAT-COMPLETIONS.md), branch `dev-m9`.
-[M9-001](tasks/M9-001.md) through [M9-007](tasks/M9-007.md) are DONE. [M9-007](tasks/M9-007.md)
-resolved cumulative PR #17 reviewer findings: enforced `stream_idle_timeout` in Chat SSE/JSON
-readers with deterministic stall/reset tests, proved mixed-protocol isolation without altering
-payload opacity, and clarified path-routing claims. Reviewer `ses_eb660fd21ffeXVr5EyzjOW0D38`
-recorded explicit PASS. Local task acceptance is verified under the documented host exception;
-PR #18 reconciliation is resolved against main and awaits review (uncommitted).
-Lane `TMPDIR=/tmp/pestiroute-m9.rH7sMT`, `GOFLAGS=-p=1`. Shared file ownership: M9 owns
-`internal/adapter/chatcompletions/**`, `internal/connector/chatcompletions/**`,
-conformance Chat tests, `docs/implementation/M9-*`, `tasks/M9-*`, and holds named
-exclusive sequencing ownership for shared gateway/config files (`cmd/gateway/main.go`,
-`cmd/gateway/yaml_config.go`, `cmd/gateway/protected_startup.go`). M8 owns
-`internal/connector/claudecode/**` and M8 docs. M8 lane shared design is respected (no
-concurrent writer here). This lane does not wait for Claude provider access.
-
-Use [separate worktrees and milestone filters](PARALLEL.md): `/next 10 M8` and
-`/next 10 M9`. Keep lane-specific TASKS/CURRENT updates and shared gateway/spec
-ownership explicit; a branch's completion is not evidence of integration on main.
+M8-008 is BLOCKED because no Claude account is available; M8-009 is DRAFT pending
+provider evidence and a reviewed enablement decision. These gates are deferred,
+not waived. Native Responses, native Chat, Anthropic translation, Codex,
+local-runtime profiles and external processes retain their individual evidence
+ceilings and existing tests. M9 branch reconciliation is merged in PR #18;
+the earlier CURRENT claim that it awaited review was stale.
 
 ## Open gates carried forward
 
@@ -61,7 +34,7 @@ ownership explicit; a branch's completion is not evidence of integration on main
 | [M5.1-051](tasks/M5.1-051.md) | DRAFT/unrun: own READY assignment, explicit authority and independent review for encrypted-reasoning continuation |
 | [M5.2-025](tasks/M5.2-025.md) | BLOCKED: provisioned compatible GPU/runtime/model and separate operator authority; DEC-013 at-most-3B ceiling remains, historical 8B candidate is not authorization |
 
-None is an M6 dependency. Preserve the isolated operator credential store and prior finite request budgets as ceilings, not permission. Credentials and private payloads stay out of repository evidence.
+M8-008 is also BLOCKED as described above. None is a dependency of independent new lanes. Preserve the isolated operator credential store and prior finite request budgets as ceilings, not permission. Credentials and private payloads stay out of repository evidence.
 
 ## Checks and operations
 

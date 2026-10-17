@@ -1,5 +1,15 @@
 # M8 — Claude Code Execution and Gateway Integration
 
+## Current disposition
+
+M8-001–007 are implemented and accepted for offline integration under
+[DEC-020](../project/DECISIONS.md#dec-020--accept-m8-offline-integration-and-defer-live-enablement).
+[M8-HANDOFF](M8-HANDOFF.md) owns the current implementation ceiling.
+M8-008 is BLOCKED on an account/current live binding; M8-009 is DRAFT pending
+that evidence. This milestone is not fully live-verified. The sequence below
+preserves the original milestone goals, not a claim that its starting state
+still describes the current implementation.
+
 ## Goal and starting point
 
 Turn the M7 candidate into an evidence-scoped, explicitly enabled Responses
