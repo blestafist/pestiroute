@@ -26,13 +26,12 @@ remain in [M6-HANDOFF](M6-HANDOFF.md) and [LOCAL-M6](LOCAL-M6.md).
 ### M8 lane
 
 [Claude Code execution/integration](M8-CLAUDE-INTEGRATION.md), branch `dev-m8`.
-[M8-001](tasks/M8-001.md), [M8-002](tasks/M8-002.md), [M8-003](tasks/M8-003.md), and
-[M8-004](tasks/M8-004.md) are DONE: public Execute connects to package-private offline fake
-transport (`api.anthropic.invalid`, `synthetic-beta`, redirect/proxy fail-closed) with verified
-lifecycle backpressure, cancellation, bounds, accounting, and multi-round tool history.
-No further registered tasks exist in TASKS.md for M8; subsequent milestone phases (Phase 5
-protected integration) remain uncarded roadmap stages. Do not prepare next before commit.
-Live/provider work, real credentials, and production routing remain strictly unauthorized.
+[M8-001](tasks/M8-001.md), [M8-002](tasks/M8-002.md), [M8-003](tasks/M8-003.md),
+[M8-004](tasks/M8-004.md), and [M8-005](tasks/M8-005.md) are DONE: public Execute connects
+to package-private offline fake transport (`api.anthropic.invalid`, `synthetic-beta`), and admin
+auth CLI binds Claude Code OAuth callback lifecycle and encrypted SQLite storage.
+Next candidate is Phase 5 protected gateway route eligibility and admission against offline fixtures.
+Production gateway routing remains fail-closed; live provider access and real credentials remain unauthorized.
 
 ### M9 lane
 

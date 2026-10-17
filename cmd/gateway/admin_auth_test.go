@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -368,6 +369,298 @@ func TestAdminAuthCodexConfiguredRegistryUsesLocalRoundTripper(t *testing.T) {
 	if polls != 2 || exchanges != 1 || refreshes != 1 {
 		t.Fatalf("provider calls polls=%d exchanges=%d refreshes=%d", polls, exchanges, refreshes)
 	}
+}
+
+func TestAdminAuthClaudeCodeEncryptedLifecycle(t *testing.T) {
+	ctx := context.Background()
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountID := "claude-account"
+	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: claudecodeComponentIDForTest, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := []byte(`{"access_token":"old-access-marker","refresh_token":"old-refresh-marker","expires_at":"2000-01-01T00:00:00Z"}`)
+	sealed, err := secure.Seal(key, 1, "v1", "credentials", "claude-oauth", accountID, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: "claude-oauth", AccountID: accountID, FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var exchanges, refreshes atomic.Int32
+	fixture := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth/token" || r.Method != http.MethodPost {
+			t.Errorf("unexpected fake OAuth request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		form, err := url.ParseQuery(readRequestBody(t, r))
+		if err != nil {
+			t.Errorf("invalid token request form: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		switch form.Get("grant_type") {
+		case "authorization_code":
+			exchanges.Add(1)
+			if form.Get("code") != "local-code" || form.Get("code_verifier") == "" || form.Get("redirect_uri") != "http://127.0.0.1:9999/callback" {
+				t.Errorf("authorization exchange fields invalid")
+			}
+			_, _ = fmt.Fprint(w, `{"access_token":"access-after-login-marker","refresh_token":"refresh-after-login-marker","token_type":"Bearer","expires_in":3600}`)
+		case "refresh_token":
+			refreshes.Add(1)
+			if form.Get("refresh_token") != "refresh-after-login-marker" {
+				t.Errorf("refresh did not use persisted rotated token")
+			}
+			_, _ = fmt.Fprint(w, `{"access_token":"access-after-refresh-marker","refresh_token":"refresh-after-refresh-marker","token_type":"Bearer","expires_in":3600}`)
+		default:
+			t.Errorf("unexpected OAuth grant type")
+			http.Error(w, "rejected", http.StatusBadRequest)
+		}
+	}))
+	defer fixture.Close()
+	fixtureURL, _ := url.Parse(fixture.URL)
+	transport := &http.Client{Transport: adminAuthRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.String() != "https://token.synthetic.invalid/oauth/token" {
+			return nil, fmt.Errorf("unexpected OAuth fixture target: %s %s", req.Method, req.URL)
+		}
+		clone := req.Clone(req.Context())
+		clone.URL = new(url.URL)
+		*clone.URL = *req.URL
+		clone.URL.Scheme, clone.URL.Host = fixtureURL.Scheme, fixtureURL.Host
+		return fixture.Client().Transport.RoundTrip(clone)
+	}), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	services := adminAuthServicesFunc(func(core.AttemptScope) core.InvocationServices { return core.InvocationServices{Transport: transport} })
+	run := func(input string, args ...string) (string, error) {
+		var out, stderr bytes.Buffer
+		full := append([]string{"--db", dbPath, "--master-key", keyPath}, args...)
+		err := runAdmin(adminEnvironment{ctx: ctx, args: full, stdin: strings.NewReader(input), stdout: &out, stderr: &stderr, authServices: services})
+		combined := out.String() + stderr.String() + errorString(err)
+		for _, secret := range []string{"access-after-login-marker", "refresh-after-login-marker", "access-after-refresh-marker", "refresh-after-refresh-marker", "local-code", "old-access-marker", "old-refresh-marker"} {
+			if strings.Contains(combined, secret) {
+				t.Fatalf("Claude auth secret leaked: %q", secret)
+			}
+		}
+		return out.String() + stderr.String(), err
+	}
+	started, err := run("", "auth", "start", "--account", accountID)
+	if err != nil || !strings.Contains(started, "https://auth.synthetic.invalid/oauth/authorize?") || !strings.Contains(started, "session=") {
+		t.Fatalf("Claude login start=%q err=%v", started, err)
+	}
+	verify, err := url.Parse(strings.Trim(strings.TrimPrefix(strings.Split(started, "verification_uri=")[1], "\""), "\"\n"))
+	if err != nil {
+		t.Fatal("invalid authorization URI")
+	}
+	state := verify.Query().Get("state")
+	if state == "" || verify.Query().Get("code_challenge") == "" || verify.Query().Has("code_verifier") {
+		t.Fatal("authorization URI missing safe PKCE challenge/state")
+	}
+	session := adminSessionID(started)
+	completed, err := run("http://127.0.0.1:9999/callback?code=local-code&state="+url.QueryEscape(state)+"\n", "auth", "continue", "--session", session, "--callback-stdin")
+	if err != nil || !strings.Contains(completed, "authentication complete") {
+		t.Fatalf("Claude callback=%q err=%v", completed, err)
+	}
+	verifyDB := mustOpenAdminDB(t, dbPath)
+	credentials := sqlite.NewCredentials(verifyDB)
+	stored, err := credentials.Get(ctx, accountID, "claude-oauth")
+	if err != nil || stored.Revision != 2 || stored.ExpiresAt == nil || !stored.ExpiresAt.After(time.Now()) {
+		t.Fatalf("login credentials not persisted with expiry: revision=%d err=%v", stored.Revision, err)
+	}
+	plain, err := secure.Open(key, secure.Envelope{FormatVersion: stored.FormatVersion, KeyVersion: stored.KeyVersion, Nonce: stored.Nonce, Ciphertext: stored.Ciphertext}, "credentials", stored.ID, stored.AccountID)
+	if err != nil || !strings.Contains(string(plain), "access-after-login-marker") || bytes.Contains(stored.Ciphertext, []byte("access-after-login-marker")) {
+		t.Fatal("Claude credentials not stored as encrypted OAuth bundle")
+	}
+	if _, err := verifyDB.ExecContext(ctx, `UPDATE credentials SET expires_at=? WHERE account_id=? AND id=?`, time.Now().Add(-time.Minute).UnixMilli(), accountID, "claude-oauth"); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := run("", "auth", "refresh", "--account", accountID)
+	if err != nil || !strings.Contains(refreshed, "authentication refreshed") || exchanges.Load() != 1 || refreshes.Load() != 1 {
+		t.Fatalf("Claude refresh=%q exchange=%d refresh=%d err=%v", refreshed, exchanges.Load(), refreshes.Load(), err)
+	}
+	stored, err = credentials.Get(ctx, accountID, "claude-oauth")
+	plain, openErr := secure.Open(key, secure.Envelope{FormatVersion: stored.FormatVersion, KeyVersion: stored.KeyVersion, Nonce: stored.Nonce, Ciphertext: stored.Ciphertext}, "credentials", stored.ID, stored.AccountID)
+	if err != nil || openErr != nil || stored.Revision != 3 || !strings.Contains(string(plain), "access-after-refresh-marker") || bytes.Contains(stored.Ciphertext, []byte("access-after-refresh-marker")) {
+		t.Fatal("refreshed Claude credentials not atomically encrypted and persisted")
+	}
+}
+
+func TestAdminAuthClaudeCodeAccountAliases(t *testing.T) {
+	dbPath, _ := adminTestFiles(t, t.TempDir())
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	accounts := sqlite.NewAccounts(db)
+	for i, connectorID := range []string{"claudecode", claudecodeComponentIDForTest} {
+		accountID := fmt.Sprintf("claude-alias-%d", i)
+		if _, err := accounts.Create(context.Background(), sqlite.Account{ID: accountID, Connector: connectorID, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		registry, err := defaultAdminAuthRegistry(context.Background(), accounts, db, accountID, false, "")
+		if err != nil {
+			t.Fatalf("connector %q rejected: %v", connectorID, err)
+		}
+		component, descriptor, ok := registry.Lookup(core.InstanceID(connectorID))
+		if !ok || descriptor.ID != claudecodeComponentIDForTest {
+			t.Fatalf("connector %q was not initialized as Claude Code: %+v", connectorID, descriptor)
+		}
+		result, ge := component.(core.Connector).Authenticate(context.Background(), core.AuthRequest{AccountID: accountID, Action: "start"}, core.InvocationServices{})
+		_ = registry.Close(context.Background())
+		if ge != nil || !result.Supported || result.UserAction == nil || !strings.HasPrefix(result.UserAction.VerificationURI, "https://auth.synthetic.invalid/") {
+			t.Fatalf("connector %q OAuth profile not ready: result=%+v error=%v", connectorID, result, ge)
+		}
+	}
+}
+
+func TestAdminAuthClaudeCodeDefaultTransportFailsClosed(t *testing.T) {
+	var proxyCalls atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxyCalls.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountID := "claude-default-transport"
+	if _, err := sqlite.NewAccounts(db).Create(context.Background(), sqlite.Account{ID: accountID, Connector: "claudecode", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := secure.Seal(key, 1, "v1", "credentials", "claude-oauth", accountID, []byte(`{"access_token":"old","refresh_token":"refresh"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(context.Background(), sqlite.Credential{ID: "claude-oauth", AccountID: accountID, FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	run := func(action, session, callback string) string {
+		t.Helper()
+		cmd := exec.Command(os.Args[0], "-test.run=^TestAdminAuthClaudeCodeProxyProcessHelper$")
+		hidden := map[string]bool{
+			"PESTIROUTE_CLAUDE_PROXY_HELPER": true, "PESTIROUTE_CLAUDE_PROXY_DB": true,
+			"PESTIROUTE_CLAUDE_PROXY_KEY": true, "PESTIROUTE_CLAUDE_PROXY_ACTION": true,
+			"PESTIROUTE_CLAUDE_PROXY_SESSION": true, "PESTIROUTE_CLAUDE_PROXY_CALLBACK": true,
+			"HTTP_PROXY": true, "http_proxy": true, "HTTPS_PROXY": true, "https_proxy": true,
+			"ALL_PROXY": true, "all_proxy": true, "NO_PROXY": true, "no_proxy": true,
+		}
+		cmd.Env = make([]string, 0, len(os.Environ())+10)
+		for _, value := range os.Environ() {
+			name, _, _ := strings.Cut(value, "=")
+			if !hidden[name] {
+				cmd.Env = append(cmd.Env, value)
+			}
+		}
+		cmd.Env = append(cmd.Env,
+			"PESTIROUTE_CLAUDE_PROXY_HELPER=1",
+			"PESTIROUTE_CLAUDE_PROXY_DB="+dbPath,
+			"PESTIROUTE_CLAUDE_PROXY_KEY="+keyPath,
+			"PESTIROUTE_CLAUDE_PROXY_ACTION="+action,
+			"PESTIROUTE_CLAUDE_PROXY_SESSION="+session,
+			"PESTIROUTE_CLAUDE_PROXY_CALLBACK="+callback,
+			"HTTP_PROXY="+proxy.URL, "http_proxy="+proxy.URL,
+			"HTTPS_PROXY="+proxy.URL, "https_proxy="+proxy.URL,
+			"ALL_PROXY="+proxy.URL, "all_proxy="+proxy.URL,
+			"NO_PROXY=", "no_proxy=",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("Claude auth helper %s failed: %v: %s", action, err, out)
+		}
+		return string(out)
+	}
+	started := run("start", "", "")
+	if got := proxyCalls.Load(); got != 0 {
+		t.Fatalf("Claude start dispatched %d proxy requests", got)
+	}
+	_, actionText, found := strings.Cut(started, "verification_uri=")
+	verifyText, quoted := strings.CutPrefix(actionText, "\"")
+	if !found || !quoted {
+		t.Fatalf("verification URI missing: %q", started)
+	}
+	verifyText, _, _ = strings.Cut(verifyText, "\"")
+	verify, err := url.Parse(verifyText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := adminSessionID(started)
+	callback := "http://127.0.0.1:9999/callback?code=offline-only&state=" + url.QueryEscape(verify.Query().Get("state")) + "\n"
+	if output := run("continue", session, callback); strings.TrimSpace(output) != "FAIL_CLOSED" {
+		t.Fatalf("Claude callback did not fail closed: %q", output)
+	}
+	if got := proxyCalls.Load(); got != 0 {
+		t.Fatalf("default Claude callback dispatched %d proxy requests", got)
+	}
+	if output := run("refresh", "", ""); strings.TrimSpace(output) != "FAIL_CLOSED" {
+		t.Fatalf("Claude refresh did not fail closed: %q", output)
+	}
+	if got := proxyCalls.Load(); got != 0 {
+		t.Fatalf("default Claude refresh dispatched %d proxy requests", got)
+	}
+}
+
+func TestAdminAuthClaudeCodeProxyProcessHelper(t *testing.T) {
+	if os.Getenv("PESTIROUTE_CLAUDE_PROXY_HELPER") != "1" {
+		return
+	}
+	action := os.Getenv("PESTIROUTE_CLAUDE_PROXY_ACTION")
+	args := []string{"--db", os.Getenv("PESTIROUTE_CLAUDE_PROXY_DB"), "--master-key", os.Getenv("PESTIROUTE_CLAUDE_PROXY_KEY"), "auth", action}
+	switch action {
+	case "start", "refresh":
+		args = append(args, "--account", "claude-default-transport")
+	case "continue":
+		args = append(args, "--session", os.Getenv("PESTIROUTE_CLAUDE_PROXY_SESSION"), "--callback-stdin")
+	default:
+		fmt.Fprintln(os.Stderr, "invalid helper action")
+		os.Exit(2)
+	}
+	var stdout, stderr bytes.Buffer
+	err := runAdmin(adminEnvironment{ctx: context.Background(), args: args, stdin: strings.NewReader(os.Getenv("PESTIROUTE_CLAUDE_PROXY_CALLBACK")), stdout: &stdout, stderr: &stderr})
+	if action == "start" {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "start failed")
+			os.Exit(2)
+		}
+		fmt.Fprint(os.Stdout, stdout.String())
+		os.Exit(0)
+	}
+	if err == nil {
+		fmt.Fprintln(os.Stderr, "expected fail-closed auth operation")
+		os.Exit(3)
+	}
+	fmt.Fprintln(os.Stdout, "FAIL_CLOSED")
+	os.Exit(0)
+}
+
+const claudecodeComponentIDForTest = "pestiroute.claudecode.messages"
+
+func mustOpenAdminDB(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	db, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
 }
 
 func TestAdminAuthConfiguredAccountsFailBeforeTransport(t *testing.T) {
