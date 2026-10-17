@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -226,10 +227,15 @@ func (s *messagesStream) Next(ctx context.Context) (core.StreamFrame, error) {
 			} else if err != nil {
 				failure, outcome = readFailure(err)
 			}
+			httpStatus := http.StatusBadGateway
+			if failure.Category == core.CategoryTimeout {
+				httpStatus = http.StatusGatewayTimeout
+			}
 			s.terminal = &core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: outcome, Error: failure, Usage: s.usage(core.UsagePartial)}}
-			return core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: protocol, ContentType: "text/event-stream", Error: failure}}, nil
+			return core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: protocol, HTTPStatus: &httpStatus, ContentType: "text/event-stream", Error: failure}}, nil
 		}
-		return core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: protocol, ContentType: "text/event-stream"}}, nil
+		httpStatus := http.StatusOK
+		return core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: protocol, HTTPStatus: &httpStatus, ContentType: "text/event-stream"}}, nil
 	}
 	if len(s.pending) > 0 {
 		return body(s.pop()), nil

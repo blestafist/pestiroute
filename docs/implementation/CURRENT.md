@@ -30,8 +30,8 @@ remain in [M6-HANDOFF](M6-HANDOFF.md) and [LOCAL-M6](LOCAL-M6.md).
 [M8-004](tasks/M8-004.md), and [M8-005](tasks/M8-005.md) are DONE: public Execute connects
 to package-private offline fake transport (`api.anthropic.invalid`, `synthetic-beta`), and admin
 auth CLI binds Claude Code OAuth callback lifecycle and encrypted SQLite storage.
-Next candidate is Phase 5 protected gateway route eligibility and admission against offline fixtures.
-Production gateway routing remains fail-closed; live provider access and real credentials remain unauthorized.
+[M8-006](tasks/M8-006.md) is DONE: verified protected offline composition, OAuth credential resolution, streaming delivery, and accounting under fake fixtures. Public Claude capabilities remain Unknown; production YAML routing stays disabled.
+All offline Phase 1–5 milestones are complete (M8-001–006). Next candidate is either bounded M8-007 (configurable protected credential ID / settings) or the Phase 6 authorized live gate stopping boundary (currently BLOCKED absent official credentials/authorization).
 
 ### M9 lane
 

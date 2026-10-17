@@ -23,6 +23,7 @@ import (
 
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	anthropic "github.com/blestafist/pestiroute/internal/connector/anthropic"
+	"github.com/blestafist/pestiroute/internal/connector/claudecode"
 	"github.com/blestafist/pestiroute/internal/connector/codex"
 	"github.com/blestafist/pestiroute/internal/connector/external"
 	connector "github.com/blestafist/pestiroute/internal/connector/responses"
@@ -542,6 +543,9 @@ func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.A
 		if item.Implementation == "pestiroute.anthropic.messages" {
 			return anthropic.NewConnector()
 		}
+		if item.Implementation == "pestiroute.claudecode.messages" {
+			return claudecode.NewConnector()
+		}
 		if item.Implementation == "pestiroute.codex.responses" {
 			return codex.NewConnector()
 		}
@@ -561,6 +565,10 @@ type codexInit struct {
 	Model     string `json:"model"`
 	AccountID string `json:"account_id"`
 	Profile   string `json:"profile"`
+}
+
+type claudecodeInit struct {
+	Profile string `json:"profile"`
 }
 
 func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component) (http.Handler, func(context.Context) error, error) {
@@ -701,6 +709,12 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(anthropicInit{Model: item.Model, AccountID: item.AccountID})}
 		} else if item.Implementation == "pestiroute.codex.responses" {
 			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(codexInit{Model: item.Model, AccountID: item.AccountID, Profile: item.Profile})}
+		} else if item.Implementation == "pestiroute.claudecode.messages" {
+			profile := item.Profile
+			if profile == "" {
+				profile = "claude-code-messages-v1"
+			}
+			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(claudecodeInit{Profile: profile})}
 		} else {
 			connect, _ := time.ParseDuration(item.ConnectTimeout)
 			tlsHandshake, _ := time.ParseDuration(item.TLSTimeout)
@@ -969,7 +983,7 @@ func configuredCredentialRefs(c config) (map[string]map[string]string, error) {
 				continue
 			}
 			name := "bearer"
-			if component.Implementation == "pestiroute.codex.responses" {
+			if component.Implementation == "pestiroute.codex.responses" || component.Implementation == "pestiroute.claudecode.messages" {
 				name = "oauth"
 			}
 			refsByConnector[component.ID] = credentialRef{name: name, id: component.CredentialEnv}
