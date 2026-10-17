@@ -159,11 +159,11 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M13 — Deployment and Recovery
 
-[M13 brief](M13-OPERATIONS.md). Branch `dev-m13-operations`; exact filter `/next 10 M13`. Only the initial audit/design is READY.
+[M13 brief](M13-OPERATIONS.md). Branch `dev-m13-operations`; exact filter `/next 10 M13`. Initial audit/design binding (M13-001) is DONE; downstream tasks remain DRAFT.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M13-001](tasks/M13-001.md) | READY | — | — | Bind single-node deployment and recovery acceptance | — | [Verification](tasks/M13-001.md#verification) |
+| [M13-001](tasks/M13-001.md) | DONE | GPT-6 Luna (M13-001 worker) / ses_eb52fd9c4ffe1EiU8LO7uiQktm (reviewer) / Planner closure | — | Bind single-node deployment and recovery acceptance | Audited and bound Linux/amd64 prerequisites, unprivileged execution, lock sidecar, WAL backup safety, and shutdown recovery in M13-BINDING.md; reviewer PASS ses_eb52fd9c4ffe1EiU8LO7uiQktm | [Verification](tasks/M13-001.md#verification) |
 | [M13-002](tasks/M13-002.md) | DRAFT | — | M13-001 | Package reproducible single-node startup | — | [Verification](tasks/M13-002.md#verification) |
 | [M13-003](tasks/M13-003.md) | DRAFT | — | M13-001 | Prove consistent backup restore and upgrade recovery | — | [Verification](tasks/M13-003.md#verification) |
 | [M13-004](tasks/M13-004.md) | DRAFT | — | M13-002, M13-003 | Run packaged offline release acceptance and publish operations handoff | — | [Verification](tasks/M13-004.md#verification) |
