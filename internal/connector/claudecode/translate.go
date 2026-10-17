@@ -12,7 +12,7 @@ import (
 	"github.com/blestafist/pestiroute/internal/core"
 )
 
-const messagesURL = "https://api.anthropic.com/v1/messages?beta=true"
+const messagesURL = "https://api.anthropic.invalid/v1/messages?beta=true"
 
 type messagesRequest struct {
 	Model       string          `json:"model"`
@@ -26,8 +26,18 @@ type messagesRequest struct {
 }
 
 type message struct {
-	Role    string      `json:"role"`
-	Content []textBlock `json:"content"`
+	Role    string         `json:"role"`
+	Content []contentBlock `json:"content"`
+}
+type contentBlock struct {
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Source    *imageSource    `json:"source,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   *string         `json:"content,omitempty"`
 }
 type textBlock struct {
 	Type   string          `json:"type"`
@@ -210,16 +220,19 @@ func uniqueJSON(raw []byte) bool {
 func translateInput(raw json.RawMessage, out *messagesRequest) error {
 	var text string
 	if json.Unmarshal(raw, &text) == nil && text != "" {
-		out.Messages = []message{{Role: "user", Content: []textBlock{{Type: "text", Text: text}}}}
+		out.Messages = []message{{Role: "user", Content: []contentBlock{{Type: "text", Text: text}}}}
 		return nil
 	}
 	var items []json.RawMessage
 	if json.Unmarshal(raw, &items) != nil || len(items) == 0 {
 		return fmt.Errorf("invalid input")
 	}
+	pending := make(map[string]struct{})
+	callIDs := make(map[string]struct{})
+	resultsStarted := false
 	for _, item := range items {
 		var f map[string]json.RawMessage
-		if json.Unmarshal(item, &f) != nil || f == nil {
+		if !uniqueJSON(item) || json.Unmarshal(item, &f) != nil || f == nil {
 			return fmt.Errorf("invalid item")
 		}
 		var typ string
@@ -228,6 +241,9 @@ func translateInput(raw json.RawMessage, out *messagesRequest) error {
 		}
 		switch typ {
 		case "message":
+			if len(pending) != 0 {
+				return fmt.Errorf("message while tool results are pending")
+			}
 			for k := range f {
 				if k != "type" && k != "role" && k != "content" {
 					return fmt.Errorf("unsupported message field")
@@ -252,10 +268,73 @@ func translateInput(raw json.RawMessage, out *messagesRequest) error {
 			if err != nil {
 				return err
 			}
-			out.Messages = append(out.Messages, message{Role: role, Content: blocks})
+			appendContent(&out.Messages, role, blocks...)
+		case "function_call":
+			if len(pending) > 0 && resultsStarted {
+				return fmt.Errorf("function call interleaved with tool results")
+			}
+			for k := range f {
+				if k != "type" && k != "id" && k != "call_id" && k != "name" && k != "arguments" && k != "status" {
+					return fmt.Errorf("unsupported function call field")
+				}
+			}
+			var itemID, callID, name, arguments string
+			if rawID, exists := f["id"]; exists && (json.Unmarshal(rawID, &itemID) != nil || itemID == "") {
+				return fmt.Errorf("invalid function call id")
+			}
+			if status, exists := f["status"]; exists {
+				var value string
+				if json.Unmarshal(status, &value) != nil || value != "completed" {
+					return fmt.Errorf("incomplete function call")
+				}
+			}
+			if json.Unmarshal(f["call_id"], &callID) != nil || callID == "" ||
+				json.Unmarshal(f["name"], &name) != nil || name == "" ||
+				json.Unmarshal(f["arguments"], &arguments) != nil || !uniqueJSON([]byte(arguments)) {
+				return fmt.Errorf("invalid function call")
+			}
+			var input map[string]json.RawMessage
+			if json.Unmarshal([]byte(arguments), &input) != nil || input == nil {
+				return fmt.Errorf("function arguments must be an object")
+			}
+			if _, exists := callIDs[callID]; exists {
+				return fmt.Errorf("duplicate function call")
+			}
+			callIDs[callID] = struct{}{}
+			pending[callID] = struct{}{}
+			appendContent(&out.Messages, "assistant", contentBlock{Type: "tool_use", ID: callID, Name: name, Input: json.RawMessage(arguments)})
+		case "function_call_output":
+			for k := range f {
+				if k != "type" && k != "id" && k != "call_id" && k != "output" {
+					return fmt.Errorf("unsupported function output field")
+				}
+			}
+			var itemID, callID, output string
+			if rawID, exists := f["id"]; exists && (json.Unmarshal(rawID, &itemID) != nil || itemID == "") {
+				return fmt.Errorf("invalid function output id")
+			}
+			if json.Unmarshal(f["call_id"], &callID) != nil || callID == "" ||
+				json.Unmarshal(f["output"], &output) != nil {
+				return fmt.Errorf("invalid function output")
+			}
+			if itemID != "" && itemID == callID {
+				return fmt.Errorf("output item id is not a call id")
+			}
+			if _, exists := pending[callID]; !exists {
+				return fmt.Errorf("orphan or duplicate function output")
+			}
+			resultsStarted = true
+			delete(pending, callID)
+			appendContent(&out.Messages, "user", contentBlock{Type: "tool_result", ToolUseID: callID, Content: &output})
+			if len(pending) == 0 {
+				resultsStarted = false
+			}
 		default:
 			return fmt.Errorf("unsupported input item")
 		}
+	}
+	if len(pending) != 0 {
+		return fmt.Errorf("unresolved function calls")
 	}
 	if len(out.Messages) == 0 {
 		return fmt.Errorf("empty history")
@@ -263,16 +342,24 @@ func translateInput(raw json.RawMessage, out *messagesRequest) error {
 	return nil
 }
 
-func contentBlocks(raw json.RawMessage) ([]textBlock, error) {
+func appendContent(messages *[]message, role string, blocks ...contentBlock) {
+	if len(*messages) == 0 || (*messages)[len(*messages)-1].Role != role {
+		*messages = append(*messages, message{Role: role})
+	}
+	last := &(*messages)[len(*messages)-1]
+	last.Content = append(last.Content, blocks...)
+}
+
+func contentBlocks(raw json.RawMessage) ([]contentBlock, error) {
 	var s string
 	if json.Unmarshal(raw, &s) == nil && s != "" {
-		return []textBlock{{Type: "text", Text: s}}, nil
+		return []contentBlock{{Type: "text", Text: s}}, nil
 	}
 	var parts []json.RawMessage
 	if json.Unmarshal(raw, &parts) != nil || len(parts) == 0 {
 		return nil, fmt.Errorf("content")
 	}
-	out := make([]textBlock, 0, len(parts))
+	out := make([]contentBlock, 0, len(parts))
 	for _, p := range parts {
 		var f map[string]json.RawMessage
 		if json.Unmarshal(p, &f) != nil {
@@ -291,7 +378,7 @@ func contentBlocks(raw json.RawMessage) ([]textBlock, error) {
 			if json.Unmarshal(f["text"], &text) != nil || text == "" {
 				return nil, fmt.Errorf("text")
 			}
-			out = append(out, textBlock{Type: "text", Text: text})
+			out = append(out, contentBlock{Type: "text", Text: text})
 		case "input_image":
 			for k := range f {
 				if k != "type" && k != "image_url" {
@@ -310,7 +397,7 @@ func contentBlocks(raw json.RawMessage) ([]textBlock, error) {
 			if err != nil || len(decoded) == 0 {
 				return nil, fmt.Errorf("image data")
 			}
-			out = append(out, textBlock{Type: "image", Source: &imageSource{Type: "base64", MediaType: media, Data: data}})
+			out = append(out, contentBlock{Type: "image", Source: &imageSource{Type: "base64", MediaType: media, Data: data}})
 		default:
 			return nil, fmt.Errorf("unsupported content")
 		}

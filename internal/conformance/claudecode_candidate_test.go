@@ -28,7 +28,7 @@ func TestClaudeCodeConnectorLifecycleAndFailClosedExecution(t *testing.T) {
 	wantDescriptor := core.Descriptor{
 		ID: "pestiroute.claudecode.messages", Kind: core.ComponentConnector, ImplementationVersion: "1.0.0",
 		APIVersions: []core.APIVersion{{Major: 1, Minor: 0}}, Protocols: []string{"openai.responses.v1"},
-		Operations: []string{"authenticate"}, ConnectorType: "api", AuthMethods: []string{"oauth"},
+		Operations: []string{"authenticate", "execute"}, ConnectorType: "api", AuthMethods: []string{"oauth"},
 	}
 	if !reflect.DeepEqual(gotDescriptor, wantDescriptor) {
 		t.Fatalf("descriptor = %+v, want exact declaration %+v", gotDescriptor, wantDescriptor)
