@@ -8,6 +8,10 @@ M5.1 and M5.2 handoffs are **conditionally accepted**, not fully DONE: [DEC-012/
 
 ## Integrated offline baseline
 
+M8 offline integration merged through [PR #19](https://github.com/blestafist/pestiroute/pull/19)
+as `6891ed6`; [hosted integration CI](https://github.com/blestafist/pestiroute/actions/runs/39046595588)
+passed for source `0e88570` (external/M6, format, vet, unit, race and build).
+
 M7 research and M9 native Chat Completions (including M9-007 stream idle timeout
 and mixed-protocol isolation) are on main. M8-001–007 are accepted for offline
 integration under [DEC-020](../project/DECISIONS.md#dec-020--accept-m8-offline-integration-and-defer-live-enablement).
@@ -23,6 +27,20 @@ not waived. Native Responses, native Chat, Anthropic translation, Codex,
 local-runtime profiles and external processes retain their individual evidence
 ceilings and existing tests. M9 branch reconciliation is merged in PR #18;
 the earlier CURRENT claim that it awaited review was stale.
+
+## Next independent lanes
+
+| Milestone | Branch | First READY task | Scope / dependency |
+| --- | --- | --- | --- |
+| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-001 | Current Antigravity research → bounded Connector slice; no Claude dependency |
+| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
+| [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
+| [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
+
+Each has a dedicated worktree and `/next 10 M10` (or M11/M12/M13) filter.
+See [PARALLEL](PARALLEL.md) before starting; later cards are DRAFT until their
+dependencies and concrete checks are settled. Plans/branches are not implemented
+features. All new branches start from the same accepted planning baseline.
 
 ## Open gates carried forward
 

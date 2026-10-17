@@ -17,6 +17,10 @@ Work progresses from transparent request path to managed runtime under the [proj
 | M7 | Claude Code subscription connector research and bounded offline candidates | Research spike plus separately gated offline candidates; no live support claim |
 | M8 | Claude Code execution and gateway integration | Design/execution slices, then separately gated live evidence |
 | M9 | Native Chat Completions client compatibility | Independent adapter/Connector and protected gateway slices |
+| M10 | Google Antigravity subscription Connector | Source/binding research, then evidence-scoped offline and later live slices |
+| M11 | Local authenticated administrative HTTP API | Contract first; reuse CLI/store/coordinator behavior |
+| M12 | Complete operator WebUI | Parallel fixture UI, then accepted API and bundled E2E |
+| M13 | Reproducible deployment and recovery | Independent build/start/backup/restore acceptance |
 
 M3 completes a minimally viable native version for standalone use. M4 validates the core architectural assumption about translation. Support for external third-party plugins appears after M6.
 
@@ -146,6 +150,52 @@ supported subset; native transport is not a universal provider support claim.
 M8 and M9 can proceed in [independent OpenCode worktrees](PARALLEL.md), starting
 with M8-001 and M9-001. They have no cross-milestone live dependency. Shared
 specifications and gateway integration need explicit ownership and serial review.
+
+## M10 · Google Antigravity Connector
+
+[Brief](M10-ANTIGRAVITY.md): research current subscription auth/backend and bind one
+opaque-contract execution slice, then prove a fake-backend vertical slice. Source,
+API-key/enterprise and personal subscription evidence are distinct. Later auth,
+project identity, tools/signatures and production enabling follow researched gates.
+**Done when:** each claimed capability has versioned applicable conformance/live
+evidence, auth/state/usage/retry constraints are explicit, and a scoped operator
+runbook exists. An offline handoff is useful progress, not full live completion.
+
+## M11 · Administrative HTTP API
+
+[Brief](M11-ADMIN-API.md): separate opt-in operator-authenticated HTTP management
+for status/topology, accounts/write-only credentials, keys/policies, usage and
+existing auth lifecycle. **Done when:** accepted OpenAPI binding matches tested
+handlers, secrets are not exposed, CAS/revocation/coordinator semantics hold,
+admin cannot be reached through inference auth/mux and whole-tree CI passes.
+
+## M12 · WebUI
+
+[Brief](M12-WEBUI.md): complete accounts/keys/policies/usage/routing/diagnostics
+workflows with accessible navigation and real failure states. Mock work proceeds
+in parallel; real API integration depends on M11's integrated handoff.
+**Done when:** a bundled distribution serves the UI without Node at runtime,
+and browser E2E against real local gateway/SQLite/fake upstream proves creation,
+restricted inference, usage visibility, revocation and logout. Screenshots of
+mock dashboards do not satisfy this milestone.
+
+## M13 · Deployment and Recovery
+
+[Brief](M13-OPERATIONS.md): minimal single-node packaging, unprivileged startup,
+consistent backups, upgrade/rollback and restored encrypted state. **Done when:**
+a fresh Linux/amd64 installation passes bounded offline release acceptance and
+backup/restore evidence, with tested tooling and honest platform/provider limits.
+UI packaging is integrated after M12, without blocking the earlier Go-only slice.
+
+## Subsequent roadmap outcomes
+
+Keep these at outcome level until their prerequisites justify cards: model aliases
+and operator-configurable target groups with existing safe fallback rules; validated
+routing edits and explicit reload/restart semantics; provider quota adapters with
+source/time/unknown semantics; observability/performance budgets; separately
+researched Gemini CLI/ACP and other providers. None is implied by M10–M13 or
+by a WebUI screen. Existing Anthropic/Codex/local-runtime live gates remain in
+TASKS; missing accounts/hardware are explicit blockers, not unfinished UI work.
 
 ## First Vertical Slice
 

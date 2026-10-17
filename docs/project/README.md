@@ -65,3 +65,11 @@ Reuse provider code and protocol knowledge from 9Router, not its routing, core a
 - [EXTENSIBILITY.md](EXTENSIBILITY.md): extension constraints and compatibility.
 - [DECISIONS.md](DECISIONS.md): accepted/proposed decisions and unresolved questions.
 - [CURRENT.md](../implementation/CURRENT.md): actual repository state and immediate focus.
+
+## Planned operator interface extension
+
+The initial MVP exclusion above describes the original phase. The 2026-10-17
+user request and DEC-021 authorize planning a local authenticated administration
+API and full WebUI in M11/M12. This remains planned, not available functionality.
+It reuses existing runtime/store operations and does not change the opaque Core
+boundary. Antigravity (M10) and deployment/recovery (M13) are independent lanes.

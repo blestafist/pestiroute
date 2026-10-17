@@ -4,7 +4,7 @@ Start with [CURRENT](CURRENT.md), then one selected row in [TASKS](TASKS.md) and
 
 | Group | Documents |
 | --- | --- |
-| Active planning | [M8 Claude integration](M8-CLAUDE-INTEGRATION.md), [M9 Chat Completions](M9-CHAT-COMPLETIONS.md), [parallel OpenCode](PARALLEL.md), [ROADMAP](ROADMAP.md), [TASKS](TASKS.md), [card template](tasks/TEMPLATE.md) |
+| Active planning | [M10 Antigravity](M10-ANTIGRAVITY.md), [M11 Admin API](M11-ADMIN-API.md), [M12 WebUI](M12-WEBUI.md), [M13 Operations](M13-OPERATIONS.md), [M8 offline handoff](M8-HANDOFF.md), [M9 Chat Completions](M9-CHAT-COMPLETIONS.md), [parallel OpenCode](PARALLEL.md), [ROADMAP](ROADMAP.md), [TASKS](TASKS.md), [card template](tasks/TEMPLATE.md) |
 | Shared specifications | [CONTRACT](CONTRACT.md), [CONFIGURATION](CONFIGURATION.md), [TESTING](TESTING.md), [STACK](STACK.md), [REFERENCES](REFERENCES.md), [TOOLING](TOOLING.md) |
 | Native/component bindings | [M1](M1-BINDING.md), [M2](M2-BINDING.md) |
 | Protected runtime/storage | [M3 runtime](M3-RUNTIME.md), [storage](M3-STORAGE.md), [auth](M3-AUTH.md), [config](M3-CONFIG.md) |

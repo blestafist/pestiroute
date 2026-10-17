@@ -500,6 +500,14 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Compatibility:** No Core API or schema change; existing Responses/Chat and Codex paths remain supported at their recorded evidence ceilings.
 - **Verification:** Reconcile against current main; test public Execute, OAuth, protected composition and non-enablement, plus whole-tree hosted format/vet/unit/race/build and M6 regressions. See [handoff](../implementation/M8-HANDOFF.md).
 
+### DEC-021 — Plan a Local Administration API and WebUI
+
+- **Status:** Scope accepted by the user's 2026-10-17 request for a full WebUI and parallel development lanes; concrete HTTP binding is prepared in M11-001.
+- **Decision:** Add a separate opt-in, authenticated local administration surface over existing runtime/store operations and a repository-hosted React/TypeScript UI. Separate M11 API and M12 UI lanes; UI starts on explicit fixtures and integrates only the accepted API. M10 owns Antigravity research/connector work; M13 owns deployment/recovery. This extends the initial MVP UI exclusion without adding UI to Core or claiming implementation.
+- **Boundary:** No provider requests from browser, inference-key admin access, returned stored secrets, raw prompt logging, billing platform, RBAC service, universal LLM schema or implicit routing reload. Operator auth/listener/Host/Origin behavior is bound before code; credentials are write-only and created virtual keys are shown once. M8 live gates stay deferred.
+- **Compatibility:** Additive future HTTP/static surface; current CLI and inference contracts stay intact. Any necessary semantic Core change still needs its own ADR. Node is a build dependency only for the future full UI distribution.
+- **Verification:** M11 contract and API behavior, M12 real browser E2E against a local gateway, M13 build/restore acceptance and existing Go/M6 CI. See the four milestone briefs and [parallel plan](../implementation/PARALLEL.md).
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |

@@ -98,3 +98,10 @@ Token estimation does not guarantee a hard upper bound on upstream consumption. 
 When estimates are unknown, explicit policies are required: `reject` or a fixed conservative reservation. Silent reservation of zero is prohibited. The exact conservative budget value is set by the operator for each route, not guessed by Core.
 
 Reconciliation is idempotent based on attempt ID. If the gateway restarts with active reservations, startup recovery marks attempts as interrupted, preserves conservative charges, and does not present unknown upstream results as canceled executions. Refresh operations and limit checks do not keep SQL transactions open during network calls.
+
+## Planned management HTTP surface
+
+M11 will bind a separate opt-in authenticated local management listener and M12
+the operator UI (DEC-021). Existing CLI/config behavior remains the current
+implementation. No new flags, YAML keys, HTTP paths or hot reload are established
+by this plan; M11-001 owns the concrete binding before implementation.

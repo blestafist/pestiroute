@@ -40,3 +40,10 @@ Full integration gate: `GOFLAGS=-p=1 ./scripts/check.sh` and both M6 offline
 smoke procedures in hosted CI, using pinned Go 1.27.1. The PR/CI result is the
 merge gate; older task-card results describe their original branch revisions.
 No real provider calls were made for this integration.
+
+Integration accepted: [PR #19](https://github.com/blestafist/pestiroute/pull/19),
+merge `6891ed6`, source `0e88570`. Targeted race tests passed on Go 1.27.1
+for Claude Connector, gateway and conformance scenarios.
+[Hosted CI](https://github.com/blestafist/pestiroute/actions/runs/39046595588)
+passed external admission/aggregate regressions, both M6 CLI procedures and
+full format/vet/unit/race/build checks. Live provider checks remain unrun.

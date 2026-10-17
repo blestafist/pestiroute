@@ -117,3 +117,53 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | [M9-005](tasks/M9-005.md) | DONE | GPT-6 Luna (M9-005 worker) | M9-004, M9-006 | Publish Chat Completions compatibility matrix, offline smoke procedure, and milestone handoff | Compatibility matrix, full CLI JSON/SSE/tools smoke procedure, and milestone handoff verified | [Handoff verification](tasks/M9-005.md#completion-evidence) |
 | [M9-006](tasks/M9-006.md) | DONE | OpenCode worker / reviewer ses_eb6b182e3ffe2KSmxDhUre2lbo | M9-004 | Add explicit YAML capability declarations for native Chat connector | YAML capabilities mapping, tri-state validation, protected startup propagation, and gating verified | [Gateway capability verification](tasks/M9-006.md#completion-evidence) |
 | [M9-007](tasks/M9-007.md) | DONE | GPT-6 Luna (M9-007 worker) / reviewer ses_eb660fd21ffeXVr5EyzjOW0D38 | M9-005, M9-006 | Enforce Chat stream idle timeout, test mixed protocol isolation, and clarify opaque routing | Chat stream idle timeout enforced on SSE/JSON, stall/reset tests verified, mixed protocol isolation tested, opaque routing clarified | [Verification](tasks/M9-007.md#verification) |
+
+## M10 — Google Antigravity Connector
+
+[M10 brief](M10-ANTIGRAVITY.md). Branch `dev-m10-antigravity`; exact filter `/next 10 M10`. Only the initial audit/design is READY.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M10-001](tasks/M10-001.md) | READY | — | — | Pin current Antigravity source and authentication evidence | — | [Verification](tasks/M10-001.md#verification) |
+| [M10-002](tasks/M10-002.md) | DRAFT | — | M10-001 | Bind one Antigravity execution slice | — | [Verification](tasks/M10-002.md#verification) |
+| [M10-003](tasks/M10-003.md) | DRAFT | — | M10-002 | Prepare provenance-labelled fixtures and slice decision | — | [Verification](tasks/M10-003.md#verification) |
+| [M10-004](tasks/M10-004.md) | DRAFT | — | M10-003 | Implement the minimal offline Antigravity vertical slice | — | [Verification](tasks/M10-004.md#verification) |
+| [M10-005](tasks/M10-005.md) | DRAFT | — | M10-004 | Publish Antigravity offline handoff and next auth/tools scope | — | [Verification](tasks/M10-005.md#verification) |
+
+## M11 — Administrative HTTP API
+
+[M11 brief](M11-ADMIN-API.md). Branch `dev-m11-admin-api`; exact filter `/next 10 M11`. Only the initial audit/design is READY.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M11-001](tasks/M11-001.md) | READY | — | — | Freeze the administrative HTTP binding | — | [Verification](tasks/M11-001.md#verification) |
+| [M11-002](tasks/M11-002.md) | DRAFT | — | M11-001 | Add opt-in authenticated admin listener | — | [Verification](tasks/M11-002.md#verification) |
+| [M11-003](tasks/M11-003.md) | DRAFT | — | M11-002 | Expose redacted status topology and ledger views | — | [Verification](tasks/M11-003.md#verification) |
+| [M11-004](tasks/M11-004.md) | DRAFT | — | M11-003 | Expose account and write-only credential management | — | [Verification](tasks/M11-004.md#verification) |
+| [M11-005](tasks/M11-005.md) | DRAFT | — | M11-004 | Expose virtual-key and policy administration | — | [Verification](tasks/M11-005.md#verification) |
+| [M11-006](tasks/M11-006.md) | DRAFT | — | M11-004 | Bridge the existing auth coordinator to admin HTTP | — | [Verification](tasks/M11-006.md#verification) |
+| [M11-007](tasks/M11-007.md) | DRAFT | — | M11-005, M11-006 | Verify and publish the admin API integration handoff | — | [Verification](tasks/M11-007.md#verification) |
+
+## M12 — WebUI
+
+[M12 brief](M12-WEBUI.md). Branch `dev-m12-webui`; exact filter `/next 10 M12`. Only the initial audit/design is READY.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M12-001](tasks/M12-001.md) | READY | — | — | Design complete operator workflows and UI states | — | [Verification](tasks/M12-001.md#verification) |
+| [M12-002](tasks/M12-002.md) | DRAFT | — | M12-001 | Build the WebUI shell with a fixture adapter | — | [Verification](tasks/M12-002.md#verification) |
+| [M12-003](tasks/M12-003.md) | DRAFT | — | M12-002 | Implement account and key management workflows on fixtures | — | [Verification](tasks/M12-003.md#verification) |
+| [M12-004](tasks/M12-004.md) | DRAFT | — | M12-002 | Implement overview usage routing and diagnostics screens | — | [Verification](tasks/M12-004.md#verification) |
+| [M12-005](tasks/M12-005.md) | DRAFT | — | M12-003, M12-004, M11-007 | Integrate the accepted admin API and authentication | — | [Verification](tasks/M12-005.md#verification) |
+| [M12-006](tasks/M12-006.md) | DRAFT | — | M12-005 | Package embedded UI assets and verify complete operator E2E | — | [Verification](tasks/M12-006.md#verification) |
+
+## M13 — Deployment and Recovery
+
+[M13 brief](M13-OPERATIONS.md). Branch `dev-m13-operations`; exact filter `/next 10 M13`. Only the initial audit/design is READY.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M13-001](tasks/M13-001.md) | READY | — | — | Bind single-node deployment and recovery acceptance | — | [Verification](tasks/M13-001.md#verification) |
+| [M13-002](tasks/M13-002.md) | DRAFT | — | M13-001 | Package reproducible single-node startup | — | [Verification](tasks/M13-002.md#verification) |
+| [M13-003](tasks/M13-003.md) | DRAFT | — | M13-001 | Prove consistent backup restore and upgrade recovery | — | [Verification](tasks/M13-003.md#verification) |
+| [M13-004](tasks/M13-004.md) | DRAFT | — | M13-002, M13-003 | Run packaged offline release acceptance and publish operations handoff | — | [Verification](tasks/M13-004.md#verification) |

@@ -76,3 +76,11 @@ Metrics track request count, active streams, errors, execution time, first-byte 
 The project starts with a single Go module and one main binary `gateway`. Minimal CI runs `gofmt`, `go vet ./...`, `go test ./...`, `go test -race ./...`, and build checks. Protocol fixtures do not require network credentials. Real upstream smoke tests run separately and have explicitly limited request volumes.
 
 The container runs as an unprivileged user, receives configuration and persistent data directory via mounts, and includes CA certificates for upstream TLS. SQLite backups are performed using consistent snapshot/backup methods; simple file copying of an active WAL database is not a proper procedure.
+
+## Planned WebUI build dependency
+
+M12 plans React + TypeScript + Vite in `web/`, pinned by a lockfile. Node is a
+build/test dependency for the full UI bundle only; the gateway runtime stays Go.
+No frontend package/build command exists until the scaffold task implements it.
+M11 binds the separate administrative listener/API and M12 the asset embedding
+seam; see their briefs before adding dependencies or build requirements.
