@@ -33,9 +33,11 @@ are not authorized by this planning handoff.
 ### M9 lane
 
 [Chat Completions client compatibility](M9-CHAT-COMPLETIONS.md), branch `dev-m9`.
-[M9-001](tasks/M9-001.md), [M9-002](tasks/M9-002.md), [M9-003](tasks/M9-003.md), and [M9-004](tasks/M9-004.md)
-are DONE (native Chat adapter, connector, conformance slice, protected gateway routing/accounting,
-and agent workflows verified). Milestone phase 5 (compatibility handoff) remains uncarded roadmap stage.
+[M9-001](tasks/M9-001.md), [M9-002](tasks/M9-002.md), [M9-003](tasks/M9-003.md), [M9-004](tasks/M9-004.md),
+and [M9-006](tasks/M9-006.md) are DONE (native Chat adapter, connector, conformance slice,
+protected gateway routing/accounting, agent workflows, and explicit YAML capability declarations verified).
+[M9-005](tasks/M9-005.md) is now unblocked to update `LOCAL-M9.md` and complete full CLI SSE/tool smoke
+acceptance; its drafted matrix and procedure are preserved.
 Lane `TMPDIR=/tmp/pestiroute-m9.rH7sMT`, `GOFLAGS=-p=1`. Shared file ownership: M9 owns
 `internal/adapter/chatcompletions/**`, `internal/connector/chatcompletions/**`,
 conformance Chat tests, `docs/implementation/M9-*`, `tasks/M9-*`, and holds named

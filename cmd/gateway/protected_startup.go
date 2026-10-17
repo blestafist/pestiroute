@@ -91,6 +91,7 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 			component.HeaderTimeout, component.IdleTimeout = s.ResponseHeaderTimeout, s.StreamIdleTimeout
 		case chatImplementation:
 			component.Endpoint, component.CredentialEnv = s.BaseURL, s.CredentialEnv
+			component.Capabilities = s.Capabilities
 			component.MaxBodyBytes, component.MaxHeaderBytes = min(p.Server.MaxRequestBytes, s.MaxRequestBodyBytes), s.MaxRequestHeaderBytes
 			component.ConnectTimeout, component.TLSTimeout = s.ConnectTimeout, s.TLSHandshakeTimeout
 			component.HeaderTimeout, component.IdleTimeout = s.ResponseHeaderTimeout, s.StreamIdleTimeout

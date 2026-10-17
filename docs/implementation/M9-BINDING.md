@@ -201,6 +201,11 @@ connectors:
       tls_handshake_timeout: 2s
       response_header_timeout: 5s
       stream_idle_timeout: 30s
+      capabilities:
+        llm.streaming: supported
+        llm.tools: supported
+        llm.tools.parallel: supported
+        llm.structured_output: supported
 routes:
   - id: chat-model
     protocol: openai.chat-completions.v1
@@ -225,7 +230,13 @@ trailing slash).
 `upstream_protocol` must exactly match the singleton `protocols` value and
 `mode` is exactly `native`. `credential_env` is a non-empty environment
 variable name whose value must exist and be non-empty at startup; only scoped
-bearer auth is supported. The two request limits and all four Go transport
+bearer auth is supported. Optional `capabilities` maps non-empty string names
+to exactly `supported`, `unsupported`, or `unknown`. Undeclared capabilities
+remain `unknown`; only explicitly `supported` declarations satisfy the
+corresponding exact-scope requirements. Operators and fixtures may declare
+reviewed support for `llm.streaming`, `llm.tools`, `llm.tools.parallel`, and
+`llm.structured_output`; the gateway does not infer support from endpoint,
+model, or provider identity. The two request limits and all four Go transport
 durations are required and positive. Reject every additional or
 Responses-specific setting; secrets are not literal YAML values. The server's
 `max_request_bytes` remains the ingress cap, while Connector body/header limits
