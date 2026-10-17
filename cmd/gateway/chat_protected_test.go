@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/connector/external"
 	"github.com/blestafist/pestiroute/internal/core"
+	secure "github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 	"gopkg.in/yaml.v3"
 )
@@ -187,7 +189,7 @@ func newChatProtectedFixture(t *testing.T, backend http.Handler, limits ...int64
 	return &chatProtectedFixture{prepared: prepared, server: server, key: issued.Secret, keyID: issued.ID, backend: upstream}
 }
 
-func newChatProtectedFixtureWithYAMLCapabilities(t *testing.T, backend http.Handler, capabilities map[string]string) *chatProtectedFixture {
+func newChatProtectedFixtureWithYAMLCapabilities(t *testing.T, backend http.Handler, capabilities map[string]string, idleTimeout ...string) *chatProtectedFixture {
 	t.Helper()
 	t.Setenv("PROTECTED_TEST_CREDENTIAL", "synthetic")
 	_, dbPath, keyPath := protectedFixture(t)
@@ -206,6 +208,10 @@ func newChatProtectedFixtureWithYAMLCapabilities(t *testing.T, backend http.Hand
 				capabilityYAML += "        " + line + "\n"
 			}
 		}
+	}
+	idle := "1s"
+	if len(idleTimeout) != 0 {
+		idle = idleTimeout[0]
 	}
 	data := fmt.Appendf(nil, `version: 1
 server: {listen: "127.0.0.1:0", max_request_bytes: 1048576, shutdown_timeout: 5s}
@@ -226,7 +232,7 @@ connectors:
       connect_timeout: 1s
       tls_handshake_timeout: 1s
       response_header_timeout: 1s
-      stream_idle_timeout: 1s
+      stream_idle_timeout: %s
 %sroutes:
   - id: chat-route
     protocol: %s
@@ -237,7 +243,7 @@ connectors:
     budget: {unknown_estimate: reserve, conservative_tokens: 10}
     targets: [{connector: upstream, account: account-a}]
 policies: {standard: policy-id-a}
-`, dbPath, keyPath, chatImplementation, chatProtocol, upstream.URL, chatProtocol, capabilityYAML, chatProtocol, chatImplementation)
+`, dbPath, keyPath, chatImplementation, chatProtocol, upstream.URL, chatProtocol, idle, capabilityYAML, chatProtocol, chatImplementation)
 	path := filepath.Join(t.TempDir(), "gateway.yaml")
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
@@ -534,6 +540,176 @@ func TestChatProtectedGateway_ProtocolIsolation(t *testing.T) {
 	_ = resp.Body.Close()
 	if err != nil || resp.StatusCode != http.StatusBadRequest || !bytes.Contains(body, []byte(`"code":"unsupported_target"`)) || calls.Load() != 0 {
 		t.Fatalf("unconfigured target status=%d body=%q upstream_calls=%d err=%v", resp.StatusCode, body, calls.Load(), err)
+	}
+}
+
+func TestChatProtectedGateway_MixedProtocolRoutesDispatchSeparately(t *testing.T) {
+	t.Setenv("PROTECTED_TEST_CREDENTIAL", "synthetic")
+	t.Setenv("CHAT_TEST_CREDENTIAL", "synthetic")
+	_, dbPath, keyPath := protectedFixture(t)
+	var responsesCalls, chatCalls atomic.Int32
+	responsesBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		responsesCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp-fixture","output":[]}`)
+	}))
+	defer responsesBackend.Close()
+	chatBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		chatCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatResponse)
+	}))
+	defer chatBackend.Close()
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	masterKey, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewAccounts(db).Create(context.Background(), sqlite.Account{ID: "chat-account", Connector: "chat-upstream", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := secure.Seal(masterKey, 2, "test-v1", "credentials", "CHAT_TEST_CREDENTIAL", "chat-account", []byte("synthetic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(context.Background(), sqlite.Credential{ID: "CHAT_TEST_CREDENTIAL", AccountID: "chat-account", FormatVersion: envelope.FormatVersion, KeyVersion: envelope.KeyVersion, Nonce: envelope.Nonce, Ciphertext: envelope.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	policies := sqlite.NewKeyPolicies(db)
+	policy, err := policies.GetLatest(context.Background(), "policy-id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policies.Update(context.Background(), policy.ID, policy.Revision, sqlite.UpdateKeyPolicyParams{Enabled: true, Models: policy.Models, Connectors: []string{"upstream", "chat-upstream"}, RPM: policy.RPM, TPM: policy.TPM}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	c := fixtureProtectedConfig(dbPath, keyPath, "127.0.0.1:0")
+	responseConnector := c.protected.Connectors[0]
+	responseConnector.Settings.BaseURL = responsesBackend.URL + "/v1/responses"
+	c.protected.Connectors[0] = responseConnector
+	chatConnector := protectedConnector{ID: "chat-upstream", Kind: "connector", Implementation: chatImplementation, Protocols: []string{chatProtocol}, Settings: nativeSettings{
+		BaseURL: chatBackend.URL + "/v1/chat/completions", UpstreamProtocol: chatProtocol, Mode: "native", CredentialEnv: "CHAT_TEST_CREDENTIAL",
+		MaxRequestBodyBytes: 1 << 20, MaxRequestHeaderBytes: 8192, ConnectTimeout: "1s", TLSHandshakeTimeout: "1s", ResponseHeaderTimeout: "1s", StreamIdleTimeout: "1s",
+	}}
+	c.protected.Connectors = append(c.protected.Connectors, chatConnector)
+	c.protected.Routes = append(c.protected.Routes, protectedRoute{
+		ID: "chat-route", Protocol: chatProtocol, Mode: "native", Model: "model-a", Adapter: chatImplementation, Policy: "standard",
+		Budget: routeBudget{UnknownEstimate: "reserve", ConservativeTokens: ptrInt64(10)}, Targets: []routeTarget{{Connector: "chat-upstream", Account: "chat-account"}},
+	})
+	prepared, err := prepareProtectedConfig(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyStore := sqlite.NewKeyPolicies(prepared.runtimeDB)
+	policy, err = policyStore.GetLatest(context.Background(), "policy-id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := sqlite.NewVirtualKeys(prepared.runtimeDB).Create(context.Background(), sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready, draining atomic.Bool
+	h, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)
+	if err != nil {
+		_ = prepared.runtimeDB.Close()
+		_ = prepared.processLock.Close()
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(h)
+	defer func() {
+		server.Close()
+		_ = closeComponents(context.Background())
+		_ = prepared.runtimeDB.Close()
+		_ = prepared.processLock.Close()
+	}()
+	f := &chatProtectedFixture{prepared: prepared, server: server, key: issued.Secret, keyID: issued.ID}
+	for _, tc := range []struct{ path, payload string }{
+		// The Responses route selects its protocol by path; foreign-looking body
+		// fields stay opaque and are not schema-rejected by that adapter.
+		{path: "/v1/responses", payload: chatRequest},
+		{path: "/v1/chat/completions", payload: chatRequest},
+	} {
+		resp := chatRequestTo(t, f, tc.path, f.key, tc.payload)
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("path=%s status=%d body=%q calls=(%d,%d) err=%v", tc.path, resp.StatusCode, body, responsesCalls.Load(), chatCalls.Load(), readErr)
+		}
+	}
+	if responsesCalls.Load() != 1 || chatCalls.Load() != 1 {
+		t.Fatalf("cross-routed backend calls: Responses=%d Chat=%d", responsesCalls.Load(), chatCalls.Load())
+	}
+}
+
+func TestChatProtectedGateway_YAMLStreamIdleTimeoutSettlesIncomplete(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	var upstreamCalls atomic.Int32
+	var cancelOnce sync.Once
+	f := newChatProtectedFixtureWithYAMLCapabilities(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("fake upstream does not support flush")
+			return
+		}
+		flusher.Flush()
+		close(started)
+		<-r.Context().Done()
+		cancelOnce.Do(func() { close(cancelled) })
+	}), nil, "150ms")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.server.URL+"/v1/chat/completions", strings.NewReader(chatRequest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+f.key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("gateway response status=%d body=%q err=%v", resp.StatusCode, body, readErr)
+	}
+	for name, signal := range map[string]<-chan struct{}{"backend start": started, "upstream cancellation": cancelled} {
+		select {
+		case <-signal:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timeout did not produce %s", name)
+		}
+	}
+	if upstreamCalls.Load() != 1 {
+		t.Fatalf("upstream calls=%d, want exactly one", upstreamCalls.Load())
+	}
+	var rows []sqlite.RequestUsage
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, err = sqlite.NewLedger(f.prepared.runtimeDB).QueryRequests(context.Background(), sqlite.RequestFilter{Limit: 10})
+		if err == nil && len(rows) == 1 && len(rows[0].Attempts) == 1 && rows[0].Attempts[0].Attempt.State != "running" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil || len(rows) != 1 || rows[0].Request.State != "interrupted" || len(rows[0].Attempts) != 1 {
+		t.Fatalf("request was not finalized incomplete: rows=%+v err=%v", rows, err)
+	}
+	attempt := rows[0].Attempts[0]
+	if attempt.Attempt.State != "interrupted" || attempt.Attempt.ErrorCategory == nil || *attempt.Attempt.ErrorCategory != "timeout" || attempt.Attempt.ErrorReason == nil || *attempt.Attempt.ErrorReason != "upstream_timeout" || !attempt.Attempt.Committed || attempt.Reservation.State != "conservative" || attempt.Usage == nil || attempt.Usage.Source != "unknown" || attempt.Usage.Completeness != "unknown" || attempt.Usage.InputTokens != nil || attempt.Usage.OutputTokens != nil {
+		t.Fatalf("timeout settlement=%+v", attempt)
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -23,16 +25,19 @@ type jsonResult struct {
 // jsonStream pipes bounded chunks into a token decoder while returning the
 // original bytes to the caller. Response size never determines retained memory.
 type jsonStream struct {
-	mu      sync.Mutex
-	body    io.ReadCloser
-	head    *core.HeadFrame
-	writer  *io.PipeWriter
-	parsed  <-chan jsonResult
-	pending error
-	phase   int
+	mu          sync.Mutex
+	body        io.ReadCloser
+	head        *core.HeadFrame
+	writer      *io.PipeWriter
+	parsed      <-chan jsonResult
+	pending     error
+	phase       int
+	cancel      context.CancelFunc
+	idleTimeout time.Duration
+	idleExpired atomic.Bool
 }
 
-func newJSONStream(body io.ReadCloser, head *core.HeadFrame) *jsonStream {
+func newJSONStream(body io.ReadCloser, head *core.HeadFrame, cancel context.CancelFunc, idleTimeout time.Duration) *jsonStream {
 	r, w := io.Pipe()
 	parsed := make(chan jsonResult, 1)
 	go func() {
@@ -43,7 +48,7 @@ func newJSONStream(body io.ReadCloser, head *core.HeadFrame) *jsonStream {
 		_ = r.Close()
 		parsed <- jsonResult{usage: usage, err: err}
 	}()
-	return &jsonStream{body: body, head: head, writer: w, parsed: parsed}
+	return &jsonStream{body: body, head: head, writer: w, parsed: parsed, cancel: cancel, idleTimeout: idleTimeout}
 }
 
 func (s *jsonStream) Close() error {
@@ -54,7 +59,9 @@ func (s *jsonStream) Close() error {
 	}
 	s.phase = 3
 	_ = s.writer.CloseWithError(context.Canceled)
-	return s.body.Close()
+	err := s.body.Close()
+	s.cancel()
+	return err
 }
 
 func (s *jsonStream) Next(ctx context.Context) (core.StreamFrame, error) {
@@ -82,7 +89,21 @@ func (s *jsonStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if s.pending != nil {
 		readErr, s.pending = s.pending, nil
 	} else {
+		var timer *time.Timer
+		var timerDone chan struct{}
+		if s.idleTimeout > 0 {
+			timerDone = make(chan struct{})
+			timer = time.AfterFunc(s.idleTimeout, func() {
+				defer close(timerDone)
+				s.idleExpired.Store(true)
+				_ = s.body.Close()
+				s.cancel()
+			})
+		}
 		n, readErr = s.body.Read(buf)
+		if timer != nil && !timer.Stop() {
+			<-timerDone
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,6 +112,18 @@ func (s *jsonStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		return core.StreamFrame{}, err
+	}
+	if s.idleExpired.Load() {
+		s.phase = 2
+		_ = s.writer.CloseWithError(io.ErrClosedPipe)
+		_ = s.body.Close()
+		result := <-s.parsed
+		complete := &core.CompleteFrame{Outcome: core.OutcomeIncomplete, Error: ge("upstream_timeout", core.CategoryTimeout, "Upstream response body idle timeout"), Usage: result.usage}
+		if complete.Usage == nil {
+			complete.Usage = unknown()
+		}
+		s.cancel()
+		return core.StreamFrame{Type: core.FrameComplete, Complete: complete}, nil
 	}
 	if n > 0 {
 		s.pending = readErr
@@ -101,6 +134,7 @@ func (s *jsonStream) Next(ctx context.Context) (core.StreamFrame, error) {
 	}
 	s.phase = 2
 	_ = s.body.Close()
+	s.cancel()
 	if readErr == io.EOF {
 		_ = s.writer.Close()
 	} else if readErr != nil {

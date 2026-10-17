@@ -725,6 +725,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		if item.Kind == core.ComponentAdapter {
 			cfg = adapterConfig{MaxBodyBytes: maxBody, MaxHeaderBytes: maxHeader}
 		} else if item.Implementation == chatImplementation {
+			streamIdle, _ := time.ParseDuration(item.IdleTimeout)
 			route := connectorRoutes[item.ID]
 			capabilities := make(map[core.Capability]core.CapabilityState, len(item.Capabilities)+len(route.Capabilities))
 			for capability, state := range route.Capabilities {
@@ -738,8 +739,9 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 				Model                 string                                   `json:"model"`
 				AccountID             string                                   `json:"account_id"`
 				MaxRequestHeaderBytes int64                                    `json:"max_request_header_bytes"`
+				StreamIdleTimeout     time.Duration                            `json:"stream_idle_timeout"`
 				Capabilities          map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
-			}{item.Endpoint, route.Model, route.Account, item.MaxHeaderBytes, capabilities})}
+			}{item.Endpoint, route.Model, route.Account, item.MaxHeaderBytes, streamIdle, capabilities})}
 		} else if item.Implementation == "pestiroute.anthropic.messages" {
 			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(anthropicInit{Model: item.Model, AccountID: item.AccountID})}
 		} else if item.Implementation == "pestiroute.codex.responses" {

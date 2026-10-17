@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -23,6 +24,7 @@ type config struct {
 	Model                 string                                   `json:"model"`
 	AccountID             string                                   `json:"account_id"`
 	MaxRequestHeaderBytes int64                                    `json:"max_request_header_bytes"`
+	StreamIdleTimeout     time.Duration                            `json:"stream_idle_timeout"`
 	Capabilities          map[core.Capability]core.CapabilityState `json:"capabilities,omitempty"`
 }
 type Connector struct {
@@ -55,7 +57,7 @@ func (c *Connector) Init(_ context.Context, raw core.ComponentConfig) error {
 		return errors.New("invalid connector configuration")
 	}
 	u, e := url.Parse(x.Endpoint)
-	if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || !strings.HasSuffix(u.EscapedPath(), "/v1/chat/completions") || (u.Scheme == "http" && !numericLoopback(u.Hostname())) || x.Model == "" || x.AccountID == "" || x.MaxRequestHeaderBytes <= 0 {
+	if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || !strings.HasSuffix(u.EscapedPath(), "/v1/chat/completions") || (u.Scheme == "http" && !numericLoopback(u.Hostname())) || x.Model == "" || x.AccountID == "" || x.MaxRequestHeaderBytes <= 0 || x.StreamIdleTimeout < 0 {
 		return errors.New("invalid Chat Completions endpoint or scope")
 	}
 	for cap, state := range x.Capabilities {

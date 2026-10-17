@@ -33,11 +33,12 @@ are not authorized by this planning handoff.
 ### M9 lane
 
 [Chat Completions client compatibility](M9-CHAT-COMPLETIONS.md), branch `dev-m9`.
-[M9-001](tasks/M9-001.md), [M9-002](tasks/M9-002.md), [M9-003](tasks/M9-003.md), [M9-004](tasks/M9-004.md),
-[M9-005](tasks/M9-005.md), and [M9-006](tasks/M9-006.md) are DONE. Native Chat adapter,
-connector, conformance slice, protected routing/accounting, agent workflows, explicit
-YAML capability declarations, compatibility matrix, and full offline CLI smoke procedure
-are verified. M9 milestone scope is fully completed; no open blockers remain in this lane.
+[M9-001](tasks/M9-001.md) through [M9-007](tasks/M9-007.md) are DONE. [M9-007](tasks/M9-007.md)
+resolved cumulative PR #17 reviewer findings: enforced `stream_idle_timeout` in Chat SSE/JSON
+readers with deterministic stall/reset tests, proved mixed-protocol isolation without altering
+payload opacity, and clarified path-routing claims. Reviewer `ses_eb660fd21ffeXVr5EyzjOW0D38`
+recorded explicit PASS. Local task acceptance is verified under the documented host exception;
+PR #17 merge to main and planning of the next milestone remain held until green hosted CI.
 Lane `TMPDIR=/tmp/pestiroute-m9.rH7sMT`, `GOFLAGS=-p=1`. Shared file ownership: M9 owns
 `internal/adapter/chatcompletions/**`, `internal/connector/chatcompletions/**`,
 conformance Chat tests, `docs/implementation/M9-*`, `tasks/M9-*`, and holds named

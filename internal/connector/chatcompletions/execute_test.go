@@ -1,6 +1,7 @@
 package chatcompletions
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -326,17 +327,202 @@ func (b *errorBody) Read(p []byte) (int, error) {
 func (*errorBody) Close() error { return nil }
 
 type blockedBody struct {
-	once   sync.Once
-	closed chan struct{}
+	once    sync.Once
+	closed  chan struct{}
+	started chan struct{}
 }
 
-func (b *blockedBody) Read([]byte) (int, error) { <-b.closed; return 0, io.ErrClosedPipe }
-func (b *blockedBody) Close() error             { b.once.Do(func() { close(b.closed) }); return nil }
+func (b *blockedBody) Read([]byte) (int, error) {
+	if b.started != nil {
+		select {
+		case <-b.started:
+		default:
+			close(b.started)
+		}
+	}
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+func (b *blockedBody) Close() error { b.once.Do(func() { close(b.closed) }); return nil }
+
+type pacedBody struct {
+	chunks  [][]byte
+	release []chan struct{}
+	started chan struct{}
+	closed  chan struct{}
+	once    sync.Once
+	index   int
+}
+
+func newPacedBody(chunks [][]byte) *pacedBody {
+	b := &pacedBody{chunks: chunks, release: make([]chan struct{}, len(chunks)-1), started: make(chan struct{}), closed: make(chan struct{})}
+	for i := range b.release {
+		b.release[i] = make(chan struct{}, 1)
+	}
+	return b
+}
+
+func (b *pacedBody) Read(p []byte) (int, error) {
+	if b.index == len(b.chunks) {
+		return 0, io.EOF
+	}
+	i := b.index
+	if i > 0 {
+		b.started <- struct{}{}
+		select {
+		case <-b.release[i-1]:
+		case <-b.closed:
+			return 0, io.ErrClosedPipe
+		}
+	}
+	b.index++
+	return copy(p, b.chunks[i]), nil
+}
+
+func (b *pacedBody) Close() error { b.once.Do(func() { close(b.closed) }); return nil }
+
+func TestStreamIdleTimeoutResetsForActiveSSEAndJSON(t *testing.T) {
+	const idleTimeout = time.Second
+	for _, tc := range []struct{ name, contentType, response string }{
+		{name: "SSE", contentType: "text/event-stream", response: "data: {\"id\":\"x\",\"choices\":[]}\n\ndata: [DONE]\n\n"},
+		{name: "JSON", contentType: "application/json", response: `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := []byte(tc.response)
+			chunks := make([][]byte, 5)
+			for i := range chunks {
+				chunks[i] = data[i*len(data)/len(chunks) : (i+1)*len(data)/len(chunks)]
+			}
+			body := newPacedBody(chunks)
+			defer body.Close()
+			resp, ge := execute(context.Background(), config{Endpoint: "https://example.test/v1/chat/completions", StreamIdleTimeout: idleTimeout}, core.ExecutionRequest{Payload: core.RawPayload{Protocol: protocol}}, "token", doerFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{tc.contentType}}, Body: body}, nil
+			}))
+			if ge != nil {
+				t.Fatal(ge)
+			}
+			defer resp.Stream.Close()
+			if frame, err := resp.Stream.Next(context.Background()); err != nil || frame.Type != core.FrameHead {
+				t.Fatalf("head=%#v err=%v", frame, err)
+			}
+			startedAt := time.Now()
+			var got []byte
+			for i, want := range chunks {
+				var frame core.StreamFrame
+				var err error
+				if i == 0 {
+					frame, err = resp.Stream.Next(context.Background())
+				} else {
+					next := make(chan struct {
+						frame core.StreamFrame
+						err   error
+					}, 1)
+					go func() {
+						f, e := resp.Stream.Next(context.Background())
+						next <- struct {
+							frame core.StreamFrame
+							err   error
+						}{f, e}
+					}()
+					select {
+					case <-body.started:
+					case <-time.After(2 * time.Second):
+						t.Fatal("upstream did not start the next chunk read")
+					}
+					// Each body.Read waits only 300ms (<1s), while four gaps keep
+					// the stream active for >1s overall.
+					timer := time.NewTimer(300 * time.Millisecond)
+					<-timer.C
+					body.release[i-1] <- struct{}{}
+					select {
+					case result := <-next:
+						frame, err = result.frame, result.err
+					case <-time.After(2 * time.Second):
+						t.Fatal("upstream chunk read did not resume")
+					}
+				}
+				if err != nil || frame.Type != core.FrameBody || !bytes.Equal(frame.Body.Data, want) {
+					t.Fatalf("chunk %d=%#v err=%v want=%q", i, frame, err, want)
+				}
+				got = append(got, frame.Body.Data...)
+			}
+			if elapsed := time.Since(startedAt); elapsed <= idleTimeout {
+				t.Fatalf("paced stream lasted %v, want longer than idle timeout %v", elapsed, idleTimeout)
+			}
+			complete, err := resp.Stream.Next(context.Background())
+			if err != nil || complete.Type != core.FrameComplete || complete.Complete.Outcome != core.OutcomeSucceeded || !bytes.Equal(got, data) {
+				t.Fatalf("paced stream complete=%#v err=%v bytes match=%t", complete, err, bytes.Equal(got, data))
+			}
+
+			fast, ge := execute(context.Background(), config{Endpoint: "https://example.test/v1/chat/completions", StreamIdleTimeout: idleTimeout}, core.ExecutionRequest{Payload: core.RawPayload{Protocol: protocol}}, "token", doerFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{tc.contentType}}, Body: io.NopCloser(strings.NewReader(tc.response))}, nil
+			}))
+			if ge != nil {
+				t.Fatal(ge)
+			}
+			defer fast.Stream.Close()
+			_, _ = fast.Stream.Next(context.Background())
+			var fastBytes []byte
+			for {
+				frame, err := fast.Stream.Next(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if frame.Type == core.FrameComplete {
+					if frame.Complete.Outcome != core.OutcomeSucceeded || !bytes.Equal(fastBytes, data) {
+						t.Fatalf("fast completion=%#v bytes match=%t", frame.Complete, bytes.Equal(fastBytes, data))
+					}
+					break
+				}
+				fastBytes = append(fastBytes, frame.Body.Data...)
+			}
+		})
+	}
+}
+
+func TestStreamIdleTimeoutClosesAndCancelsSSEAndJSON(t *testing.T) {
+	for _, tc := range []struct{ name, contentType string }{
+		{name: "SSE", contentType: "text/event-stream"},
+		{name: "JSON", contentType: "application/json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &blockedBody{closed: make(chan struct{}), started: make(chan struct{})}
+			var requestCtx context.Context
+			response, ge := execute(context.Background(), config{Endpoint: "https://example.test/v1/chat/completions", StreamIdleTimeout: 30 * time.Millisecond}, core.ExecutionRequest{Payload: core.RawPayload{Protocol: protocol}}, "token", doerFunc(func(r *http.Request) (*http.Response, error) {
+				requestCtx = r.Context()
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{tc.contentType}}, Body: body}, nil
+			}))
+			if ge != nil {
+				t.Fatal(ge)
+			}
+			_, _ = response.Stream.Next(context.Background())
+			frame, err := response.Stream.Next(context.Background())
+			if err != nil || frame.Type != core.FrameComplete || frame.Complete.Outcome != core.OutcomeIncomplete || frame.Complete.Error == nil || frame.Complete.Error.Code != "upstream_timeout" {
+				t.Fatalf("timeout completion = %#v, %v", frame, err)
+			}
+			select {
+			case <-body.started:
+			default:
+				t.Fatal("upstream read did not start")
+			}
+			select {
+			case <-body.closed:
+			default:
+				t.Fatal("timeout did not close upstream body")
+			}
+			select {
+			case <-requestCtx.Done():
+			default:
+				t.Fatal("timeout did not cancel upstream request")
+			}
+		})
+	}
+}
 
 func TestSSECloseInterruptsBlockedRead(t *testing.T) {
 	body := &blockedBody{closed: make(chan struct{})}
 	status := 200
-	s := newSSE(body, &core.HeadFrame{Protocol: protocol, HTTPStatus: &status})
+	s := newSSE(body, &core.HeadFrame{Protocol: protocol, HTTPStatus: &status}, func() {}, 0)
 	_, _ = s.Next(context.Background())
 	done := make(chan error, 1)
 	go func() { _, e := s.Next(context.Background()); done <- e }()
