@@ -132,13 +132,13 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M11 — Administrative HTTP API
 
-[M11 brief](M11-ADMIN-API.md). Branch `dev-m11-admin-api`; exact filter `/next 10 M11`. Administrative HTTP binding frozen in M11-001; M11-002 listener implementation verified and DONE; M11-003 is next candidate (DRAFT).
+[M11 brief](M11-ADMIN-API.md). Branch `dev-m11-admin-api`; exact filter `/next 10 M11`. Administrative HTTP binding frozen in M11-001; M11-002 and M11-003 verified and DONE; M11-004 is next candidate (DRAFT).
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
 | [M11-001](tasks/M11-001.md) | DONE | GPT-6 Luna (M11-001 worker) | — | Freeze the administrative HTTP binding | Administrative HTTP binding and OpenAPI 3.1.0 specification frozen; verified parity against existing CLI/store and YAML syntax | [Verification](tasks/M11-001.md#verification) |
 | [M11-002](tasks/M11-002.md) | DONE | GPT-6 Luna (M11-002 worker) | M11-001 | Add opt-in authenticated admin listener | Opt-in authenticated admin listener implemented with RFC 6750 token validation, Host/Origin protection, TLS enforcement on non-loopback binds, and concurrent graceful shutdown; full pinned gate passed | `GOFLAGS=-p=1 ./scripts/check.sh`; [evidence](tasks/M11-002.md#completion-evidence) |
-| [M11-003](tasks/M11-003.md) | DRAFT | — | M11-002 | Expose redacted status topology and ledger views | — | [Verification](tasks/M11-003.md#verification) |
+| [M11-003](tasks/M11-003.md) | DONE | GPT-6 Luna (M11-003 worker) | M11-002 | Expose redacted status topology and ledger views | Legacy account redaction, shared M2 database, sub-millisecond bounds, and data-backed usage reads verified; independent reviewer full pinned gate PASS | [Verification](tasks/M11-003.md#verification) |
 | [M11-004](tasks/M11-004.md) | DRAFT | — | M11-003 | Expose account and write-only credential management | — | [Verification](tasks/M11-004.md#verification) |
 | [M11-005](tasks/M11-005.md) | DRAFT | — | M11-004 | Expose virtual-key and policy administration | — | [Verification](tasks/M11-005.md#verification) |
 | [M11-006](tasks/M11-006.md) | DRAFT | — | M11-004 | Bridge the existing auth coordinator to admin HTTP | — | [Verification](tasks/M11-006.md#verification) |

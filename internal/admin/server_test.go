@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -125,10 +126,10 @@ func TestTokenFileOriginAndStaticSeam(t *testing.T) {
 		h.ServeHTTP(w, r)
 		return w.Code
 	}
-	if got := call("/admin/v1/status", "https://ui.example", true); got != 404 {
+	if got := call("/admin/v1/status", "https://ui.example", true); got != 200 {
 		t.Fatalf("configured origin status=%d", got)
 	}
-	if got := call("/admin/v1/status", "http://127.0.0.1:9091", true); got != 404 {
+	if got := call("/admin/v1/status", "http://127.0.0.1:9091", true); got != 200 {
 		t.Fatalf("same origin status=%d", got)
 	}
 	if got := call("/admin/v1/status", "https://evil.example", true); got != 403 {
@@ -179,6 +180,34 @@ func TestTokenFileOriginAndStaticSeam(t *testing.T) {
 		}
 		if _, err := New(Config{Address: "127.0.0.1:9091", TokenFile: tokenPath, ReadTimeout: time.Second, WriteTimeout: time.Second, IdleTimeout: time.Second}); err == nil {
 			t.Errorf("invalid token file value %q accepted", token)
+		}
+	}
+}
+
+func TestStatusSnapshotAndUsageQueryValidation(t *testing.T) {
+	t.Setenv("PESTIROUTE_ADMIN_TEST_TOKEN", "secret")
+	h, err := New(Config{Address: "127.0.0.1:9092", TokenEnv: "PESTIROUTE_ADMIN_TEST_TOKEN", ReadTimeout: time.Second, WriteTimeout: time.Second, IdleTimeout: time.Second,
+		Version: "test-version", Readiness: "unknown", Components: []Component{{ID: "connector", Kind: "connector", Implementation: "impl", Health: "unknown", Capabilities: map[string]string{}}},
+		Routes: []Route{{Protocol: "p", Mode: "native", Model: "m", AdapterID: "a", ConnectorID: "c", AccountID: "acct"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/admin/v1/status", nil)
+	r.Host = "127.0.0.1:9092"
+	r.Header.Set("Authorization", "Bearer secret")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"readiness":"unknown"`) || !strings.Contains(w.Body.String(), `"adapter_id":"a"`) || !strings.Contains(w.Body.String(), `"capabilities":{}`) || strings.Contains(w.Body.String(), "secret") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	for _, target := range []string{"/admin/v1/usage/requests?limit=501", "/admin/v1/usage/attempts?since=bad", "/admin/v1/usage/summary?offset=0", "/admin/v1/usage/requests?unexpected=", "/admin/v1/usage/requests?limit=", "/admin/v1/usage/requests?since=", "/admin/v1/usage/requests?key_id=", "/admin/v1/usage/requests?key_id=%zz", "/admin/v1/usage/requests?key_id=a;b"} {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		r.Host = "127.0.0.1:9092"
+		r.Header.Set("Authorization", "Bearer secret")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), `"code":"invalid_request"`) {
+			t.Fatalf("%s status=%d body=%s", target, w.Code, w.Body.String())
 		}
 	}
 }

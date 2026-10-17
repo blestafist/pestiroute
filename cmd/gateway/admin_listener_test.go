@@ -2,16 +2,21 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/blestafist/pestiroute/internal/core"
+	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
 func freeAdminTCPAddress(t *testing.T) string {
@@ -329,7 +334,7 @@ func TestAdminListenerRunIsolationAndShutdown(t *testing.T) {
 	if code, err := request("http://"+management+"/admin/v1/status", ""); err != nil || code != 401 {
 		t.Fatalf("admin auth: status=%d err=%v", code, err)
 	}
-	if code, err := request("http://"+management+"/admin/v1/status", "operator-secret"); err != nil || code != 404 {
+	if code, err := request("http://"+management+"/admin/v1/status", "operator-secret"); err != nil || code != 200 {
 		t.Fatalf("admin API isolation: status=%d err=%v", code, err)
 	}
 	if code, err := request("http://"+management+"/v1/responses", "operator-secret"); err != nil || code != 404 {
@@ -351,6 +356,169 @@ func TestAdminListenerRunIsolationAndShutdown(t *testing.T) {
 	if _, err := net.DialTimeout("tcp", management, 100*time.Millisecond); err == nil {
 		t.Fatal("admin socket leaked")
 	}
+}
+
+func TestAdminRouteSnapshotRedactsLegacyCredentialEnvironment(t *testing.T) {
+	route := topologyRoute{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "model", Account: "UPSTREAM_TOKEN_ENV", Adapter: "adapter", Connector: "connector"}
+	legacy := adminRouteSnapshot([]topologyRoute{route}, true)
+	if len(legacy) != 1 || legacy[0].AccountID != "" {
+		t.Fatalf("legacy route leaked environment reference: %+v", legacy)
+	}
+	route.Account = "account-id"
+	explicit := adminRouteSnapshot([]topologyRoute{route}, false)
+	if len(explicit) != 1 || explicit[0].AccountID != "account-id" {
+		t.Fatalf("explicit route account identity omitted: %+v", explicit)
+	}
+}
+
+func TestAdminStatusRedactsLoadedLegacyJSON(t *testing.T) {
+	t.Setenv("PESTIROUTE_ADMIN_TEST_TOKEN", "operator-secret")
+	t.Setenv("PESTIROUTE_LEGACY_SECRET_ENV", "opaque-upstream-secret")
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "legacy.json")
+	config := map[string]any{"listen": freeAdminTCPAddress(t), "shutdown_timeout": "1s", "upstream_endpoint": "http://127.0.0.1:9/v1/responses", "upstream_credential_env": "PESTIROUTE_LEGACY_SECRET_ENV", "max_request_body_bytes": 4096, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "1s", "stream_idle_timeout": "2s", "admin": map[string]any{"listen": freeAdminTCPAddress(t), "token_env": "PESTIROUTE_ADMIN_TEST_TOKEN", "read_timeout": "2s", "write_timeout": "2s", "idle_timeout": "2s"}}
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := loadConfig([]string{"-config", configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, []string{"-config", configPath}) }()
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		r, _ := http.NewRequest(http.MethodGet, "http://"+loaded.Admin.Listen+"/admin/v1/status", nil)
+		r.Header.Set("Authorization", "Bearer operator-secret")
+		resp, requestErr := client.Do(r)
+		if requestErr == nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				cancel()
+				if closeErr := <-done; closeErr != nil {
+					t.Fatal(closeErr)
+				}
+				if bytes.Contains(body, []byte("PESTIROUTE_LEGACY_SECRET_ENV")) || bytes.Contains(body, []byte("opaque-upstream-secret")) || bytes.Contains(body, []byte("127.0.0.1:9")) {
+					t.Fatalf("legacy status leaked secret/config: %s", body)
+				}
+				if !bytes.Contains(body, []byte(`"account_id":""`)) {
+					t.Fatalf("legacy status missing redacted account field: %s", body)
+				}
+				return
+			}
+		}
+		select {
+		case err := <-done:
+			cancel()
+			t.Fatalf("legacy gateway exited before admin ready: %v", err)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatal("legacy admin status did not become ready")
+}
+
+func TestAdminReadsM2PersistentJSONDatabase(t *testing.T) {
+	t.Setenv("PESTIROUTE_ADMIN_TEST_TOKEN", "operator-secret")
+	t.Setenv("PESTIROUTE_UPSTREAM_TEST", "not-used")
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "runtime.db")
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlite.Migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	keyPath := filepath.Join(dir, "master.key")
+	if err := os.WriteFile(keyPath, make([]byte, 32), 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "gateway.json")
+	cfg := map[string]any{"listen": freeAdminTCPAddress(t), "shutdown_timeout": "1s", "database_path": dbPath, "master_key_file": keyPath,
+		"components": []map[string]any{{"id": "adapter", "kind": "adapter", "implementation": responsesImplementation}, {"id": "connector", "kind": "connector", "implementation": responsesImplementation, "endpoint": "http://127.0.0.1:1/v1/responses", "credential_env": "PESTIROUTE_UPSTREAM_TEST", "max_request_body_bytes": 4096, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "1s", "stream_idle_timeout": "2s"}},
+		"routes":     []map[string]any{{"protocol": responsesProtocol, "mode": "native", "model": "model", "account": "account-id", "adapter": "adapter", "connector": "connector"}},
+		"admin":      map[string]any{"listen": freeAdminTCPAddress(t), "token_env": "PESTIROUTE_ADMIN_TEST_TOKEN", "read_timeout": "2s", "write_timeout": "2s", "idle_timeout": "2s"}}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := loadConfig([]string{"-config", configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, []string{"-config", configPath}) }()
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		request := func(path string) *http.Response {
+			r, _ := http.NewRequest(http.MethodGet, "http://"+loaded.Admin.Listen+path, nil)
+			r.Header.Set("Authorization", "Bearer operator-secret")
+			resp, e := client.Do(r)
+			if e != nil {
+				return nil
+			}
+			return resp
+		}
+		status := request("/admin/v1/status")
+		if status != nil && status.StatusCode == 200 {
+			statusBody, _ := io.ReadAll(status.Body)
+			status.Body.Close()
+			if !bytes.Contains(statusBody, []byte(`"account_id":"account-id"`)) {
+				cancel()
+				<-done
+				t.Fatalf("explicit account identity missing: %s", statusBody)
+			}
+			for _, value := range [][]byte{[]byte(`"endpoint"`), []byte("PESTIROUTE_UPSTREAM_TEST")} {
+				if bytes.Contains(statusBody, value) {
+					cancel()
+					<-done
+					t.Fatalf("status leaked topology detail %q: %s", value, statusBody)
+				}
+			}
+			usage := request("/admin/v1/usage/requests")
+			if usage != nil {
+				body, _ := io.ReadAll(usage.Body)
+				usage.Body.Close()
+				cancel()
+				if usage.StatusCode != 200 || !bytes.Contains(body, []byte(`"total":0`)) {
+					t.Fatalf("persistent admin usage status=%d body=%s", usage.StatusCode, body)
+				}
+				if closeErr := <-done; closeErr != nil {
+					t.Fatal(closeErr)
+				}
+				return
+			}
+		}
+		if status != nil {
+			status.Body.Close()
+		}
+		select {
+		case err := <-done:
+			cancel()
+			t.Fatalf("gateway exited before admin ready: %v", err)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatal("persistent admin listener did not become ready")
 }
 
 func TestAdminTLSStartupFailureClosesListener(t *testing.T) {

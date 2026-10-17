@@ -65,6 +65,7 @@ type config struct {
 	runtimeDB             *sql.DB
 	runtimeKey            secure.MasterKey
 	processLock           *sqlite.ProcessLock
+	legacyMode            bool
 }
 
 type topologyComponent struct {
@@ -302,6 +303,7 @@ func loadConfig(args []string) (config, time.Duration, error) {
 			return config{}, 0, errors.New("upstream_credential_env is unset or empty")
 		}
 		c.credential = secret(value)
+		c.legacyMode = true
 		c.Components = legacyComponents(c)
 		c.Routes = []topologyRoute{{Protocol: responsesProtocol, Mode: core.ModeNative, Model: "gpt-5.4-mini", Account: c.UpstreamCredentialEnv, Adapter: "responses-adapter", Connector: "responses-connector", Budget: c.routeBudget, BudgetPolicy: c.budgetPolicy, RouteID: c.routeID}}
 		c.Credentials = map[string]secret{c.UpstreamCredentialEnv: c.credential}
@@ -620,7 +622,16 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		return nil, nil, err
 	}
 	if len(c.Components) == 0 {
-		return mux, func(context.Context) error { return nil }, nil
+		return mux, func(context.Context) error {
+			var closeErr error
+			if c.runtimeDB != nil {
+				closeErr = errors.Join(closeErr, c.runtimeDB.Close())
+			}
+			if c.processLock != nil {
+				closeErr = errors.Join(closeErr, c.processLock.Close())
+			}
+			return closeErr
+		}, nil
 	}
 	var persistentRefs map[string]map[string]string
 	if c.DatabasePath != "" {
@@ -1261,10 +1272,6 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 		if err != nil {
 			return fmt.Errorf("configure admin listener: %w", err)
 		}
-		adminHandler, err = adminhttp.New(adminConfig)
-		if err != nil {
-			return fmt.Errorf("configure admin listener: %w", err)
-		}
 	}
 	if c.protected != nil {
 		prepared, err := prepareProtectedConfig(ctx, c)
@@ -1273,12 +1280,55 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 		}
 		c = prepared
 	}
+	legacyStatus := c.legacyMode
 	cleanupPrepared := func() {
 		if c.runtimeDB != nil {
 			_ = c.runtimeDB.Close()
 		}
 		if c.processLock != nil {
 			_ = c.processLock.Close()
+		}
+	}
+	// Open the configured M2 database before constructing the admin handler. The
+	// runtime composition reuses and owns this same handle through closeTransport.
+	if c.Admin != nil && c.runtimeDB == nil && c.DatabasePath != "" {
+		key, keyErr := secure.LoadMasterKey(c.MasterKeyFile)
+		if keyErr != nil {
+			return errors.New("invalid runtime master key file")
+		}
+		db, dbErr := sqlite.Open(c.DatabasePath)
+		if dbErr != nil {
+			return errors.New("cannot open runtime database")
+		}
+		version, versionErr := sqlite.SchemaVersion(ctx, db)
+		if versionErr != nil || version != sqlite.CurrentSchemaVersion() {
+			_ = db.Close()
+			return errors.New("runtime database is not fully migrated")
+		}
+		c.runtimeDB, c.runtimeKey = db, key
+	}
+	if c.Admin != nil {
+		adminConfig.DB = c.runtimeDB
+		adminConfig.Version = "dev"
+		adminConfig.Readiness = "unknown"
+		for _, item := range c.Components {
+			protocols := []string{}
+			for _, route := range c.Routes {
+				if route.Adapter == item.ID || route.Connector == item.ID {
+					protocols = append(protocols, route.Protocol)
+				}
+			}
+			capabilities := item.Capabilities
+			if capabilities == nil {
+				capabilities = map[string]string{}
+			}
+			adminConfig.Components = append(adminConfig.Components, adminhttp.Component{ID: string(item.ID), Kind: string(item.Kind), Implementation: item.Implementation, Health: "unknown", Protocols: protocols, Capabilities: capabilities})
+		}
+		adminConfig.Routes = adminRouteSnapshot(c.Routes, legacyStatus)
+		adminHandler, err = adminhttp.New(adminConfig)
+		if err != nil {
+			cleanupPrepared()
+			return fmt.Errorf("configure admin listener: %w", err)
 		}
 	}
 	var adminListener net.Listener
@@ -1375,6 +1425,18 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 		closeErr := closeTransport(closeCtx)
 		return errors.Join(wrapIf("shutdown", shutdownErr), wrapIf("close components", closeErr))
 	}
+}
+
+func adminRouteSnapshot(routes []topologyRoute, legacy bool) []adminhttp.Route {
+	out := make([]adminhttp.Route, 0, len(routes))
+	for _, route := range routes {
+		accountID := route.Account
+		if legacy {
+			accountID = ""
+		}
+		out = append(out, adminhttp.Route{Protocol: route.Protocol, Mode: string(route.Mode), Model: route.Model, AdapterID: string(route.Adapter), ConnectorID: string(route.Connector), AccountID: accountID})
+	}
+	return out
 }
 
 func serveAdminTLS(server *http.Server, listener net.Listener, certFile, keyFile string) error {

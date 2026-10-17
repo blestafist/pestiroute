@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"crypto/tls"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -20,6 +21,23 @@ import (
 	"time"
 )
 
+type Component struct {
+	ID             string            `json:"id"`
+	Kind           string            `json:"kind"`
+	Implementation string            `json:"implementation"`
+	Health         string            `json:"health"`
+	Protocols      []string          `json:"protocols"`
+	Capabilities   map[string]string `json:"capabilities"`
+}
+type Route struct {
+	Protocol    string `json:"protocol"`
+	Mode        string `json:"mode"`
+	Model       string `json:"model"`
+	AdapterID   string `json:"adapter_id"`
+	ConnectorID string `json:"connector_id"`
+	AccountID   string `json:"account_id"`
+}
+
 type Config struct {
 	Address                                string
 	TokenFile                              string
@@ -30,10 +48,13 @@ type Config struct {
 	MaxBodyBytes                           int64
 	ReadTimeout, WriteTimeout, IdleTimeout time.Duration
 	Static                                 http.Handler
+	DB                                     *sql.DB
+	Version, Readiness                     string
+	Components                             []Component
+	Routes                                 []Route
 }
 
-// New validates operator credentials and returns an API-only handler. API
-// endpoints are intentionally unimplemented here; later M11 slices register them.
+// New validates operator credentials and returns the authenticated API handler.
 func New(c Config) (http.Handler, error) {
 	host, _, err := net.SplitHostPort(c.Address)
 	if err != nil || strings.TrimSpace(c.Address) == "" {
@@ -96,6 +117,7 @@ func New(c Config) (http.Handler, error) {
 		}
 	}
 	api := http.NewServeMux()
+	registerReadHandlers(api, c)
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { writeError(w, 404, "not_found", "Not found") })
 	root := http.NewServeMux()
 	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
