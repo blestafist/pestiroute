@@ -58,7 +58,7 @@ Completed rows and historical handoff: [archive](archive/TASKS-DONE.md).
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M5.1-049](tasks/M5.1-049.md) | BLOCKED | GPT-6 Luna (M5.1-049 worker) | M5.1-040, M5.1-048 | Verify live gateway OAuth token refresh and atomic credential rotation | DEC-012-approved deferral; read-only preflight proves credential fresh; natural refresh window is 2026-10-15 21:04:55.103 UTC; no refresh/provider calls made | [Preflight evidence](tasks/M5.1-049.md#completion-evidence); due-only procedure in card |
+| [M5.1-049](tasks/M5.1-049.md) | BLOCKED | GPT-6.1 Sol (operator recovery) | M5.1-040, M5.1-048 | Verify live gateway OAuth token refresh and atomic credential rotation | Authorized explicit refresh passed Oct 17: token rotation, revision 2→3, restart decryption; natural trigger still unrun, new window Oct 27 11:24:32.933–11:25:32.933 UTC; no inference | [Refresh evidence](tasks/M5.1-049.md#completion-evidence); separate explicit/natural procedures in card |
 | [M5.1-051](tasks/M5.1-051.md) | DRAFT | — | M5.1-041, M5.1-048 | Verify live multi-round encrypted reasoning continuation and replay | DEC-012-approved deferral; scoped two-request live gate remains unrun and is not authorized until separately READY, assigned, explicitly authorized, and independently reviewed | [Diagnostic procedure](tasks/M5.1-051.md#verification) |
 
 ## M5.2 — Local Runtime Connectors
