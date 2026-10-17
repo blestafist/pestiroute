@@ -34,7 +34,7 @@ the earlier CURRENT claim that it awaited review was stale.
 | --- | --- | --- | --- |
 | [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-001 | Current Antigravity research → bounded Connector slice; no Claude dependency |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
-| [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 (DONE) | UX/API/mock/fallback design complete; M12-002 DRAFT |
+| [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-002 (DONE) | WebUI shell with fixture adapter complete; M12-003 DRAFT |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
 
 Each has a dedicated worktree and `/next 10 M10` (or M11/M12/M13) filter.
@@ -45,9 +45,9 @@ features. All new branches start from the same accepted planning baseline.
 ### M12 — WebUI lane focus
 
 - Active branch: `dev-m12-webui` (worktree `/home/pestix/code/pestiroute-m12`)
-- Completed task: [M12-001](tasks/M12-001.md) (DONE) — operator UX, screen state matrices, M11 API inventory, and Go embed fallback specified in `docs/implementation/M12-UX.md`.
-- Next task: [M12-002](tasks/M12-002.md) (DRAFT) — UI shell with fixture adapter pending planning preparation.
-- Shared-file ownership: None for M12-001. Later tasks (`web/**`, UI embedding package) do not modify core runtime or gateway until M11-007 integrates on main.
+- Completed tasks: [M12-001](tasks/M12-001.md) (DONE) and [M12-002](tasks/M12-002.md) (DONE) — React 19/TS/Vite shell, responsive navigation, 6 route stubs, theme toggle, and fixture adapter with state selector and demo badge verified.
+- Next task: [M12-003](tasks/M12-003.md) (DRAFT) — account and key management workflows on fixtures; pending planning preparation after M12-002 commit.
+- Shared-file ownership: None for M12-001/002. Frontend tasks operate strictly within `web/**` and do not touch gateway runtime until M11-007 integrates on main.
 
 
 ## Open gates carried forward
