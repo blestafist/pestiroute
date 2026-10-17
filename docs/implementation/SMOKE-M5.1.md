@@ -127,6 +127,21 @@ unexpected auth redirect, ambiguous continuation, failed persistence, or any
 need to expose opaque auth state. No secret-bearing output or raw auth transcript
 is retained.
 
+### Explicit administrative refresh exception (M5.1-049)
+
+The operator authorized a separate single explicit `admin auth refresh` on
+2026-10-17 against the replacement persistent `selected-A` store. After an
+independent current-diff review PASS and fresh read-only preflight, the opt-in
+`TestOperatorCredentialExplicitRefreshLive` may invoke that production CLI path
+once while the credential remains valid, without manufacturing expiry. This is
+an exception to the natural-due-only smoke restriction above, not proof of the
+automatic freshness trigger and not authorization for inference. Verify revision
+advances by exactly one, account binding, expiry, refresh-token rotation status
+and read-only restart decryption. Stop on any failure or ambiguous delivery;
+never retry, restore an old token, or switch account. Preserve the replacement
+credential and record its new natural refresh window separately. M5.1-049 stays
+BLOCKED until its natural-due gate is independently verified.
+
 ## Paired inference leg
 
 For each scenario, use the same client version/model/options and identical

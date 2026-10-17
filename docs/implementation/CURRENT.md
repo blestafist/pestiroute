@@ -38,7 +38,7 @@ resolved cumulative PR #17 reviewer findings: enforced `stream_idle_timeout` in 
 readers with deterministic stall/reset tests, proved mixed-protocol isolation without altering
 payload opacity, and clarified path-routing claims. Reviewer `ses_eb660fd21ffeXVr5EyzjOW0D38`
 recorded explicit PASS. Local task acceptance is verified under the documented host exception;
-PR #17 merge to main and planning of the next milestone remain held until green hosted CI.
+PR #18 reconciliation is resolved against main and awaits review (uncommitted).
 Lane `TMPDIR=/tmp/pestiroute-m9.rH7sMT`, `GOFLAGS=-p=1`. Shared file ownership: M9 owns
 `internal/adapter/chatcompletions/**`, `internal/connector/chatcompletions/**`,
 conformance Chat tests, `docs/implementation/M9-*`, `tasks/M9-*`, and holds named
@@ -57,7 +57,7 @@ ownership explicit; a branch's completion is not evidence of integration on main
 | --- | --- |
 | [M4-036](tasks/M4-036.md) | BLOCKED: official Anthropic credentials and its separate authorized procedure/review |
 | [M4-041](tasks/M4-041.md) | BLOCKED: compatible endpoint live tool-cycle evidence remains unmet after the recorded failed probe; no implicit retry |
-| [M5.1-049](tasks/M5.1-049.md) | BLOCKED: natural refresh threshold 2026-10-15 21:04:55.103 UTC plus current preflight, explicit authority and independent review; real refresh unverified |
+| [M5.1-049](tasks/M5.1-049.md) | BLOCKED: authorized explicit refresh passed Oct 17 (token rotation, revision 2→3, restart decryption); persistent-store natural refresh window 2026-10-27 11:24:32.933–11:25:32.933 UTC still needs current preflight, explicit authority and independent review; automatic trigger unverified |
 | [M5.1-051](tasks/M5.1-051.md) | DRAFT/unrun: own READY assignment, explicit authority and independent review for encrypted-reasoning continuation |
 | [M5.2-025](tasks/M5.2-025.md) | BLOCKED: provisioned compatible GPU/runtime/model and separate operator authority; DEC-013 at-most-3B ceiling remains, historical 8B candidate is not authorization |
 
