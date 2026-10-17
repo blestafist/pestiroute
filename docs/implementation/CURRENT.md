@@ -33,7 +33,7 @@ the earlier CURRENT claim that it awaited review was stale.
 | Milestone | Branch | First READY task | Scope / dependency |
 | --- | --- | --- | --- |
 | [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-001 | Current Antigravity research → bounded Connector slice; no Claude dependency |
-| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
+| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 (DONE) | Management HTTP binding frozen (M11-001); listener implementation (M11-002) is next DRAFT |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
 
