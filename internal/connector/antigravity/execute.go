@@ -45,6 +45,18 @@ func parseOAuthCredentials(raw []byte, requireRefresh bool) (oauthCredentials, b
 	return result, true
 }
 
+func validateOAuthCandidate(accessToken, refreshToken string, includeRefresh, requireRefresh bool) (oauthCredentials, bool) {
+	fields := map[string]string{"access_token": accessToken}
+	if includeRefresh {
+		fields["refresh_token"] = refreshToken
+	}
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return oauthCredentials{}, false
+	}
+	return parseOAuthCredentials(raw, requireRefresh)
+}
+
 func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scope core.AttemptScope, services core.InvocationServices) (core.ExecutionResponse, *core.GatewayError) {
 	if e := c.validate(ctx, req.Payload.Protocol, scope.Mode); e != nil {
 		return core.ExecutionResponse{}, e

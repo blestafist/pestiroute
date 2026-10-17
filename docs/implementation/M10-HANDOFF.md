@@ -20,6 +20,36 @@ gateway routing eligibility remain unverified. `llm.streaming`, `auth.oauth`,
 `usage.exact`, and all other capabilities remain `Unknown`; no live claims or
 provider calls are authorized by this handoff.
 
+## Browser OAuth candidate (M10-009)
+
+The connector implements PKCE S256 start/continue and the gateway exposes them
+through `gateway admin auth start --account ID` and
+`gateway admin auth continue --session ID --callback-stdin`. The operator must
+provide an authorized client through `PESTIROUTE_ANTIGRAVITY_CLIENT_ID`; optional
+`PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET`, `..._AUTH_ENDPOINT`,
+`..._TOKEN_ENDPOINT`, `..._REDIRECT_URI`, and whitespace-separated `..._SCOPES`
+override the documented candidate defaults. Defaults and plugin-derived scopes
+are hypotheses, not official Google OAuth facts; do not use plugin client
+credentials. No network request is made by `start`. Token exchange/refresh uses
+the standard HTTPS transport only when explicitly opted in with
+`PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1`, or an injected deterministic test
+transport. Native CLI usage:
+
+```sh
+export PESTIROUTE_ANTIGRAVITY_CLIENT_ID='operator-authorized-client-id'
+export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1 # needed only for code exchange/refresh
+gateway admin auth start --account ACCOUNT_ID
+# Follow verification_uri in a browser, then paste the exact callback URL:
+gateway admin auth continue --session SESSION_ID --callback-stdin
+```
+
+Endpoints, redirect URI and scopes can be overridden using the variables above.
+Credentials are persisted through the existing encrypted account store. This
+implementation and its synthetic tests do not establish provider
+eligibility, Google authorization, OAuth endpoint/client support, or production
+compatibility; all remain unverified and capability `auth.oauth` remains
+`Unknown`. Never use live OAuth without separate operator authorization.
+
 ## Error, replay, and lifecycle boundary
 
 Pre-dispatch validation and missing/invalid credentials fail closed. 401/403
@@ -36,9 +66,9 @@ commit, cancellation and exactly-once finalization responsibilities.
 Use the M10 [brief](M10-ANTIGRAVITY.md) and [roadmap](ROADMAP.md#m10--google-antigravity-connector)
 to decompose future work only when evidence is ready:
 
-1. Research and bind auth-bundle parsing, refresh lifecycle, account/project
-   association, and required authority; prove offline lifecycle behavior before
-   any separately authorized live gate.
+1. Review M10-009's offline browser OAuth implementation; research and bind
+   account/project association and required authority before any separately
+   authorized live gate.
 2. Research project discovery/onboarding semantics and side effects before
    designing an offline testable slice; do not invent endpoints or provisioning.
 3. Research multi-round tool calls and thought-signature/history preservation;

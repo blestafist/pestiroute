@@ -4,13 +4,16 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/blestafist/pestiroute/internal/connector/antigravity"
 	"github.com/blestafist/pestiroute/internal/connector/claudecode"
 	"github.com/blestafist/pestiroute/internal/connector/codex"
 	"github.com/blestafist/pestiroute/internal/connector/responses"
@@ -80,7 +83,7 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 		if err := db.QueryRowContext(env.ctx, `SELECT connector FROM accounts WHERE id=? AND enabled=1`, targetAccountID).Scan(&connectorID); err != nil {
 			return errors.New("admin: authentication connector is not configured")
 		}
-		if isClaudeCodeAuthConnector(connectorID) {
+		if !useDefaultAdminAuthTransport(connectorID) {
 			useDefaultTransport = false
 		}
 	}
@@ -178,7 +181,7 @@ func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db
 		}
 	}
 	account, err := accounts.Get(ctx, accountID)
-	if err != nil || !account.Enabled || account.ID != accountID || (account.Connector != "responses" && account.Connector != "codex" && !isClaudeCodeAuthConnector(account.Connector)) {
+	if err != nil || !account.Enabled || account.ID != accountID || (account.Connector != "responses" && account.Connector != "codex" && !isClaudeCodeAuthConnector(account.Connector) && !isAntigravityAuthConnector(account.Connector)) {
 		return nil, errors.New("admin: authentication connector is not configured")
 	}
 	registry, err := core.NewRegistry(map[core.ComponentKind]core.APIVersion{core.ComponentConnector: {Major: 1}}, nil)
@@ -193,6 +196,25 @@ func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db
 	} else if isClaudeCodeAuthConnector(account.Connector) {
 		connector = claudecode.NewConnector()
 		config = []byte(`{"profile":"claude-code-messages-v1","oauth":{"authorization_endpoint":"https://auth.synthetic.invalid/oauth/authorize","token_endpoint":"https://token.synthetic.invalid/oauth/token","redirect_uri":"http://127.0.0.1:9999/callback","client_id":"synthetic-client","scope":"synthetic:offline"}}`)
+	} else if isAntigravityAuthConnector(account.Connector) {
+		connector = antigravity.NewConnector()
+		oauth := map[string]any{}
+		if clientID := os.Getenv("PESTIROUTE_ANTIGRAVITY_CLIENT_ID"); clientID != "" {
+			oauth["client_id"] = clientID
+			for key, envName := range map[string]string{"client_secret": "PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET", "auth_endpoint": "PESTIROUTE_ANTIGRAVITY_AUTH_ENDPOINT", "token_endpoint": "PESTIROUTE_ANTIGRAVITY_TOKEN_ENDPOINT", "redirect_uri": "PESTIROUTE_ANTIGRAVITY_REDIRECT_URI"} {
+				if value := os.Getenv(envName); value != "" {
+					oauth[key] = value
+				}
+			}
+			if scopes := strings.Fields(os.Getenv("PESTIROUTE_ANTIGRAVITY_SCOPES")); len(scopes) > 0 {
+				oauth["scopes"] = scopes
+			}
+		}
+		cfg := map[string]any{"profile": "antigravity-v1internal", "project": "admin-auth"}
+		if len(oauth) > 0 {
+			cfg["oauth"] = oauth
+		}
+		config, _ = json.Marshal(cfg)
 	} else {
 		connector = responses.NewConnector()
 		// The built-in native Connector's authentication operation is unsupported;
@@ -250,7 +272,7 @@ func authCredentialRefs(ctx context.Context, db *sql.DB, accountID string, conti
 	if err := db.QueryRowContext(ctx, `SELECT connector FROM accounts WHERE id=? AND enabled=1`, accountID).Scan(&connector); err != nil {
 		return nil, errors.New("admin: authentication connector is not configured")
 	}
-	if connector == "codex" || isClaudeCodeAuthConnector(connector) {
+	if connector == "codex" || isClaudeCodeAuthConnector(connector) || isAntigravityAuthConnector(connector) {
 		credentialName = "oauth"
 	}
 	rows, err := db.QueryContext(ctx, `SELECT id FROM credentials WHERE account_id=? ORDER BY id`, accountID)
@@ -274,4 +296,18 @@ func authCredentialRefs(ctx context.Context, db *sql.DB, accountID string, conti
 
 func isClaudeCodeAuthConnector(connector string) bool {
 	return connector == "claudecode" || connector == "pestiroute.claudecode.messages"
+}
+
+func isAntigravityAuthConnector(connector string) bool {
+	return connector == "antigravity" || connector == "pestiroute.antigravity.v1internal"
+}
+
+func useDefaultAdminAuthTransport(connector string) bool {
+	if isClaudeCodeAuthConnector(connector) {
+		return false
+	}
+	if isAntigravityAuthConnector(connector) {
+		return os.Getenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT") == "1"
+	}
+	return true
 }

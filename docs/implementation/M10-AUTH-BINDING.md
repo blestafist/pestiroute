@@ -170,6 +170,22 @@ and refresh results carrying continuation state/action are quarantined. These
 are future offline test requirements, not implementation completed by this
 document.
 
+## Browser authorization-code candidate (M10-009)
+
+The offline implementation additionally supports the existing
+`Connector.Authenticate` `start`/`continue` actions with PKCE S256 and callback
+state validation. It accepts an operator-supplied OAuth client ID and optional
+secret/endpoints/redirect/scopes; absent overrides, it uses the candidate Google
+authorization/token URLs, localhost callback and scopes listed in the M10-009
+card. These defaults are based on pinned unofficial plugin observations, not
+official Google protocol facts or a supplied/authorized client. No plugin client
+credentials are reused. `start` is local-only; `continue` exchanges the callback
+code only through the invocation-scoped transport. Gateway real HTTP transport is
+disabled unless explicitly opted in. Deterministic tests prove the local
+lifecycle, not endpoint/client authorization, account eligibility, Google OAuth
+compatibility or production readiness. Capability `auth.oauth` remains Unknown;
+this implementation authorizes no live call.
+
 ## Unresolved / blocked
 
 Official OAuth endpoints, authorized client and scopes, grant parameters,
@@ -178,9 +194,8 @@ identity, personal-subscription versus Gemini Enterprise/Cloud eligibility, and
 live exchange behavior remain **Unknown** or **Blocked** as applicable. The
 plugin scope discrepancy is unresolved. No endpoint, scope, refresh token
 format, quota policy, or account class is inferred from plugin code. Do not
-promote capabilities, compose production auth, or perform live calls from this
-binding. Resolve with current authoritative documentation and separately
-authorized, reviewable evidence before any live implementation or claim.
+promote capabilities or make a production-provider compatibility claim. Perform
+live calls only after separate operator authorization and reviewable evidence.
 
 ## References
 

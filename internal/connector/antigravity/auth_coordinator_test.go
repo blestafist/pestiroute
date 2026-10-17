@@ -24,6 +24,9 @@ type coordinatorFixtureStore struct {
 	markers     map[string]bool
 	quarantine  map[string]bool
 	resolveErr  error
+	sessions    map[string]core.AuthSession
+	states      map[string][]byte
+	claimed     map[string]bool
 }
 
 func (s *coordinatorFixtureStore) AuthAccount(_ context.Context, id string) (core.AuthAccount, error) {
@@ -84,6 +87,69 @@ func (s *coordinatorFixtureStore) ResolveRefresh(_ context.Context, _ string, se
 	return cloneCoordinatorCredentials(candidate), nil
 }
 
+func (s *coordinatorFixtureStore) CreateAuthSession(_ context.Context, session core.AuthSession, state []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[session.ID] = session
+	s.states[session.ID] = append([]byte(nil), state...)
+	return nil
+}
+func (s *coordinatorFixtureStore) GetAuthSession(_ context.Context, id string, now time.Time) (core.AuthSession, []byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[id]
+	if !ok || s.claimed[id] || !session.ExpiresAt.After(now) {
+		return core.AuthSession{}, nil, core.ErrAuthUnavailable
+	}
+	return session, append([]byte(nil), s.states[id]...), nil
+}
+func (s *coordinatorFixtureStore) ClaimAuthSession(_ context.Context, session core.AuthSession) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[session.ID]; !ok || s.claimed[session.ID] {
+		return core.ErrAuthUnavailable
+	}
+	s.claimed[session.ID] = true
+	return nil
+}
+func (s *coordinatorFixtureStore) AdvanceAuthSession(_ context.Context, session core.AuthSession, state []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[session.ID]; !ok {
+		return core.ErrAuthUnavailable
+	}
+	s.states[session.ID] = append([]byte(nil), state...)
+	delete(s.claimed, session.ID)
+	return nil
+}
+func (s *coordinatorFixtureStore) ConsumeAuthSession(_ context.Context, session core.AuthSession) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, session.ID)
+	delete(s.states, session.ID)
+	delete(s.claimed, session.ID)
+	return nil
+}
+func (s *coordinatorFixtureStore) FinishAuthSession(_ context.Context, session core.AuthSession, candidate core.AuthCredentials) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.credentials[session.AccountID]
+	if current.Revision != session.Revision {
+		delete(s.sessions, session.ID)
+		delete(s.states, session.ID)
+		return core.ErrAuthRevisionMismatch
+	}
+	if len(candidate.Values) > 0 {
+		candidate.Revision++
+		candidate.Valid = true
+		s.credentials[session.AccountID] = cloneCoordinatorCredentials(candidate)
+	}
+	delete(s.sessions, session.ID)
+	delete(s.states, session.ID)
+	delete(s.claimed, session.ID)
+	return nil
+}
+
 func cloneCoordinatorCredentials(v core.AuthCredentials) core.AuthCredentials {
 	values := make(map[string][]byte, len(v.Values))
 	for k, b := range v.Values {
@@ -140,6 +206,104 @@ func coordinatorFixture(t *testing.T, store *coordinatorFixtureStore, transport 
 	return coordinator
 }
 
+func TestBrowserCoordinatorConsumesAmbiguousContinuationBeforeRedispatch(t *testing.T) {
+	ctx := context.Background()
+	store := newCoordinatorFixtureStore(nil)
+	connector := NewConnector()
+	config := []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","oauth":{"client_id":"synthetic-client","auth_endpoint":"https://auth.synthetic.invalid/authorize","token_endpoint":"https://oauth.synthetic.invalid/token","redirect_uri":"http://localhost:8080/callback"}}`)
+	if err := connector.Init(ctx, core.ComponentConfig{Data: config}); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := core.NewRegistry(map[core.ComponentKind]core.APIVersion{core.ComponentConnector: {Major: 1}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Register("antigravity", connector, core.ComponentConnector); err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Init(ctx, "antigravity", core.ComponentConfig{Data: config}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = registry.Close(context.Background()) })
+	transport := &fakeDoer{err: errors.New("synthetic ambiguous response")}
+	services := coordinatorServices(func(core.AttemptScope) core.InvocationServices {
+		return core.InvocationServices{Transport: packageTestDoer(transport)}
+	})
+	coordinator, err := core.NewAuthCoordinator(registry, store, services, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := coordinator.Start(ctx, "account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify, err := url.Parse(session.UserAction.VerificationURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := "http://localhost:8080/callback?code=synthetic-code&state=" + url.QueryEscape(verify.Query().Get("state"))
+	if _, err = coordinator.Continue(ctx, session.ID, callback); err == nil || transport.calls != 1 {
+		t.Fatalf("ambiguous exchange: err=%v calls=%d", err, transport.calls)
+	}
+	transport.err = nil
+	transport.response = response(http.StatusOK, `{"access_token":"SYNTHETIC_ACCESS","expires_in":3600,"token_type":"Bearer"}`)
+	if _, err = coordinator.Continue(ctx, session.ID, callback); err == nil || transport.calls != 1 {
+		t.Fatalf("consumed state dispatched again: err=%v calls=%d", err, transport.calls)
+	}
+	stored, _ := store.AuthCredentials(ctx, "account-a")
+	if stored.Revision != 4 || !strings.Contains(string(stored.Values["oauth"]), "SYNTHETIC_A_REFRESH") {
+		t.Fatalf("uncertain callback persisted credentials: %+v", stored)
+	}
+}
+
+func TestBrowserCoordinatorRejectsNewlineRefreshCandidateWithoutPersistence(t *testing.T) {
+	ctx := context.Background()
+	store := newCoordinatorFixtureStore(nil)
+	connector := NewConnector()
+	config := []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","oauth":{"client_id":"synthetic-client","auth_endpoint":"https://auth.synthetic.invalid/authorize","token_endpoint":"https://oauth.synthetic.invalid/token","redirect_uri":"http://localhost:8080/callback"}}`)
+	if err := connector.Init(ctx, core.ComponentConfig{Data: config}); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := core.NewRegistry(map[core.ComponentKind]core.APIVersion{core.ComponentConnector: {Major: 1}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Register("antigravity", connector, core.ComponentConnector); err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.Init(ctx, "antigravity", core.ComponentConfig{Data: config}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = registry.Close(context.Background()) })
+	transport := &fakeDoer{response: response(http.StatusOK, `{"access_token":"SYNTHETIC_ACCESS","refresh_token":"SYNTHETIC_BAD\nTOKEN","expires_in":3600,"token_type":"Bearer"}`)}
+	services := coordinatorServices(func(core.AttemptScope) core.InvocationServices {
+		return core.InvocationServices{Transport: packageTestDoer(transport)}
+	})
+	coordinator, err := core.NewAuthCoordinator(registry, store, services, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := coordinator.Start(ctx, "account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify, err := url.Parse(session.UserAction.VerificationURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := "http://localhost:8080/callback?code=synthetic-code&state=" + url.QueryEscape(verify.Query().Get("state"))
+	if _, err = coordinator.Continue(ctx, session.ID, callback); err == nil || transport.calls != 1 {
+		t.Fatalf("invalid candidate: err=%v calls=%d", err, transport.calls)
+	}
+	credentials, _ := store.AuthCredentials(ctx, "account-a")
+	if credentials.Revision != 4 || !strings.Contains(string(credentials.Values["oauth"]), "SYNTHETIC_A_REFRESH") {
+		t.Fatalf("invalid candidate persisted: %+v", credentials)
+	}
+	if _, err = coordinator.Continue(ctx, session.ID, callback); err == nil || transport.calls != 1 {
+		t.Fatalf("invalid session dispatched again: err=%v calls=%d", err, transport.calls)
+	}
+}
+
 func newCoordinatorFixtureStore(resolveErr error) *coordinatorFixtureStore {
 	expired := time.Now().Add(-time.Minute)
 	return &coordinatorFixtureStore{
@@ -152,6 +316,7 @@ func newCoordinatorFixtureStore(resolveErr error) *coordinatorFixtureStore {
 			"account-b": {Revision: 9, Valid: true, Values: map[string][]byte{"oauth": []byte(`{"access_token":"SYNTHETIC_B_ACCESS","refresh_token":"SYNTHETIC_B_REFRESH"}`)}, ExpiresAt: &expired},
 		},
 		markers: map[string]bool{}, quarantine: map[string]bool{}, resolveErr: resolveErr,
+		sessions: map[string]core.AuthSession{}, states: map[string][]byte{}, claimed: map[string]bool{},
 	}
 }
 

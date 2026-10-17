@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/blestafist/pestiroute/internal/core"
@@ -21,9 +23,26 @@ const (
 var projectPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}[a-z0-9]$|^[a-z]$`)
 
 type config struct {
-	Profile string `json:"profile"`
-	Project string `json:"project"`
+	Profile string      `json:"profile"`
+	Project string      `json:"project"`
+	OAuth   oauthConfig `json:"oauth"`
 }
+
+type oauthConfig struct {
+	ClientID              string   `json:"client_id"`
+	ClientSecret          string   `json:"client_secret,omitempty"`
+	AuthorizationEndpoint string   `json:"auth_endpoint,omitempty"`
+	TokenEndpoint         string   `json:"token_endpoint,omitempty"`
+	RedirectURI           string   `json:"redirect_uri,omitempty"`
+	Scopes                []string `json:"scopes,omitempty"`
+}
+
+const (
+	defaultAuthEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
+	defaultTokenEndpoint = "https://oauth2.googleapis.com/token"
+	defaultRedirectURI   = "http://localhost:8080/callback"
+	defaultScopes        = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog"
+)
 
 type Connector struct {
 	mu     sync.Mutex
@@ -58,6 +77,12 @@ func (c *Connector) Init(ctx context.Context, in core.ComponentConfig) error {
 	d.DisallowUnknownFields()
 	if d.Decode(&cfg) != nil || d.Decode(new(any)) != io.EOF || cfg.Profile != profile || !projectPattern.MatchString(cfg.Project) {
 		return errors.New("invalid Antigravity profile or project")
+	}
+	if cfg.OAuth.ClientID != "" || cfg.OAuth.ClientSecret != "" || cfg.OAuth.AuthorizationEndpoint != "" || cfg.OAuth.TokenEndpoint != "" || cfg.OAuth.RedirectURI != "" || len(cfg.OAuth.Scopes) != 0 {
+		cfg.OAuth = withOAuthDefaults(cfg.OAuth)
+		if !validOAuthConfig(cfg.OAuth) {
+			return errors.New("invalid Antigravity OAuth configuration")
+		}
 	}
 	c.cfg, c.state = cfg, core.HealthReady
 	return nil
@@ -102,10 +127,58 @@ func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, serv
 	if e := c.validate(ctx, protocol, core.ModeTranslation); e != nil {
 		return core.AuthResult{}, e
 	}
+	c.mu.Lock()
+	cfg := c.cfg.OAuth
+	c.mu.Unlock()
+	if req.Action == "start" && len(req.State) == 0 && req.CallbackInput == "" {
+		if cfg.ClientID == "" {
+			return core.AuthResult{Supported: false}, nil
+		}
+		return c.authenticateStart(ctx, cfg)
+	}
+	if req.Action == "continue" && len(req.State) != 0 {
+		if cfg.ClientID == "" {
+			return core.AuthResult{Supported: false}, nil
+		}
+		return c.authenticateContinue(ctx, cfg, req, services)
+	}
 	if req.Action != "refresh" || len(req.State) != 0 || req.CallbackInput != "" {
 		return core.AuthResult{Supported: false}, nil
 	}
-	return c.authenticateRefresh(ctx, services)
+	return c.authenticateRefresh(ctx, cfg, services)
+}
+
+func withOAuthDefaults(cfg oauthConfig) oauthConfig {
+	if cfg.AuthorizationEndpoint == "" {
+		cfg.AuthorizationEndpoint = defaultAuthEndpoint
+	}
+	if cfg.TokenEndpoint == "" {
+		cfg.TokenEndpoint = defaultTokenEndpoint
+	}
+	if cfg.RedirectURI == "" {
+		cfg.RedirectURI = defaultRedirectURI
+	}
+	if len(cfg.Scopes) == 0 {
+		cfg.Scopes = strings.Fields(defaultScopes)
+	}
+	return cfg
+}
+
+func validOAuthConfig(cfg oauthConfig) bool {
+	endpoint := func(raw string) bool {
+		u, err := url.Parse(raw)
+		return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
+	}
+	r, err := url.Parse(cfg.RedirectURI)
+	if cfg.ClientID == "" || strings.ContainsAny(cfg.ClientID+cfg.ClientSecret, "\r\n") || !endpoint(cfg.AuthorizationEndpoint) || !endpoint(cfg.TokenEndpoint) || err != nil || !r.IsAbs() || r.Host == "" || r.User != nil || r.RawQuery != "" || r.Fragment != "" || len(cfg.Scopes) == 0 {
+		return false
+	}
+	for _, scope := range cfg.Scopes {
+		if strings.TrimSpace(scope) != scope || scope == "" || strings.ContainsAny(scope, "\r\n") {
+			return false
+		}
+	}
+	return true
 }
 func (c *Connector) validate(ctx context.Context, p, m string) *core.GatewayError {
 	c.mu.Lock()

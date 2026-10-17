@@ -19,10 +19,193 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blestafist/pestiroute/internal/connector/antigravity"
 	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
+
+type antigravityAuthDoer struct {
+	calls   int
+	request *http.Request
+	err     error
+	onDo    func()
+}
+
+func (d *antigravityAuthDoer) Do(req *http.Request) (*http.Response, error) {
+	d.calls++
+	d.request = req
+	if d.onDo != nil {
+		d.onDo()
+	}
+	if d.err != nil {
+		return nil, d.err
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"access_token":"SYNTHETIC_LOGIN_ACCESS","refresh_token":"SYNTHETIC_LOGIN_REFRESH","expires_in":3600,"token_type":"Bearer"}`)), Request: req}, nil
+}
+
+func TestAdminAuthAntigravityEncryptedBrowserLifecycleAndExecuteReload(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "")
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const accountID = "antigravity-auth-account"
+	if _, err = sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: "antigravity", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := secure.Seal(key, 1, "v1", "credentials", "antigravity-oauth", accountID, []byte(`{"access_token":"SYNTHETIC_OLD_ACCESS"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: "antigravity-oauth", AccountID: accountID, FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_CLIENT_ID", "synthetic-gateway-client")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_AUTH_ENDPOINT", "https://auth.synthetic.invalid/authorize")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_TOKEN_ENDPOINT", "https://oauth.synthetic.invalid/token")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REDIRECT_URI", "http://localhost:8080/callback")
+	transport := &antigravityAuthDoer{}
+	services := adminAuthServicesFunc(func(core.AttemptScope) core.InvocationServices { return core.InvocationServices{Transport: transport} })
+	run := func(input string, args ...string) string {
+		t.Helper()
+		var out, stderr bytes.Buffer
+		all := append([]string{"--db", dbPath, "--master-key", keyPath}, args...)
+		if err := runAdmin(adminEnvironment{ctx: ctx, args: all, stdin: strings.NewReader(input), stdout: &out, stderr: &stderr, authServices: services}); err != nil {
+			t.Fatalf("run %v: %v (%s)", args, err, stderr.String())
+		}
+		text := out.String() + stderr.String()
+		for _, secret := range []string{"SYNTHETIC_LOGIN_ACCESS", "SYNTHETIC_LOGIN_REFRESH", "synthetic-local-code"} {
+			if strings.Contains(text, secret) {
+				t.Fatalf("authentication output leaked secret %q", secret)
+			}
+		}
+		return out.String()
+	}
+	started := run("", "auth", "start", "--account", accountID)
+	_, verifyText, found := strings.Cut(started, "verification_uri=\"")
+	if !found {
+		t.Fatalf("verification URL missing: %q", started)
+	}
+	verifyText, _, _ = strings.Cut(verifyText, "\"")
+	verify, err := url.Parse(verifyText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := verify.Query().Get("state")
+	session := adminSessionID(started)
+	if state == "" || session == "" || transport.calls != 0 {
+		t.Fatal("start did not remain offline or omit state/session")
+	}
+	completed := run("http://localhost:8080/callback?code=synthetic-local-code&state="+url.QueryEscape(state)+"\n", "auth", "continue", "--session", session, "--callback-stdin")
+	if !strings.Contains(completed, "authentication complete") || transport.calls != 1 {
+		t.Fatalf("continue=%q calls=%d", completed, transport.calls)
+	}
+	var duplicateOutput, duplicateError bytes.Buffer
+	duplicateArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session, "--callback-stdin"}
+	if err := runAdmin(adminEnvironment{ctx: ctx, args: duplicateArgs, stdin: strings.NewReader("http://localhost:8080/callback?code=synthetic-local-code&state=" + url.QueryEscape(state) + "\n"), stdout: &duplicateOutput, stderr: &duplicateError, authServices: services}); err == nil || transport.calls != 1 {
+		t.Fatalf("consumed continuation replay dispatched: err=%v calls=%d", err, transport.calls)
+	}
+	body, err := io.ReadAll(transport.request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, err := url.ParseQuery(string(body))
+	if err != nil || form.Get("grant_type") != "authorization_code" || form.Get("client_id") != "synthetic-gateway-client" {
+		t.Fatalf("exchange form=%v error=%v", form, err)
+	}
+	start2 := run("", "auth", "start", "--account", accountID)
+	session2, state2 := adminAuthSessionAndState(t, start2)
+	transport.err = errors.New("synthetic ambiguous exchange")
+	ambiguousArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session2, "--callback-stdin"}
+	callback2 := "http://localhost:8080/callback?code=ambiguous-code&state=" + url.QueryEscape(state2) + "\n"
+	var ambiguousOut, ambiguousErr bytes.Buffer
+	if err := runAdmin(adminEnvironment{ctx: ctx, args: ambiguousArgs, stdin: strings.NewReader(callback2), stdout: &ambiguousOut, stderr: &ambiguousErr, authServices: services}); err == nil || transport.calls != 2 {
+		t.Fatalf("ambiguous exchange result=%v calls=%d", err, transport.calls)
+	}
+	var replayOut, replayErr bytes.Buffer
+	if err := runAdmin(adminEnvironment{ctx: ctx, args: ambiguousArgs, stdin: strings.NewReader(callback2), stdout: &replayOut, stderr: &replayErr, authServices: services}); err == nil || transport.calls != 2 {
+		t.Fatalf("ambiguous continuation replay dispatched: err=%v calls=%d", err, transport.calls)
+	}
+	transport.err = nil
+	start3 := run("", "auth", "start", "--account", accountID)
+	session3, state3 := adminAuthSessionAndState(t, start3)
+	cancelCtx, cancel := context.WithCancel(ctx)
+	transport.onDo = cancel
+	cancelArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session3, "--callback-stdin"}
+	var cancelOut, cancelErr bytes.Buffer
+	if err := runAdmin(adminEnvironment{ctx: cancelCtx, args: cancelArgs, stdin: strings.NewReader("http://localhost:8080/callback?code=cancel-code&state=" + url.QueryEscape(state3) + "\n"), stdout: &cancelOut, stderr: &cancelErr, authServices: services}); err == nil || transport.calls != 3 {
+		t.Fatalf("cancelled exchange result=%v calls=%d", err, transport.calls)
+	}
+	transport.onDo = nil
+	cancel()
+	verifyDB := mustOpenAdminDB(t, dbPath)
+	stored, err := sqlite.NewCredentials(verifyDB).Get(ctx, accountID, "antigravity-oauth")
+	if err != nil || stored.Revision != 2 || stored.ExpiresAt == nil {
+		t.Fatalf("credential persistence revision=%d err=%v", stored.Revision, err)
+	}
+	plain, err := secure.Open(key, secure.Envelope{FormatVersion: stored.FormatVersion, KeyVersion: stored.KeyVersion, Nonce: stored.Nonce, Ciphertext: stored.Ciphertext}, "credentials", stored.ID, stored.AccountID)
+	if err != nil || !strings.Contains(string(plain), "SYNTHETIC_LOGIN_ACCESS") || bytes.Contains(stored.Ciphertext, []byte("SYNTHETIC_LOGIN_ACCESS")) {
+		t.Fatal("credential was not encrypted and reloadable")
+	}
+	connector := antigravity.NewConnector()
+	if err := connector.Init(ctx, core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	execTransport, err := antigravity.NewOfflineTestTransport(antigravity.OfflineTestResponse{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}}\n\ndata: {\"response\":{\"done\":true}}\n\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, ge := connector.Execute(ctx, core.ExecutionRequest{Payload: core.RawPayload{Protocol: "openai.responses.v1", ContentType: "application/json", Body: []byte(`{"model":"gemini-2.5-pro","input":"synthetic","stream":true}`)}}, core.AttemptScope{Mode: core.ModeTranslation}, core.InvocationServices{Transport: execTransport, Credentials: adminTestCredential{plain}})
+	if ge != nil {
+		t.Fatalf("execute after decrypt/reload: %v", ge)
+	}
+	_ = response.Stream.Close()
+}
+
+func adminAuthSessionAndState(t *testing.T, output string) (string, string) {
+	t.Helper()
+	_, uriText, found := strings.Cut(output, "verification_uri=\"")
+	if !found {
+		t.Fatalf("verification URL missing: %q", output)
+	}
+	uriText, _, _ = strings.Cut(uriText, "\"")
+	verify, err := url.Parse(uriText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, state := adminSessionID(output), verify.Query().Get("state")
+	if session == "" || state == "" {
+		t.Fatalf("session/state missing: %q", output)
+	}
+	return session, state
+}
+
+func TestAdminAuthAntigravityDefaultTransportRequiresOptIn(t *testing.T) {
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "")
+	if useDefaultAdminAuthTransport("antigravity") {
+		t.Fatal("Antigravity real transport enabled by default")
+	}
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "1")
+	if !useDefaultAdminAuthTransport("pestiroute.antigravity.v1internal") {
+		t.Fatal("explicit Antigravity transport opt-in ignored")
+	}
+}
+
+type adminTestCredential struct{ value []byte }
+
+func (c adminTestCredential) Get(context.Context, string) ([]byte, error) {
+	return append([]byte(nil), c.value...), nil
+}
 
 func TestAdminAuthScriptedCLIAndRestart(t *testing.T) {
 	ctx := context.Background()
