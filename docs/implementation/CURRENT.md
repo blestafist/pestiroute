@@ -30,17 +30,25 @@ the earlier CURRENT claim that it awaited review was stale.
 
 ## Next independent lanes
 
-| Milestone | Branch | First READY task | Scope / dependency |
+| Milestone | Branch | Initial task | Scope / dependency |
 | --- | --- | --- | --- |
 | [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-001 | Current Antigravity research → bounded Connector slice; no Claude dependency |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
-| [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
+| [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 (DONE) | UX/API/mock/fallback design complete; M12-002 DRAFT |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
 
 Each has a dedicated worktree and `/next 10 M10` (or M11/M12/M13) filter.
 See [PARALLEL](PARALLEL.md) before starting; later cards are DRAFT until their
 dependencies and concrete checks are settled. Plans/branches are not implemented
 features. All new branches start from the same accepted planning baseline.
+
+### M12 — WebUI lane focus
+
+- Active branch: `dev-m12-webui` (worktree `/home/pestix/code/pestiroute-m12`)
+- Completed task: [M12-001](tasks/M12-001.md) (DONE) — operator UX, screen state matrices, M11 API inventory, and Go embed fallback specified in `docs/implementation/M12-UX.md`.
+- Next task: [M12-002](tasks/M12-002.md) (DRAFT) — UI shell with fixture adapter pending planning preparation.
+- Shared-file ownership: None for M12-001. Later tasks (`web/**`, UI embedding package) do not modify core runtime or gateway until M11-007 integrates on main.
+
 
 ## Open gates carried forward
 

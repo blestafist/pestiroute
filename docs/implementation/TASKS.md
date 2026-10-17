@@ -146,11 +146,11 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M12 — WebUI
 
-[M12 brief](M12-WEBUI.md). Branch `dev-m12-webui`; exact filter `/next 10 M12`. Only the initial audit/design is READY.
+[M12 brief](M12-WEBUI.md). Branch `dev-m12-webui`; exact filter `/next 10 M12`. M12-001 is DONE; downstream tasks remain DRAFT.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M12-001](tasks/M12-001.md) | READY | — | — | Design complete operator workflows and UI states | — | [Verification](tasks/M12-001.md#verification) |
+| [M12-001](tasks/M12-001.md) | DONE | GPT-6 Luna (M12-001 worker) | — | Design complete operator workflows and UI states | Operator UX, 6-screen state matrix, M11 API inventory and embed fallback specified in M12-UX.md | [Verification](tasks/M12-001.md#completion-evidence) |
 | [M12-002](tasks/M12-002.md) | DRAFT | — | M12-001 | Build the WebUI shell with a fixture adapter | — | [Verification](tasks/M12-002.md#verification) |
 | [M12-003](tasks/M12-003.md) | DRAFT | — | M12-002 | Implement account and key management workflows on fixtures | — | [Verification](tasks/M12-003.md#verification) |
 | [M12-004](tasks/M12-004.md) | DRAFT | — | M12-002 | Implement overview usage routing and diagnostics screens | — | [Verification](tasks/M12-004.md#verification) |
