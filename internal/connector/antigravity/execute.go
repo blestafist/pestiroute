@@ -3,12 +3,20 @@ package antigravity
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
+	"os"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -65,6 +73,14 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	cfg := c.cfg
 	c.mu.Unlock()
 	transport, ok := offlineTestTransport(services.Transport)
+	if !ok && os.Getenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT") == "1" {
+		c.mu.Lock()
+		runtimeTransport := c.doer
+		c.mu.Unlock()
+		transport = runtimeTransport
+		runtimeDoer, isRuntimeDoer := services.Transport.(*runtimeHTTPDoer)
+		ok = runtimeTransport != nil && isRuntimeDoer && runtimeDoer == runtimeTransport
+	}
 	if !ok {
 		return core.ExecutionResponse{}, unavailable()
 	}
@@ -72,7 +88,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if mediaErr != nil || mediaType != "application/json" {
 		return core.ExecutionResponse{}, invalid("invalid_request")
 	}
-	input, model, e := admit(req.Payload.Body)
+	input, model, tools, toolConfig, e := admit(req.Payload.Body)
 	if e != nil {
 		return core.ExecutionResponse{}, e
 	}
@@ -90,15 +106,31 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if !valid {
 		return core.ExecutionResponse{}, unauthenticated()
 	}
+	request := map[string]any{"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]string{"text": input}}}}}
+	if len(tools) != 0 {
+		request["tools"] = tools
+	}
+	if toolConfig != nil {
+		request["toolConfig"] = toolConfig
+	}
+	var requestID [16]byte
+	if _, err := rand.Read(requestID[:]); err != nil {
+		return core.ExecutionResponse{}, unavailable()
+	}
+	executionID := hex.EncodeToString(requestID[:])
 	body, err := json.Marshal(map[string]any{
-		"project": cfg.Project, "model": model, "request": map[string]any{"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]string{"text": input}}}}},
-		"requestType": "agent", "userAgent": "pestiroute-offline-fixture/1", "requestId": "synthetic-request-001",
+		"project": cfg.Project, "model": model, "request": request,
+		"requestType": "agent", "userAgent": "antigravity", "requestId": "agent/" + executionID + "/" + time.Now().UTC().Format("20060102T150405.000Z"),
 	})
 	if err != nil {
 		return core.ExecutionResponse{}, invalid("invalid_request")
 	}
-	url := "https://antigravity.synthetic.invalid/v1internal/projects/" + cfg.Project + ":generateContent?alt=sse"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	requestURL := cfg.Endpoint + "/v1internal:streamGenerateContent?alt=sse"
+	endpoint, _ := url.Parse(cfg.Endpoint)
+	if strings.EqualFold(endpoint.Hostname(), "antigravity.synthetic.invalid") {
+		requestURL = cfg.Endpoint + "/v1internal/projects/" + cfg.Project + ":generateContent?alt=sse"
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return core.ExecutionResponse{}, invalid("invalid_request")
 	}
@@ -133,36 +165,293 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		_ = resp.Body.Close()
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "invalid_response", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Antigravity response is invalid"}
 	}
-	return core.ExecutionResponse{Stream: newStream(resp.Body)}, nil
+	return core.ExecutionResponse{Stream: newStream(resp.Body, "resp_"+executionID, "msg_"+executionID)}, nil
 }
 
-func admit(body []byte) (string, string, *core.GatewayError) {
+func admit(body []byte) (string, string, []any, map[string]any, *core.GatewayError) {
 	if len(body) == 0 || len(body) > maxRequestBytes || !uniqueJSON(body) {
-		return "", "", invalid("invalid_request")
+		return "", "", nil, nil, invalid("invalid_request")
 	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(body, &fields) != nil || fields == nil {
-		return "", "", invalid("invalid_request")
+		return "", "", nil, nil, invalid("invalid_request")
 	}
 	for k := range fields {
-		if k != "model" && k != "input" && k != "stream" {
-			return "", "", unsupported()
+		if k != "model" && k != "input" && k != "stream" && k != "tools" && k != "tool_choice" {
+			return "", "", nil, nil, unsupported()
 		}
 	}
 	var in struct {
-		Model  string `json:"model"`
-		Input  string `json:"input"`
-		Stream *bool  `json:"stream"`
+		Model      string          `json:"model"`
+		Input      string          `json:"input"`
+		Stream     *bool           `json:"stream"`
+		Tools      json.RawMessage `json:"tools"`
+		ToolChoice json.RawMessage `json:"tool_choice"`
 	}
 	d := json.NewDecoder(bytes.NewReader(body))
 	d.DisallowUnknownFields()
 	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF || in.Stream == nil || !*in.Stream || strings.TrimSpace(in.Input) == "" {
-		return "", "", invalid("invalid_request")
+		return "", "", nil, nil, invalid("invalid_request")
 	}
 	if in.Model != "gemini-2.5-pro" && in.Model != "gemini-2.5-flash" {
-		return "", "", invalid("invalid_request")
+		return "", "", nil, nil, invalid("invalid_request")
 	}
-	return in.Input, in.Model, nil
+	tools, names, err := functionTools(in.Tools)
+	if err != nil {
+		return "", "", nil, nil, invalid("invalid_request")
+	}
+	toolConfig, err := functionToolChoice(in.ToolChoice, names)
+	if err != nil {
+		return "", "", nil, nil, unsupported()
+	}
+	return in.Input, in.Model, tools, toolConfig, nil
+}
+
+func functionTools(raw json.RawMessage) ([]any, map[string]bool, error) {
+	if len(raw) == 0 {
+		return nil, nil, nil
+	}
+	var declarations []json.RawMessage
+	if json.Unmarshal(raw, &declarations) != nil || declarations == nil {
+		return nil, nil, errors.New("tools must be an array")
+	}
+	if len(declarations) == 0 {
+		return nil, nil, nil
+	}
+	functions := make([]any, 0, len(declarations))
+	names := make(map[string]bool, len(declarations))
+	for _, declaration := range declarations {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(declaration, &fields) != nil || fields == nil {
+			return nil, nil, errors.New("tool declaration must be an object")
+		}
+		for key := range fields {
+			if key != "type" && key != "name" && key != "description" && key != "parameters" {
+				return nil, nil, errors.New("unsupported function declaration field")
+			}
+		}
+		var tool struct {
+			Type        string          `json:"type"`
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		}
+		if json.Unmarshal(declaration, &tool) != nil || tool.Type != "function" || !validFunctionName(tool.Name) || names[tool.Name] || !validJSONSchema(tool.Parameters) {
+			return nil, nil, errors.New("invalid function declaration")
+		}
+		if description, ok := fields["description"]; ok {
+			if _, valid := schemaString(description); !valid {
+				return nil, nil, errors.New("invalid function description")
+			}
+		}
+		names[tool.Name] = true
+		functions = append(functions, map[string]any{"name": tool.Name, "description": tool.Description, "parametersJsonSchema": json.RawMessage(tool.Parameters)})
+	}
+	return []any{map[string]any{"functionDeclarations": functions}}, names, nil
+}
+
+func validFunctionName(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for _, r := range name {
+		if !(r == '_' || r == '-' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func validJSONSchema(raw json.RawMessage) bool {
+	if len(raw) == 0 || !uniqueJSON(raw) {
+		return false
+	}
+	var schema map[string]json.RawMessage
+	if json.Unmarshal(raw, &schema) != nil || schema == nil {
+		return false
+	}
+	var kind string
+	if json.Unmarshal(schema["type"], &kind) != nil || kind != "object" {
+		return false
+	}
+	return validateSchemaObject(schema)
+}
+
+func validSchemaNode(raw json.RawMessage) bool {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("true")) || bytes.Equal(bytes.TrimSpace(raw), []byte("false")) {
+		return true
+	}
+	var schema map[string]json.RawMessage
+	if json.Unmarshal(raw, &schema) != nil || schema == nil {
+		return false
+	}
+	return validateSchemaObject(schema)
+}
+
+func validateSchemaObject(schema map[string]json.RawMessage) bool {
+	for key := range schema {
+		switch key {
+		case "type", "description", "title", "properties", "required", "items", "enum", "minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems", "additionalProperties", "pattern":
+		default:
+			return false
+		}
+	}
+	if raw, ok := schema["type"]; ok {
+		var value string
+		if json.Unmarshal(raw, &value) != nil || !validSchemaType(value) {
+			return false
+		}
+	}
+	for _, key := range []string{"description", "title"} {
+		if raw, ok := schema[key]; ok {
+			if _, valid := schemaString(raw); !valid {
+				return false
+			}
+		}
+	}
+	properties := map[string]json.RawMessage{}
+	if raw, ok := schema["properties"]; ok {
+		if json.Unmarshal(raw, &properties) != nil || properties == nil {
+			return false
+		}
+		for _, child := range properties {
+			if !validSchemaNode(child) {
+				return false
+			}
+		}
+	}
+	if raw, ok := schema["required"]; ok {
+		var names []string
+		if json.Unmarshal(raw, &names) != nil || names == nil {
+			return false
+		}
+		seen := map[string]bool{}
+		for _, name := range names {
+			if name == "" || seen[name] {
+				return false
+			}
+			if _, exists := properties[name]; !exists {
+				return false
+			}
+			seen[name] = true
+		}
+	}
+	if raw, ok := schema["items"]; ok {
+		if !validSchemaNode(raw) {
+			return false
+		}
+	}
+	if raw, ok := schema["additionalProperties"]; ok && !validSchemaNode(raw) {
+		return false
+	}
+	if raw, ok := schema["enum"]; ok {
+		var values []json.RawMessage
+		if json.Unmarshal(raw, &values) != nil || len(values) == 0 {
+			return false
+		}
+		for _, value := range values {
+			if !uniqueJSON(value) {
+				return false
+			}
+		}
+	}
+	for _, key := range []string{"minimum", "maximum"} {
+		if raw, ok := schema[key]; ok {
+			if _, err := strconv.ParseFloat(string(raw), 64); err != nil {
+				return false
+			}
+		}
+	}
+	if min, ok := schema["minimum"]; ok {
+		if max, exists := schema["maximum"]; exists {
+			lo, _ := strconv.ParseFloat(string(min), 64)
+			hi, _ := strconv.ParseFloat(string(max), 64)
+			if lo > hi {
+				return false
+			}
+		}
+	}
+	for _, key := range []string{"minLength", "maxLength", "minItems", "maxItems"} {
+		if raw, ok := schema[key]; ok {
+			n, err := strconv.Atoi(string(raw))
+			if err != nil || n < 0 {
+				return false
+			}
+		}
+	}
+	for _, pair := range [][2]string{{"minLength", "maxLength"}, {"minItems", "maxItems"}} {
+		if lo, ok := schema[pair[0]]; ok {
+			if hi, exists := schema[pair[1]]; exists {
+				min, _ := strconv.Atoi(string(lo))
+				max, _ := strconv.Atoi(string(hi))
+				if min > max {
+					return false
+				}
+			}
+		}
+	}
+	if raw, ok := schema["pattern"]; ok {
+		pattern, valid := schemaString(raw)
+		if !valid {
+			return false
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func schemaString(raw json.RawMessage) (string, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '"' {
+		return "", false
+	}
+	var value string
+	if json.Unmarshal(trimmed, &value) != nil {
+		return "", false
+	}
+	return value, true
+}
+
+func validSchemaType(value string) bool {
+	switch value {
+	case "object", "array", "string", "number", "integer", "boolean", "null":
+		return true
+	default:
+		return false
+	}
+}
+
+func functionToolChoice(raw json.RawMessage, names map[string]bool) (map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var choice string
+	if json.Unmarshal(raw, &choice) == nil {
+		switch choice {
+		case "auto":
+			return nil, nil
+		case "none":
+			return map[string]any{"functionCallingConfig": map[string]any{"mode": "NONE"}}, nil
+		case "required":
+			if len(names) == 0 {
+				return nil, errors.New("required tool choice needs functions")
+			}
+			return map[string]any{"functionCallingConfig": map[string]any{"mode": "ANY"}}, nil
+		default:
+			return nil, errors.New("unsupported tool choice")
+		}
+	}
+	var specific struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil || len(fields) != 2 || json.Unmarshal(raw, &specific) != nil || specific.Type != "function" || !names[specific.Name] {
+		return nil, errors.New("unsupported tool choice")
+	}
+	return map[string]any{"functionCallingConfig": map[string]any{"mode": "ANY", "allowedFunctionNames": []string{specific.Name}}}, nil
 }
 func unsupported() *core.GatewayError {
 	return &core.GatewayError{Code: "unsupported_feature", Category: core.CategoryUnsupportedFeature, RetryDisposition: core.RetryUnsafe, Message: "Antigravity request feature is unsupported"}

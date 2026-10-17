@@ -1,22 +1,28 @@
-# M10 Antigravity Offline Handoff
+# M10 Antigravity Connector Handoff
 
 ## Disposition
 
 M10-001–004 delivered the reviewed offline candidate: provenance-labelled
-synthetic fixtures, a fail-closed fake-only connector, one translated Responses
-text prompt, incremental SSE-to-Responses text streaming, synthetic usage and
-HTTP error mapping, cancellation, and deterministic tests. The only backend
-destination is
-`https://antigravity.synthetic.invalid/v1internal/projects/{project}:generateContent?alt=sse`;
-all transport is injected and non-fake transports, other destinations, and
-redirects are rejected. This is not a production endpoint.
+synthetic fixtures, one translated Responses text prompt, incremental
+SSE-to-Responses text streaming, synthetic usage and HTTP error mapping,
+cancellation, and deterministic tests. M10-010 extends it with trusted endpoint
+and project configuration, candidate function declarations/tool-choice mapping,
+gateway Responses routing, and standard HTTP transport opt-in via
+`PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1`. The default endpoint candidate is
+`https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`;
+the synthetic `.invalid` endpoint retains its fixture path. The production host
+and wire shape come from pinned unofficial community sources, not a supported
+Google API contract; endpoint, project semantics, and eligibility remain
+unverified. Automated tests make no provider or external network calls.
 
 M10-005 records the narrow client compatibility and event omissions in the
 [matrix](M10-COMPATIBILITY.md). Fake tests and acceptance by
 `responsesAdapter.Encode` demonstrate this offline stream can pass through that
 encoder; they do not prove broad client compatibility. The live provider
-contract, live authentication, account eligibility, capability support, and
-gateway routing eligibility remain unverified. `llm.streaming`, `auth.oauth`,
+contract, live authentication, account eligibility, and production route
+eligibility remain unverified. `llm.streaming` is `Supported` only for the
+deterministically verified `openai.responses.v1` translation implementation
+scope; this is not remote entitlement or provider support. `auth.oauth`,
 `usage.exact`, and all other capabilities remain `Unknown`; no live claims or
 provider calls are authorized by this handoff.
 
@@ -37,7 +43,7 @@ transport. Native CLI usage:
 
 ```sh
 export PESTIROUTE_ANTIGRAVITY_CLIENT_ID='operator-authorized-client-id'
-export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1 # needed only for code exchange/refresh
+export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1 # explicit HTTPS auth/inference transport opt-in
 gateway admin auth start --account ACCOUNT_ID
 # Follow verification_uri in a browser, then paste the exact callback URL:
 gateway admin auth continue --session SESSION_ID --callback-stdin
@@ -59,7 +65,10 @@ ambiguous and also remain unknown. The connector never retries internally;
 status alone does not establish safe replay, and no fallback is justified by
 this offline evidence. Streaming success requires the synthetic terminal event;
 malformed or truncated streams do not become success. Core/Adapter retain
-commit, cancellation and exactly-once finalization responsibilities.
+commit, cancellation and exactly-once finalization responsibilities. Success
+requires synthetic `response.done: true` or candidate `finishReason: STOP` then
+clean EOF; usage alone is not terminal evidence. Thought/signature-bearing parts
+are rejected before their frame can emit text.
 
 ## Planner handoff
 

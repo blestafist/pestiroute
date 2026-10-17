@@ -75,6 +75,8 @@ type nativeSettings struct {
 	Model                 string            `yaml:"model"`
 	AccountID             string            `yaml:"account_id"`
 	CredentialID          string            `yaml:"credential_id"`
+	Project               string            `yaml:"project"`
+	Endpoint              string            `yaml:"endpoint"`
 	Profile               string            `yaml:"profile"`
 	RuntimeProfile        string            `yaml:"runtime_profile"`
 	AuthMode              string            `yaml:"auth_mode"`
@@ -229,6 +231,10 @@ func validateConnectorSettingsFields(root *yaml.Node) error {
 			for _, key := range []string{"base_url", "runtime_profile", "auth_mode", "max_request_body_bytes", "max_request_header_bytes", "connect_timeout", "tls_handshake_timeout", "response_header_timeout", "stream_idle_timeout", "model", "account_id", "credential_id", "capabilities"} {
 				allowed[key] = true
 			}
+		case "pestiroute.antigravity.v1internal":
+			for _, key := range []string{"project", "model", "account_id", "endpoint"} {
+				allowed[key] = true
+			}
 		default:
 			continue // Implementation validation reports this case.
 		}
@@ -377,6 +383,10 @@ func validateProtectedConfig(c protectedConfig) error {
 			if err := validateLocalSettings(prefix+".settings", item.Settings); err != nil {
 				return err
 			}
+		case "pestiroute.antigravity.v1internal":
+			if err := validateAntigravitySettings(prefix+".settings", item.Settings); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("%s has unsupported connector implementation %q", prefix, item.Implementation)
 		}
@@ -460,6 +470,11 @@ func validateProtectedConfig(c protectedConfig) error {
 				} else if connector.Implementation == "pestiroute.responses.local" {
 					if route.Mode != "native" || connector.Settings.Model != route.Model || connector.Settings.AccountID != target.Account {
 						return fmt.Errorf("%s target %q does not match local native mode, model, and account settings", prefix, target.Connector)
+					}
+				} else if connector.Implementation == "pestiroute.antigravity.v1internal" {
+					translationTarget = true
+					if route.Mode != "translation" || connector.Settings.Model != route.Model || connector.Settings.AccountID != target.Account {
+						return fmt.Errorf("%s target %q does not match Antigravity translation mode, model, and account settings", prefix, target.Connector)
 					}
 				} else if route.Mode == "translation" {
 					return fmt.Errorf("%s target %q implementation does not match translation mode", prefix, target.Connector)
@@ -559,6 +574,30 @@ func validateLocalSettings(prefix string, s nativeSettings) error {
 	return nil
 }
 
+func validateAntigravitySettings(prefix string, s nativeSettings) error {
+	if strings.TrimSpace(s.Project) == "" || strings.TrimSpace(s.Model) == "" || strings.TrimSpace(s.AccountID) == "" {
+		return fmt.Errorf("%s requires non-empty project, model, and account_id", prefix)
+	}
+	if len(s.Project) > 64 || s.Project[0] < 'a' || s.Project[0] > 'z' || !(s.Project[len(s.Project)-1] >= 'a' && s.Project[len(s.Project)-1] <= 'z' || s.Project[len(s.Project)-1] >= '0' && s.Project[len(s.Project)-1] <= '9') {
+		return fmt.Errorf("%s.project is invalid", prefix)
+	}
+	for _, r := range s.Project {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			return fmt.Errorf("%s.project is invalid", prefix)
+		}
+	}
+	if s.Endpoint != "" {
+		u, err := url.Parse(s.Endpoint)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("%s.endpoint must be an HTTPS origin", prefix)
+		}
+	}
+	if s.BaseURL != "" || s.CredentialEnv != "" || s.CredentialID != "" || s.Profile != "" || s.RuntimeProfile != "" || s.AuthMode != "" || s.UpstreamProtocol != "" || s.Mode != "" || s.Capabilities != nil || s.MaxRequestBodyBytes != 0 || s.MaxRequestHeaderBytes != 0 || s.ConnectTimeout != "" || s.TLSHandshakeTimeout != "" || s.ResponseHeaderTimeout != "" || s.StreamIdleTimeout != "" {
+		return fmt.Errorf("%s has unsupported Antigravity settings", prefix)
+	}
+	return nil
+}
+
 func isLocalRuntimeHost(host string) bool {
 	return isLoopbackHost(host) || strings.EqualFold(host, "localhost")
 }
@@ -651,7 +690,7 @@ func validateChatSettings(prefix string, s nativeSettings) error {
 
 func implementationProtocol(implementation string) string {
 	switch implementation {
-	case responsesImplementation, "pestiroute.anthropic.messages", "pestiroute.codex.responses", "pestiroute.responses.local":
+	case responsesImplementation, "pestiroute.anthropic.messages", "pestiroute.codex.responses", "pestiroute.responses.local", "pestiroute.antigravity.v1internal":
 		return responsesProtocol
 	case chatImplementation:
 		return chatProtocol

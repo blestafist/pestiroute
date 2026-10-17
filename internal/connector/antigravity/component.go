@@ -6,10 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
+	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -23,10 +27,13 @@ const (
 var projectPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}[a-z0-9]$|^[a-z]$`)
 
 type config struct {
-	Profile string      `json:"profile"`
-	Project string      `json:"project"`
-	OAuth   oauthConfig `json:"oauth"`
+	Profile  string      `json:"profile"`
+	Project  string      `json:"project"`
+	Endpoint string      `json:"endpoint,omitempty"`
+	OAuth    oauthConfig `json:"oauth"`
 }
+
+const defaultInferenceEndpoint = "https://cloudcode-pa.googleapis.com"
 
 type oauthConfig struct {
 	ClientID              string   `json:"client_id"`
@@ -49,6 +56,14 @@ type Connector struct {
 	state  core.HealthState
 	closed bool
 	cfg    config
+	client *http.Client
+	doer   *runtimeHTTPDoer
+}
+
+type runtimeHTTPDoer struct{ client *http.Client }
+
+func (d *runtimeHTTPDoer) Do(request *http.Request) (*http.Response, error) {
+	return d.client.Do(request)
 }
 
 var _ core.Connector = (*Connector)(nil)
@@ -84,8 +99,33 @@ func (c *Connector) Init(ctx context.Context, in core.ComponentConfig) error {
 			return errors.New("invalid Antigravity OAuth configuration")
 		}
 	}
+	if endpointOverride := strings.TrimSpace(os.Getenv("PESTIROUTE_ANTIGRAVITY_ENDPOINT")); endpointOverride != "" {
+		cfg.Endpoint = endpointOverride
+	}
+	if cfg.Endpoint == "" {
+		cfg.Endpoint = defaultInferenceEndpoint
+	}
+	cfg.Endpoint = strings.TrimRight(cfg.Endpoint, "/")
+	endpoint, err := url.Parse(cfg.Endpoint)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Path != "" {
+		return errors.New("invalid Antigravity endpoint")
+	}
 	c.cfg, c.state = cfg, core.HealthReady
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyFromEnvironment
+	transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = 90 * time.Second
+	c.client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	c.doer = &runtimeHTTPDoer{client: c.client}
 	return nil
+}
+
+// HTTPDoer exposes the connector-scoped, redirect-disabled runtime client.
+func (c *Connector) HTTPDoer() core.HTTPDoer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.doer
 }
 
 func (c *Connector) Health(context.Context) core.Health {
@@ -99,13 +139,16 @@ func (c *Connector) Capabilities(_ context.Context, scope core.CapabilityScope) 
 	if c.state != core.HealthReady || scope.Protocol != protocol || scope.Mode != core.ModeTranslation {
 		return core.CapabilityResult{}
 	}
-	return core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{"llm.streaming": core.Unknown, "auth.oauth": core.Unknown, "usage.exact": core.Unknown}}
+	return core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported, "auth.oauth": core.Unknown, "usage.exact": core.Unknown}}
 }
 func (c *Connector) Close(context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
 	c.state = core.HealthUnavailable
+	if c.client != nil {
+		c.client.CloseIdleConnections()
+	}
 	return nil
 }
 func (c *Connector) Models(ctx context.Context, q core.ModelQuery, _ core.InvocationServices) (core.ModelsResult, *core.GatewayError) {

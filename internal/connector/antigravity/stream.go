@@ -15,23 +15,26 @@ import (
 const maxSSELine = 1 << 20
 
 type stream struct {
-	r          *bufio.Reader
-	body       io.ReadCloser
-	mu         sync.Mutex
-	closed     bool
-	once       sync.Once
-	closeErr   error
-	phase      uint8
-	pending    [][]byte
-	terminal   bool
-	sequence   int
-	responseID string
-	text       strings.Builder
-	usage      *core.UsageReport
+	r                *bufio.Reader
+	body             io.ReadCloser
+	mu               sync.Mutex
+	closed           bool
+	once             sync.Once
+	closeErr         error
+	phase            uint8
+	pending          [][]byte
+	terminal         bool
+	sequence         int
+	responseID       string
+	messageID        string
+	text             strings.Builder
+	usage            *core.UsageReport
+	sawFinish        bool
+	sawTrailingUsage bool
 }
 
-func newStream(body io.ReadCloser) *stream {
-	return &stream{r: bufio.NewReader(body), body: body, responseID: "resp_synthetic-request-001"}
+func newStream(body io.ReadCloser, responseID, messageID string) *stream {
+	return &stream{r: bufio.NewReader(body), body: body, responseID: responseID, messageID: messageID}
 }
 func (s *stream) Close() error {
 	s.once.Do(func() { s.mu.Lock(); s.closed = true; s.mu.Unlock(); s.closeErr = s.body.Close() })
@@ -59,6 +62,9 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if s.phase == 0 {
 		e, err := s.nextEvent(ctx)
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				err = io.ErrUnexpectedEOF
+			}
 			_ = s.Close()
 			return core.StreamFrame{}, err
 		}
@@ -76,6 +82,13 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 	for !s.terminal {
 		e, err := s.nextEvent(ctx)
 		if err != nil {
+			if errors.Is(err, io.EOF) && s.sawFinish {
+				s.terminal = true
+				break
+			}
+			if errors.Is(err, io.EOF) {
+				err = io.ErrUnexpectedEOF
+			}
 			if ctx.Err() != nil {
 				_ = s.Close()
 				return core.StreamFrame{}, ctx.Err()
@@ -92,7 +105,7 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 		}
 	}
 	s.phase = 2
-	final := map[string]any{"id": s.responseID, "object": "response", "status": "completed", "output": []any{map[string]any{"id": "msg_synthetic", "type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]any{"type": "output_text", "text": s.text.String(), "annotations": []any{}}}}}}
+	final := map[string]any{"id": s.responseID, "object": "response", "status": "completed", "output": []any{map[string]any{"id": s.messageID, "type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]any{"type": "output_text", "text": s.text.String(), "annotations": []any{}}}}}}
 	if s.usage != nil {
 		u := map[string]int64{}
 		if s.usage.InputTokens != nil {
@@ -127,6 +140,9 @@ func (s *stream) nextEvent(ctx context.Context) ([]byte, error) {
 		}
 		line, err := s.readLine()
 		if err != nil {
+			if errors.Is(err, io.EOF) && hasData {
+				return nil, io.ErrUnexpectedEOF
+			}
 			return nil, err
 		}
 		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
@@ -167,6 +183,9 @@ func (s *stream) readLine() (string, error) {
 			continue
 		}
 		if err != nil {
+			if errors.Is(err, io.EOF) && len(line) == 0 {
+				return "", io.EOF
+			}
 			return "", io.ErrUnexpectedEOF
 		}
 		return string(line), nil
@@ -180,9 +199,13 @@ func (s *stream) consume(raw []byte) error {
 	var outer struct {
 		Response struct {
 			Candidates []struct {
-				Content struct {
+				FinishReason string `json:"finishReason"`
+				Content      struct {
 					Parts []struct {
-						Text *string `json:"text"`
+						Text             *string         `json:"text"`
+						FunctionCall     json.RawMessage `json:"functionCall"`
+						Thought          *bool           `json:"thought"`
+						ThoughtSignature json.RawMessage `json:"thoughtSignature"`
 					} `json:"parts"`
 				} `json:"content"`
 			} `json:"candidates"`
@@ -199,6 +222,16 @@ func (s *stream) consume(raw []byte) error {
 	resp := outer.Response
 	if s.terminal {
 		return errors.New("frame after terminal marker")
+	}
+	if s.sawFinish {
+		if s.sawTrailingUsage || resp.Done != nil || len(resp.Candidates) != 0 || resp.Usage == nil || !usageOnlyFrame(raw) {
+			return errors.New("frame after candidate finish reason")
+		}
+		if err := s.setUsage(resp.Usage); err != nil {
+			return err
+		}
+		s.sawTrailingUsage = true
+		return nil
 	}
 	if resp.Done != nil && *resp.Done {
 		if len(resp.Candidates) > 0 {
@@ -219,23 +252,96 @@ func (s *stream) consume(raw []byte) error {
 		s.terminal = true
 		return nil
 	}
+	finished := false
+	candidateTextBytes := s.text.Len()
+	for _, candidate := range resp.Candidates {
+		if candidate.FinishReason != "" {
+			if candidate.FinishReason != "STOP" {
+				return errors.New("unsupported candidate finish reason")
+			}
+			finished = true
+		}
+		for _, part := range candidate.Content.Parts {
+			if part.Thought != nil && *part.Thought || len(part.ThoughtSignature) != 0 || len(part.FunctionCall) != 0 {
+				return errors.New("unsupported reasoning or function-call response")
+			}
+			if part.Text == nil || *part.Text == "" || len(*part.Text) > maxRequestBytes-candidateTextBytes {
+				return errors.New("invalid or oversized candidate text")
+			}
+			candidateTextBytes += len(*part.Text)
+		}
+	}
+	if resp.Usage != nil {
+		if err := s.setUsage(resp.Usage); err != nil {
+			return err
+		}
+	}
+	if finished {
+		s.sawFinish = true
+	}
 	if len(resp.Candidates) == 0 {
+		if resp.Usage != nil {
+			return nil
+		}
 		return errors.New("candidate frame has no text")
 	}
 	for _, candidate := range resp.Candidates {
 		for _, part := range candidate.Content.Parts {
-			if part.Text == nil || *part.Text == "" || len(*part.Text) > maxRequestBytes-s.text.Len() {
-				return errors.New("invalid or oversized candidate text")
-			}
 			s.text.WriteString(*part.Text)
 			if s.sequence == 0 {
 				s.pending = append(s.pending, emitEvent("response.created", map[string]any{"response": map[string]any{"id": s.responseID, "object": "response", "status": "in_progress", "output": []any{}}}, &s.sequence))
 			}
-			s.pending = append(s.pending, emitEvent("response.output_text.delta", map[string]any{"item_id": "msg_synthetic", "output_index": 0, "content_index": 0, "delta": *part.Text}, &s.sequence))
+			s.pending = append(s.pending, emitEvent("response.output_text.delta", map[string]any{"item_id": s.messageID, "output_index": 0, "content_index": 0, "delta": *part.Text}, &s.sequence))
 		}
 	}
-	if len(s.pending) == 0 {
+	if len(s.pending) == 0 && !finished && resp.Usage == nil {
 		return errors.New("candidate frame has no text")
+	}
+	return nil
+}
+
+func usageOnlyFrame(raw []byte) bool {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) != nil || len(envelope) != 1 {
+		return false
+	}
+	responseRaw, ok := envelope["response"]
+	if !ok {
+		return false
+	}
+	var response map[string]json.RawMessage
+	if json.Unmarshal(responseRaw, &response) != nil || len(response) != 1 {
+		return false
+	}
+	usageRaw, ok := response["usageMetadata"]
+	if !ok {
+		return false
+	}
+	var usage map[string]json.RawMessage
+	if json.Unmarshal(usageRaw, &usage) != nil || usage == nil {
+		return false
+	}
+	for key := range usage {
+		if key != "promptTokenCount" && key != "candidatesTokenCount" {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *stream) setUsage(usage *struct {
+	Prompt     *int64 `json:"promptTokenCount"`
+	Candidates *int64 `json:"candidatesTokenCount"`
+}) error {
+	if (usage.Prompt != nil && *usage.Prompt < 0) || (usage.Candidates != nil && *usage.Candidates < 0) {
+		return errors.New("invalid usage")
+	}
+	if usage.Prompt != nil || usage.Candidates != nil {
+		completeness := core.UsagePartial
+		if usage.Prompt != nil && usage.Candidates != nil {
+			completeness = core.UsageComplete
+		}
+		s.usage = &core.UsageReport{InputTokens: usage.Prompt, OutputTokens: usage.Candidates, Source: core.UsageProvider, Completeness: completeness}
 	}
 	return nil
 }

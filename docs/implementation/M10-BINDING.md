@@ -1,15 +1,18 @@
-# M10 Antigravity Offline Text/Stream Binding
+# M10 Antigravity Candidate Text/Stream Binding
 
 ## Status and evidence ceiling
 
-This is the normative design for the bounded M10 offline candidate, not a claim
-of Google-supported protocol compatibility. It authorizes no live request, login,
-credential acquisition, production endpoint, or capability promotion. Current
-wire facts remain **Unknown** as recorded in [M10 research](M10-RESEARCH.md).
+This is the normative design for the bounded M10 connector, not a claim of
+Google-supported protocol compatibility. M10-010 authorizes implementation of an
+explicitly opted-in HTTPS inference transport, but no live request or provider
+test is part of automated acceptance. Endpoint, envelope and event details below
+remain unofficial candidate observations; supported wire facts remain **Unknown**
+as recorded in [M10 research](M10-RESEARCH.md). No remote/provider capability is promoted.
 Third-party OpenCode source observations are MIT-licensed research hypotheses;
 any source-derived implementation must retain applicable notices and must not
-reuse plugin OAuth client credentials. The subsequent slice is deterministic
-fake-only and remains subject to M10-003 fixture provenance and review.
+reuse plugin OAuth client credentials. M10-004's fake-only boundary covered its
+initial vertical slice; M10-010 adds opt-in runtime transport while retaining
+deterministic fake-only acceptance tests subject to M10-003 fixture provenance.
 
 ## Component and admitted execution
 
@@ -18,8 +21,8 @@ fake-only and remains subject to M10-003 fixture provenance and review.
 | Component | Private `antigravity.Connector`, implementing the existing `core.Connector` contract; stable descriptor ID `pestiroute.antigravity.v1internal` is a proposed implementation identity, not a provider identity. |
 | Profile | `antigravity-v1internal`, selected only by trusted component configuration. It names this candidate translation, not a supported Google API. |
 | Client protocol | Exactly `openai.responses.v1`; translation mode only. Native mode, other protocol versions, and implicit protocol inference are rejected. |
-| Work in scope | One text-only prompt producing an incrementally translated Responses stream through a deterministic fake transport. One Execute is one attempt for the runtime-selected account. |
-| Capabilities | `llm.streaming`, `auth.oauth`, `usage.exact`, and all other capabilities remain `unknown` absent separately accepted evidence. A synthetic fixture cannot establish live eligibility. |
+| Work in scope | One text-only prompt and candidate function declarations/tool-choice mapping producing an incrementally translated Responses text stream. Function-call responses, tool execution/history and signature-dependent continuation remain unsupported. One Execute is one attempt for the runtime-selected account. |
+| Capabilities | `llm.streaming` is `supported` only for `openai.responses.v1` translation, meaning this exact implementation scope is available and deterministically verified. It does not claim remote entitlement or provider support. `auth.oauth`, `usage.exact`, and all other capabilities remain `unknown`. |
 
 The existing `core.Connector.Execute(context, request, attemptScope,
 invocationServices)` is sufficient. Connector-private translation and streaming
@@ -32,39 +35,47 @@ contract and compatibility review before implementation.
 
 The admitted `RawPayload` remains immutable. The Connector requires the exact
 protocol above, translation mode, a live invocation context, and a bounded valid
-JSON object. For this candidate accept only `model` (non-empty fixture-allowlisted
-string), `input` (non-empty string), and `stream: true` (required). Reject malformed JSON, duplicate keys, trailing
+JSON object. Accept `model` (allowlisted string), `input` (non-empty string),
+`stream: true` (required), and only the function declarations/tool-choice forms
+described in [M10-TOOL-BINDING](M10-TOOL-BINDING.md#candidate-translation). Reject malformed JSON, duplicate keys, trailing
 values, unknown top-level fields, invalid field types, false/missing stream, and
 unsupported semantics before transport dispatch. Do not silently drop fields.
 The adapter owns client-protocol decoding; the Connector-owned private parser
 validates the supported subset and does not introduce a shared message schema.
 
-Reject tools/tool choice, tool history, images, audio, video, other multimodal
-input, structured-output constraints, unsupported reasoning/state fields, and
-unrecognized extension fields as `unsupported_feature` before dispatch. Tool
-calls and thought signatures are unsupported/Unknown: do not synthesize,
+Reject tool history, unsupported tool options, images, audio, video, other
+multimodal input, structured-output constraints, unsupported reasoning/state
+fields, and unrecognized extension fields as `unsupported_feature` before
+dispatch. Function-call responses remain unsupported and must fail rather than be
+silently dropped. Thought signatures are unsupported/Unknown: do not synthesize,
 discard-and-continue, or claim continuity. Model identifiers are accepted only
-from an explicit fixture allowlist; no model rewriting, guessed aliases, or
+from an explicit allowlist; no model rewriting, guessed aliases, or
 provider-model claim is implied.
 
-The private backend request is a candidate-only translation based on the pinned
-MIT plugin observations. Its observed outer candidate shape is `project`,
-`model`, `request`, `requestType`, `userAgent`, and `requestId`; `request`
-contains the candidate Gemini-style `contents` text prompt. For this one-turn
-slice, map the accepted prompt to one user-role content with one text part, and
-use configured project plus the fixture-allowlisted model. Do not include
-system-instruction, tool, session, label, or multimodal fields. Exact
-`requestType`, user-agent/request-ID values, generation options, action path,
-headers, and backend wire compatibility are unverified and must be explicitly
-settled as synthetic fixture values in M10-003; none may be presented as
-official API facts. Do not copy source expression or credentials from the
-audited plugins.
+The private backend request is a candidate-only translation based on pinned MIT
+plugin observations: Rahularya01 `opencode-antigravity` revision
+`874ef4d6cc44f852401e6298790c6b34804e2978` (`src/client/client.ts`,
+`src/stream/transform.ts`, `src/utils/util.ts`, `src/types/enums.ts`). Use outer
+keys `project`, `model`, `request`, `requestType`, `userAgent`, and `requestId`;
+`request` contains `contents` and admitted `tools`. `requestType: agent`,
+`userAgent: antigravity`, and `functionDeclarations[].parametersJsonSchema` are
+pinned-source candidate values. Generate a fresh request ID per invocation; its
+format is not verified. Map the text prompt to one user-role content with one
+text part and bind the explicit project/model. Do not include system-instruction,
+session, labels, or multimodal fields. The selected endpoint candidate is
+`https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`.
+This production host is observed as the `ENDPOINT_PROD` constant in the pinned
+community source; that client defaults to a daily host. This is not official API
+evidence. Keep `/v1internal/projects/{project}:generateContent?alt=sse` only for
+the `antigravity.synthetic.invalid` fixture destination. Project semantics,
+endpoint/action compatibility, headers, envelope acceptance, and provider wire
+support remain **Unknown**. Do not copy source expression or credentials.
 
 ## Project and credential scope
 
-Project identity is mandatory trusted per-instance configuration for the offline
-candidate: a single non-empty, strictly validated identifier is supplied
-explicitly and bound to the selected connector/account. Missing or invalid
+Project identity is mandatory trusted per-instance configuration: a single
+non-empty, strictly validated identifier is supplied explicitly and bound to the
+selected connector/account. Missing or invalid
 configuration fails initialization or the pre-dispatch validation path; it is
 never inferred from credentials, environment, user identity, discovery, or a
 request. No `loadCodeAssist`, project lookup, auto-provisioning/onboarding,
@@ -80,28 +91,41 @@ plugin-owned OAuth client. Credential acquisition/refresh is not implemented or
 authorized by this task; absent credentials fail before dispatch as
 `unauthenticated`.
 
-## Offline transport and stream lifecycle
+## Transport opt-in and stream lifecycle
 
-The implementation candidate must use only an injected deterministic fake
-transport. No production host, configurable external endpoint, redirect, or
-ambient HTTP client is permitted. If the implementation cannot enforce that
-fake-only boundary before dispatch, it must fail closed. No provider call is an
-acceptance check for this task.
+`Execute` uses the connector-owned, redirect-disabled runtime HTTP client only
+when `services.Transport` is the exact connector-provided doer and
+`PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1`; an arbitrary `HTTPDoer` is never an
+opt-in seam. Otherwise it accepts only the existing deterministic offline-test
+transport and rejects ambient transport before dispatch. The endpoint is an HTTPS origin, defaulting to the candidate host above
+and optionally configured per connector; the trusted
+`PESTIROUTE_ANTIGRAVITY_ENDPOINT` environment override takes precedence. The
+gateway-created client refuses redirects.
+Opt-in permits an operator-controlled inference request; it does not authorize
+or imply live testing, Google support, account eligibility, or capability
+promotion. Automated checks use synthetic `.invalid` endpoints and make zero
+external network/provider calls.
 
 The research observed candidate SSE frames with `data:` JSON containing a
 `response` object and candidate text in `candidates[].content.parts`. This is a
-test hypothesis, not a server guarantee. M10-003 fixtures must settle the
-synthetic exact framing and terminal condition. The Connector parses
-incrementally with bounded line/event and retained-state buffers; it forwards
-translated client-protocol bytes as soon as validated content is available and
-must not wait for whole-response EOF. It must not expose provider SSE bytes as
-Responses output or require the Protocol Adapter to translate them again.
+test hypothesis, not a server guarantee. The implemented terminal evidence is
+either synthetic `response.done: true`, or candidate `finishReason: STOP`,
+optionally followed by one usage-only frame, then clean EOF. After `STOP`, reject
+further candidate content and conflicting finish markers; after the optional
+usage frame, reject all further events. Usage metadata alone is never terminal
+evidence. Truncated or partial SSE framing fails, including after `STOP`. Parts marked `thought: true`
+or carrying `thoughtSignature` are rejected before any content in that frame is
+emitted. The Connector parses incrementally with bounded line/event and
+retained-state buffers; it forwards translated client-protocol bytes as soon as
+validated content is available and must not wait for whole-response EOF. It must
+not expose provider SSE bytes as Responses output or require the Protocol Adapter
+to translate them again.
 
 Return an `ExecutionResponse` with exactly `Head → Body* → Complete → EOF`.
 `Head` identifies `openai.responses.v1` and the correct client content type;
 each non-empty `Body` contains already translated Responses stream bytes.
-`Complete(succeeded)` follows only a valid synthetic terminal event and carries
-final usage only when known. Missing usage remains nil/unknown, never zero by
+`Complete(succeeded)` follows only the terminal evidence above and carries final
+usage only when known. Missing usage remains nil/unknown, never zero by
 assumption. No frames follow `Complete` and no EOF-before-Complete success is
 allowed. Do not aggregate the full response or merge protocol bytes with
 accounting/control metadata.
@@ -123,7 +147,7 @@ Connector must set retry disposition explicitly and must never internally replay
 | Observation | Result | Retryable / disposition |
 | --- | --- | --- |
 | Invalid protocol/mode/body, unsupported input, invalid project or credential | Pre-dispatch `invalid_request`, `unsupported_feature`, or `unauthenticated` as appropriate | `false / unsafe` |
-| Missing scoped transport or fake-only transport unavailable | Pre-dispatch `unavailable` | `false / unknown` |
+| Missing scoped transport or real-transport opt-in unavailable | Pre-dispatch `unavailable` | `false / unknown` |
 | Transport `Do` error, nil response/body, or invalid status after invocation starts | Fail; close any available body. Delivery may be ambiguous. | `false / unknown` |
 | Redirect response | Reject and close; transport must not follow redirects | `false / unknown` |
 | 401/403 | `unauthenticated`; bounded error-body drain then close | `false / unsafe` |

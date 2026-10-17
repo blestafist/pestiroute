@@ -23,10 +23,14 @@ type fakeDoer struct {
 	calls    int
 	request  *http.Request
 }
-type ambientDoer struct{ calls int }
+type ambientDoer struct {
+	calls   int
+	request *http.Request
+}
 
-func (f *ambientDoer) Do(*http.Request) (*http.Response, error) {
+func (f *ambientDoer) Do(request *http.Request) (*http.Response, error) {
 	f.calls++
+	f.request = request
 	return nil, errors.New("must not dispatch")
 }
 
@@ -83,7 +87,7 @@ func (c credentials) Get(context.Context, string) ([]byte, error) { return c.dat
 func ready(t *testing.T) *Connector {
 	t.Helper()
 	c := NewConnector()
-	if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project"}`)}); err != nil {
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://antigravity.synthetic.invalid"}`)}); err != nil {
 		t.Fatal(err)
 	}
 	return c
@@ -161,6 +165,324 @@ func TestExecuteStreamsIncrementallyAndBuildsCandidateRequest(t *testing.T) {
 	}
 }
 
+func TestSeparateExecutionsUseDistinctResponseAndMessageIDs(t *testing.T) {
+	c := ready(t)
+	type streamIDs struct{ response, message string }
+	readIDs := func() streamIDs {
+		t.Helper()
+		wire := "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"x\"}]}}]}}\n\ndata: {\"response\":{\"done\":true}}\n\n"
+		f := &fakeDoer{response: response(http.StatusOK, wire)}
+		out, ge := c.Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+		if ge != nil {
+			t.Fatal(ge)
+		}
+		defer out.Stream.Close()
+		var responseID, messageID, completedResponseID, completedMessageID string
+		for {
+			frame, err := out.Stream.Next(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if frame.Type == core.FrameBody {
+				for _, line := range strings.Split(string(frame.Body.Data), "\n") {
+					if !strings.HasPrefix(line, "data: ") {
+						continue
+					}
+					var event struct {
+						Type     string `json:"type"`
+						ItemID   string `json:"item_id"`
+						Response struct {
+							ID     string `json:"id"`
+							Output []struct {
+								ID string `json:"id"`
+							} `json:"output"`
+						} `json:"response"`
+					}
+					if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event); err != nil {
+						t.Fatal(err)
+					}
+					switch event.Type {
+					case "response.created":
+						responseID = event.Response.ID
+					case "response.output_text.delta":
+						messageID = event.ItemID
+					case "response.completed":
+						completedResponseID = event.Response.ID
+						if len(event.Response.Output) > 0 {
+							completedMessageID = event.Response.Output[0].ID
+						}
+					}
+				}
+			}
+			if frame.Type == core.FrameComplete {
+				break
+			}
+		}
+		if responseID == "" || responseID != completedResponseID || messageID == "" || messageID != completedMessageID {
+			t.Fatalf("response/message IDs changed within execution: created=%q/%q completed=%q/%q", responseID, messageID, completedResponseID, completedMessageID)
+		}
+		return streamIDs{response: responseID, message: messageID}
+	}
+	idsA, idsB := readIDs(), readIDs()
+	if idsA.response == idsB.response || idsA.message == idsB.message {
+		t.Fatalf("execution IDs were not independently generated: %+v %+v", idsA, idsB)
+	}
+}
+
+func TestInferenceEndpointDefaultsAndOverride(t *testing.T) {
+	for _, tc := range []struct{ name, config, env, want string }{
+		{"production default", `{"profile":"antigravity-v1internal","project":"synthetic-project"}`, "", "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"},
+		{"environment override", `{"profile":"antigravity-v1internal","project":"synthetic-project"}`, "https://api.example.invalid", "https://api.example.invalid/v1internal:streamGenerateContent?alt=sse"},
+		{"environment overrides configured endpoint", `{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://configured.example.invalid"}`, "https://api.example.invalid", "https://api.example.invalid/v1internal:streamGenerateContent?alt=sse"},
+		{"explicit endpoint", `{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://api.example.invalid"}`, "", "https://api.example.invalid/v1internal:streamGenerateContent?alt=sse"},
+		{"synthetic compatibility", `{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://antigravity.synthetic.invalid"}`, "", "https://antigravity.synthetic.invalid/v1internal/projects/synthetic-project:generateContent?alt=sse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PESTIROUTE_ANTIGRAVITY_ENDPOINT", tc.env)
+			c := NewConnector()
+			if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(tc.config)}); err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
+			out, ge := c.Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+			if ge != nil {
+				t.Fatal(ge)
+			}
+			_ = out.Stream.Close()
+			if f.request == nil || f.request.URL.String() != tc.want {
+				t.Fatalf("request URL=%v want %q", f.request, tc.want)
+			}
+		})
+	}
+}
+
+func TestInferenceEndpointRejectsUnsafeURL(t *testing.T) {
+	for _, endpoint := range []string{"http://api.example.invalid", "https://user@api.example.invalid", "https://api.example.invalid/path", "https://api.example.invalid?query=1", "https://api.example.invalid/#fragment"} {
+		c := NewConnector()
+		config := `{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"` + endpoint + `"}`
+		if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(config)}); err == nil {
+			t.Errorf("unsafe endpoint accepted: %q", endpoint)
+		}
+	}
+}
+
+func TestRealInferenceTransportRequiresExplicitOptIn(t *testing.T) {
+	req := request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`)
+	doer := &ambientDoer{}
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "")
+	c := NewConnector()
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	services := services(nil)
+	services.Transport = doer
+	if _, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: core.ModeTranslation}, services); ge == nil || doer.calls != 0 {
+		t.Fatalf("disabled real transport dispatched: error=%v calls=%d", ge, doer.calls)
+	}
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "1")
+	if _, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: core.ModeTranslation}, services); ge == nil || doer.calls != 0 {
+		t.Fatalf("arbitrary opted-in transport was not rejected: error=%v calls=%d", ge, doer.calls)
+	}
+	c.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n"), nil
+	})
+	services.Transport = c.HTTPDoer()
+	out, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: core.ModeTranslation}, services)
+	if ge != nil {
+		t.Fatalf("opted-in connector HTTP client rejected: %v", ge)
+	}
+	_ = out.Stream.Close()
+	if doer.calls != 0 {
+		t.Fatalf("arbitrary opted-in doer dispatched %d times", doer.calls)
+	}
+	out, ge = c.Execute(context.Background(), req, core.AttemptScope{Mode: core.ModeTranslation}, services)
+	if ge != nil {
+		t.Fatalf("opted-in connector HTTP client rejected: %v", ge)
+	}
+	_ = out.Stream.Close()
+	redirectCalls := 0
+	c.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		redirectCalls++
+		resp := response(http.StatusTemporaryRedirect, "")
+		resp.Header.Set("Location", "https://redirect.example.invalid/")
+		return resp, nil
+	})
+	if _, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: core.ModeTranslation}, services); ge == nil || redirectCalls != 1 {
+		t.Fatalf("redirect was followed or accepted: error=%v calls=%d", ge, redirectCalls)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestCapabilitiesOnlyPromoteVerifiedTranslationStreaming(t *testing.T) {
+	c := ready(t)
+	for _, tc := range []struct {
+		protocol string
+		mode     string
+		want     core.CapabilityState
+	}{
+		{protocol, core.ModeTranslation, core.Supported},
+		{protocol, core.ModeNative, core.Unknown},
+		{"other.protocol", core.ModeTranslation, core.Unknown},
+	} {
+		result := c.Capabilities(context.Background(), core.CapabilityScope{Protocol: tc.protocol, Mode: tc.mode})
+		if got := result.Values["llm.streaming"]; (tc.want == core.Supported && got != core.Supported) || (tc.want != core.Supported && got == core.Supported) {
+			t.Errorf("scope %+v streaming=%v want supported=%v", tc, got, tc.want == core.Supported)
+		}
+		for _, cap := range []core.Capability{"auth.oauth", "usage.exact"} {
+			if result.Values[cap] == core.Supported {
+				t.Errorf("scope %+v %s=%v want unknown", tc, cap, result.Values[cap])
+			}
+		}
+	}
+}
+
+func TestStreamTerminalEvidenceAndReasoningAdmission(t *testing.T) {
+	stop := "data: {\"response\":{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"answer\"}]}}]}}\n\n"
+	for _, tc := range []struct {
+		name string
+		wire string
+		ok   bool
+	}{
+		{"candidate STOP plus clean EOF", stop, true},
+		{"trailing usage after STOP", stop + "data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":1}}}\n\n", true},
+		{"candidate after STOP", stop + "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"late\"}]}}]}}\n\n", false},
+		{"conflicting finish after STOP", stop + "data: {\"response\":{\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}}\n\n", false},
+		{"content after trailing usage", stop + "data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":1}}}\n\ndata: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"late\"}]}}]}}\n\n", false},
+		{"synthetic done", "data: {\"response\":{\"done\":true}}\n\n", true},
+		{"usage alone", "data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":1}}}\n\n", false},
+		{"truncated after STOP", stop + "data: {\"response\":", false},
+		{"thought", "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hidden\",\"thought\":true}]}}]}}\n\n", false},
+		{"signature", "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hidden\",\"thoughtSignature\":\"sig\"}]}}]}}\n\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStream(io.NopCloser(strings.NewReader(tc.wire)), "resp_test", "msg_test")
+			defer s.Close()
+			completed := false
+			body := strings.Builder{}
+			for {
+				frame, err := s.Next(context.Background())
+				if err != nil {
+					if tc.ok {
+						t.Fatalf("unexpected stream error: %v", err)
+					}
+					break
+				}
+				if frame.Type == core.FrameBody {
+					body.Write(frame.Body.Data)
+				}
+				if frame.Type == core.FrameComplete {
+					completed = true
+					break
+				}
+			}
+			if completed != tc.ok {
+				t.Fatalf("completed=%v want %v", completed, tc.ok)
+			}
+			if strings.Contains(body.String(), "hidden") || strings.Contains(body.String(), "late") {
+				t.Fatalf("rejected content leaked: %s", body.String())
+			}
+		})
+	}
+}
+
+func TestFunctionToolDeclarationMappingAndFailClosedOptions(t *testing.T) {
+	const accepted = `{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","description":"Find a value","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}],"tool_choice":{"type":"function","name":"lookup"}}`
+	f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
+	out, ge := ready(t).Execute(context.Background(), request(accepted), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	_ = out.Stream.Close()
+	body, err := io.ReadAll(f.request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Request struct {
+			Tools []struct {
+				Functions []struct {
+					Name        string         `json:"name"`
+					Description string         `json:"description"`
+					Parameters  map[string]any `json:"parametersJsonSchema"`
+				} `json:"functionDeclarations"`
+			} `json:"tools"`
+			ToolConfig struct {
+				Calling struct {
+					Mode    string   `json:"mode"`
+					Allowed []string `json:"allowedFunctionNames"`
+				} `json:"functionCallingConfig"`
+			} `json:"toolConfig"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil || len(envelope.Request.Tools) != 1 || len(envelope.Request.Tools[0].Functions) != 1 || envelope.Request.Tools[0].Functions[0].Name != "lookup" || envelope.Request.Tools[0].Functions[0].Description != "Find a value" || envelope.Request.ToolConfig.Calling.Mode != "ANY" || len(envelope.Request.ToolConfig.Calling.Allowed) != 1 || envelope.Request.ToolConfig.Calling.Allowed[0] != "lookup" {
+		t.Fatalf("unexpected mapped function declaration %s (%v)", body, err)
+	}
+
+	f = &fakeDoer{}
+	for _, body := range []string{
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","required":1}}]}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","required":null}}]}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","description":null}}]}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","title":null}}]}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"value":{"type":"string","pattern":null}}}}]}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","description":null,"parameters":{"type":"object"}}]}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"nested":{"type":"object","patternProperties":{"x":{"type":"string"}}}}}}]}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"nested":{"type":"array","items":{"type":"string","maxLength":"many"}}}}}]}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"nested":{"type":"string","minLength":8,"maxLength":2}}}}]}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"computer","name":"lookup","parameters":{"type":"object"}}]}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"tool_choice":"file_search"}`,
+		`{"model":"gemini-2.5-pro","input":"x","stream":true,"tool_choice":"required"}`,
+	} {
+		_, ge := ready(t).Execute(context.Background(), request(body), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+		if ge == nil {
+			t.Errorf("unsupported/invalid tool request admitted: %s", body)
+		}
+	}
+	if f.calls != 0 {
+		t.Fatalf("invalid tool requests dispatched %d times", f.calls)
+	}
+}
+
+func TestFunctionToolChoiceModesAndFunctionCallResponsesFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		choice string
+		mode   string
+		want   bool
+	}{
+		{`"auto"`, "", false},
+		{`"none"`, "NONE", true},
+		{`"required"`, "ANY", true},
+		{`{"type":"function","name":"lookup"}`, "ANY", true},
+	} {
+		config, err := functionToolChoice(json.RawMessage(tc.choice), map[string]bool{"lookup": true})
+		if err != nil {
+			t.Fatalf("choice %s: %v", tc.choice, err)
+		}
+		if !tc.want {
+			if config != nil {
+				t.Errorf("automatic choice emitted config: %+v", config)
+			}
+			continue
+		}
+		calling := config["functionCallingConfig"].(map[string]any)
+		if calling["mode"] != tc.mode {
+			t.Errorf("choice %s config=%+v", tc.choice, config)
+		}
+	}
+	f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"},{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}}\n\n")}
+	out, ge := ready(t).Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer out.Stream.Close()
+	if frame, err := out.Stream.Next(context.Background()); err == nil || frame.Type != "" {
+		t.Fatalf("function call response was delivered or silently ignored: frame=%+v err=%v", frame, err)
+	}
+}
+
 func TestResponsesEncoderAcceptsConnectorStream(t *testing.T) {
 	wire := "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"usable\"}]}}]}}\n\n" + "data: {\"response\":{\"done\":true}}\n\n"
 	f := &fakeDoer{response: response(http.StatusOK, wire)}
@@ -234,7 +556,7 @@ func TestAdmissionRejectsBeforeDispatch(t *testing.T) {
 	f := &fakeDoer{}
 	c := ready(t)
 	svc := services(f)
-	for _, body := range []string{`{"model":"gemini-2.5-pro","input":"x","stream":true,"extra":1}`, `{"model":"gemini-2.5-pro","model":"gemini-2.5-pro","input":"x","stream":true}`, `{"model":"gemini-2.5-pro","input":"x","stream":false}`, `{"model":"gemini-2.5-pro","input":["x"],"stream":true}`, `{"model":"bad","input":"x","stream":true}`, `{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[]}`} {
+	for _, body := range []string{`{"model":"gemini-2.5-pro","input":"x","stream":true,"extra":1}`, `{"model":"gemini-2.5-pro","model":"gemini-2.5-pro","input":"x","stream":true}`, `{"model":"gemini-2.5-pro","input":"x","stream":false}`, `{"model":"gemini-2.5-pro","input":["x"],"stream":true}`, `{"model":"bad","input":"x","stream":true}`, `{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"computer","name":"x"}]}`, `{"model":"gemini-2.5-pro","input":"x","stream":true,"previous_response_id":"resp_1"}`} {
 		_, ge := c.Execute(context.Background(), request(body), core.AttemptScope{Mode: core.ModeTranslation}, svc)
 		if ge == nil {
 			t.Errorf("accepted %s", body)
@@ -358,7 +680,7 @@ func TestCancellationClosesActiveStream(t *testing.T) {
 func TestConcurrentCloseAndCancellationDuringNext(t *testing.T) {
 	for range 100 {
 		b := &cancelBody{started: make(chan struct{}), closed: make(chan struct{})}
-		s := newStream(b)
+		s := newStream(b, "resp_test", "msg_test")
 		ctx, cancel := context.WithCancel(context.Background())
 		start := make(chan struct{})
 		done := make(chan struct{})

@@ -158,7 +158,7 @@ func TestAdminAuthAntigravityEncryptedBrowserLifecycleAndExecuteReload(t *testin
 		t.Fatal("credential was not encrypted and reloadable")
 	}
 	connector := antigravity.NewConnector()
-	if err := connector.Init(ctx, core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project"}`)}); err != nil {
+	if err := connector.Init(ctx, core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://antigravity.synthetic.invalid"}`)}); err != nil {
 		t.Fatal(err)
 	}
 	execTransport, err := antigravity.NewOfflineTestTransport(antigravity.OfflineTestResponse{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}}\n\ndata: {\"response\":{\"done\":true}}\n\n")})

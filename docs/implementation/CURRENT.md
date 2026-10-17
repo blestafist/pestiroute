@@ -32,7 +32,7 @@ the earlier CURRENT claim that it awaited review was stale.
 
 | Milestone | Branch | First READY task | Scope / dependency |
 | --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-009 DONE (uncommitted) | 009 DONE verified explicit PASS but uncommitted due Git delegation assignment mismatch; 008 `c93e0f1` local unpushed. User objective NOT complete: inference real endpoint/project/tool/state and smoke gate remain |
+| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-010 DONE (awaiting commit) | Verified explicit PASS (ses_eb46e053affeJb3k8CxqiU8S5t); M10-001–010 complete. Production connector ready for browser auth; tool declarations supported, but full tool calling (rounds, thought signatures, causal history) remains BLOCKED pending carrier/state specification |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
@@ -51,7 +51,6 @@ features. All new branches start from the same accepted planning baseline.
 | [M5.1-049](tasks/M5.1-049.md) | BLOCKED: authorized explicit refresh passed Oct 17 (token rotation, revision 2→3, restart decryption); persistent-store natural refresh window 2026-10-27 11:24:32.933–11:25:32.933 UTC still needs current preflight, explicit authority and independent review; automatic trigger unverified |
 | [M5.1-051](tasks/M5.1-051.md) | DRAFT/unrun: own READY assignment, explicit authority and independent review for encrypted-reasoning continuation |
 | [M5.2-025](tasks/M5.2-025.md) | BLOCKED: provisioned compatible GPU/runtime/model and separate operator authority; DEC-013 at-most-3B ceiling remains, historical 8B candidate is not authorization |
-| [M10-009](tasks/M10-009.md) | BLOCKED (commit): verified explicit PASS by reviewer `ses_eb4acab20ffe8RV1lRZ4Ujfv5S` but commit blocked by Git delegation worker assignment mismatch (stale M10-005/006 context instead of current HEAD `c93e0f1`); local M10-008 `c93e0f1` unpushed |
 
 M8-008 is also BLOCKED as described above. None is a dependency of independent new lanes. Preserve the isolated operator credential store and prior finite request budgets as ceilings, not permission. Credentials and private payloads stay out of repository evidence.
 

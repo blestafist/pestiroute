@@ -18,13 +18,13 @@ Every wire shape below is a **candidate observation** from unofficial clients.
 Official support, accepted fields, exact schema dialect, signature validation,
 tool-call response ordering, and multi-turn behavior are **Unknown**. Live provider
 behavior is **BLOCKED** pending applicable terms/eligibility and separately
-authorized reproducible evidence. No production capability is promoted.
+authorized reproducible evidence. No remote/provider capability is promoted.
 
 ## Candidate translation
 
 | Responses input | Candidate Gemini-style representation | Binding / limit |
 | --- | --- | --- |
-| Function tool declaration (`name`, optional `description`, JSON input schema) | `tools: [{functionDeclarations: [{name, description, parametersJsonSchema}]}]` (Rahul); Noe accepts/normalizes several function declaration shapes and may use `parameters` | Translate only inside the Connector. Candidate mapping is one declaration per function; schema keyword/dialect support and invalid-schema behavior are Unknown. Do not silently omit a required client tool or schema property. |
+| Function tool declaration (`name`, optional `description`, JSON input schema) | `tools: [{functionDeclarations: [{name, description, parametersJsonSchema}]}]` (Rahul); Noe accepts/normalizes several function declaration shapes and may use `parameters` | Translate only inside the Connector. Candidate mapping is one declaration per function. Admit only the implemented JSON Schema subset (`type`, `description`, `title`, `properties`, `required`, `items`, `enum`, `minimum`/`maximum`, `minLength`/`maxLength`, `minItems`/`maxItems`, `additionalProperties`, and compilable `pattern`); apply validation recursively and reject unknown keywords or malformed constraints before dispatch. This subset is not a claim about provider dialect support. Do not silently omit a required client tool or schema property. |
 | Automatic/required/none/specific `tool_choice` | Omitted `toolConfig` for automatic; `functionCallingConfig.mode` `ANY` or `NONE`; specific function adds `allowedFunctionNames` (Rahul) | Candidate only. Exact accepted enum/field spelling and enforcement are Unknown. Reject unsupported choice before dispatch rather than silently weakening it. |
 | Assistant `function_call` (`name`, arguments, call ID) | Model-role `content.parts[]` with `functionCall: {name, args, id?}` | Preserve call chronology and association. Argument JSON and ID constraints are not established by official evidence. No invented IDs or signature sentinel. |
 | `function_call_output` (call ID, output) | User-role `content.parts[]` with `functionResponse: {name, id?, response: {output: …}}` | Pair to the originating call by `call_id`; preserve causal order. Output serialization is candidate-only: do not coerce arbitrary structured output to text without a documented, lossless policy. |
@@ -109,13 +109,13 @@ Required offline cases for a future separately scoped implementation:
 These tests establish only deterministic translation and lifecycle behavior.
 They cannot establish official wire conformance, signature acceptance, live
 multi-turn success, capability support, or safe retries. Those remain **Unknown**
-and **BLOCKED**, respectively. Existing M10-004 explicitly rejects tools and
-history; this document does not widen that runtime scope or authorize a tools
-implementation. See the [offline text/stream binding](M10-BINDING.md).
+and **BLOCKED**, respectively. M10-010 admits declarations and tool-choice only;
+function-call response parsing, execution/history and signature-dependent
+continuation remain unsupported. See the [text/stream binding](M10-BINDING.md).
 
 ## References
 
 - [M10 research and source audit](M10-RESEARCH.md#opencode-plugin-audit-reusable-observations-not-verified-contract)
-- [M10 offline text/stream binding](M10-BINDING.md)
+- [M10 text/stream binding](M10-BINDING.md)
 - [M10 brief](M10-ANTIGRAVITY.md#state-and-identity-constraints)
 - [Contract: execution request](CONTRACT.md#execution-request), [Connector](CONTRACT.md#connector-contract)

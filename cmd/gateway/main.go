@@ -24,6 +24,7 @@ import (
 	chatadapter "github.com/blestafist/pestiroute/internal/adapter/chatcompletions"
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	anthropic "github.com/blestafist/pestiroute/internal/connector/anthropic"
+	"github.com/blestafist/pestiroute/internal/connector/antigravity"
 	chatconnector "github.com/blestafist/pestiroute/internal/connector/chatcompletions"
 	"github.com/blestafist/pestiroute/internal/connector/claudecode"
 	"github.com/blestafist/pestiroute/internal/connector/codex"
@@ -84,6 +85,7 @@ type topologyComponent struct {
 	RuntimeProfile string                  `json:"-"`
 	Capabilities   map[string]string       `json:"-"`
 	Process        *external.ProcessConfig `json:"-"`
+	Project        string                  `json:"-"`
 }
 
 type topologyRoute struct {
@@ -110,6 +112,7 @@ const responsesProtocol = "openai.responses.v1"
 const chatProtocol = "openai.chat-completions.v1"
 const responsesImplementation = "pestiroute.responses.native"
 const chatImplementation = "pestiroute.chat-completions.native"
+const antigravityImplementation = "pestiroute.antigravity.v1internal"
 
 // externalProcessCleanupTimeout matches the binding's 30s close/drain plus 5s
 // terminate/reap bound, with an orchestration margin shared by supervisors.
@@ -579,6 +582,9 @@ func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.A
 		if item.Implementation == "pestiroute.responses.local" {
 			return connector.NewLocalConnector(item.AuthMode)
 		}
+		if item.Implementation == antigravityImplementation {
+			return antigravity.NewConnector()
+		}
 		return connector.NewConnector()
 	})
 }
@@ -596,6 +602,12 @@ type codexInit struct {
 
 type claudecodeInit struct {
 	Profile string `json:"profile"`
+}
+
+type antigravityInit struct {
+	Profile  string `json:"profile"`
+	Project  string `json:"project"`
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component) (http.Handler, func(context.Context) error, error) {
@@ -760,6 +772,8 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 				profile = "claude-code-messages-v1"
 			}
 			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(claudecodeInit{Profile: profile})}
+		} else if item.Implementation == antigravityImplementation {
+			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(antigravityInit{Profile: "antigravity-v1internal", Project: item.Project, Endpoint: item.Endpoint})}
 		} else {
 			connect, _ := time.ParseDuration(item.ConnectTimeout)
 			tlsHandshake, _ := time.ParseDuration(item.TLSTimeout)
@@ -799,7 +813,11 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		}
 		limits := connectorLimits[item.Connector]
 		routes = append(routes, core.Route{Identity: core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: item.Protocol, Mode: item.Mode, Model: item.Model}, AccountID: item.Account}, Adapter: item.Adapter, Connector: item.Connector, CandidateGroup: item.CandidateGroup, MaxBodyBytes: limits.MaxBodyBytes, MaxHeaderBytes: limits.MaxHeaderBytes, Requirements: item.Requirements})
-		credentials[item.Account] = map[string]string{"bearer": credentialEnv(c, item.Connector)}
+		credentialName := "bearer"
+		if connectorUsesOAuth(c, item.Connector) {
+			credentialName = "oauth"
+		}
+		credentials[item.Account] = map[string]string{credentialName: credentialEnv(c, item.Connector)}
 	}
 	table, err := core.NewRouteTable(routes, registry)
 	if err != nil {
@@ -1057,7 +1075,7 @@ func configuredCredentialRefs(c config) (map[string]map[string]string, error) {
 				continue
 			}
 			name := "bearer"
-			if component.Implementation == "pestiroute.codex.responses" || component.Implementation == "pestiroute.claudecode.messages" {
+			if component.Implementation == "pestiroute.codex.responses" || component.Implementation == "pestiroute.claudecode.messages" || component.Implementation == antigravityImplementation {
 				name = "oauth"
 			}
 			refsByConnector[component.ID] = credentialRef{name: name, id: component.CredentialEnv}
@@ -1208,6 +1226,15 @@ func credentialEnv(c config, id core.InstanceID) string {
 		}
 	}
 	return ""
+}
+
+func connectorUsesOAuth(c config, id core.InstanceID) bool {
+	for _, item := range c.Components {
+		if item.ID == id {
+			return item.Implementation == "pestiroute.codex.responses" || item.Implementation == "pestiroute.claudecode.messages" || item.Implementation == antigravityImplementation
+		}
+	}
+	return false
 }
 
 func run(ctx context.Context, args []string) error {
