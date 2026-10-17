@@ -159,11 +159,11 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M13 — Deployment and Recovery
 
-[M13 brief](M13-OPERATIONS.md). Branch `dev-m13-operations`; exact filter `/next 10 M13`. M13-001, M13-002, and M13-003 are DONE; downstream tasks remain DRAFT.
+[M13 brief](M13-OPERATIONS.md). Branch `dev-m13-operations`; exact filter `/next 10 M13`. All M13 tasks (M13-001 through M13-004) are DONE.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
 | [M13-001](tasks/M13-001.md) | DONE | GPT-6 Luna (M13-001 worker) / ses_eb52fd9c4ffe1EiU8LO7uiQktm (reviewer) / Planner closure | — | Bind single-node deployment and recovery acceptance | Audited and bound Linux/amd64 prerequisites, unprivileged execution, lock sidecar, WAL backup safety, and shutdown recovery in M13-BINDING.md; reviewer PASS ses_eb52fd9c4ffe1EiU8LO7uiQktm | [Verification](tasks/M13-001.md#verification) |
 | [M13-002](tasks/M13-002.md) | DONE | GPT-6 Luna (M13-002 worker) / ses_eb51a5672ffe3MEvN6OrFdVaDV (reviewer) / Planner closure | M13-001 | Package reproducible single-node startup | Packaged reproducible static Linux/amd64 build, unprivileged Dockerfile, systemd service unit, deployment guide, and packaging smoke verification with live WAL/SHM600 and Docker CLI smoke; reviewer PASS ses_eb51a5672ffe3MEvN6OrFdVaDV | [Verification](tasks/M13-002.md#verification) |
 | [M13-003](tasks/M13-003.md) | DONE | GPT-6 Luna (M13-003 worker) / ses_eb4cfa82fffenIQ2VutUNjSF4p (reviewer) / Planner closure | M13-001, M13-002 | Prove consistent backup restore and upgrade recovery | Verified online SQLite backup, distinct-path restore, checked integrity/FK validation, preserved account/key/credential/usage state, fail-closed key handling, stopped v5→v6 migration, and untouched-backup rollback recovery; reviewer PASS ses_eb4cfa82fffenIQ2VutUNjSF4p | [Verification](tasks/M13-003.md#verification) |
-| [M13-004](tasks/M13-004.md) | DRAFT | — | M13-002, M13-003 | Run packaged offline release acceptance and publish operations handoff | — | [Verification](tasks/M13-004.md#verification) |
+| [M13-004](tasks/M13-004.md) | DONE | GPT-6 Luna (M13-004 worker) / ses_eb4a14701ffejxyXJdynVUxFi5 (reviewer) / Planner closure | M13-002, M13-003 | Run packaged offline release acceptance and publish operations handoff | Byte-exact payloads and stable usage history verified across restart/restore; local M6 gates and full checks pass; hosted baseline 39047526958 verified read-only; reviewer PASS ses_eb4a14701ffejxyXJdynVUxFi5 | [Verification](tasks/M13-004.md#verification) |

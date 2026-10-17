@@ -13,6 +13,7 @@ with provisioned values.
 ```sh
 ./scripts/release-build.sh
 TMPDIR=/path/to/private-temp ./scripts/verify-packaging.sh
+TMPDIR=/path/to/private-temp ./scripts/verify-release.sh
 ```
 
 Run the verification script as an unprivileged account. It provisions a private
@@ -20,6 +21,13 @@ temporary SQLite database and master key, starts a deterministic fake upstream,
 checks readiness and a protected request, rejects a second process on the same
 database lock, then proves clean SIGTERM exit and lock reacquisition. It requires
 `curl` and `python3`; it does not contact a real provider.
+
+`verify-release.sh` runs the bounded offline release matrix: protected opaque
+JSON and incremental SSE, client-disconnect cancellation, unknown/revoked key
+denial, durable usage across SIGTERM/restart, and online SQLite backup plus
+distinct-path restore. It also requires `sqlite3`; see
+[`M13-HANDOFF`](../docs/implementation/M13-HANDOFF.md) for tested bounds and
+limitations.
 
 ## Filesystem and secret provisioning
 
