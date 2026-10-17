@@ -218,7 +218,7 @@ func validateConnectorSettingsFields(root *yaml.Node) error {
 				allowed[key] = true
 			}
 		case "pestiroute.chat-completions.native":
-			for _, key := range []string{"base_url", "upstream_protocol", "mode", "credential_env", "max_request_body_bytes", "max_request_header_bytes", "connect_timeout", "tls_handshake_timeout", "response_header_timeout", "stream_idle_timeout"} {
+			for _, key := range []string{"base_url", "upstream_protocol", "mode", "credential_env", "max_request_body_bytes", "max_request_header_bytes", "connect_timeout", "tls_handshake_timeout", "response_header_timeout", "stream_idle_timeout", "capabilities"} {
 				allowed[key] = true
 			}
 		case "pestiroute.anthropic.messages":
@@ -354,8 +354,13 @@ func validateProtectedConfig(c protectedConfig) error {
 			if item.Process != nil {
 				return fmt.Errorf("%s.process is not supported by the in-process Chat connector", prefix)
 			}
-			if item.Settings.Model != "" || item.Settings.AccountID != "" || item.Settings.CredentialID != "" || item.Settings.Profile != "" || item.Settings.RuntimeProfile != "" || item.Settings.AuthMode != "" || len(item.Settings.Capabilities) != 0 {
+			if item.Settings.Model != "" || item.Settings.AccountID != "" || item.Settings.CredentialID != "" || item.Settings.Profile != "" || item.Settings.RuntimeProfile != "" || item.Settings.AuthMode != "" {
 				return fmt.Errorf("%s.settings has fields not supported by native Chat connector", prefix)
+			}
+			for name, state := range item.Settings.Capabilities {
+				if strings.TrimSpace(name) == "" || (state != "supported" && state != "unsupported" && state != "unknown") {
+					return fmt.Errorf("%s.settings.capabilities contains invalid declaration", prefix)
+				}
 			}
 			if err := validateChatSettings(prefix+".settings", item.Settings); err != nil {
 				return err

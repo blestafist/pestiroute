@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/blestafist/pestiroute/internal/connector/external"
 	"github.com/blestafist/pestiroute/internal/core"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
+	"gopkg.in/yaml.v3"
 )
 
 const chatRequest = ` {"model":"model-a","messages":[{"role":"user","content":"ping"}],"future":{"keep": [1,  2]}} `
@@ -82,6 +84,26 @@ policies: {standard: policy-id-a}
 			}
 		})
 	}
+	for name, declarations := range map[string]string{
+		"valid explicit capabilities": "      capabilities: {llm.streaming: supported, llm.tools: unknown}\n",
+		"empty capability name":       "      capabilities: {\"\": supported}\n",
+		"invalid capability state":    "      capabilities: {llm.streaming: maybe}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			data := strings.Replace(valid, "      mode: native\n", "      mode: native\n"+declarations, 1)
+			if err := write(data); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := loadProtectedYAML(path)
+			if name == "valid explicit capabilities" {
+				if err != nil || loaded.Connectors[0].Settings.Capabilities["llm.streaming"] != "supported" || loaded.Connectors[0].Settings.Capabilities["llm.tools"] != "unknown" {
+					t.Fatalf("explicit capabilities not loaded: settings=%+v err=%v", loaded.Connectors[0].Settings, err)
+				}
+			} else if err == nil {
+				t.Fatal("invalid capability declaration accepted")
+			}
+		})
+	}
 	if err := write(strings.Replace(valid, "https://api.example", "http://127.0.0.1:9000", 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +165,95 @@ func newChatProtectedFixture(t *testing.T, backend http.Handler, limits ...int64
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	issued, err := sqlite.NewVirtualKeys(prepared.runtimeDB).Create(context.Background(), sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready, draining atomic.Bool
+	h, closeComponents, err := composeHandler(prepared, &ready, &draining, nil)
+	if err != nil {
+		_ = prepared.runtimeDB.Close()
+		_ = prepared.processLock.Close()
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(h)
+	t.Cleanup(func() {
+		server.Close()
+		_ = closeComponents(context.Background())
+		_ = prepared.runtimeDB.Close()
+		_ = prepared.processLock.Close()
+	})
+	return &chatProtectedFixture{prepared: prepared, server: server, key: issued.Secret, keyID: issued.ID, backend: upstream}
+}
+
+func newChatProtectedFixtureWithYAMLCapabilities(t *testing.T, backend http.Handler, capabilities map[string]string) *chatProtectedFixture {
+	t.Helper()
+	t.Setenv("PROTECTED_TEST_CREDENTIAL", "synthetic")
+	_, dbPath, keyPath := protectedFixture(t)
+	upstream := httptest.NewServer(backend)
+	t.Cleanup(upstream.Close)
+	c := fixtureProtectedConfig(dbPath, keyPath, "127.0.0.1:0")
+	capabilityYAML := ""
+	if len(capabilities) != 0 {
+		encoded, err := yaml.Marshal(capabilities)
+		if err != nil {
+			t.Fatal(err)
+		}
+		capabilityYAML = "      capabilities:\n"
+		for line := range strings.SplitSeq(string(encoded), "\n") {
+			if line != "" {
+				capabilityYAML += "        " + line + "\n"
+			}
+		}
+	}
+	data := fmt.Appendf(nil, `version: 1
+server: {listen: "127.0.0.1:0", max_request_bytes: 1048576, shutdown_timeout: 5s}
+storage: {driver: sqlite, path: %q}
+secrets: {master_key_file: %q}
+connectors:
+  - id: upstream
+    kind: connector
+    implementation: %s
+    protocols: [%s]
+    settings:
+      base_url: %s/v1/chat/completions
+      upstream_protocol: %s
+      mode: native
+      credential_env: PROTECTED_TEST_CREDENTIAL
+      max_request_body_bytes: 1048576
+      max_request_header_bytes: 8192
+      connect_timeout: 1s
+      tls_handshake_timeout: 1s
+      response_header_timeout: 1s
+      stream_idle_timeout: 1s
+%sroutes:
+  - id: chat-route
+    protocol: %s
+    mode: native
+    model: model-a
+    adapter: %s
+    policy: standard
+    budget: {unknown_estimate: reserve, conservative_tokens: 10}
+    targets: [{connector: upstream, account: account-a}]
+policies: {standard: policy-id-a}
+`, dbPath, keyPath, chatImplementation, chatProtocol, upstream.URL, chatProtocol, capabilityYAML, chatProtocol, chatImplementation)
+	path := filepath.Join(t.TempDir(), "gateway.yaml")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadProtectedYAML(path)
+	if err != nil {
+		t.Fatalf("load protected Chat YAML: %v", err)
+	}
+	c.protected = &loaded
+	prepared, err := prepareProtectedConfig(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := sqlite.NewKeyPolicies(prepared.runtimeDB).GetLatest(context.Background(), "policy-id-a")
+	if err != nil {
+		t.Fatal(err)
 	}
 	issued, err := sqlite.NewVirtualKeys(prepared.runtimeDB).Create(context.Background(), sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
 	if err != nil {
@@ -271,6 +382,84 @@ func TestChatProtectedGateway_SSE(t *testing.T) {
 	usage := requests[0].Attempts[0].Usage
 	if usage == nil || usage.InputTokens == nil || *usage.InputTokens != 3 || usage.OutputTokens == nil || *usage.OutputTokens != 2 || requests[0].Attempts[0].Reservation.State != "settled" {
 		t.Fatalf("usage-only SSE chunk not settled: %+v", requests[0].Attempts[0])
+	}
+}
+
+func TestChatProtectedGateway_YAMLCapabilities(t *testing.T) {
+	var calls atomic.Int32
+	f := newChatProtectedFixtureWithYAMLCapabilities(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		if bytes.Contains(body, []byte(`"stream":true`)) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"choices\":[]}\n\ndata: [DONE]\n\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatResponse)
+	}), map[string]string{
+		"llm.streaming": "supported", "llm.tools": "supported",
+		"llm.tools.parallel": "supported", "llm.structured_output": "supported",
+	})
+	if got := f.prepared.Components[0].Capabilities; got["llm.streaming"] != "supported" || got["llm.tools"] != "supported" || got["llm.tools.parallel"] != "supported" || got["llm.structured_output"] != "supported" {
+		t.Fatalf("protected startup did not propagate YAML capabilities: %#v", got)
+	}
+	for name, body := range map[string]string{
+		"streaming":         `{"model":"model-a","stream":true,"messages":[{"role":"user","content":"ping"}]}`,
+		"tools":             `{"model":"model-a","tools":[{"type":"function","function":{"name":"lookup"}}],"messages":[{"role":"user","content":"ping"}]}`,
+		"parallel tools":    `{"model":"model-a","parallel_tool_calls":true,"tools":[{"type":"function","function":{"name":"lookup"}}],"messages":[{"role":"user","content":"ping"}]}`,
+		"structured output": `{"model":"model-a","response_format":{"type":"json_object"},"messages":[{"role":"user","content":"ping"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp := chatRequestTo(t, f, "/v1/chat/completions", f.key, body)
+			_, err := io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if err != nil || resp.StatusCode != http.StatusOK {
+				t.Fatalf("configured %s request status=%d err=%v", name, resp.StatusCode, err)
+			}
+		})
+	}
+	if calls.Load() != 4 {
+		t.Fatalf("upstream calls=%d, want 4", calls.Load())
+	}
+}
+
+func TestChatProtectedGateway_YAMLCapabilitiesFailClosed(t *testing.T) {
+	requests := map[string]string{
+		"llm.streaming":         `{"model":"model-a","stream":true,"messages":[{"role":"user","content":"ping"}]}`,
+		"llm.tools":             `{"model":"model-a","tools":[{"type":"function","function":{"name":"lookup"}}],"messages":[{"role":"user","content":"ping"}]}`,
+		"llm.tools.parallel":    `{"model":"model-a","parallel_tool_calls":true,"messages":[{"role":"user","content":"ping"}]}`,
+		"llm.structured_output": `{"model":"model-a","response_format":{"type":"json_object"},"messages":[{"role":"user","content":"ping"}]}`,
+	}
+	for state, declaration := range map[string]string{
+		"undeclared":  "",
+		"unsupported": "unsupported",
+	} {
+		t.Run(state, func(t *testing.T) {
+			var calls atomic.Int32
+			capabilities := map[string]string{}
+			if state == "unsupported" {
+				for capability := range requests {
+					capabilities[capability] = declaration
+				}
+			}
+			f := newChatProtectedFixtureWithYAMLCapabilities(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			}), capabilities)
+			for capability, requestBody := range requests {
+				resp := chatRequestTo(t, f, "/v1/chat/completions", f.key, requestBody)
+				body, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if err != nil || resp.StatusCode != http.StatusBadRequest || !bytes.Contains(body, []byte(`"code":"unsupported_capability"`)) || calls.Load() != 0 {
+					t.Fatalf("%s %s capability was not denied before dispatch: status=%d body=%s calls=%d err=%v", state, capability, resp.StatusCode, body, calls.Load(), err)
+				}
+			}
+		})
 	}
 }
 
