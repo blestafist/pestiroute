@@ -9,15 +9,18 @@ It does not change inference, Core, connector, or current CLI behavior.
 
 The admin listener is separately configured and opt-in; it is never mounted on
 the inference listener. Its default bind is numeric loopback (`127.0.0.1` or
-`[::1]`); a non-loopback bind requires an explicit operator setting and TLS or
-a documented trusted TLS-terminating reverse proxy. No default credential is
-created. One operator bearer token is provisioned out-of-band via a permission-
+`[::1]`); a non-loopback bind requires TLS. A trusted TLS-terminating reverse
+proxy can be supported only when explicitly configured; the initial listener
+does not define such a proxy mode. No default credential is created. One
+operator bearer token is provisioned out-of-band via a permission-
 restricted token file or environment reference. It is independent of virtual
 inference keys. All `/admin/v1` API requests require
 `Authorization: Bearer <token>` over TLS (loopback may use HTTP); token
 comparison is constant-time. Tokens are never returned, logged, placed in URLs,
 cookies, or persisted by the browser. Rotate by replacing the configured token
 and restarting the listener.
+The configured token and bearer credential use RFC 6750 `b64token` syntax:
+ASCII letters/digits and `-._~+/`, followed only by optional `=` padding.
 
 Validate `Host` against the listener's configured host/address (and explicitly
 configured reverse-proxy hostnames); reject unknown hosts to prevent DNS

@@ -23,6 +23,7 @@ import (
 
 	chatadapter "github.com/blestafist/pestiroute/internal/adapter/chatcompletions"
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
+	adminhttp "github.com/blestafist/pestiroute/internal/admin"
 	anthropic "github.com/blestafist/pestiroute/internal/connector/anthropic"
 	chatconnector "github.com/blestafist/pestiroute/internal/connector/chatcompletions"
 	"github.com/blestafist/pestiroute/internal/connector/claudecode"
@@ -35,18 +36,19 @@ import (
 )
 
 type config struct {
-	Listen                string `json:"listen"`
-	ShutdownTimeout       string `json:"shutdown_timeout"`
-	UpstreamEndpoint      string `json:"upstream_endpoint"`
-	UpstreamCredentialEnv string `json:"upstream_credential_env"`
-	MaxRequestBodyBytes   int64  `json:"max_request_body_bytes"`
-	MaxRequestHeaderBytes int64  `json:"max_request_header_bytes"`
-	ConnectTimeout        string `json:"connect_timeout"`
-	TLSHandshakeTimeout   string `json:"tls_handshake_timeout"`
-	ResponseHeaderTimeout string `json:"response_header_timeout"`
-	StreamIdleTimeout     string `json:"stream_idle_timeout"`
-	DatabasePath          string `json:"database_path,omitempty"`
-	MasterKeyFile         string `json:"master_key_file,omitempty"`
+	Listen                string          `json:"listen"`
+	ShutdownTimeout       string          `json:"shutdown_timeout"`
+	Admin                 *protectedAdmin `json:"admin,omitempty"`
+	UpstreamEndpoint      string          `json:"upstream_endpoint"`
+	UpstreamCredentialEnv string          `json:"upstream_credential_env"`
+	MaxRequestBodyBytes   int64           `json:"max_request_body_bytes"`
+	MaxRequestHeaderBytes int64           `json:"max_request_header_bytes"`
+	ConnectTimeout        string          `json:"connect_timeout"`
+	TLSHandshakeTimeout   string          `json:"tls_handshake_timeout"`
+	ResponseHeaderTimeout string          `json:"response_header_timeout"`
+	StreamIdleTimeout     string          `json:"stream_idle_timeout"`
+	DatabasePath          string          `json:"database_path,omitempty"`
+	MasterKeyFile         string          `json:"master_key_file,omitempty"`
 	credential            secret
 	Components            []topologyComponent `json:"components,omitempty"`
 	Routes                []topologyRoute     `json:"routes,omitempty"`
@@ -179,6 +181,7 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		c.DatabasePath = loaded.Storage.Path
 		c.MasterKeyFile = loaded.Secrets.MasterKeyFile
 		c.protected = &loaded
+		c.Admin = loaded.Admin
 		return c, d, nil
 	}
 	var supplied map[string]json.RawMessage
@@ -319,7 +322,7 @@ func validateJSONFieldSpellings(data []byte) error {
 		"upstream_credential_env": true, "max_request_body_bytes": true,
 		"max_request_header_bytes": true, "connect_timeout": true,
 		"tls_handshake_timeout": true, "response_header_timeout": true,
-		"stream_idle_timeout": true, "components": true, "routes": true,
+		"stream_idle_timeout": true, "components": true, "routes": true, "admin": true,
 		"database_path": true, "master_key_file": true,
 	}); err != nil {
 		return err
@@ -355,6 +358,14 @@ func validateJSONFieldSpellings(data []byte) error {
 			}
 			if err := checkJSONKeys(entry, group.keys); err != nil {
 				return fmt.Errorf("%s[%d]: %w", group.field, i, err)
+			}
+		}
+	}
+	if raw, ok := object["admin"]; ok {
+		var adminFields map[string]json.RawMessage
+		if json.Unmarshal(raw, &adminFields) == nil && adminFields != nil {
+			if err := checkJSONKeys(adminFields, map[string]bool{"listen": true, "token_file": true, "token_env": true, "allowed_hosts": true, "allowed_origins": true, "max_request_bytes": true, "read_timeout": true, "write_timeout": true, "idle_timeout": true, "tls_cert_file": true, "tls_key_file": true}); err != nil {
+				return fmt.Errorf("admin: %w", err)
 			}
 		}
 	}
@@ -1194,6 +1205,27 @@ func firstAdapterForProtocol(adapters map[string]core.ProtocolAdapter, protocol 
 
 func routeDispatchKey(protocol, model string) string { return protocol + "\x00" + model }
 
+func adminRuntimeConfig(c protectedAdmin) (adminhttp.Config, error) {
+	read, err := time.ParseDuration(c.ReadTimeout)
+	if err != nil || read <= 0 {
+		return adminhttp.Config{}, errors.New("admin.read_timeout must be positive")
+	}
+	write, err := time.ParseDuration(c.WriteTimeout)
+	if err != nil || write <= 0 {
+		return adminhttp.Config{}, errors.New("admin.write_timeout must be positive")
+	}
+	idle, err := time.ParseDuration(c.IdleTimeout)
+	if err != nil || idle <= 0 {
+		return adminhttp.Config{}, errors.New("admin.idle_timeout must be positive")
+	}
+	maxBody := c.MaxRequestBytes
+	if maxBody == 0 {
+		maxBody = 64 << 10
+	}
+	return adminhttp.Config{Address: c.Listen, TokenFile: c.TokenFile, TokenEnv: c.TokenEnv, AllowedHosts: c.AllowedHosts, AllowedOrigins: c.AllowedOrigins,
+		MaxBodyBytes: maxBody, ReadTimeout: read, WriteTimeout: write, IdleTimeout: idle, TLSCertFile: c.TLSCertFile, TLSKeyFile: c.TLSKeyFile}, nil
+}
+
 type adapterConfig struct {
 	MaxBodyBytes   int64 `json:"max_body_bytes"`
 	MaxHeaderBytes int64 `json:"max_header_bytes"`
@@ -1222,6 +1254,18 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 	if err != nil {
 		return err
 	}
+	var adminHandler http.Handler
+	var adminConfig adminhttp.Config
+	if c.Admin != nil {
+		adminConfig, err = adminRuntimeConfig(*c.Admin)
+		if err != nil {
+			return fmt.Errorf("configure admin listener: %w", err)
+		}
+		adminHandler, err = adminhttp.New(adminConfig)
+		if err != nil {
+			return fmt.Errorf("configure admin listener: %w", err)
+		}
+	}
 	if c.protected != nil {
 		prepared, err := prepareProtectedConfig(ctx, c)
 		if err != nil {
@@ -1229,10 +1273,29 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 		}
 		c = prepared
 	}
+	cleanupPrepared := func() {
+		if c.runtimeDB != nil {
+			_ = c.runtimeDB.Close()
+		}
+		if c.processLock != nil {
+			_ = c.processLock.Close()
+		}
+	}
+	var adminListener net.Listener
+	if c.Admin != nil {
+		adminListener, err = net.Listen("tcp", adminConfig.Address)
+		if err != nil {
+			cleanupPrepared()
+			return fmt.Errorf("listen admin %q: %w", adminConfig.Address, err)
+		}
+	}
 	var ready atomic.Bool
 	var draining atomic.Bool
 	h, closeTransport, err := composeHandler(c, &ready, &draining, finalize)
 	if err != nil {
+		if adminListener != nil {
+			_ = adminListener.Close()
+		}
 		if c.runtimeDB != nil {
 			_ = c.runtimeDB.Close()
 		}
@@ -1243,45 +1306,102 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 	}
 	listener, err := net.Listen("tcp", c.Listen)
 	if err != nil {
+		if adminListener != nil {
+			_ = adminListener.Close()
+		}
 		_ = closeTransport(context.Background())
 		return fmt.Errorf("listen %q: %w", c.Listen, err)
 	}
-	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
-	done := make(chan error, 1)
+	servers := []*http.Server{{Handler: h, ReadHeaderTimeout: 5 * time.Second}}
+	listeners := []net.Listener{listener}
+	if adminListener != nil {
+		servers = append(servers, &http.Server{Handler: adminHandler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: adminConfig.ReadTimeout, WriteTimeout: adminConfig.WriteTimeout, IdleTimeout: adminConfig.IdleTimeout})
+		listeners = append(listeners, adminListener)
+	}
+	done := make(chan error, len(servers))
 	go func() {
 		ready.Store(true)
-		done <- server.Serve(listener)
+		done <- servers[0].Serve(listeners[0])
 	}()
+	if len(servers) > 1 {
+		go func() {
+			if adminConfig.TLSCertFile != "" {
+				done <- serveAdminTLS(servers[1], listeners[1], adminConfig.TLSCertFile, adminConfig.TLSKeyFile)
+			} else {
+				done <- servers[1].Serve(listeners[1])
+			}
+		}()
+	}
 	fmt.Fprintf(os.Stderr, "gateway: listening on %s\n", listener.Addr())
+	if adminListener != nil {
+		fmt.Fprintf(os.Stderr, "gateway: admin listening on %s\n", adminListener.Addr())
+	}
 	select {
 	case err := <-done:
 		draining.Store(true)
 		ready.Store(false)
 		closeCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		if err != nil {
-			server.Close()
+		var shutdownErr error
+		if len(servers) == 1 && err != nil {
+			// Preserve the inference-only fast close path: do not wait for graceful
+			// drain after Serve has already failed.
+			_ = servers[0].Close()
+		} else {
+			shutdownErr = shutdownHTTPServers(servers, timeout)
+			if err != nil {
+				for _, server := range servers {
+					_ = server.Close()
+				}
+			}
+		}
+		for range servers[1:] {
+			<-done
 		}
 		if closeErr := closeTransport(closeCtx); closeErr != nil {
-			return errors.Join(wrapIf("serve", err), wrapIf("close components", closeErr))
+			return errors.Join(wrapIf("serve", err), wrapIf("shutdown", shutdownErr), wrapIf("close components", closeErr))
 		}
-		return wrapIf("serve", err)
+		return errors.Join(wrapIf("serve", err), wrapIf("shutdown", shutdownErr))
 	case <-ctx.Done():
 		draining.Store(true)
 		ready.Store(false)
 		// shutdown_timeout bounds drain and is reused as a separate Close grace.
-		drainCtx, cancelDrain := context.WithTimeout(context.Background(), timeout)
-		shutdownErr := server.Shutdown(drainCtx)
-		cancelDrain()
-		if shutdownErr != nil {
-			server.Close()
+		shutdownErr := shutdownHTTPServers(servers, timeout)
+		for range servers {
+			<-done
 		}
-		<-done
 		closeCtx, cancelClose := context.WithTimeout(context.Background(), timeout)
 		defer cancelClose()
 		closeErr := closeTransport(closeCtx)
 		return errors.Join(wrapIf("shutdown", shutdownErr), wrapIf("close components", closeErr))
 	}
+}
+
+func serveAdminTLS(server *http.Server, listener net.Listener, certFile, keyFile string) error {
+	err := server.ServeTLS(listener, certFile, keyFile)
+	if err != nil {
+		_ = listener.Close()
+	}
+	return err
+}
+
+func shutdownHTTPServers(servers []*http.Server, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	results := make(chan error, len(servers))
+	for _, server := range servers {
+		go func(server *http.Server) { results <- server.Shutdown(ctx) }(server)
+	}
+	var shutdownErr error
+	for range servers {
+		shutdownErr = errors.Join(shutdownErr, <-results)
+	}
+	if shutdownErr != nil {
+		for _, server := range servers {
+			_ = server.Close()
+		}
+	}
+	return shutdownErr
 }
 
 func wrapIf(prefix string, err error) error {

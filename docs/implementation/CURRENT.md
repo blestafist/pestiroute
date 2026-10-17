@@ -33,7 +33,7 @@ the earlier CURRENT claim that it awaited review was stale.
 | Milestone | Branch | First READY task | Scope / dependency |
 | --- | --- | --- | --- |
 | [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-001 | Current Antigravity research → bounded Connector slice; no Claude dependency |
-| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 (DONE) | Management HTTP binding frozen (M11-001); listener implementation (M11-002) is next DRAFT |
+| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-003 (DRAFT) | M11-002 DONE; admin listener verified under pinned Go 1.27.1 and short TMPDIR; M11-003–007 remain DRAFT |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
 
@@ -56,6 +56,6 @@ M8-008 is also BLOCKED as described above. None is a dependency of independent n
 
 ## Checks and operations
 
-Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. This cloud host lacks `/proc/<pid>/task/<tid>/children`, so existing process-inspection tests and M6 CLI smoke cannot fully pass locally; use hosted Linux CI for that gate. Parallel worktrees need distinct TMPDIR values as well as package serialization.
+Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. The pinned toolchain is installed locally (`PATH=/home/pestix/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/bin:$PATH`). Parallel worktrees and child process probes require short unique lane TMPDIR values (such as `/tmp/m11-XXXXXX`) to fit the Linux 108-byte AF_UNIX socket path bound as well as package serialization; M6 smoke and full repository check gate pass locally under these settings.
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.

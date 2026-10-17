@@ -27,6 +27,21 @@ type protectedConfig struct {
 	Connectors []protectedConnector `yaml:"connectors"`
 	Routes     []protectedRoute     `yaml:"routes"`
 	Policies   map[string]string    `yaml:"policies"`
+	Admin      *protectedAdmin      `yaml:"admin,omitempty"`
+}
+
+type protectedAdmin struct {
+	Listen          string   `yaml:"listen" json:"listen"`
+	TokenFile       string   `yaml:"token_file" json:"token_file"`
+	TokenEnv        string   `yaml:"token_env" json:"token_env"`
+	AllowedHosts    []string `yaml:"allowed_hosts" json:"allowed_hosts,omitempty"`
+	AllowedOrigins  []string `yaml:"allowed_origins" json:"allowed_origins,omitempty"`
+	MaxRequestBytes int64    `yaml:"max_request_bytes" json:"max_request_bytes"`
+	ReadTimeout     string   `yaml:"read_timeout" json:"read_timeout"`
+	WriteTimeout    string   `yaml:"write_timeout" json:"write_timeout"`
+	IdleTimeout     string   `yaml:"idle_timeout" json:"idle_timeout"`
+	TLSCertFile     string   `yaml:"tls_cert_file" json:"tls_cert_file,omitempty"`
+	TLSKeyFile      string   `yaml:"tls_key_file" json:"tls_key_file,omitempty"`
 }
 
 type protectedServer struct {
@@ -293,6 +308,10 @@ func validateYAMLTypes(node *yaml.Node, typ reflect.Type) error {
 		if node.Kind != yaml.ScalarNode || node.Tag != "!!int" {
 			return fmt.Errorf("expected integer, got %s", node.Tag)
 		}
+	case reflect.Bool:
+		if node.Kind != yaml.ScalarNode || node.Tag != "!!bool" {
+			return fmt.Errorf("expected boolean, got %s", node.Tag)
+		}
 	default:
 		return fmt.Errorf("unsupported configuration type %s", typ)
 	}
@@ -314,6 +333,19 @@ func validateProtectedConfig(c protectedConfig) error {
 	}
 	if err := positiveDuration("server.shutdown_timeout", c.Server.ShutdownTimeout); err != nil {
 		return err
+	}
+	if c.Admin != nil {
+		if strings.TrimSpace(c.Admin.Listen) == "" {
+			return errors.New("admin.listen must be configured when admin is enabled")
+		}
+		for _, item := range []struct{ name, value string }{{"admin.read_timeout", c.Admin.ReadTimeout}, {"admin.write_timeout", c.Admin.WriteTimeout}, {"admin.idle_timeout", c.Admin.IdleTimeout}} {
+			if err := positiveDuration(item.name, item.value); err != nil {
+				return err
+			}
+		}
+		if c.Admin.MaxRequestBytes < 0 {
+			return errors.New("admin.max_request_bytes must not be negative")
+		}
 	}
 	if c.Storage.Driver != "sqlite" || strings.TrimSpace(c.Storage.Path) == "" {
 		return errors.New("storage requires driver sqlite and a non-empty path")
