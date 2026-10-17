@@ -3,12 +3,14 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +21,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	secure "github.com/blestafist/pestiroute/internal/crypto"
 )
 
 type Component struct {
@@ -49,10 +53,13 @@ type Config struct {
 	ReadTimeout, WriteTimeout, IdleTimeout time.Duration
 	Static                                 http.Handler
 	DB                                     *sql.DB
+	MasterKey                              secure.MasterKey
 	Version, Readiness                     string
 	Components                             []Component
 	Routes                                 []Route
 }
+
+type rawBodyKey struct{}
 
 // New validates operator credentials and returns the authenticated API handler.
 func New(c Config) (http.Handler, error) {
@@ -104,6 +111,9 @@ func New(c Config) (http.Handler, error) {
 	if c.MaxBodyBytes < 0 {
 		return nil, fmt.Errorf("admin max body size must not be negative")
 	}
+	if c.MaxBodyBytes > int64(int(^uint(0)>>1))-1 {
+		return nil, fmt.Errorf("admin max body size is too large")
+	}
 	if c.MaxBodyBytes == 0 {
 		c.MaxBodyBytes = 64 << 10
 	}
@@ -118,6 +128,7 @@ func New(c Config) (http.Handler, error) {
 	}
 	api := http.NewServeMux()
 	registerReadHandlers(api, c)
+	registerAccountHandlers(api, c)
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { writeError(w, 404, "not_found", "Not found") })
 	root := http.NewServeMux()
 	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -148,19 +159,12 @@ func New(c Config) (http.Handler, error) {
 			writeError(w, 401, "unauthorized", "Unauthorized")
 			return
 		}
-		body := r.Body
-		defer body.Close()
-		data, err := io.ReadAll(io.LimitReader(body, c.MaxBodyBytes+1))
-		if err != nil {
-			writeError(w, 400, "invalid_request", "Invalid request")
-			return
+		bodyLimit := c.MaxBodyBytes
+		if strings.HasPrefix(r.URL.Path, "/admin/v1/accounts/") && strings.Contains(r.URL.Path, "/credentials") {
+			bodyLimit = max(bodyLimit, int64(6*(64<<10)+4096))
 		}
-		if int64(len(data)) > c.MaxBodyBytes {
-			writeError(w, 413, "payload_too_large", "Payload too large")
-			return
-		}
-		r.Body = io.NopCloser(bytes.NewReader(data))
-		api.ServeHTTP(w, r)
+		defer r.Body.Close()
+		dispatchBody(w, r, api, bodyLimit)
 	})
 	root.Handle("/admin/v1", apiHandler)
 	root.Handle("/admin/v1/", apiHandler)
@@ -181,6 +185,60 @@ func New(c Config) (http.Handler, error) {
 	}))
 	return root, nil
 }
+
+func dispatchBody(w http.ResponseWriter, r *http.Request, api http.Handler, limit int64) {
+	data, oversized, err := readBoundedBody(r.Body, limit)
+	if err != nil {
+		zeroBuffer(data)
+		writeError(w, 400, "invalid_request", "Invalid request")
+		return
+	}
+	defer zeroBuffer(data)
+	if oversized {
+		writeError(w, 413, "payload_too_large", "Payload too large")
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(data))
+	r = r.WithContext(context.WithValue(r.Context(), rawBodyKey{}, &data))
+	api.ServeHTTP(w, r)
+}
+
+// readBoundedBody grows one tracked buffer; every superseded allocation is
+// cleared before it is released, and the caller clears the returned allocation.
+func readBoundedBody(reader io.Reader, limit int64) ([]byte, bool, error) {
+	maxSize := int(limit + 1)
+	initial := min(maxSize, 4096)
+	buffer := make([]byte, initial)
+	used := 0
+	for {
+		if used == len(buffer) {
+			if used == maxSize {
+				return buffer[:used], true, nil
+			}
+			nextSize := min(maxSize, max(len(buffer)*2, 1))
+			next := make([]byte, nextSize)
+			copy(next, buffer[:used])
+			clear(buffer)
+			buffer = next
+		}
+		n, err := reader.Read(buffer[used:])
+		used += n
+		if int64(used) > limit {
+			return buffer[:used], true, nil
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return buffer[:used], false, nil
+			}
+			return buffer[:used], false, err
+		}
+		if n == 0 {
+			return buffer[:used], false, io.ErrNoProgress
+		}
+	}
+}
+
+func zeroBuffer(buffer []byte) { clear(buffer[:cap(buffer)]) }
 
 func contains(values []string, value string) bool { return slices.Contains(values, value) }
 

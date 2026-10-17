@@ -1309,6 +1309,7 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 	}
 	if c.Admin != nil {
 		adminConfig.DB = c.runtimeDB
+		adminConfig.MasterKey = c.runtimeKey
 		adminConfig.Version = "dev"
 		adminConfig.Readiness = "unknown"
 		for _, item := range c.Components {

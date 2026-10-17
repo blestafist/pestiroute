@@ -3,6 +3,8 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -72,6 +74,77 @@ func TestMiddlewareAndIsolation(t *testing.T) {
 	}
 	if got := request("/admin/v1/status", "Bearer operator-secret", "127.0.0.1:9090", "", []byte("12345")).Code; got != 413 {
 		t.Fatalf("oversize body: got %d want 413", got)
+	}
+}
+
+type capturedBodyReader struct {
+	data []byte
+	step int
+	fail bool
+	refs [][]byte
+}
+
+func (r *capturedBodyReader) Read(p []byte) (int, error) {
+	r.refs = append(r.refs, p)
+	if len(r.data) == 0 {
+		if r.fail {
+			return 0, errors.New("read failed")
+		}
+		return 0, io.EOF
+	}
+	n := min(len(p), len(r.data), r.step)
+	copy(p[:n], r.data[:n])
+	r.data = r.data[n:]
+	return n, nil
+}
+
+func (r *capturedBodyReader) assertCleared(t *testing.T) {
+	t.Helper()
+	if len(r.refs) == 0 {
+		t.Fatal("reader was not given a buffer")
+	}
+	for i, ref := range r.refs {
+		for _, b := range ref {
+			if b != 0 {
+				t.Fatalf("reader buffer %d retained plaintext", i)
+			}
+		}
+	}
+}
+
+func TestAdminBodyBuffersClearedOnAllDispatchPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		limit               int64
+		payload             string
+		fail, panicDispatch bool
+		wantStatus          int
+	}{
+		{name: "success", limit: 20000, payload: strings.Repeat("secret-chunk-", 1000), wantStatus: 204},
+		{name: "read error", limit: 20000, payload: strings.Repeat("secret-chunk-", 400), fail: true, wantStatus: 400},
+		{name: "oversize", limit: 32, payload: strings.Repeat("oversized-secret-", 10), wantStatus: 413},
+		{name: "panic", limit: 20000, payload: "panic-secret", panicDispatch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &capturedBodyReader{data: []byte(tc.payload), step: 1024, fail: tc.fail}
+			r := httptest.NewRequest(http.MethodPost, "/admin/v1/status", nil)
+			r.Body = io.NopCloser(reader)
+			w := httptest.NewRecorder()
+			api := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.panicDispatch {
+					panic("synthetic dispatch panic")
+				}
+				w.WriteHeader(204)
+			})
+			func() {
+				defer func() { _ = recover() }()
+				dispatchBody(w, r, api, tc.limit)
+			}()
+			reader.assertCleared(t)
+			if tc.wantStatus != 0 && w.Code != tc.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", w.Code, tc.wantStatus, w.Body.String())
+			}
+		})
 	}
 }
 
