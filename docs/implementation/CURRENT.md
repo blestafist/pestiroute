@@ -35,7 +35,7 @@ the earlier CURRENT claim that it awaited review was stale.
 | [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-001 | Current Antigravity research → bounded Connector slice; no Claude dependency |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | None (all 7 tasks DONE) | M11-001–007 complete and verified; M11-HANDOFF published; unblocks M12-005 integration once on main |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
-| [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
+| [M13](M13-OPERATIONS.md) | `dev-m13-operations` | None (all DONE) | [M13-BINDING](M13-BINDING.md) accepted; M13-001 through M13-004 DONE; packaged release acceptance, recovery, and [M13-HANDOFF](M13-HANDOFF.md) verified; ready for batch push and PR revision CI |
 
 Each has a dedicated worktree and `/next 10 M10` (or M11/M12/M13) filter.
 See [PARALLEL](PARALLEL.md) before starting; later cards are DRAFT until their

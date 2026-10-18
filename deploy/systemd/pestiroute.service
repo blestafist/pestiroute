@@ -1,0 +1,28 @@
+[Unit]
+Description=PestiRoute protected gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pestiroute
+Group=pestiroute
+UMask=0077
+StateDirectory=pestiroute
+StateDirectoryMode=0700
+ConfigurationDirectory=pestiroute
+ConfigurationDirectoryMode=0750
+EnvironmentFile=-/etc/pestiroute/environment
+ExecStart=/usr/local/bin/pestiroute -config-format yaml -config /etc/pestiroute/gateway.yaml
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=30
+Restart=on-failure
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=/var/lib/pestiroute
+
+[Install]
+WantedBy=multi-user.target
