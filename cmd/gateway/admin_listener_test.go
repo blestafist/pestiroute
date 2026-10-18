@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
+	secure "github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
@@ -439,11 +441,26 @@ func TestAdminReadsM2PersistentJSONDatabase(t *testing.T) {
 	if err := sqlite.Migrate(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	_ = db.Close()
 	keyPath := filepath.Join(dir, "master.key")
 	if err := os.WriteFile(keyPath, make([]byte, 32), 0600); err != nil {
 		t.Fatal(err)
 	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewAccounts(db).Create(context.Background(), sqlite.Account{ID: "account-id", Connector: "connector", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	const credentialID = "PESTIROUTE_UPSTREAM_TEST"
+	envelope, err := secure.Seal(key, 1, "v1", "credentials", credentialID, "account-id", []byte("unsupported-auth-test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(context.Background(), sqlite.Credential{ID: credentialID, AccountID: "account-id", FormatVersion: envelope.FormatVersion, KeyVersion: envelope.KeyVersion, Nonce: envelope.Nonce, Ciphertext: envelope.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
 	configPath := filepath.Join(dir, "gateway.json")
 	cfg := map[string]any{"listen": freeAdminTCPAddress(t), "shutdown_timeout": "1s", "database_path": dbPath, "master_key_file": keyPath,
 		"components": []map[string]any{{"id": "adapter", "kind": "adapter", "implementation": responsesImplementation}, {"id": "connector", "kind": "connector", "implementation": responsesImplementation, "endpoint": "http://127.0.0.1:1/v1/responses", "credential_env": "PESTIROUTE_UPSTREAM_TEST", "max_request_body_bytes": 4096, "max_request_header_bytes": 4096, "connect_timeout": "1s", "tls_handshake_timeout": "1s", "response_header_timeout": "1s", "stream_idle_timeout": "2s"}},
@@ -461,6 +478,7 @@ func TestAdminReadsM2PersistentJSONDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, []string{"-config", configPath}) }()
 	client := &http.Client{Timeout: time.Second}
@@ -495,10 +513,25 @@ func TestAdminReadsM2PersistentJSONDatabase(t *testing.T) {
 			if usage != nil {
 				body, _ := io.ReadAll(usage.Body)
 				usage.Body.Close()
-				cancel()
 				if usage.StatusCode != 200 || !bytes.Contains(body, []byte(`"total":0`)) {
 					t.Fatalf("persistent admin usage status=%d body=%s", usage.StatusCode, body)
 				}
+				startRequest, requestErr := http.NewRequest(http.MethodPost, "http://"+loaded.Admin.Listen+"/admin/v1/auth/sessions", strings.NewReader(`{"account_id":"account-id"}`))
+				if requestErr != nil {
+					t.Fatal(requestErr)
+				}
+				startRequest.Header.Set("Authorization", "Bearer operator-secret")
+				startRequest.Header.Set("Content-Type", "application/json")
+				startResponse, requestErr := client.Do(startRequest)
+				if requestErr != nil {
+					t.Fatal(requestErr)
+				}
+				startBody, _ := io.ReadAll(startResponse.Body)
+				startResponse.Body.Close()
+				if startResponse.StatusCode != http.StatusServiceUnavailable || !bytes.Contains(startBody, []byte(`"code":"unavailable"`)) || bytes.Contains(startBody, []byte(`revision_conflict`)) {
+					t.Fatalf("configured unsupported auth status=%d body=%s; want coordinator-unavailable (not conflict)", startResponse.StatusCode, startBody)
+				}
+				cancel()
 				if closeErr := <-done; closeErr != nil {
 					t.Fatal(closeErr)
 				}

@@ -57,6 +57,7 @@ type Config struct {
 	Version, Readiness                     string
 	Components                             []Component
 	Routes                                 []Route
+	Auth                                   AuthCoordinator
 }
 
 type rawBodyKey struct{}
@@ -130,6 +131,7 @@ func New(c Config) (http.Handler, error) {
 	registerReadHandlers(api, c)
 	registerAccountHandlers(api, c)
 	registerPolicyKeyHandlers(api, c)
+	registerAuthHandlers(api, c)
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { writeError(w, 404, "not_found", "Not found") })
 	root := http.NewServeMux()
 	apiHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +165,9 @@ func New(c Config) (http.Handler, error) {
 		bodyLimit := c.MaxBodyBytes
 		if strings.HasPrefix(r.URL.Path, "/admin/v1/accounts/") && strings.Contains(r.URL.Path, "/credentials") {
 			bodyLimit = max(bodyLimit, int64(6*(64<<10)+4096))
+		}
+		if r.URL.Path == "/admin/v1/auth/sessions" || strings.HasPrefix(r.URL.Path, "/admin/v1/auth/sessions/") {
+			bodyLimit = min(bodyLimit, int64(64<<10))
 		}
 		defer r.Body.Close()
 		dispatchBody(w, r, api, bodyLimit)

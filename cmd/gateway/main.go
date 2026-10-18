@@ -66,6 +66,7 @@ type config struct {
 	runtimeKey            secure.MasterKey
 	processLock           *sqlite.ProcessLock
 	legacyMode            bool
+	authCoordinatorSink   **core.AuthCoordinator
 }
 
 type topologyComponent struct {
@@ -144,6 +145,7 @@ func (c config) String() string {
 	c.runtimeDB = nil
 	c.runtimeKey = secure.MasterKey{}
 	c.processLock = nil
+	c.authCoordinatorSink = nil
 	c.logger = nil
 	type view config
 	return fmt.Sprintf("%+v", view(c))
@@ -887,6 +889,23 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			accounting = sqliteAccountingStore{ledger: sqlite.NewLedger(persistentDB)}
 		}
 		services = core.NewPersistentServices(sqliteAccountReader{accounts: accounts}, sqliteCredentialReader{credentials: sqlite.NewCredentials(persistentDB), key: persistentKey}, persistentRefs, transports, c.logger)
+		credentials := sqlite.NewCredentials(persistentDB)
+		authStore, err := newSQLiteAuthCoordinatorStore(accounts, credentials, sqlite.NewAuthSessions(persistentDB), persistentKey, "v1", persistentRefs)
+		if err != nil {
+			cleanup()
+			return nil, nil, errors.New("cannot initialize authentication coordinator")
+		}
+		authServices := adminAuthServicesFunc(func(scope core.AttemptScope) core.InvocationServices {
+			return core.InvocationServices{Credentials: adminAuthCredentialAccess{store: authStore, accountID: scope.AccountID}, Transport: transports[scope.AccountID]}
+		})
+		authCoordinator, err := core.NewAuthCoordinator(registry, authStore, authServices, 10*time.Minute)
+		if err != nil {
+			cleanup()
+			return nil, nil, errors.New("cannot initialize authentication coordinator")
+		}
+		if c.authCoordinatorSink != nil {
+			*c.authCoordinatorSink = authCoordinator
+		}
 		codexAccounts := make(map[string]struct{})
 		for _, route := range c.Routes {
 			for _, component := range c.Components {
@@ -896,21 +915,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			}
 		}
 		if len(codexAccounts) > 0 {
-			credentials := sqlite.NewCredentials(persistentDB)
-			authStore, err := newSQLiteAuthCoordinatorStore(accounts, credentials, sqlite.NewAuthSessions(persistentDB), persistentKey, "v1", persistentRefs)
-			if err != nil {
-				cleanup()
-				return nil, nil, errors.New("cannot initialize Codex credential freshness")
-			}
-			authServices := adminAuthServicesFunc(func(scope core.AttemptScope) core.InvocationServices {
-				return core.InvocationServices{Credentials: adminAuthCredentialAccess{store: authStore, accountID: scope.AccountID}, Transport: transports[scope.AccountID]}
-			})
-			freshness, err := core.NewAuthCoordinator(registry, authStore, authServices, time.Minute)
-			if err != nil {
-				cleanup()
-				return nil, nil, errors.New("cannot initialize Codex credential freshness")
-			}
-			services = freshCredentialServices{next: services, resolver: freshness, accounts: codexAccounts, margin: time.Minute}
+			services = freshCredentialServices{next: services, resolver: authCoordinator, accounts: codexAccounts, margin: time.Minute}
 		}
 		if policyStore == nil {
 			policyStore = sqlitePolicyStore{policies: sqlite.NewKeyPolicies(persistentDB)}
@@ -1326,11 +1331,6 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 			adminConfig.Components = append(adminConfig.Components, adminhttp.Component{ID: string(item.ID), Kind: string(item.Kind), Implementation: item.Implementation, Health: "unknown", Protocols: protocols, Capabilities: capabilities})
 		}
 		adminConfig.Routes = adminRouteSnapshot(c.Routes, legacyStatus)
-		adminHandler, err = adminhttp.New(adminConfig)
-		if err != nil {
-			cleanupPrepared()
-			return fmt.Errorf("configure admin listener: %w", err)
-		}
 	}
 	var adminListener net.Listener
 	if c.Admin != nil {
@@ -1342,6 +1342,8 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 	}
 	var ready atomic.Bool
 	var draining atomic.Bool
+	var authCoordinator *core.AuthCoordinator
+	c.authCoordinatorSink = &authCoordinator
 	h, closeTransport, err := composeHandler(c, &ready, &draining, finalize)
 	if err != nil {
 		if adminListener != nil {
@@ -1354,6 +1356,17 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 			_ = c.processLock.Close()
 		}
 		return fmt.Errorf("initialize gateway: %w", err)
+	}
+	if c.Admin != nil {
+		adminConfig.Auth = authCoordinator
+		adminHandler, err = adminhttp.New(adminConfig)
+		if err != nil {
+			if adminListener != nil {
+				_ = adminListener.Close()
+			}
+			_ = closeTransport(context.Background())
+			return fmt.Errorf("configure admin listener: %w", err)
+		}
 	}
 	listener, err := net.Listen("tcp", c.Listen)
 	if err != nil {
