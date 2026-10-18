@@ -4,7 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { clearSession, fixtureAdapter, fixtureData, getSessionToken } from './fixtures'
-import { clearOperatorToken } from './api'
+import { clearOperatorToken, hasOperatorToken } from './api'
 
 function LocationSearch() { return <output data-testid="location-search">{useLocation().search}</output> }
 function renderApp(path = '/') { const result = render(<MemoryRouter initialEntries={[path]}><App /><LocationSearch /></MemoryRouter>); fireEvent.click(screen.getByRole('button', { name: 'Use demo data' })); return result }
@@ -321,11 +321,13 @@ describe('live administration mode', () => {
     await user.type(screen.getByLabelText('Operator bearer token'), 'live-secret')
     await user.click(screen.getByRole('button', { name: 'Connect' }))
     expect(screen.queryByText('live-secret')).not.toBeInTheDocument()
+    expect(hasOperatorToken()).toBe(true)
     expect(localStorage.length).toBe(0)
     expect(sessionStorage.length).toBe(0)
     expect(screen.getByText('Live administration API')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Log out' }))
     expect(screen.getByRole('heading', { name: 'PestiRoute administration' })).toBeInTheDocument()
+    expect(hasOperatorToken()).toBe(false)
   })
   it('returns to unauthenticated state on an API 401 without persisting the token', async () => {
     const user = userEvent.setup()
@@ -372,6 +374,54 @@ describe('live administration mode', () => {
     await user.click(screen.getByRole('button', { name: 'Refresh latest revision' }))
     expect(screen.getByLabelText('Account ID')).toHaveValue('new-acct')
     expect(fetcher.mock.calls.filter(([url]) => url.endsWith('/accounts')).length).toBeGreaterThan(2)
+  })
+  it('creates write-only credentials from the live Connections screen and clears the secret field', async () => {
+    const user = userEvent.setup()
+    const fetcher = stubLiveAPI((url, init) => {
+      if (url.endsWith('/status')) return response(statusDTO)
+      if (url.endsWith('/accounts') && init.method === 'POST') return response({ id: 'new-account', connector: 'conn-1', enabled: true, created_at: '', updated_at: '' }, 201)
+      if (url.endsWith('/credentials')) return response({ id: 'new-credential', account_id: 'new-account', revision: 1, expires_at: null, updated_at: '' }, 201)
+      if (url.endsWith('/accounts')) return response({ items: [{ ...accountPage.items[0], id: 'new-account' }], limit: 50, offset: 0, total: 1 })
+      return response({})
+    })
+    render(<MemoryRouter initialEntries={['/connections']}><App /></MemoryRouter>)
+    await connect(user)
+    await user.type(await screen.findByLabelText('Account ID'), 'new-account')
+    await user.type(screen.getByLabelText('Connector'), 'conn-1')
+    await user.click(screen.getByRole('button', { name: 'Create account' }))
+    await user.type(await screen.findByLabelText('Credential account ID'), 'new-account')
+    await user.type(screen.getByLabelText('New credential ID'), 'new-credential')
+    await user.type(screen.getByLabelText('New write-only credential'), 'never-display-this')
+    await user.click(screen.getByRole('button', { name: 'Create credential' }))
+    await waitFor(() => expect(fetcher.mock.calls.some(([url, init]) => url.endsWith('/accounts/new-account/credentials') && init?.method === 'POST' && JSON.parse(String(init.body)).secret === 'never-display-this')).toBe(true))
+    expect(screen.getByLabelText('New write-only credential')).toHaveValue('')
+    expect(screen.queryByText('never-display-this')).not.toBeInTheDocument()
+  })
+  it('shows the live issued key in a trapped, dismissible dialog and distinguishes policy labels', async () => {
+    const user = userEvent.setup()
+    stubLiveAPI((url, init) => {
+      if (url.endsWith('/status')) return response(statusDTO)
+      if (url.endsWith('/policies')) return response({ items: [], limit: 50, offset: 0, total: 0 })
+      if (url.endsWith('/keys') && init.method === 'POST') return response({ secret: 'pr_live_one_time', key: {} })
+      if (url.endsWith('/keys')) return response({ items: [], limit: 50, offset: 0, total: 0 })
+      return response({})
+    })
+    render(<MemoryRouter initialEntries={['/keys']}><App /></MemoryRouter>)
+    await connect(user)
+    const policyFields = await screen.findAllByLabelText(/Policy ID/)
+    expect(policyFields.map(field => field.parentElement?.textContent)).toEqual(['Policy ID', 'Target Policy ID'])
+    const trigger = screen.getByRole('button', { name: 'Create key' })
+    await user.click(trigger)
+    const dialog = await screen.findByRole('dialog', { name: 'Copy your new key secret' })
+    expect(within(dialog).getByText('pr_live_one_time')).toBeInTheDocument()
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    await user.tab()
+    expect(within(dialog).getByRole('button', { name: 'Dismiss secret' })).toHaveFocus()
+    await user.tab()
+    expect(within(dialog).getByRole('button', { name: 'Dismiss secret' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
   })
   it.each([403, 404, 413, 500, 503])('renders an actionable alert with request id for HTTP %i', async status => {
     const user = userEvent.setup()
