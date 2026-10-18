@@ -194,7 +194,7 @@ func coordinatorFixture(t *testing.T, store *coordinatorFixtureStore, transport 
 	if err := registry.Register("antigravity", conn, core.ComponentConnector); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Init(context.Background(), "antigravity", core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project"}`)}); err != nil {
+	if err := registry.Init(context.Background(), "antigravity", core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","oauth":{"client_secret":"SYNTHETIC_CLIENT_SECRET"}}`)}); err != nil {
 		t.Fatal(err)
 	}
 	coordinator, err := core.NewAuthCoordinator(registry, store, coordinatorServices(func(core.AttemptScope) core.InvocationServices {

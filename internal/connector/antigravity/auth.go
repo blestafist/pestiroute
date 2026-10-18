@@ -72,6 +72,7 @@ func (c *Connector) authenticateStart(ctx context.Context, cfg oauthConfig) (cor
 	query.Set("redirect_uri", cfg.RedirectURI)
 	query.Set("scope", strings.Join(cfg.Scopes, " "))
 	query.Set("access_type", "offline")
+	query.Set("prompt", "consent")
 	query.Set("code_challenge", base64.RawURLEncoding.EncodeToString(hash[:]))
 	query.Set("code_challenge_method", "S256")
 	query.Set("state", state)
@@ -80,6 +81,9 @@ func (c *Connector) authenticateStart(ctx context.Context, cfg oauthConfig) (cor
 }
 
 func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, discoveryOrigin string, req core.AuthRequest, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
+	if requiresConfiguredClientSecret(cfg) {
+		return core.AuthResult{}, unauthenticated()
+	}
 	var continuation authContinuation
 	d := json.NewDecoder(bytes.NewReader(req.State))
 	d.DisallowUnknownFields()
@@ -142,6 +146,10 @@ func validPastedOAuthCode(code string) bool {
 		}
 	}
 	return true
+}
+
+func requiresConfiguredClientSecret(cfg oauthConfig) bool {
+	return cfg.ClientID == defaultClientID && cfg.ClientSecret == ""
 }
 
 func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOrigin string, transport core.HTTPDoer, form url.Values) (core.AuthResult, *core.GatewayError) {
@@ -231,6 +239,9 @@ func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOri
 }
 
 func (c *Connector) authenticateRefresh(ctx context.Context, cfg oauthConfig, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
+	if requiresConfiguredClientSecret(cfg) {
+		return core.AuthResult{}, unauthenticated()
+	}
 	if services.Credentials == nil {
 		return core.AuthResult{}, unauthenticated()
 	}

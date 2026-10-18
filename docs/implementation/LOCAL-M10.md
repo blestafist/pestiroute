@@ -52,14 +52,29 @@ operator-consented action; no such combined command exists today.
 
 ## OAuth client and remote-SSH code handling
 
-PestiRoute uses the public client identifier published at
-`https://antigravity.google/oauth/client-metadata.json` and redirect URI
-`https://antigravity.google/oauth-callback` by default. A client ID is a public
-identifier, not a secret; its publication does not establish third-party
-authorization or account eligibility. OAuth endpoints, scopes and protocol
-compatibility remain unverified. Do not copy plugin credentials. Local overrides
-remain available; never place a client secret in YAML, command-line arguments,
-shell history, logs, or chat.
+PestiRoute defaults to the public OAuth client identity, token endpoint and
+scopes observed in pinned 9Router v0.5.104 source; it does not bundle a client
+secret. The known emulated client requires a configured client secret before
+token exchange or refresh, and those operations fail closed when it is absent.
+The client metadata URL is not used as `client_id`. Authorization also sends
+`prompt=consent` and retains PKCE S256. The default redirect is
+`http://localhost:8080/callback`, a bounded fixed-port candidate matching the
+loopback shape only. Pinned 9Router starts a listener and chooses a dynamic port;
+PestiRoute starts no callback listener, and Google acceptance of this fixed URI
+is unverified. This is not a working-client or source-identical claim. These are
+unofficial candidate observations, not proof of Google authorization, account
+eligibility or protocol compatibility. Treat any locally configured client
+secret as a secret. Never copy user/plugin credentials.
+Local endpoint, client ID/secret, redirect and scope overrides remain available.
+Custom client IDs remain configurable without a secret, allowing explicit
+public-client configurations.
+
+**Live authorization is blocked.** No callback listener is running, and an
+unrelated local process may already own port 8080 and receive the callback URL
+and authorization code. Do not sign in, authorize, or run `auth continue` for
+this candidate until the planner-approved callback design and safe callback
+handling are available. `auth start` itself remains offline and emits no network
+request.
 
 Optional local overrides only (the client ID and redirect URI already default):
 
@@ -86,24 +101,31 @@ only and makes no network request:
 "$WORK/gateway" admin --db "$DB" --master-key "$MASTER_KEY" auth start --account antigravity-local
 ```
 
-Keep the printed verification URL and session handle in the local terminal; do
-not paste them into chat or save terminal output to shared logs. The official
-Antigravity remote-SSH instructions say to open that URL in a local browser,
-complete sign-in, copy the displayed authorization code, and paste it into the
-remote terminal. The default redirect URI is
-`https://antigravity.google/oauth-callback`. Browser sign-in/token exchange is a
-separate operator-authorized live action; the offline checks never perform it.
+The following describes the unverified candidate only; do not perform it while
+the live authorization blocker above remains. Keep the printed verification URL and session handle in the local terminal; do
+not paste them into chat or save terminal output to shared logs. This candidate
+uses a loopback redirect, unlike the official remote-SSH UX. If separately
+authorized to try it, open the URL in a local browser and after sign-in copy the
+complete redirected `http://localhost:8080/callback?...` URL from the address
+bar, including both code and state. PestiRoute has no listener; if nothing else
+owns the port the browser may show a connection failure, but another local
+process could receive the callback. Do not attempt this live while the blocker
+above remains. Do not substitute the official web callback or paste only the
+code for this flow. Browser sign-in/token exchange remains a separate
+operator-authorized live action; offline checks never perform it. A fixed-port
+candidate and pasted URL have not been verified with Google.
 
-**Only when that live action is explicitly authorized**, opt in to outbound
-HTTPS and continue with the session handle printed by `start`:
+After the callback blocker is cleared and a separate live action is explicitly
+authorized, opt in to outbound HTTPS and continue with the session handle printed
+by `start`:
 
 ```sh
 export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1
 "$WORK/gateway" admin --db "$DB" --master-key "$MASTER_KEY" auth continue --session SESSION_ID --callback-stdin
 ```
 
-Paste the displayed code into this command's stdin and press Enter. A full
-callback URL is also accepted when provided by an authorized flow. Never put the
+Paste the complete loopback callback URL into this command's stdin and press
+Enter. Never put the
 code/URL in command arguments, shell history, files, logs, or chat;
 `--callback-stdin` does not echo it. Continuation exchanges the one-time code and
 performs one candidate `loadCodeAssist` project lookup over HTTPS. Both requests

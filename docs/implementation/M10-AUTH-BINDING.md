@@ -5,8 +5,10 @@
 This is an offline candidate binding, not an Antigravity/Google OAuth protocol
 claim. Official documentation reviewed for M10 describes sign-in UX but does not
 document OAuth client authorization, refresh endpoint/grant, token schema,
-scopes, expiry rules, or personal-versus-enterprise refresh behavior. Those
-facts remain **Unknown**; live refresh and endpoint discovery are **Blocked**.
+scopes, expiry rules, or personal-versus-enterprise refresh behavior. A pinned
+unofficial client source observation informs candidate auth defaults; official
+support/authorization and live behavior remain **Unknown**, and live refresh and
+endpoint discovery remain **Blocked**.
 No login, credentials, or provider requests were used or authorized. The
 synthetic `.invalid` exchange below is a local test boundary only, not a
 configurable production endpoint.
@@ -170,7 +172,7 @@ and refresh results carrying continuation state/action are quarantined. These
 are future offline test requirements, not implementation completed by this
 document.
 
-## Browser / remote-SSH authorization-code candidate (M10-012)
+## Browser / remote-SSH authorization-code candidate (M10-012/M10-013)
 
 The offline implementation supports `Connector.Authenticate` `start`/`continue`
 with PKCE S256. Official Antigravity CLI documentation describes remote-SSH
@@ -178,15 +180,41 @@ authentication as a unique authorization URL opened in a local browser, followed
 by pasting the displayed code into the remote terminal. The official public
 client-metadata document
 [`oauth/client-metadata.json`](https://antigravity.google/oauth/client-metadata.json)
-identifies its own URL as `client_id` and lists
-`https://antigravity.google/oauth-callback` as a redirect URI. These establish
-the published UX, public identifier, and redirect string only; they do not
-establish OAuth endpoint/grant compatibility, approval for third-party use,
-scopes, account eligibility, or backend access. The published client ID is a
-public identifier, not a client secret; no plugin credentials are copied.
+identifies its own URL as a public `client_id` and lists
+`https://antigravity.google/oauth-callback` as a redirect URI. The offline
+candidate uses the public distributed client identity, token endpoint and scope
+list observed in pinned 9Router v0.5.104 source (see
+[M10-RESEARCH](M10-RESEARCH.md#pinned-9router-oauth-client-emulation-m10-013));
+that source includes client-authentication material, which PestiRoute does not
+bundle. The known emulated client requires an operator-configured secret before
+token exchange or refresh; explicit public-client configurations may omit one.
+No user credentials are copied or reproduced in evidence. These third-party
+observations do not establish OAuth approval, supported protocol, account
+eligibility, or backend access. The published metadata URL is not used as
+`client_id`.
 
-`start` defaults to that client ID and redirect URI, retaining local overrides.
-The Antigravity CLI and runbook direct operators to paste the displayed code.
+`start` defaults to the source-pinned public client ID, endpoints, and scope
+list, plus `prompt=consent`. It uses the bounded local
+callback candidate `http://localhost:8080/callback`, matching 9Router's
+loopback host/path shape but not its dynamically allocated port. PestiRoute does
+not start a callback listener. The user must paste the complete localhost
+callback URL, including code and state, from the browser address bar after the
+navigation fails to connect; strict DEC-019 validation checks it against this
+same configured redirect. This fixed-port candidate is not demonstrated to be
+registered or accepted by Google and is not a working-client claim. Resolving
+dynamic-port behavior requires a separately scoped listener decision. Since an
+unrelated local process could already own port 8080 and receive the callback,
+live authorization using this candidate is blocked until callback handling is
+reviewed; do not use it for live sign-in.
+PestiRoute also continues to require PKCE S256 although the inspected 9Router
+flow omits PKCE; this is an intentional safety addition, not an emulation claim.
+The authorization URL includes `prompt=consent`, matching the source. That
+parameter does not guarantee a refresh token; the pinned authorization-code
+source does not establish refresh-grant behavior, so refresh remains an
+unverified candidate.
+
+The Antigravity CLI and runbook direct operators to paste the displayed code;
+PestiRoute's loopback candidate instead requires the full callback URL as above.
 The Connector locally accepts either a trimmed 1–512-byte visible-ASCII code
 (no whitespace or `:`, `?`, `#`, `&`) or a strict DEC-019 callback URL. URL mode
 compares raw scheme, authority and escaped path byte-for-byte; requires exactly
@@ -202,8 +230,12 @@ ID into encrypted credential metadata. This is pinned-unofficial behavior only;
 it does not change the explicitly configured Execute project. Discovery
 failure/missing project fails closed; no onboarding, retries, alternate endpoint,
 project substitution, or account fallback occurs. Token exchange and refresh
-share the same default token endpoint. Gateway real HTTP transport remains
-disabled unless explicitly opted in. OAuth/discovery compatibility remains
+share the source-pinned default token endpoint. PestiRoute retains the public
+client identity but bundles no client secret; the known emulated client fails
+closed before exchange or refresh unless an operator configures its secret.
+Explicit custom client IDs may be used without a secret for public-client
+configurations. Gateway real HTTP transport remains disabled unless explicitly
+opted in. OAuth/discovery compatibility remains
 Unknown; capability `auth.oauth` stays Unknown and no live call is authorized.
 
 ## Unresolved / blocked

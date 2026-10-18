@@ -47,9 +47,10 @@ type oauthConfig struct {
 const (
 	defaultAuthEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
 	defaultTokenEndpoint = "https://oauth2.googleapis.com/token"
-	defaultClientID      = "https://antigravity.google/oauth/client-metadata.json"
-	defaultRedirectURI   = "https://antigravity.google/oauth-callback"
-	defaultScopes        = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog"
+	// Public client identity from the pinned 9Router source; credentials remain operator-supplied.
+	defaultClientID    = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+	defaultRedirectURI = "http://localhost:8080/callback"
+	defaultScopes      = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs"
 )
 
 type Connector struct {
@@ -213,7 +214,7 @@ func validOAuthConfig(cfg oauthConfig) bool {
 		return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
 	}
 	r, err := url.Parse(cfg.RedirectURI)
-	if cfg.ClientID == "" || strings.ContainsAny(cfg.ClientID+cfg.ClientSecret, "\r\n") || !endpoint(cfg.AuthorizationEndpoint) || cfg.TokenEndpoint != "" && !endpoint(cfg.TokenEndpoint) || err != nil || !r.IsAbs() || r.Host == "" || r.User != nil || r.RawQuery != "" || r.Fragment != "" || len(cfg.Scopes) == 0 {
+	if cfg.ClientID == "" || cfg.ClientSecret != "" && strings.TrimSpace(cfg.ClientSecret) == "" || strings.ContainsAny(cfg.ClientID+cfg.ClientSecret, "\r\n") || !endpoint(cfg.AuthorizationEndpoint) || cfg.TokenEndpoint != "" && !endpoint(cfg.TokenEndpoint) || err != nil || !r.IsAbs() || r.Host == "" || r.User != nil || r.RawQuery != "" || r.Fragment != "" || len(cfg.Scopes) == 0 {
 		return false
 	}
 	for _, scope := range cfg.Scopes {

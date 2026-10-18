@@ -91,7 +91,7 @@ func (c credentials) Get(context.Context, string) ([]byte, error) { return c.dat
 func ready(t *testing.T) *Connector {
 	t.Helper()
 	c := NewConnector()
-	if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://antigravity.synthetic.invalid"}`)}); err != nil {
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://antigravity.synthetic.invalid","oauth":{"client_secret":"SYNTHETIC_CLIENT_SECRET"}}`)}); err != nil {
 		t.Fatal(err)
 	}
 	return c

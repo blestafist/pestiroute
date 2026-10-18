@@ -26,44 +26,41 @@ scope; this is not remote entitlement or provider support. `auth.oauth`,
 `usage.exact`, and all other capabilities remain `Unknown`; no live claims or
 provider calls are authorized by this handoff.
 
-## Browser OAuth and pasted-code candidate (M10-012)
+## Browser OAuth and pasted-callback candidate (M10-012/M10-013)
 
-The connector implements PKCE S256 start/continue. Official Antigravity docs
-describe the remote-SSH URL → local browser → displayed code → terminal paste
-UX. The official metadata publishes a public client ID and
-`https://antigravity.google/oauth-callback` redirect; neither proves third-party
-authorization or OAuth protocol compatibility. These are the default client ID
-and redirect URI; no client secret is bundled. OAuth endpoint and scope defaults
-remain unverified hypotheses. Optional client/endpoints/redirect/scopes
-overrides remain available. The CLI/runbook direct operators to paste the
-displayed code; the Connector accepts a raw code (trimmed, 1–512 visible-ASCII
-bytes, no whitespace/URL delimiters) or a DEC-019 strict callback URL. Runtime
-continues forwarding its existing string unchanged, with no provider branch.
-Both modes use exact redirect URI, PKCE S256, and the existing runtime single-use
-claim; neither can retry/replay.
+The official Antigravity metadata URL is not PestiRoute's `client_id`. Offline
+defaults now follow the client identity, token/auth endpoints, scopes, and
+`prompt=consent` observed in pinned 9Router
+v0.5.104 source; see [source evidence](M10-RESEARCH.md#pinned-9router-oauth-client-emulation-m10-013)
+and the [auth binding](M10-AUTH-BINDING.md#browser--remote-ssh-authorization-code-candidate-m10-012m10-013).
+PestiRoute bundles no client secret. The known emulated client fails closed
+before token exchange or refresh without an operator-configured secret; an
+explicit custom public client may be configured without one. Do not include
+configured client secrets or user credentials in operator reports.
+
+9Router uses a dynamically allocated localhost callback with a listener.
+PestiRoute has no listener: its `http://localhost:8080/callback` redirect is a
+bounded fixed-port candidate, not source-identical or verified as registered.
+The user would need to paste the entire callback URL (code and state); an
+unrelated local process may receive it. **Live authorization is blocked** pending
+safe callback handling and a reviewed listener-scope decision. No live 401
+resolution is claimed. The existing parser still enforces the configured
+redirect, state, and PKCE S256 (an intentional addition beyond 9Router); see
+[LOCAL-M10](LOCAL-M10.md#oauth-client-and-remote-ssh-code-handling) for the
+operator evidence ceiling. Do not run live auth from this handoff.
 
 After token exchange, one bounded `loadCodeAssist` query uses the validated
-configured inference origin (including explicit trusted endpoint override),
-stores only validated project metadata in the encrypted credential bundle, and
-does not override the explicit Execute project. There is no onboarding, retry,
-fallback endpoint, or account fallback. Token exchange and refresh share the
-same candidate token endpoint default. Gateway HTTPS for auth/discovery/inference
-requires explicit `PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1`, or an injected
-deterministic test transport. Native CLI usage:
-
-```sh
-export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1 # explicit HTTPS auth/inference transport opt-in
-gateway admin auth start --account ACCOUNT_ID
-# Follow verification_uri in a browser, then paste the displayed code:
-gateway admin auth continue --session SESSION_ID --callback-stdin
-```
-
-The client ID override above is optional; omit it to use the published public
-identifier. Codes/URLs are read without echo and never logged. Credentials and
-project metadata are persisted in the existing encrypted account store. The
-synthetic tests establish no provider eligibility, third-party authorization,
-OAuth/discovery compatibility, or production support; capability `auth.oauth`
-remains `Unknown`. No live OAuth is authorized by this handoff.
+configured inference origin, stores only validated project metadata in the
+encrypted credential bundle, and does not override the explicit Execute project.
+There is no onboarding, retry, fallback endpoint, or account fallback. Gateway
+real HTTPS transport still requires explicit opt-in, but that opt-in is not
+authorization and this handoff provides no live OAuth commands. See
+[LOCAL-M10](LOCAL-M10.md#oauth-client-and-remote-ssh-code-handling) for the
+blocked live procedure and [M10-AUTH-BINDING](M10-AUTH-BINDING.md#browser--remote-ssh-authorization-code-candidate-m10-012m10-013)
+for the candidate details. Synthetic tests establish no provider eligibility,
+third-party authorization, OAuth/discovery compatibility, or production support;
+capability `auth.oauth` remains `Unknown`. No live OAuth is authorized by this
+handoff.
 
 ## Error, replay, and lifecycle boundary
 
