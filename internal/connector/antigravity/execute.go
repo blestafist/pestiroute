@@ -92,7 +92,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if mediaErr != nil || mediaType != "application/json" {
 		return core.ExecutionResponse{}, invalid("invalid_request")
 	}
-	input, model, tools, toolConfig, e := admit(req.Payload.Body)
+	contents, model, tools, toolConfig, e := admit(req.Payload.Body)
 	if e != nil {
 		return core.ExecutionResponse{}, e
 	}
@@ -110,7 +110,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if !valid {
 		return core.ExecutionResponse{}, unauthenticated()
 	}
-	request := map[string]any{"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]string{"text": input}}}}}
+	request := map[string]any{"contents": contents}
 	if len(tools) != 0 {
 		request["tools"] = tools
 	}
@@ -172,43 +172,237 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	return core.ExecutionResponse{Stream: newStream(resp.Body, "resp_"+executionID, "msg_"+executionID)}, nil
 }
 
-func admit(body []byte) (string, string, []any, map[string]any, *core.GatewayError) {
+func admit(body []byte) ([]any, string, []any, map[string]any, *core.GatewayError) {
 	if len(body) == 0 || len(body) > maxRequestBytes || !uniqueJSON(body) {
-		return "", "", nil, nil, invalid("invalid_request")
+		return nil, "", nil, nil, invalid("invalid_request")
 	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(body, &fields) != nil || fields == nil {
-		return "", "", nil, nil, invalid("invalid_request")
+		return nil, "", nil, nil, invalid("invalid_request")
 	}
 	for k := range fields {
 		if k != "model" && k != "input" && k != "stream" && k != "tools" && k != "tool_choice" {
-			return "", "", nil, nil, unsupported()
+			return nil, "", nil, nil, unsupported()
 		}
 	}
 	var in struct {
 		Model      string          `json:"model"`
-		Input      string          `json:"input"`
+		Input      json.RawMessage `json:"input"`
 		Stream     *bool           `json:"stream"`
 		Tools      json.RawMessage `json:"tools"`
 		ToolChoice json.RawMessage `json:"tool_choice"`
 	}
 	d := json.NewDecoder(bytes.NewReader(body))
 	d.DisallowUnknownFields()
-	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF || in.Stream == nil || !*in.Stream || strings.TrimSpace(in.Input) == "" {
-		return "", "", nil, nil, invalid("invalid_request")
+	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF || in.Stream == nil || !*in.Stream {
+		return nil, "", nil, nil, invalid("invalid_request")
 	}
 	if in.Model != "gemini-2.5-pro" && in.Model != "gemini-2.5-flash" {
-		return "", "", nil, nil, invalid("invalid_request")
+		return nil, "", nil, nil, invalid("invalid_request")
 	}
-	tools, names, err := functionTools(in.Tools)
+	contents, err := translateInput(in.Input)
 	if err != nil {
-		return "", "", nil, nil, invalid("invalid_request")
+		return nil, "", nil, nil, err
 	}
-	toolConfig, err := functionToolChoice(in.ToolChoice, names)
-	if err != nil {
-		return "", "", nil, nil, unsupported()
+	tools, names, toolErr := functionTools(in.Tools)
+	if toolErr != nil {
+		return nil, "", nil, nil, invalid("invalid_request")
 	}
-	return in.Input, in.Model, tools, toolConfig, nil
+	toolConfig, choiceErr := functionToolChoice(in.ToolChoice, names)
+	if choiceErr != nil {
+		return nil, "", nil, nil, unsupported()
+	}
+	return contents, in.Model, tools, toolConfig, nil
+}
+
+// translateInput maps only the text and function-history subset whose causal
+// relationships can be represented without Core state or invented metadata.
+func translateInput(raw json.RawMessage) ([]any, *core.GatewayError) {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		if strings.TrimSpace(text) == "" {
+			return nil, invalid("invalid_request")
+		}
+		return []any{contentTurn("user", map[string]any{"text": text})}, nil
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil || items == nil {
+		return nil, invalid("invalid_request")
+	}
+	contents := make([]any, 0, len(items))
+	pending := make(map[string]string)
+	seen := make(map[string]bool)
+	resultsPending := false
+	for _, item := range items {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(item, &fields) != nil || fields == nil {
+			return nil, invalid("invalid_request")
+		}
+		var kind string
+		if json.Unmarshal(fields["type"], &kind) != nil {
+			return nil, invalid("invalid_request")
+		}
+		allowed := map[string]bool{"type": true}
+		switch kind {
+		case "message":
+			allowed["id"], allowed["status"], allowed["role"], allowed["content"] = true, true, true, true
+		case "function_call":
+			if resultsPending {
+				return nil, invalid("invalid_request")
+			}
+			allowed["id"], allowed["status"], allowed["call_id"], allowed["name"], allowed["arguments"] = true, true, true, true, true
+		case "function_call_output":
+			allowed["id"], allowed["call_id"], allowed["output"] = true, true, true
+		}
+		for key := range fields {
+			if !allowed[key] {
+				return nil, unsupported()
+			}
+		}
+		if id, exists := fields["id"]; exists {
+			if _, ok := rawString(id); !ok {
+				return nil, invalid("invalid_request")
+			}
+		}
+		if status, exists := fields["status"]; exists {
+			value, ok := rawString(status)
+			if !ok || value != "completed" {
+				return nil, invalid("invalid_request")
+			}
+		}
+		switch kind {
+		case "message":
+			if len(pending) != 0 {
+				return nil, invalid("invalid_request")
+			}
+			role, ok := rawString(fields["role"])
+			if !ok || (role != "user" && role != "assistant") {
+				return nil, unsupported()
+			}
+			parts, err := messageParts(fields["content"], role)
+			if err != nil {
+				return nil, err
+			}
+			candidateRole := map[string]string{"user": "user", "assistant": "model"}[role]
+			for _, part := range parts {
+				contents = appendTurnPart(contents, candidateRole, part)
+			}
+		case "function_call":
+			if _, ok := fields["type"]; !ok {
+				return nil, invalid("invalid_request")
+			}
+			callID, idOK := rawString(fields["call_id"])
+			name, nameOK := rawString(fields["name"])
+			args, argsOK := rawString(fields["arguments"])
+			if !idOK || strings.TrimSpace(callID) == "" || !nameOK || !validFunctionName(name) || !argsOK || !uniqueJSON([]byte(args)) {
+				return nil, invalid("invalid_request")
+			}
+			var argObject map[string]json.RawMessage
+			if json.Unmarshal([]byte(args), &argObject) != nil || argObject == nil {
+				return nil, invalid("invalid_request")
+			}
+			if seen[callID] {
+				return nil, invalid("invalid_request")
+			}
+			seen[callID], pending[callID] = true, name
+			contents = appendTurnPart(contents, "model", map[string]any{"functionCall": map[string]any{"name": name, "args": json.RawMessage(args), "id": callID}})
+		case "function_call_output":
+			callID, ok := rawString(fields["call_id"])
+			name, exists := pending[callID]
+			output, hasOutput := fields["output"]
+			if !ok || !exists || !hasOutput || !uniqueJSON(output) {
+				return nil, invalid("invalid_request")
+			}
+			delete(pending, callID)
+			resultsPending = len(pending) != 0
+			contents = appendTurnPart(contents, "user", map[string]any{"functionResponse": map[string]any{"name": name, "id": callID, "response": map[string]json.RawMessage{"output": append(json.RawMessage(nil), output...)}}})
+		case "reasoning":
+			return nil, unsupported()
+		default:
+			return nil, unsupported()
+		}
+	}
+	if len(contents) == 0 || len(pending) != 0 {
+		return nil, invalid("invalid_request")
+	}
+	return contents, nil
+}
+
+func rawString(raw json.RawMessage) (string, bool) {
+	var value string
+	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
+		return "", false
+	}
+	return value, true
+}
+
+func contentTurn(role string, part any) any {
+	return map[string]any{"role": role, "parts": []any{part}}
+}
+
+func appendTurnPart(contents []any, role string, part any) []any {
+	if len(contents) != 0 {
+		last := contents[len(contents)-1].(map[string]any)
+		if last["role"] == role {
+			last["parts"] = append(last["parts"].([]any), part)
+			return contents
+		}
+	}
+	return append(contents, contentTurn(role, part))
+}
+
+func messageParts(raw json.RawMessage, role string) ([]any, *core.GatewayError) {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		if strings.TrimSpace(text) == "" {
+			return nil, invalid("invalid_request")
+		}
+		return []any{map[string]string{"text": text}}, nil
+	}
+	var blocks []json.RawMessage
+	if json.Unmarshal(raw, &blocks) != nil || blocks == nil || len(blocks) == 0 {
+		return nil, invalid("invalid_request")
+	}
+	parts := make([]any, 0, len(blocks))
+	wantType := "input_text"
+	if role == "assistant" {
+		wantType = "output_text"
+	}
+	for _, block := range blocks {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(block, &fields) != nil || fields == nil {
+			return nil, invalid("invalid_request")
+		}
+		for key := range fields {
+			if key != "type" && key != "text" && key != "refusal" && key != "annotations" {
+				return nil, unsupported()
+			}
+		}
+		var kind string
+		text, ok := rawString(fields["text"])
+		if json.Unmarshal(fields["type"], &kind) != nil {
+			return nil, invalid("invalid_request")
+		}
+		if kind == "refusal" && role == "assistant" {
+			text, ok = rawString(fields["refusal"])
+		} else if len(fields["refusal"]) != 0 {
+			return nil, unsupported()
+		}
+		if annotations, exists := fields["annotations"]; exists {
+			var values []json.RawMessage
+			if json.Unmarshal(annotations, &values) != nil || values == nil || !uniqueJSON(annotations) {
+				return nil, invalid("invalid_request")
+			}
+			if len(values) != 0 {
+				return nil, unsupported()
+			}
+		}
+		if !ok || strings.TrimSpace(text) == "" || (kind != wantType && kind != "text" && !(role == "assistant" && kind == "refusal")) {
+			return nil, unsupported()
+		}
+		parts = append(parts, map[string]string{"text": text})
+	}
+	return parts, nil
 }
 
 func functionTools(raw json.RawMessage) ([]any, map[string]bool, error) {

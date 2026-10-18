@@ -29,7 +29,7 @@ authorized reproducible evidence. No remote/provider capability is promoted.
 | Assistant `function_call` (`name`, arguments, call ID) | Model-role `content.parts[]` with `functionCall: {name, args, id?}` | Preserve call chronology and association. Argument JSON and ID constraints are not established by official evidence. No invented IDs or signature sentinel. |
 | `function_call_output` (call ID, output) | User-role `content.parts[]` with `functionResponse: {name, id?, response: {output: …}}` | Pair to the originating call by `call_id`; preserve causal order. Output serialization is candidate-only: do not coerce arbitrary structured output to text without a documented, lossless policy. |
 
-M10-015 implements only the response half for one Execute: candidate
+M10-015 implements the response half for one Execute: candidate
 `functionCall` parts are treated as complete call objects with a string `name`,
 object `args`, and optional string `id`, as represented in the pinned Rahul
 transformer. It serializes each complete argument object into a Responses delta
@@ -40,6 +40,15 @@ connector-local per-response IDs; duplicate explicit IDs fail closed. This is
 deterministic synthetic translation evidence only; provider acceptance and
 whether a live server emits other shapes remain Unknown. Thought-marked parts or
 any thought signature reject the frame before that frame emits content.
+
+M10-016 adds the request-history half for text messages and
+`function_call`/`function_call_output` items. It associates each result with its
+originating call ID and name, preserves JSON arguments/results and item order,
+coalesces adjacent same-role parts, and rejects orphan, duplicate, dangling,
+interleaved, malformed, or signature/reasoning-bearing history before dispatch.
+The implementation is stateless across Execute calls; it does not establish
+signature-dependent continuation or live Gemini acceptance. The gateway adapter
+still applies its Responses input validation before the Connector.
 
 Rahul's pinned conversion coalesces adjacent same-role contents and puts a tool
 result in a user-role function response; it emits a synthetic `Hello` user turn
@@ -118,12 +127,15 @@ Required offline cases for a future separately scoped implementation:
    arguments, truncated history, and invalid signature representation never
    become an apparently valid tool execution.
 
-These tests establish only deterministic translation and lifecycle behavior.
+M10-016 verifies sequential and parallel candidate history, pre-dispatch
+rejection, and a fake-backend gateway tool cycle with incremental SSE and
+cancellation. The full gateway cycle exercises string tool results; Connector
+translation preserves arbitrary valid JSON result values exactly. These tests establish only deterministic translation and lifecycle behavior.
 They cannot establish official wire conformance, signature acceptance, live
 multi-turn success, capability support, or safe retries. Those remain **Unknown**
 and **BLOCKED**, respectively. M10-010 admitted declarations and tool-choice;
-M10-015 adds candidate response translation only. Function execution,
-result/history translation and signature-dependent continuation remain
+M10-015 and M10-016 implement candidate response and supported history
+translations. Function execution and signature-dependent continuation remain
 unsupported. See the [text/stream binding](M10-BINDING.md).
 
 ## References

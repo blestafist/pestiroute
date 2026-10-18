@@ -12,7 +12,7 @@ and [handoff](M10-HANDOFF.md).
 | Area | Offline candidate behavior | Evidence ceiling |
 | --- | --- | --- |
 | Client protocol/mode | `openai.responses.v1`, translation mode only | Connector admission; no native mode or other protocol claim |
-| Input | One non-empty text `input`, `stream: true`, model `gemini-2.5-pro` or `gemini-2.5-flash` | Synthetic allowlist only; other fields/features rejected |
+| Input | Non-empty text or supported Responses message/function-call history, `stream: true`, model `gemini-2.5-pro` or `gemini-2.5-flash` | Synthetic allowlist and causal validation only; no signature-dependent continuity claim |
 | Backend destination | `POST https://antigravity.synthetic.invalid/v1internal/projects/{project}:generateContent?alt=sse` through injected fake-only transport | Reserved `.invalid` fixture destination; external destinations and redirects rejected; never a production endpoint |
 | Capabilities | `llm.streaming`, `auth.oauth`, `usage.exact` are `Unknown`; other capabilities are not established | Fixture success does not satisfy live capability evidence or route eligibility |
 | Stream events | The first non-empty candidate text causes one `response.created`, followed by `response.output_text.delta` event(s); later text emits deltas without another created event. The synthetic terminal marker emits `response.completed` whether or not text appeared. A terminal-only upstream stream therefore emits `response.completed` without `response.created` or deltas. | Verified synthetic behavior and Responses encoder acceptance; no claim of complete Responses lifecycle conformance |
@@ -22,16 +22,25 @@ and [handoff](M10-HANDOFF.md).
 
 Admission fails closed for unsupported protocol/mode, model, input, malformed
 or duplicate-key JSON, unknown fields, missing project, invalid/missing scoped
-OAuth access token, and unavailable/non-fake transport. Tools, tool history,
-reasoning/signatures, multimodal inputs, structured output, project discovery,
+OAuth access token, and unavailable/non-fake transport. Function declarations
+and supported function history are candidate-translated; orphan, duplicate,
+interleaved and dangling calls fail before dispatch. Reasoning/signatures,
+multimodal inputs, structured output, project discovery,
 OAuth exchange/refresh, and live authentication are unsupported or Unknown.
 These constraints and the exact retry dispositions are specified in the
 [binding](M10-BINDING.md); this matrix does not promote them to live behavior.
+No standard Responses carrier with verifiable origin/scope for Gemini thought
+signatures is established. Consequently, fullworking live tool loops on
+signature-enforcing Thinking models remain constrained despite the offline
+history mapping. Offline follow-up may research carrier mapping or
+`skip_thought_signature_validator`; neither behavior is implemented, authorized,
+or treated as a safe bypass.
 
 ## Verification references
 
 Offline behavior is covered by `internal/connector/antigravity` tests, including
-`TestResponsesEncoderAcceptsConnectorStream`. Deterministic tests establish only
-the fake fixture behavior described above. The next auth, project, and
-tools/history scopes require separate cards and evidence before implementation;
+`TestResponsesToolHistoryCandidateTranslationAndCausalRejection`, and the
+gateway tool-cycle/cancellation test. Deterministic tests establish only
+the fake fixture behavior described above. Auth, project, and signature-replay
+scopes require separate cards and evidence before implementation;
 live work requires separately recorded authority and provider evidence.

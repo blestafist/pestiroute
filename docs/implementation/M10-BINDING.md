@@ -21,7 +21,7 @@ deterministic fake-only acceptance tests subject to M10-003 fixture provenance.
 | Component | Private `antigravity.Connector`, implementing the existing `core.Connector` contract; stable descriptor ID `pestiroute.antigravity.v1internal` is a proposed implementation identity, not a provider identity. |
 | Profile | `antigravity-v1internal`, selected only by trusted component configuration. It names this candidate translation, not a supported Google API. |
 | Client protocol | Exactly `openai.responses.v1`; translation mode only. Native mode, other protocol versions, and implicit protocol inference are rejected. |
-| Work in scope | One text-only prompt and candidate function declarations/tool-choice mapping producing an incrementally translated Responses stream of text and candidate function-call outputs. Function execution/history and signature-dependent continuation remain unsupported. One Execute is one attempt for the runtime-selected account. |
+| Work in scope | Text prompts or supported text/function-call history, candidate function declarations/tool-choice mapping, and an incrementally translated Responses stream of text and candidate function-call outputs. History translation is stateless per Execute; thought-signature-dependent continuation remains unsupported. One Execute is one attempt for the runtime-selected account. |
 | Capabilities | `llm.streaming` is `supported` only for `openai.responses.v1` translation, meaning this exact implementation scope is available and deterministically verified. It does not claim remote entitlement or provider support. `auth.oauth`, `usage.exact`, and all other capabilities remain `unknown`. |
 
 The existing `core.Connector.Execute(context, request, attemptScope,
@@ -35,7 +35,7 @@ contract and compatibility review before implementation.
 
 The admitted `RawPayload` remains immutable. The Connector requires the exact
 protocol above, translation mode, a live invocation context, and a bounded valid
-JSON object. Accept `model` (allowlisted string), `input` (non-empty string),
+JSON object. Accept `model` (allowlisted string), `input` (non-empty string or supported Responses item array),
 `stream: true` (required), and only the function declarations/tool-choice forms
 described in [M10-TOOL-BINDING](M10-TOOL-BINDING.md#candidate-translation). Reject malformed JSON, duplicate keys, trailing
 values, unknown top-level fields, invalid field types, false/missing stream, and
@@ -43,10 +43,13 @@ unsupported semantics before transport dispatch. Do not silently drop fields.
 The adapter owns client-protocol decoding; the Connector-owned private parser
 validates the supported subset and does not introduce a shared message schema.
 
-Reject tool history, unsupported tool options, images, audio, video, other
-multimodal input, structured-output constraints, unsupported reasoning/state
-fields, and unrecognized extension fields as `unsupported_feature` before
-dispatch. Candidate function-call responses are translated by M10-015 as
+Reject unsupported tool options, images, audio, video, other multimodal input,
+structured-output constraints, unsupported reasoning/state fields, and
+unrecognized extension fields as `unsupported_feature` before dispatch.
+Supported message, function-call and function-call-output history is translated
+by M10-016 with per-request causal ID/name matching; orphan, duplicate,
+interleaved, malformed, or dangling calls fail before dispatch. Function results
+retain their JSON value in the candidate response wrapper. Candidate function-call responses are translated by M10-015 as
 complete `name`/object-`args`/optional-`id` parts; unsupported shapes fail rather
 than being silently dropped. This is an offline candidate based on pinned plugin
 source, not a provider guarantee. Thought signatures remain unsupported/Unknown:

@@ -32,9 +32,9 @@ func TestAntigravityProtectedYAMLStreamsAndCancelsWithRealHTTPClients(t *testing
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := upstreamCalls.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Synthetic gateway output\"}]}}]}}\n\n")
-		w.(http.Flusher).Flush()
 		if call == 1 {
+			_, _ = io.WriteString(w, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"id\":\"call-cycle-1\",\"args\":{\"q\":\"synthetic\"}}}]}}]}}\n\n")
+			w.(http.Flusher).Flush()
 			select {
 			case <-releaseTerminal:
 				_, _ = io.WriteString(w, "data: {\"response\":{\"done\":true}}\n\n")
@@ -43,6 +43,13 @@ func TestAntigravityProtectedYAMLStreamsAndCancelsWithRealHTTPClients(t *testing
 			}
 			return
 		}
+		if call == 2 {
+			_, _ = io.WriteString(w, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Synthetic gateway final\"}]}}]}}\n\ndata: {\"response\":{\"done\":true}}\n\n")
+			w.(http.Flusher).Flush()
+			return
+		}
+		_, _ = io.WriteString(w, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Synthetic gateway output\"}]}}]}}\n\n")
+		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 		close(cancelObserved)
 	}))
@@ -155,8 +162,8 @@ policies: {standard: policy-id-a}
 	}
 	gateway := httptest.NewServer(h)
 	t.Cleanup(gateway.Close)
-	post := func(ctx context.Context) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{"model":"gemini-2.5-pro","stream":true,"input":"synthetic prompt"}`))
+	post := func(ctx context.Context, input string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(input))
 		if err != nil {
 			return nil, err
 		}
@@ -165,12 +172,12 @@ policies: {standard: policy-id-a}
 		return gateway.Client().Do(req)
 	}
 
-	response, err := post(context.Background())
+	response, err := post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"input":"synthetic prompt"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	reader := bufio.NewReader(response.Body)
-	first := readGatewayUntil(t, reader, "Synthetic gateway output")
+	first := readGatewayUntil(t, reader, "lookup")
 	if strings.Contains(first, "response.completed") {
 		t.Fatal("gateway exposed completion before controlled upstream released its terminal frame")
 	}
@@ -183,9 +190,19 @@ policies: {standard: policy-id-a}
 	if response.StatusCode != http.StatusOK || !strings.Contains(first+string(remaining), "response.completed") {
 		t.Fatalf("gateway status=%d incomplete stream=%q", response.StatusCode, first+string(remaining))
 	}
+	resultInput := `{"model":"gemini-2.5-pro","stream":true,"input":[{"type":"function_call","call_id":"call-cycle-1","name":"lookup","arguments":"{\"q\":\"synthetic\"}"},{"type":"function_call_output","call_id":"call-cycle-1","output":"synthetic result"}]}`
+	response, err = post(context.Background(), resultInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalBytes, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(finalBytes), "Synthetic gateway final") || !strings.Contains(string(finalBytes), "response.completed") {
+		t.Fatalf("tool result completion status=%d err=%v body=%q", response.StatusCode, err, finalBytes)
+	}
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
-	response, err = post(cancelCtx)
+	response, err = post(cancelCtx, `{"model":"gemini-2.5-pro","stream":true,"input":"synthetic prompt"}`)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -199,8 +216,8 @@ policies: {standard: policy-id-a}
 	case <-time.After(3 * time.Second):
 		t.Fatal("downstream cancellation did not cancel the controlled upstream request")
 	}
-	if upstreamCalls.Load() != 2 {
-		t.Fatalf("upstream calls=%d want 2", upstreamCalls.Load())
+	if upstreamCalls.Load() != 3 {
+		t.Fatalf("upstream calls=%d want 3", upstreamCalls.Load())
 	}
 }
 

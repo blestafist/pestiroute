@@ -777,7 +777,7 @@ func TestAdmissionRejectsBeforeDispatch(t *testing.T) {
 	f := &fakeDoer{}
 	c := ready(t)
 	svc := services(f)
-	for _, body := range []string{`{"model":"gemini-2.5-pro","input":"x","stream":true,"extra":1}`, `{"model":"gemini-2.5-pro","model":"gemini-2.5-pro","input":"x","stream":true}`, `{"model":"gemini-2.5-pro","input":"x","stream":false}`, `{"model":"gemini-2.5-pro","input":["x"],"stream":true}`, `{"model":"bad","input":"x","stream":true}`, `{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"computer","name":"x"}]}`, `{"model":"gemini-2.5-pro","input":"x","stream":true,"previous_response_id":"resp_1"}`} {
+	for _, body := range []string{`{"model":"gemini-2.5-pro","input":"x","stream":true,"extra":1}`, `{"model":"gemini-2.5-pro","model":"gemini-2.5-pro","input":"x","stream":true}`, `{"model":"gemini-2.5-pro","input":"x","stream":false}`, `{"model":"gemini-2.5-pro","input":["x"],"stream":true}`, `{"model":"bad","input":"x","stream":true}`, `{"model":"gemini-2.5-pro","input":"x","stream":true,"tools":[{"type":"computer","name":"x"}]}`, `{"model":"gemini-2.5-pro","input":"x","stream":true,"previous_response_id":"resp_1"}`, `{"model":"gemini-2.5-pro","stream":true,"input":[{"type":"function_call_output","call_id":"orphan","output":"x"}]}`, `{"model":"gemini-2.5-pro","stream":true,"input":[{"type":"function_call","call_id":"x","name":"lookup","arguments":"{}"},{"type":"message","role":"user","content":"interleaved"}]}`, `{"model":"gemini-2.5-pro","stream":true,"input":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"cited","annotations":[{"type":"url_citation","url":"https://example.invalid"}]}]}]}`, `{"model":"gemini-2.5-pro","stream":true,"input":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"cited","annotations":"malformed"}]}]}`} {
 		_, ge := c.Execute(context.Background(), request(body), core.AttemptScope{Mode: core.ModeTranslation}, svc)
 		if ge == nil {
 			t.Errorf("accepted %s", body)
@@ -785,6 +785,52 @@ func TestAdmissionRejectsBeforeDispatch(t *testing.T) {
 	}
 	if f.calls != 0 {
 		t.Fatalf("invalid requests dispatched %d times", f.calls)
+	}
+}
+
+func TestResponsesToolHistoryCandidateTranslationAndCausalRejection(t *testing.T) {
+	input := json.RawMessage(`[{"type":"message","role":"user","content":[{"type":"input_text","text":"find"}]},{"type":"function_call","call_id":"call-a","name":"lookup","arguments":"{\"q\":\"a\"}"},{"type":"function_call","call_id":"call-b","name":"fetch","arguments":"{}"},{"type":"function_call_output","call_id":"call-b","output":{"exact":[1,true]}},{"type":"function_call_output","call_id":"call-a","output":"done"},{"type":"function_call","call_id":"call-c","name":"finish","arguments":"{\"ok\":true}"},{"type":"function_call_output","call_id":"call-c","output":{"done":true}},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"finished"}]}]`)
+	contents, err := translateInput(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"parts":[{"text":"find"}],"role":"user"},{"parts":[{"functionCall":{"args":{"q":"a"},"id":"call-a","name":"lookup"}},{"functionCall":{"args":{},"id":"call-b","name":"fetch"}}],"role":"model"},{"parts":[{"functionResponse":{"id":"call-b","name":"fetch","response":{"output":{"exact":[1,true]}}}},{"functionResponse":{"id":"call-a","name":"lookup","response":{"output":"done"}}}],"role":"user"},{"parts":[{"functionCall":{"args":{"ok":true},"id":"call-c","name":"finish"}}],"role":"model"},{"parts":[{"functionResponse":{"id":"call-c","name":"finish","response":{"output":{"done":true}}}}],"role":"user"},{"parts":[{"text":"finished"}],"role":"model"}]`
+	got, _ := json.Marshal(contents)
+	if string(got) != want {
+		t.Fatalf("candidate contents=%s want %s", got, want)
+	}
+	for _, bad := range []string{
+		`[{"type":"function_call_output","call_id":"orphan","output":"x"}]`,
+		`[{"type":"function_call","call_id":"x","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"x","output":"1"},{"type":"function_call_output","call_id":"x","output":"2"}]`,
+		`[{"type":"function_call","call_id":"x","name":"lookup","arguments":"{}"},{"type":"message","role":"user","content":"early"}]`,
+		`[{"type":"function_call","call_id":"x","name":"lookup","arguments":"{}"}]`,
+		`[{"type":"reasoning","summary":[]}]`,
+		`[{"type":"function_call","call_id":"x","name":"lookup","arguments":"{}","thought_signature":"secret"}]`,
+		`[{"type":"function_call","call_id":"x","name":"lookup","arguments":"{\"a\":1,\"a\":2}"}]`,
+	} {
+		if _, ge := translateInput(json.RawMessage(bad)); ge == nil {
+			t.Errorf("accepted invalid history %s", bad)
+		}
+	}
+	for _, accepted := range []string{`"plain prompt"`, `[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]`} {
+		if _, ge := translateInput(json.RawMessage(accepted)); ge != nil {
+			t.Errorf("rejected ordinary text history %s: %v", accepted, ge)
+		}
+	}
+	emptyAnnotations := json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"cited text","annotations":[]}]}]`)
+	contents, err = translateInput(emptyAnnotations)
+	if err != nil {
+		t.Fatalf("rejected empty annotations: %v", err)
+	}
+	got, _ = json.Marshal(contents)
+	if string(got) != `[{"parts":[{"text":"cited text"}],"role":"model"}]` {
+		t.Fatalf("empty annotation translation=%s", got)
+	}
+	for _, annotation := range []string{`[{"type":"url_citation","url":"https://example.invalid"}]`, `"malformed"`} {
+		input := json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"cited text","annotations":` + annotation + `}]}]`)
+		if _, ge := translateInput(input); ge == nil {
+			t.Errorf("silently accepted annotations %s", annotation)
+		}
 	}
 }
 
