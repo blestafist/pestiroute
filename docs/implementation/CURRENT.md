@@ -39,15 +39,15 @@ its own active lane and is not included here.
 | Milestone | Source branch / revision | Result / next step |
 | --- | --- | --- |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` / `886a81d` | M11-001–007 DONE; isolated management API, [OpenAPI](../api/admin.openapi.yaml) and [handoff](M11-HANDOFF.md) |
-| [M12](M12-WEBUI.md) | `dev-m12-webui` / `fc92dbf` | M12-001–004 DONE; fixture UI only; M12-005/006 remain DRAFT |
+| [M12](M12-WEBUI.md) | `dev-m12-webui` / `831f2d4` | M12-001–005 DONE; Admin API client & in-memory auth integrated; M12-006 DRAFT |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` / `1b0cb6e` | M13-001–004 DONE; deployment, backup/restore and [handoff](M13-HANDOFF.md); UI packaging deferred |
 
-The UI still uses fixtures. M12-005 owns the real HTTP client and memory-only
-operator authentication; M12-006 owns embedding and real gateway/SQLite browser
-E2E. After this integration reaches main, update the existing M12 worktree from
-its remote branch, reconcile fixtures with M11 DTOs, and settle M12-005's exact
-verification commands before marking it READY. Then continue `/next 10 M12`.
-Do not switch branches underneath running workers. See [PARALLEL](PARALLEL.md).
+M12-005 is verified and closed DONE with reviewer PASS. The WebUI defaults to
+the accepted M11 admin API client with memory-only authentication; demo fixtures
+require explicit opt-in. M12-006 owns embedding and real gateway/SQLite browser
+E2E and remains DRAFT (with reviewer nonblocking focus/escape and label
+disambiguation notes noted for inclusion). Do not switch branches underneath
+running workers. See [PARALLEL](PARALLEL.md).
 
 The integration review resolved the CURRENT table conflict and fixed five task
 card links. Dedicated WebUI CI now runs lockfile installation, typechecking,

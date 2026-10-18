@@ -4,9 +4,10 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { clearSession, fixtureAdapter, fixtureData, getSessionToken } from './fixtures'
+import { clearOperatorToken } from './api'
 
 function LocationSearch() { return <output data-testid="location-search">{useLocation().search}</output> }
-function renderApp(path = '/') { return render(<MemoryRouter initialEntries={[path]}><App /><LocationSearch /></MemoryRouter>) }
+function renderApp(path = '/') { const result = render(<MemoryRouter initialEntries={[path]}><App /><LocationSearch /></MemoryRouter>); fireEvent.click(screen.getByRole('button', { name: 'Use demo data' })); return result }
 
 describe('operator demo shell', () => {
   afterEach(() => { clearSession(); fixtureAdapter.policyRevision = 1 })
@@ -295,5 +296,144 @@ describe('operator demo shell', () => {
     renderApp('/')
     expect(screen.getByText('1', { selector: 'strong' })).toBeInTheDocument()
     expect(fixtureData.overview.enabledAccounts).toBe(fixtureData.connections.filter(account => account.enabled).length)
+  })
+})
+
+describe('live administration mode', () => {
+  afterEach(() => { clearSession(); clearOperatorToken(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+  const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
+  const statusDTO = { version: '1.2.3', readiness: 'ready', components: [], routes: [] }
+  const accountPage = { items: [{ id: 'acct-1', connector: 'conn-1', enabled: true, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }], limit: 50, offset: 0, total: 1 }
+  function stubLiveAPI(handler: (url: string, init: RequestInit) => Response) {
+    const fetcher = vi.fn((url: string, init: RequestInit = {}) => Promise.resolve(handler(url, init)))
+    vi.stubGlobal('fetch', fetcher)
+    return fetcher
+  }
+  async function connect(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText('Operator bearer token'), 'operator-token')
+    await user.click(screen.getByRole('button', { name: 'Connect' }))
+  }
+  it('defaults to live API authentication, keeps the token in memory and logs out', async () => {
+    const user = userEvent.setup()
+    render(<MemoryRouter><App /></MemoryRouter>)
+    expect(screen.getByRole('heading', { name: 'PestiRoute administration' })).toBeInTheDocument()
+    expect(screen.queryByText('DEMO DATA — NOT LIVE')).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('Operator bearer token'), 'live-secret')
+    await user.click(screen.getByRole('button', { name: 'Connect' }))
+    expect(screen.queryByText('live-secret')).not.toBeInTheDocument()
+    expect(localStorage.length).toBe(0)
+    expect(sessionStorage.length).toBe(0)
+    expect(screen.getByText('Live administration API')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Log out' }))
+    expect(screen.getByRole('heading', { name: 'PestiRoute administration' })).toBeInTheDocument()
+  })
+  it('returns to unauthenticated state on an API 401 without persisting the token', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { code: 'unauthorized', message: 'Invalid operator token', request_id: 'req-auth' } }), { status: 401 })))
+    render(<MemoryRouter><App /></MemoryRouter>)
+    await user.type(screen.getByLabelText('Operator bearer token'), 'expired-token')
+    await user.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'PestiRoute administration' })).toBeInTheDocument())
+    expect(localStorage.length).toBe(0)
+    expect(sessionStorage.length).toBe(0)
+  })
+  it.each([
+    ['/', ['/admin/v1/status', '/admin/v1/usage/summary']],
+    ['/connections', ['/admin/v1/status', '/admin/v1/accounts']],
+    ['/keys', ['/admin/v1/keys', '/admin/v1/policies']],
+    ['/usage', ['/admin/v1/usage/summary', '/admin/v1/usage/requests?limit=50', '/admin/v1/usage/attempts?limit=50']],
+    ['/routing', ['/admin/v1/status']],
+    ['/settings', ['/admin/v1/status']],
+  ])('loads %s from its accepted API endpoints', async (path, expected) => {
+    const user = userEvent.setup()
+    const fetcher = stubLiveAPI(url => url.endsWith('/status') ? response(statusDTO) : url.endsWith('/accounts') ? response(accountPage) : url.endsWith('/summary') ? response({ requests: 0, attempts: 0, input_tokens: null, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 0, actual_tokens: null, effective_charge: 0 }) : url.endsWith('/keys') || url.endsWith('/policies') || url.includes('/usage/') ? response({ items: [], limit: 50, offset: 0, total: 0 }) : response({}))
+    render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>)
+    await connect(user)
+    await waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(expected.length))
+    for (const endpoint of expected) expect(fetcher.mock.calls.some(([url]) => url === endpoint)).toBe(true)
+  })
+  it('keeps mutation inputs on 409 and offers an explicit refresh', async () => {
+    const user = userEvent.setup()
+    const fetcher = stubLiveAPI((url, init) => {
+      if (url.endsWith('/status')) return response(statusDTO)
+      if (url.endsWith('/accounts') && init.method === 'POST') return response({ error: { code: 'revision_conflict', message: 'Account state changed', request_id: 'req-conflict' } }, 409)
+      if (url.endsWith('/accounts')) return response(accountPage)
+      return response({})
+    })
+    render(<MemoryRouter initialEntries={['/connections']}><App /><LocationSearch /></MemoryRouter>)
+    await connect(user)
+    await user.type(await screen.findByLabelText('Account ID'), 'new-acct')
+    await user.type(screen.getByLabelText('Connector'), 'connector-type')
+    await user.click(screen.getByRole('button', { name: 'Create account' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Revision conflict')
+    expect(screen.getByRole('alert')).toHaveTextContent('req-conflict')
+    expect(screen.getByLabelText('Account ID')).toHaveValue('new-acct')
+    expect(screen.getByLabelText('Connector')).toHaveValue('connector-type')
+    await user.click(screen.getByRole('button', { name: 'Refresh latest revision' }))
+    expect(screen.getByLabelText('Account ID')).toHaveValue('new-acct')
+    expect(fetcher.mock.calls.filter(([url]) => url.endsWith('/accounts')).length).toBeGreaterThan(2)
+  })
+  it.each([403, 404, 413, 500, 503])('renders an actionable alert with request id for HTTP %i', async status => {
+    const user = userEvent.setup()
+    stubLiveAPI(url => url.endsWith('/status') ? response(statusDTO) : response({ error: { code: 'test_error', message: 'Safe API detail', request_id: `req-${status}` } }, status))
+    render(<MemoryRouter initialEntries={['/connections']}><App /></MemoryRouter>)
+    await connect(user)
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Safe API detail')
+    expect(alert).toHaveTextContent(`req-${status}`)
+    expect(alert).toHaveTextContent(status === 403 ? 'Access denied' : status === 404 ? 'Resource not found' : status === 413 ? 'too large' : status === 503 ? 'unavailable' : 'server could not complete')
+  })
+  it('renders successful sibling data while a related usage endpoint fails', async () => {
+    const user = userEvent.setup()
+    stubLiveAPI(url => url.endsWith('/summary') ? response({ requests: 4, attempts: 5, input_tokens: 12, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 12, actual_tokens: null, effective_charge: 12 }) : url.includes('/usage/requests') ? response({ error: { code: 'denied', message: 'Requests unavailable', request_id: 'req-partial' } }, 403) : url.includes('/usage/attempts') ? response({ items: [{ id: 'attempt-1', state: 'failed', error_reason: null }], limit: 50, offset: 0, total: 1 }) : response({}))
+    render(<MemoryRouter initialEntries={['/usage']}><App /></MemoryRouter>)
+    await connect(user)
+    expect(await screen.findByText(/Requests 4 · Attempts 5/)).toBeInTheDocument()
+    expect(screen.getByText(/attempt-1 · failed/)).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('req-partial')
+  })
+  it('keeps auth session identifiers in memory, displays advertised user action, and submits transient callback input', async () => {
+    const user = userEvent.setup()
+    const fetcher = stubLiveAPI((url, init) => {
+      if (url.endsWith('/status')) return response({ ...statusDTO, components: [{ id: 'conn-1', kind: 'connector', implementation: 'connector', health: 'unknown', capabilities: { 'auth.oauth': 'supported' } }] })
+      if (url.endsWith('/accounts')) return response(accountPage)
+      if (url.endsWith('/auth/sessions') && init.method === 'POST') return response({ status: 'continue', session_id: 'opaque-session', expires_at: null, user_action: { verification_uri: 'https://auth.example.test/device', user_code: 'ABCD-EFGH' } })
+      if (url.endsWith('/continue')) return response({ status: 'complete', session_id: null, expires_at: null, user_action: null })
+      return response({})
+    })
+    render(<MemoryRouter initialEntries={['/connections']}><App /><LocationSearch /></MemoryRouter>)
+    await connect(user)
+    await user.click(await screen.findByRole('button', { name: 'Start OAuth authentication' }))
+    expect(await screen.findByRole('link', { name: 'Open verification page' })).toHaveAttribute('href', 'https://auth.example.test/device')
+    expect(screen.getByText('ABCD-EFGH')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('Callback input (transient)'), 'one-time-callback')
+    await user.click(screen.getByRole('button', { name: 'Continue authentication' }))
+    await waitFor(() => expect(fetcher.mock.calls.some(([url, init]) => url.endsWith('/auth/sessions/opaque-session/continue') && JSON.parse(String(init?.body)).callback_input === 'one-time-callback')).toBe(true))
+    expect(screen.queryByLabelText('Callback input (transient)')).not.toBeInTheDocument()
+    expect(document.cookie).toBe('')
+    expect(localStorage.length).toBe(0)
+    expect(sessionStorage.length).toBe(0)
+    expect(screen.getByTestId('location-search')).not.toHaveTextContent('one-time-callback')
+    expect(screen.getByTestId('location-search')).not.toHaveTextContent('opaque-session')
+  })
+  it('reports unavailable authentication service errors', async () => {
+    const user = userEvent.setup()
+    stubLiveAPI((url, init) => url.endsWith('/status') ? response({ ...statusDTO, components: [{ id: 'conn-1', kind: 'connector', implementation: 'connector', health: 'unknown', capabilities: { 'auth.oauth': 'supported' } }] }) : url.endsWith('/accounts') ? response(accountPage) : url.endsWith('/auth/sessions') && init.method === 'POST' ? response({ error: { code: 'unavailable', message: 'Authentication is not configured', request_id: 'req-auth-down' } }, 503) : response({}))
+    render(<MemoryRouter initialEntries={['/connections']}><App /></MemoryRouter>)
+    await connect(user)
+    await user.click(await screen.findByRole('button', { name: 'Start OAuth authentication' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Authentication service unavailable')
+    expect(screen.getByRole('alert')).toHaveTextContent('req-auth-down')
+  })
+  it('never persists auth values to cookies or URL parameters', async () => {
+    const user = userEvent.setup()
+    stubLiveAPI(url => url.endsWith('/status') ? response(statusDTO) : url.endsWith('/summary') ? response({ requests: 0, attempts: 0, input_tokens: null, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 0, actual_tokens: null, effective_charge: 0 }) : url.includes('/usage/') ? response({ items: [], limit: 50, offset: 0, total: 0 }) : response({}))
+    render(<MemoryRouter initialEntries={['/usage?filter=value']}><App /><LocationSearch /></MemoryRouter>)
+    await connect(user)
+    expect(screen.getByTestId('location-search')).toHaveTextContent('filter=value')
+    expect(document.cookie).toBe('')
+    expect(localStorage.length).toBe(0)
+    expect(sessionStorage.length).toBe(0)
+    expect(window.location.search).not.toContain('operator-token')
   })
 })
