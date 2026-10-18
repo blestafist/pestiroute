@@ -83,6 +83,15 @@ truncate, or replay signatures across scope boundaries. Fail closed rather than
 claiming signature preservation or continuity when the carrier or verification
 mechanism is absent. Do not invent a contract field to fill this evidence gap.
 
+The offline connector allowlists `gemini-2.5-pro` and `gemini-2.5-flash`; this
+model allowlist does not classify models as thinking/non-thinking or gate on
+signature enforcement. It rejects reasoning/signature-bearing submitted history
+before dispatch, and rejects an upstream signature-bearing frame before
+delivering that frame; the latter occurs after the request was dispatched. Thus
+signature-dependent tool loops on signature-enforcing models are blocked, but
+this is not a model-wide pre-dispatch gate or a live-provider compatibility
+finding.
+
 The v1 contract leaves request body bytes opaque to Core and permits translation
 inside a Connector; no universal tool/signature type or Core parsing is needed.
 However, this research has not established that Responses history can carry the

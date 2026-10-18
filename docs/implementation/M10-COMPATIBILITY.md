@@ -31,8 +31,14 @@ These constraints and the exact retry dispositions are specified in the
 [binding](M10-BINDING.md); this matrix does not promote them to live behavior.
 No standard Responses carrier with verifiable origin/scope for Gemini thought
 signatures is established. Consequently, fullworking live tool loops on
-signature-enforcing Thinking models remain constrained despite the offline
-history mapping. Offline follow-up may research carrier mapping or
+signature-enforcing Thinking models remain blocked despite the offline
+history mapping. The connector allowlists only `gemini-2.5-pro` and
+`gemini-2.5-flash`; this is not a thinking/non-thinking classification or
+signature-enforcement gate. Reasoning or signature metadata in submitted
+history is rejected before dispatch; a signature first
+seen in an upstream frame is rejected before that frame is delivered, after the
+request has already been dispatched. Do not describe this as model-wide
+pre-dispatch detection. Offline follow-up may research carrier mapping or
 `skip_thought_signature_validator`; neither behavior is implemented, authorized,
 or treated as a safe bypass.
 

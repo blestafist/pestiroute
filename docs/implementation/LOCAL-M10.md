@@ -10,8 +10,9 @@ provider calls.
 ## Offline setup: isolated database, key, account, and credential placeholder
 
 Run from the repository root in Bash with Go and Python 3. This creates a temporary
-database and a 32-byte master key readable only by the current user. All files
-are disposable; do not point these commands at a real operator database.
+database and a 32-byte master key readable only by the current user. This fixture
+is offline-only and disposable; do not use it for browser auth or live inference,
+and do not point these commands at a real operator database.
 
 ```sh
 set -eu
@@ -41,6 +42,10 @@ The current binary migrates a new database through schema version 6; check the
 `status` output. For an existing database, stop the gateway and take a
 consistent SQLite backup before migrating. Keep the matching external master
 key; never replace it with a newly generated key for an existing database.
+The commands above initialize only their newly created disposable directory.
+An operator-store rebuild or schema upgrade is a separate, explicit manual
+operation with a verified backup; never overwrite an existing database or
+credential row or regenerate its master key as part of this procedure.
 
 The auth CLI currently requires **exactly one credential row** for an account
 and binds it under the name `oauth`. `authCredentialRefs` enforces this before
@@ -80,6 +85,39 @@ Custom client IDs remain configurable without a secret, allowing explicit
 public-client configurations. `auth start` itself remains offline and emits no
 network request. Live authorization remains blocked pending separate provider
 registration evidence and operator authorization.
+
+The emulated client secret is runtime configuration, never a repository default
+or a user/plugin token. Provide `PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET` through the
+operator's protected secret manager/runtime environment; do not put its value in
+repository files, shell commands, scripts, arguments, or logs. The standalone
+launcher preserves this inherited variable and requires it for the default
+emulated client. If an explicitly reviewed public client is configured through
+`PESTIROUTE_ANTIGRAVITY_CLIENT_ID`, the secret may be absent; token exchange still
+uses the connector's own client validation and fails closed when required.
+
+## Standalone auth launcher
+
+Build a standalone binary offline, then choose an existing persistent operator
+directory outside `/tmp` that contains `gateway.db` and its matching `master.key`.
+The launcher does not create, migrate, overwrite, or clean up that directory; it
+is not an initializer. Do not point it at an existing store unless its use is
+explicitly authorized. The account must already be `antigravity-local` with the
+required `oauth` credential row. The offline fixture above is deliberately not
+the persistent live-auth store.
+
+```sh
+export PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT=/absolute/path/to/persistent/operator-data
+export GATEWAY_BIN="$WORK/gateway"
+# Supply PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET from protected runtime config.
+scripts/antigravity-auth.sh start
+```
+
+Run `start` in a private local terminal without redirection, shell tracing, or
+shared terminal capture: its child prints the authorization URL and session
+handle there. It does not log or store the URL itself. Use the session handle
+only as a command argument; callback codes and URLs must never be arguments.
+The launcher has no implicit onboarding, retry, database setup, or credential
+creation behavior.
 
 Optional local overrides; absent an override, `auth start` records a new dynamic
 loopback redirect URI in that session's opaque continuation:
@@ -131,13 +169,16 @@ Only after separate live authorization, opt in to outbound HTTPS and continue
 with the session handle printed by `start`:
 
 ```sh
+# Only after separate operator authorization; keep protected client-secret
+# configuration in the process environment, not in this command.
 export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1
-"$WORK/gateway" admin --db "$DB" --master-key "$MASTER_KEY" auth continue --session SESSION_ID --callback-stdin
+scripts/antigravity-auth.sh continue SESSION_ID
 ```
 
 Paste the complete loopback callback URL into this command's stdin and press
-Enter. Never put the code/URL in command arguments, shell history, files, logs,
-or chat; `--callback-stdin` does not echo it. Continuation exchanges the one-time
+Enter. The script invokes the standalone binary with `--callback-stdin`; it
+does not echo or log the pasted value. Never put the code/URL in command
+arguments, shell history, files, logs, or chat. Continuation exchanges the one-time
 code and performs one candidate `loadCodeAssist` project lookup over HTTPS. Both
 requests require the explicit real-transport opt-in, which enables outbound auth
 and inference HTTPS; it is not a test flag. Do not run continuation during
@@ -147,10 +188,13 @@ explicit Execute project, and no onboarding or fallback occurs.
 ## Protected gateway configuration and single-turn smoke
 
 After separately authorized OAuth succeeds, the `oauth` row contains the
-encrypted credential. Create `$WORK/gateway.yaml` with the disposable paths and
-operator-selected project name:
+encrypted credential. Point the gateway at the same persistent database and
+matching key used by the launcher; keep only the YAML and binary in the temporary
+working directory:
 
 ```sh
+DB=$PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT/gateway.db
+MASTER_KEY=$PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT/master.key
 cat >"$WORK/gateway.yaml" <<YAML
 version: 1
 server: {listen: "127.0.0.1:8080", max_request_bytes: 1048576, shutdown_timeout: 5s}
@@ -186,7 +230,9 @@ The following is a **live provider request**, not an offline test. Run it only
 after separate operator authorization, successful manual auth, and confirmation
 of the account/project and finite request budget. Start the local gateway with
 the real-transport opt-in still set. Keep it running in this terminal and note
-the non-secret temporary directory path printed by `printf`:
+the non-secret temporary directory path printed by `printf`. The gateway config
+uses the persistent operator database/key set above; only the binary and YAML
+remain temporary:
 
 ```sh
 printf 'WORK=%s\n' "$WORK"
@@ -194,14 +240,16 @@ export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1
 "$WORK/gateway" --config "$WORK/gateway.yaml" --config-format yaml
 ```
 
-In a second local terminal, set `WORK` to that printed path, then issue a
-virtual key and keep its one-time secret out of history/logs/chat. The CLI
+In a second local terminal, set `WORK` to that printed path and set the same
+persistent operator root used in the first terminal, then issue a virtual key
+against that store. Keep its one-time secret out of history/logs/chat. The CLI
 prints the secret, so capture it only in a local shell variable:
 
 ```sh
 WORK=/absolute/path/printed/above
-DB=$WORK/gateway.db
-MASTER_KEY=$WORK/master.key
+export PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT=/absolute/path/to/persistent/operator-data
+DB=$PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT/gateway.db
+MASTER_KEY=$PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT/master.key
 export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1
 KEY_OUTPUT=$("$WORK/gateway" admin --db "$DB" --master-key "$MASTER_KEY" key create --policy antigravity-local-policy)
 VKEY=$(printf '%s\n' "$KEY_OUTPUT" | sed -n 's/^secret=\([^ ]*\).*/\1/p')
@@ -223,9 +271,32 @@ Stop the gateway with Ctrl-C, then remove the disposable fixture directory from
 the first terminal with `rm -rf -- "$WORK"`. Do not remove a real data
 directory.
 
-This smoke exercises only one text turn over streaming Responses. It does not
-verify broad client compatibility or provider support. Multi-round tool calling,
-tool-result/history continuation, and thought-signature handling remain
-unsupported/blocked; do not include tools in this smoke. No browser auth or live
-inference was run to prepare this document. Offline connector and gateway tests
-use deterministic synthetic transports and are not live-provider evidence.
+This smoke exercises only one text turn over streaming Responses. A separately
+authorized tool-loop request has this Responses shape; this is an offline
+candidate example, not a recommendation to send it to a provider. No currently
+allowlisted model is established here as non-thinking, and no provider/model
+tool-loop behavior is verified. Only consider a real request after separate
+evidence establishes that the selected model does not enforce signatures; the
+client must execute returned calls and send results/history in a subsequent
+request (there is no server-side tool execution):
+
+```json
+{"model":"gemini-2.5-pro","stream":true,"store":false,"input":"Look up the current status.","tools":[{"type":"function","name":"lookup","description":"Look up a status","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}],"tool_choice":"auto"}
+```
+
+Offline candidate translation accepts causal multi-turn Responses function-call
+history, including paired `function_call_output` items and parallel call
+coalescence; the client remains responsible for executing tools. The synthetic
+tests do not establish provider acceptance. Capability evidence for
+`llm.streaming`, `auth.oauth`, and `usage.exact` remain `Unknown`, so this is not
+a general provider-support claim. Text-only multi-turn requests do not require
+signature continuation, but fullworking/tool loops on signature-enforcing
+Thinking models are blocked: no Responses carrier or scoped signature
+verification is implemented. Reasoning/signature-bearing submitted history is
+rejected before dispatch; a signature first seen upstream is rejected before
+frame delivery, after dispatch. The connector does not detect/block models by
+thinking/non-thinking status: it accepts only the `gemini-2.5-pro` and
+`gemini-2.5-flash` model identifiers, which is a separate allowlist. Never bypass
+that guard. No browser auth
+or live inference was run to prepare this document. Offline connector and gateway
+tests use deterministic synthetic transports and are not live-provider evidence.
