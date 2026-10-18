@@ -1,0 +1,4 @@
+data: {"response":{"candidates":[{"index":0,"content":{"parts":[{"text":"before "},{"functionCall":{"name":"lookup","id":"candidate-call-a","args":{"query":"alpha"}}},{"text":"between "}]}},{"index":1,"content":{"parts":[{"functionCall":{"name":"lookup","id":"candidate-call-b","args":{"query":"beta"}}},{"text":"after"}]}}]}}
+
+data: {"response":{"done":true,"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":7}}}
+

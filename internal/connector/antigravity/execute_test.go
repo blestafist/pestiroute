@@ -72,7 +72,7 @@ type cancelBody struct {
 func (b *cancelBody) Read(p []byte) (int, error) {
 	if !b.sent {
 		b.sent = true
-		return copy(p, `data: {"response":{"candidates":[{"content":{"parts":[{"text":"x"}]}}]}}`+"\n\n"), nil
+		return copy(p, `data: {"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{"q":"x"}}}]}}]}}`+"\n\n"), nil
 	}
 	b.once.Do(func() { close(b.started) })
 	<-b.closed
@@ -450,7 +450,7 @@ func TestFunctionToolDeclarationMappingAndFailClosedOptions(t *testing.T) {
 	}
 }
 
-func TestFunctionToolChoiceModesAndFunctionCallResponsesFailClosed(t *testing.T) {
+func TestFunctionToolChoiceModes(t *testing.T) {
 	for _, tc := range []struct {
 		choice string
 		mode   string
@@ -476,14 +476,231 @@ func TestFunctionToolChoiceModesAndFunctionCallResponsesFailClosed(t *testing.T)
 			t.Errorf("choice %s config=%+v", tc.choice, config)
 		}
 	}
-	f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"},{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}}\n\n")}
+}
+
+func TestFunctionCallsStreamIncrementallyWithTextAndParallelIndices(t *testing.T) {
+	wire, err := os.ReadFile("testdata/stream-function-calls.sse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeDoer{response: response(http.StatusOK, string(wire))}
 	out, ge := ready(t).Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
 	if ge != nil {
 		t.Fatal(ge)
 	}
 	defer out.Stream.Close()
+	types := []string{}
+	indices := map[string][]int{}
+	var completed map[string]any
+	for {
+		frame, err := out.Stream.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameComplete {
+			break
+		}
+		if frame.Type != core.FrameBody {
+			continue
+		}
+		for _, line := range strings.Split(string(frame.Body.Data), "\n") {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			var event map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event); err != nil {
+				t.Fatal(err)
+			}
+			kind := event["type"].(string)
+			types = append(types, kind)
+			if index, ok := event["output_index"].(float64); ok {
+				indices[kind] = append(indices[kind], int(index))
+			}
+			if kind == "response.completed" {
+				completed = event["response"].(map[string]any)
+			}
+		}
+	}
+	wantTypes := []string{"response.created", "response.output_item.added", "response.output_text.delta", "response.output_item.added", "response.function_call_arguments.delta", "response.function_call_arguments.done", "response.output_item.done", "response.output_text.delta", "response.output_item.added", "response.function_call_arguments.delta", "response.function_call_arguments.done", "response.output_item.done", "response.output_text.delta", "response.output_text.done", "response.output_item.done", "response.completed"}
+	if strings.Join(types, ",") != strings.Join(wantTypes, ",") {
+		t.Fatalf("event order: %v", types)
+	}
+	callIndices := indices["response.function_call_arguments.delta"]
+	if len(callIndices) != 2 || callIndices[0] != 1 || callIndices[1] != 2 {
+		t.Fatalf("call output indices: %v", indices)
+	}
+	output := completed["output"].([]any)
+	if len(output) != 3 {
+		t.Fatalf("completed output: %#v", output)
+	}
+	message := output[0].(map[string]any)
+	text := message["content"].([]any)[0].(map[string]any)["text"]
+	if text != "before between after" || message["status"] != "completed" {
+		t.Fatalf("interleaved text output: %#v", message)
+	}
+	itemIDs := map[string]bool{}
+	for i, id := range []string{"candidate-call-a", "candidate-call-b"} {
+		call := output[i+1].(map[string]any)
+		if call["type"] != "function_call" || call["call_id"] != id || call["status"] != "completed" {
+			t.Fatalf("call %d: %#v", i, call)
+		}
+		itemID := call["id"].(string)
+		if itemID == "" || itemIDs[itemID] {
+			t.Fatalf("duplicate or missing call item ID: %q", itemID)
+		}
+		itemIDs[itemID] = true
+		if !strings.Contains(call["arguments"].(string), []string{"alpha", "beta"}[i]) {
+			t.Fatalf("call arguments: %#v", call)
+		}
+	}
+	if completed["usage"].(map[string]any)["input_tokens"] != float64(5) {
+		t.Fatalf("usage missing: %#v", completed["usage"])
+	}
+}
+
+func TestFunctionCallWithoutCandidateIDGetsScopedID(t *testing.T) {
+	wire := "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{}}}]}}]}}\n\ndata: {\"response\":{\"done\":true}}\n\n"
+	f := &fakeDoer{response: response(http.StatusOK, wire)}
+	out, ge := ready(t).Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer out.Stream.Close()
+	for {
+		frame, err := out.Stream.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type != core.FrameBody || !strings.Contains(string(frame.Body.Data), `"type":"response.completed"`) {
+			continue
+		}
+		var event struct {
+			Response struct {
+				Output []struct {
+					CallID string `json:"call_id"`
+				} `json:"output"`
+			} `json:"response"`
+		}
+		line := strings.TrimPrefix(strings.Split(string(frame.Body.Data), "\n")[1], "data: ")
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if len(event.Response.Output) != 1 || !strings.HasPrefix(event.Response.Output[0].CallID, "call_resp_") {
+			t.Fatalf("missing response-scoped call ID: %+v", event.Response.Output)
+		}
+		return
+	}
+}
+
+func TestDoneOnlyStreamCompletesWithEmptyOutputArray(t *testing.T) {
+	f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
+	out, ge := ready(t).Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer out.Stream.Close()
+	for {
+		frame, err := out.Stream.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type != core.FrameBody || !strings.Contains(string(frame.Body.Data), `"type":"response.completed"`) {
+			if frame.Type == core.FrameComplete {
+				t.Fatal("missing response.completed event")
+			}
+			continue
+		}
+		var event struct {
+			Response struct {
+				Output json.RawMessage `json:"output"`
+			} `json:"response"`
+		}
+		line := strings.TrimPrefix(strings.Split(string(frame.Body.Data), "\n")[1], "data: ")
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if string(event.Response.Output) != "[]" {
+			t.Fatalf("done-only response output=%s, want []", event.Response.Output)
+		}
+		return
+	}
+}
+
+func TestFunctionCallIDsStagePerFrameWithoutPartialCommit(t *testing.T) {
+	s := newStream(io.NopCloser(strings.NewReader("")), "resp_test", "msg_test")
+	if err := s.consume([]byte(`{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","id":"existing","args":{}}}]}}]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	pendingBefore, idsBefore := len(s.pending), len(s.usedCallIDs)
+	invalid := []byte(`{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","id":"new-id","args":{}}},{"functionCall":{"name":"lookup","id":"existing","args":{}}}]}}]}}`)
+	if err := s.consume(invalid); err == nil {
+		t.Fatal("accepted duplicate function-call ID")
+	}
+	if len(s.usedCallIDs) != idsBefore || s.usedCallIDs["new-id"] || len(s.pending) != pendingBefore {
+		t.Fatalf("failed frame partially committed IDs/events: IDs=%v pending=%d", s.usedCallIDs, len(s.pending))
+	}
+	wire := "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"id\":\"same\",\"args\":{}}},{\"functionCall\":{\"name\":\"lookup\",\"id\":\"same\",\"args\":{}}}]}}]}}\n\n"
+	body := &trackingBody{Reader: strings.NewReader(wire)}
+	stream := newStream(body, "resp_stream", "msg_stream")
+	frame, err := stream.Next(context.Background())
+	if err == nil || frame.Type != "" || !body.closed {
+		t.Fatalf("duplicate-call frame escaped or body remained open: frame=%+v err=%v closed=%v", frame, err, body.closed)
+	}
+}
+
+func TestFunctionCallRejectsInvalidAndSignatureBearingParts(t *testing.T) {
+	if err := newStream(io.NopCloser(strings.NewReader("")), "resp_test", "msg_test").consume([]byte{0xff}); err == nil {
+		t.Fatal("accepted invalid UTF-8 candidate bytes")
+	}
+	for _, part := range []string{
+		`{"functionCall":{"name":"","args":{}}}`,
+		`{"functionCall":{"name":"lookup","args":[]}}`,
+		`{"functionCall":{"name":"lookup","args":{"a":1,"a":2}}}`,
+		`{"functionCall":{"name":"lookup","args":{},"thoughtSignature":"opaque"}}`,
+		`{"functionCall":{"name":"lookup","args":{}},"thought":true}`,
+		`{"text":"ignored","functionCall":{"name":"lookup","args":{}}}`,
+		`{"functionCall":{"name":"lookup","args":{}} ,"thoughtSignature":"opaque"}`,
+	} {
+		wire := "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[" + part + "]}}]}}\n\n"
+		f := &fakeDoer{response: response(http.StatusOK, wire)}
+		out, ge := ready(t).Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+		if ge != nil {
+			t.Fatal(ge)
+		}
+		if frame, err := out.Stream.Next(context.Background()); err == nil || frame.Type != "" {
+			t.Errorf("accepted malformed/tool-signature part %s: %+v %v", part, frame, err)
+		}
+		_ = out.Stream.Close()
+	}
+	large := `{"functionCall":{"name":"lookup","args":{"value":"` + strings.Repeat("x", maxRequestBytes) + `"}}}`
+	wire := "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[" + large + "]}}]}}\n\n"
+	f := &fakeDoer{response: response(http.StatusOK, wire)}
+	out, ge := ready(t).Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+	if ge != nil {
+		t.Fatal(ge)
+	}
 	if frame, err := out.Stream.Next(context.Background()); err == nil || frame.Type != "" {
-		t.Fatalf("function call response was delivered or silently ignored: frame=%+v err=%v", frame, err)
+		t.Fatalf("accepted oversized args: %+v %v", frame, err)
+	}
+	_ = out.Stream.Close()
+
+	text := strings.Repeat("t", maxRequestBytes/2)
+	args := strings.Repeat("a", maxRequestBytes/2)
+	wire = "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"" + text + "\"}]}}]}}\n\n" +
+		"data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{\"value\":\"" + args + "\"}}}]}}]}}\n\n"
+	f = &fakeDoer{response: response(http.StatusOK, wire)}
+	out, ge = ready(t).Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	defer out.Stream.Close()
+	for range 4 { // head, then created/item-added/text-delta body frames
+		if frame, err := out.Stream.Next(context.Background()); err != nil || frame.Type == core.FrameComplete {
+			t.Fatalf("text prefix did not stream before over-limit call: %+v %v", frame, err)
+		}
+	}
+	if frame, err := out.Stream.Next(context.Background()); err == nil || frame.Type != "" {
+		t.Fatalf("text and arguments exceeded shared retained-byte budget: %+v %v", frame, err)
 	}
 }
 
@@ -656,8 +873,11 @@ func TestCancellationClosesActiveStream(t *testing.T) {
 	if frame, err := out.Stream.Next(ctx); err != nil || frame.Type != core.FrameHead {
 		t.Fatalf("head: %v %v", frame, err)
 	}
-	_, _ = out.Stream.Next(ctx) // response.created
-	_, _ = out.Stream.Next(ctx) // first text delta
+	for range 5 { // response.created and the complete function-call item lifecycle
+		if frame, err := out.Stream.Next(ctx); err != nil || frame.Type != core.FrameBody {
+			t.Fatalf("function-call event: %+v %v", frame, err)
+		}
+	}
 	done := make(chan error, 1)
 	go func() { _, err := out.Stream.Next(ctx); done <- err }()
 	select {

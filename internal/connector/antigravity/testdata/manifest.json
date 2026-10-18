@@ -1,12 +1,16 @@
 {
   "version": 1,
   "provenance": "Synthetic fixtures authored for PestiRoute from documented candidate-only observations; SYNTHETIC_ONLY_NOT_PROVIDER_CAPTURE; no live provider captures, credentials, or production claims.",
+  "source_observation": "Rahularya01/opencode-antigravity@874ef4d6cc44f852401e6298790c6b34804e2978",
+  "provider_capture": false,
+  "license": "MIT",
   "files": {
     "request-positive.json": "89374b8b3d567794ef502a3c2a3292f43c303ba7248311e5e9db713456cf8edb",
     "stream-text.sse": "2ad77818d1e375f81be33f8406766eb311e51c3eb9230b645e40e7463c87d39b",
     "stream-usage.sse": "86987f879004fb27adadba76c2bb9a89c3ca64dce31839a0a367a0891e47e70b",
     "stream-premature-eof.sse": "e514e0dddd6af1062c772480caca7c560776115e7925520a8cc20f5bd3118bd4",
     "stream-malformed.sse": "c7ec8e3a07218385bc98637d1e0513f93e3c789451daa25782baaa903a281880",
+    "stream-function-calls.sse": "e9ce41a7d9afa4573ddf7f2fe8f6c918b07c321a54200cb37b4403401b22c705",
     "http-401.json": "5efdcc98e7afd23182db3e387b211cbceff7f567f9232064f67bd9989c3b011c",
     "http-403.json": "9e445960f82c6d4b9696e3430ade63aa90840984c4e89eeb048c8736beff2228",
     "http-429.json": "b0c52657329236c9f8beab2777f3f9692fa62e9624f74e360c9054ebd4120f67",

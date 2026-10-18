@@ -29,6 +29,18 @@ authorized reproducible evidence. No remote/provider capability is promoted.
 | Assistant `function_call` (`name`, arguments, call ID) | Model-role `content.parts[]` with `functionCall: {name, args, id?}` | Preserve call chronology and association. Argument JSON and ID constraints are not established by official evidence. No invented IDs or signature sentinel. |
 | `function_call_output` (call ID, output) | User-role `content.parts[]` with `functionResponse: {name, id?, response: {output: …}}` | Pair to the originating call by `call_id`; preserve causal order. Output serialization is candidate-only: do not coerce arbitrary structured output to text without a documented, lossless policy. |
 
+M10-015 implements only the response half for one Execute: candidate
+`functionCall` parts are treated as complete call objects with a string `name`,
+object `args`, and optional string `id`, as represented in the pinned Rahul
+transformer. It serializes each complete argument object into a Responses delta
+and done event; it does not infer argument fragments or merge repeated partial
+calls. Calls and text are emitted in candidate/part order with one monotonically
+assigned Responses `output_index` per output item. Missing IDs receive
+connector-local per-response IDs; duplicate explicit IDs fail closed. This is
+deterministic synthetic translation evidence only; provider acceptance and
+whether a live server emits other shapes remain Unknown. Thought-marked parts or
+any thought signature reject the frame before that frame emits content.
+
 Rahul's pinned conversion coalesces adjacent same-role contents and puts a tool
 result in a user-role function response; it emits a synthetic `Hello` user turn
 when the first content role would otherwise be model. These are implementation
@@ -109,9 +121,10 @@ Required offline cases for a future separately scoped implementation:
 These tests establish only deterministic translation and lifecycle behavior.
 They cannot establish official wire conformance, signature acceptance, live
 multi-turn success, capability support, or safe retries. Those remain **Unknown**
-and **BLOCKED**, respectively. M10-010 admits declarations and tool-choice only;
-function-call response parsing, execution/history and signature-dependent
-continuation remain unsupported. See the [text/stream binding](M10-BINDING.md).
+and **BLOCKED**, respectively. M10-010 admitted declarations and tool-choice;
+M10-015 adds candidate response translation only. Function execution,
+result/history translation and signature-dependent continuation remain
+unsupported. See the [text/stream binding](M10-BINDING.md).
 
 ## References
 

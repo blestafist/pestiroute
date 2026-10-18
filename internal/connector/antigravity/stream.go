@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -28,13 +30,19 @@ type stream struct {
 	responseID       string
 	messageID        string
 	text             strings.Builder
+	outputs          []map[string]any
+	outputIndex      int
+	usedCallIDs      map[string]bool
+	retainedBytes    int
+	messageStarted   bool
+	messageIndex     int
 	usage            *core.UsageReport
 	sawFinish        bool
 	sawTrailingUsage bool
 }
 
 func newStream(body io.ReadCloser, responseID, messageID string) *stream {
-	return &stream{r: bufio.NewReader(body), body: body, responseID: responseID, messageID: messageID}
+	return &stream{r: bufio.NewReader(body), body: body, responseID: responseID, messageID: messageID, messageIndex: -1}
 }
 func (s *stream) Close() error {
 	s.once.Do(func() { s.mu.Lock(); s.closed = true; s.mu.Unlock(); s.closeErr = s.body.Close() })
@@ -55,6 +63,9 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 		return core.StreamFrame{}, context.Canceled
 	}
 	if s.phase == 2 {
+		if len(s.pending) > 0 {
+			return bodyFrame(s.pop()), nil
+		}
 		s.phase = 3
 		_ = s.Close()
 		return core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: core.OutcomeSucceeded, Usage: s.usage}}, nil
@@ -105,7 +116,19 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 		}
 	}
 	s.phase = 2
-	final := map[string]any{"id": s.responseID, "object": "response", "status": "completed", "output": []any{map[string]any{"id": s.messageID, "type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]any{"type": "output_text", "text": s.text.String(), "annotations": []any{}}}}}}
+	if s.outputs == nil {
+		s.outputs = make([]map[string]any, 0)
+	}
+	final := map[string]any{"id": s.responseID, "object": "response", "status": "completed", "output": s.outputs}
+	if s.messageStarted {
+		item := s.outputs[s.messageIndex]
+		item["status"] = "completed"
+		content := item["content"].([]any)[0].(map[string]any)
+		s.pending = append(s.pending,
+			emitEvent("response.output_text.done", map[string]any{"item_id": s.messageID, "output_index": s.messageIndex, "content_index": 0, "text": content["text"]}, &s.sequence),
+			emitEvent("response.output_item.done", map[string]any{"output_index": s.messageIndex, "item": item}, &s.sequence),
+		)
+	}
 	if s.usage != nil {
 		u := map[string]int64{}
 		if s.usage.InputTokens != nil {
@@ -193,8 +216,13 @@ func (s *stream) readLine() (string, error) {
 }
 
 func (s *stream) consume(raw []byte) error {
-	if !uniqueJSON(raw) {
+	if !utf8.Valid(raw) || !uniqueJSON(raw) {
 		return errors.New("malformed SSE JSON")
+	}
+	type functionCall struct {
+		Name string          `json:"name"`
+		Args json.RawMessage `json:"args"`
+		ID   string          `json:"id"`
 	}
 	var outer struct {
 		Response struct {
@@ -252,8 +280,17 @@ func (s *stream) consume(raw []byte) error {
 		s.terminal = true
 		return nil
 	}
+	type parsedPart struct {
+		text   string
+		call   *functionCall
+		args   string
+		callID string
+		itemID string
+	}
+	var parts []parsedPart
 	finished := false
-	candidateTextBytes := s.text.Len()
+	retainedBytes := s.retainedBytes
+	var stagedCallIDs map[string]bool
 	for _, candidate := range resp.Candidates {
 		if candidate.FinishReason != "" {
 			if candidate.FinishReason != "STOP" {
@@ -262,13 +299,72 @@ func (s *stream) consume(raw []byte) error {
 			finished = true
 		}
 		for _, part := range candidate.Content.Parts {
-			if part.Thought != nil && *part.Thought || len(part.ThoughtSignature) != 0 || len(part.FunctionCall) != 0 {
-				return errors.New("unsupported reasoning or function-call response")
+			if part.Thought != nil && *part.Thought || len(part.ThoughtSignature) != 0 {
+				return errors.New("unsupported reasoning signature")
 			}
-			if part.Text == nil || *part.Text == "" || len(*part.Text) > maxRequestBytes-candidateTextBytes {
-				return errors.New("invalid or oversized candidate text")
+			if part.Text != nil && len(part.FunctionCall) != 0 {
+				return errors.New("candidate part has conflicting content")
 			}
-			candidateTextBytes += len(*part.Text)
+			if part.Text != nil {
+				if *part.Text == "" || !utf8.ValidString(*part.Text) || len(*part.Text) > maxRequestBytes-retainedBytes {
+					return errors.New("invalid or oversized candidate text")
+				}
+				retainedBytes += len(*part.Text)
+				parts = append(parts, parsedPart{text: *part.Text})
+				continue
+			}
+			if len(part.FunctionCall) != 0 {
+				var fields map[string]json.RawMessage
+				if json.Unmarshal(part.FunctionCall, &fields) != nil || fields == nil || fields["name"] == nil || fields["args"] == nil {
+					return errors.New("invalid function call")
+				}
+				for key := range fields {
+					if key != "name" && key != "args" && key != "id" {
+						return errors.New("unsupported function-call field")
+					}
+				}
+				call := new(functionCall)
+				if json.Unmarshal(part.FunctionCall, call) != nil {
+					return errors.New("invalid function call")
+				}
+				if !validFunctionName(call.Name) || len(call.Args) == 0 || !uniqueJSON(call.Args) || !utf8.Valid(call.Args) || len(call.Args) > maxRequestBytes-retainedBytes {
+					return errors.New("invalid or oversized function-call arguments")
+				}
+				trimmed := strings.TrimSpace(string(call.Args))
+				if len(trimmed) == 0 || trimmed[0] != '{' {
+					return errors.New("function-call arguments must be an object")
+				}
+				var object map[string]json.RawMessage
+				if json.Unmarshal(call.Args, &object) != nil || object == nil {
+					return errors.New("function-call arguments must be an object")
+				}
+				arguments := string(call.Args)
+				if idRaw, present := fields["id"]; present && (json.Unmarshal(idRaw, &call.ID) != nil || call.ID == "") {
+					return errors.New("invalid function-call ID")
+				}
+				if call.ID != "" {
+					if len(call.ID) > 256 || !utf8.ValidString(call.ID) || strings.TrimSpace(call.ID) != call.ID {
+						return errors.New("invalid function-call ID")
+					}
+				}
+				callIndex := len(s.usedCallIDs) + len(stagedCallIDs)
+				callID := call.ID
+				if callID == "" {
+					callID = "call_" + s.responseID + "_" + strconv.Itoa(callIndex)
+				}
+				if s.usedCallIDs[callID] || stagedCallIDs[callID] {
+					return errors.New("duplicate function-call ID")
+				}
+				if stagedCallIDs == nil {
+					stagedCallIDs = make(map[string]bool)
+				}
+				stagedCallIDs[callID] = true
+				itemID := "fc_" + s.responseID + "_" + strconv.Itoa(callIndex)
+				retainedBytes += len(arguments)
+				parts = append(parts, parsedPart{call: call, args: arguments, callID: callID, itemID: itemID})
+				continue
+			}
+			return errors.New("candidate part has no supported content")
 		}
 	}
 	if resp.Usage != nil {
@@ -279,21 +375,51 @@ func (s *stream) consume(raw []byte) error {
 	if finished {
 		s.sawFinish = true
 	}
+	if len(stagedCallIDs) > 0 {
+		if s.usedCallIDs == nil {
+			s.usedCallIDs = make(map[string]bool, len(stagedCallIDs))
+		}
+		for id := range stagedCallIDs {
+			s.usedCallIDs[id] = true
+		}
+	}
 	if len(resp.Candidates) == 0 {
 		if resp.Usage != nil {
 			return nil
 		}
 		return errors.New("candidate frame has no text")
 	}
-	for _, candidate := range resp.Candidates {
-		for _, part := range candidate.Content.Parts {
-			s.text.WriteString(*part.Text)
-			if s.sequence == 0 {
-				s.pending = append(s.pending, emitEvent("response.created", map[string]any{"response": map[string]any{"id": s.responseID, "object": "response", "status": "in_progress", "output": []any{}}}, &s.sequence))
-			}
-			s.pending = append(s.pending, emitEvent("response.output_text.delta", map[string]any{"item_id": s.messageID, "output_index": 0, "content_index": 0, "delta": *part.Text}, &s.sequence))
+	for _, part := range parts {
+		if s.sequence == 0 {
+			s.pending = append(s.pending, emitEvent("response.created", map[string]any{"response": map[string]any{"id": s.responseID, "object": "response", "status": "in_progress", "output": []any{}}}, &s.sequence))
 		}
+		if part.call == nil {
+			if !s.messageStarted {
+				item := map[string]any{"id": s.messageID, "type": "message", "role": "assistant", "status": "in_progress", "content": []any{map[string]any{"type": "output_text", "text": "", "annotations": []any{}}}}
+				s.outputs = append(s.outputs, item)
+				s.messageIndex = s.outputIndex
+				s.outputIndex++
+				s.messageStarted = true
+				s.pending = append(s.pending, emitEvent("response.output_item.added", map[string]any{"output_index": s.messageIndex, "item": item}, &s.sequence))
+			}
+			s.text.WriteString(part.text)
+			content := s.outputs[s.messageIndex]["content"].([]any)[0].(map[string]any)
+			content["text"] = s.text.String()
+			s.pending = append(s.pending, emitEvent("response.output_text.delta", map[string]any{"item_id": s.messageID, "output_index": s.messageIndex, "content_index": 0, "delta": part.text}, &s.sequence))
+			continue
+		}
+		index := s.outputIndex
+		s.outputIndex++
+		item := map[string]any{"id": part.itemID, "type": "function_call", "call_id": part.callID, "name": part.call.Name, "arguments": part.args, "status": "completed"}
+		s.outputs = append(s.outputs, item)
+		s.pending = append(s.pending,
+			emitEvent("response.output_item.added", map[string]any{"output_index": index, "item": map[string]any{"id": part.itemID, "type": "function_call", "call_id": part.callID, "name": part.call.Name, "arguments": "", "status": "in_progress"}}, &s.sequence),
+			emitEvent("response.function_call_arguments.delta", map[string]any{"item_id": part.itemID, "output_index": index, "delta": part.args}, &s.sequence),
+			emitEvent("response.function_call_arguments.done", map[string]any{"item_id": part.itemID, "output_index": index, "arguments": part.args}, &s.sequence),
+			emitEvent("response.output_item.done", map[string]any{"output_index": index, "item": item}, &s.sequence),
+		)
 	}
+	s.retainedBytes = retainedBytes
 	if len(s.pending) == 0 && !finished && resp.Usage == nil {
 		return errors.New("candidate frame has no text")
 	}

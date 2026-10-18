@@ -17,7 +17,7 @@ func TestFixturesIntegrity(t *testing.T) {
 	const root = "testdata"
 	wantFiles := []string{
 		"request-positive.json", "stream-text.sse", "stream-usage.sse",
-		"stream-premature-eof.sse", "stream-malformed.sse", "http-401.json",
+		"stream-premature-eof.sse", "stream-malformed.sse", "stream-function-calls.sse", "http-401.json",
 		"http-403.json", "http-429.json", "http-500.json", "oauth-refresh-rotated.json",
 	}
 	manifestBytes, err := os.ReadFile(filepath.Join(root, "manifest.json"))
@@ -25,14 +25,17 @@ func TestFixturesIntegrity(t *testing.T) {
 		t.Fatal(err)
 	}
 	var manifest struct {
-		Version    int               `json:"version"`
-		Provenance string            `json:"provenance"`
-		Files      map[string]string `json:"files"`
+		Version           int               `json:"version"`
+		Provenance        string            `json:"provenance"`
+		SourceObservation string            `json:"source_observation"`
+		ProviderCapture   bool              `json:"provider_capture"`
+		License           string            `json:"license"`
+		Files             map[string]string `json:"files"`
 	}
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Version != 1 || !strings.Contains(manifest.Provenance, "Synthetic") || len(manifest.Files) != len(wantFiles) {
+	if manifest.Version != 1 || !strings.Contains(manifest.Provenance, "Synthetic") || manifest.SourceObservation != "Rahularya01/opencode-antigravity@874ef4d6cc44f852401e6298790c6b34804e2978" || manifest.ProviderCapture || manifest.License != "MIT" || len(manifest.Files) != len(wantFiles) {
 		t.Fatalf("invalid synthetic fixture manifest: %+v", manifest)
 	}
 	entries, err := os.ReadDir(root)
@@ -135,6 +138,10 @@ func checkFixtureSemantics(t *testing.T, root string) {
 	text := read("stream-text.sse")
 	if strings.Count(string(text), "data: ") != 2 || !strings.Contains(string(text), "Synthetic ") || !strings.Contains(string(text), "stream text.") {
 		t.Errorf("text stream does not contain two incremental synthetic text chunks")
+	}
+	toolStream := read("stream-function-calls.sse")
+	if strings.Count(string(toolStream), `"functionCall"`) != 2 || !strings.Contains(string(toolStream), `"id":"candidate-call-a"`) || !strings.Contains(string(toolStream), `"id":"candidate-call-b"`) {
+		t.Errorf("function-call fixture lacks two distinct candidate calls")
 	}
 	usage := read("stream-usage.sse")
 	if !strings.Contains(string(usage), `"promptTokenCount":7`) || !strings.Contains(string(usage), `"candidatesTokenCount":4`) || !strings.Contains(string(usage), `"done":true`) {

@@ -21,7 +21,7 @@ deterministic fake-only acceptance tests subject to M10-003 fixture provenance.
 | Component | Private `antigravity.Connector`, implementing the existing `core.Connector` contract; stable descriptor ID `pestiroute.antigravity.v1internal` is a proposed implementation identity, not a provider identity. |
 | Profile | `antigravity-v1internal`, selected only by trusted component configuration. It names this candidate translation, not a supported Google API. |
 | Client protocol | Exactly `openai.responses.v1`; translation mode only. Native mode, other protocol versions, and implicit protocol inference are rejected. |
-| Work in scope | One text-only prompt and candidate function declarations/tool-choice mapping producing an incrementally translated Responses text stream. Function-call responses, tool execution/history and signature-dependent continuation remain unsupported. One Execute is one attempt for the runtime-selected account. |
+| Work in scope | One text-only prompt and candidate function declarations/tool-choice mapping producing an incrementally translated Responses stream of text and candidate function-call outputs. Function execution/history and signature-dependent continuation remain unsupported. One Execute is one attempt for the runtime-selected account. |
 | Capabilities | `llm.streaming` is `supported` only for `openai.responses.v1` translation, meaning this exact implementation scope is available and deterministically verified. It does not claim remote entitlement or provider support. `auth.oauth`, `usage.exact`, and all other capabilities remain `unknown`. |
 
 The existing `core.Connector.Execute(context, request, attemptScope,
@@ -46,9 +46,11 @@ validates the supported subset and does not introduce a shared message schema.
 Reject tool history, unsupported tool options, images, audio, video, other
 multimodal input, structured-output constraints, unsupported reasoning/state
 fields, and unrecognized extension fields as `unsupported_feature` before
-dispatch. Function-call responses remain unsupported and must fail rather than be
-silently dropped. Thought signatures are unsupported/Unknown: do not synthesize,
-discard-and-continue, or claim continuity. Model identifiers are accepted only
+dispatch. Candidate function-call responses are translated by M10-015 as
+complete `name`/object-`args`/optional-`id` parts; unsupported shapes fail rather
+than being silently dropped. This is an offline candidate based on pinned plugin
+source, not a provider guarantee. Thought signatures remain unsupported/Unknown:
+do not synthesize, discard-and-continue, or claim continuity. Model identifiers are accepted only
 from an explicit allowlist; no model rewriting, guessed aliases, or
 provider-model claim is implied.
 
@@ -121,8 +123,12 @@ further candidate content and conflicting finish markers; after the optional
 usage frame, reject all further events. Usage metadata alone is never terminal
 evidence. Truncated or partial SSE framing fails, including after `STOP`. Parts marked `thought: true`
 or carrying `thoughtSignature` are rejected before any content in that frame is
-emitted. The Connector parses incrementally with bounded line/event and
-retained-state buffers; it forwards translated client-protocol bytes as soon as
+emitted. Candidate function calls are complete part values, not inferred
+argument-growth fragments: each JSON object is streamed through the Responses
+added/delta/done item lifecycle, and final output retains text and calls in
+candidate/part order. Retained text and arguments share a 1 MiB bound. The
+Connector parses incrementally with bounded line/event and retained-state
+buffers; it forwards translated client-protocol bytes as soon as
 validated content is available and must not wait for whole-response EOF. It must
 not expose provider SSE bytes as Responses output or require the Protocol Adapter
 to translate them again.
