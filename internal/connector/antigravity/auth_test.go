@@ -172,11 +172,19 @@ func TestAuthenticateSourceDerivedDefaults(t *testing.T) {
 	if ge != nil || !result.Supported || result.UserAction == nil {
 		t.Fatalf("start: %+v %v", result, ge)
 	}
+	var continuation authContinuation
+	if err := json.Unmarshal([]byte(result.State), &continuation); err != nil {
+		t.Fatal(err)
+	}
+	redirect, err := url.Parse(continuation.RedirectURI)
+	if err != nil || redirect.Scheme != "http" || redirect.Hostname() != "localhost" || redirect.Port() == "" || redirect.Path != "/callback" {
+		t.Fatalf("default start did not record an ephemeral loopback redirect: %q (%v)", continuation.RedirectURI, err)
+	}
 	authorize, err := url.Parse(result.UserAction.VerificationURI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authorize.Host != "accounts.google.com" || authorize.Path != "/o/oauth2/v2/auth" || authorize.Query().Get("client_id") != defaultClientID || authorize.Query().Get("redirect_uri") != "http://localhost:8080/callback" || authorize.Query().Get("scope") != defaultScopes || authorize.Query().Get("access_type") != "offline" || authorize.Query().Get("prompt") != "consent" || authorize.Query().Get("code_challenge_method") != "S256" || authorize.Query().Get("code_challenge") == "" {
+	if authorize.Host != "accounts.google.com" || authorize.Path != "/o/oauth2/v2/auth" || authorize.Query().Get("client_id") != defaultClientID || authorize.Query().Get("redirect_uri") != continuation.RedirectURI || authorize.Query().Get("scope") != defaultScopes || authorize.Query().Get("access_type") != "offline" || authorize.Query().Get("prompt") != "consent" || authorize.Query().Get("code_challenge_method") != "S256" || authorize.Query().Get("code_challenge") == "" {
 		t.Fatalf("unexpected default OAuth request: %s", authorize)
 	}
 }
@@ -194,6 +202,11 @@ func TestAuthenticateDefaultsShareOAuthEndpointsAndBoundDiscoveryOrigin(t *testi
 	if err := json.Unmarshal([]byte(started.State), &continuation); err != nil {
 		t.Fatal(err)
 	}
+	// The exact redirect is session-bound; later component configuration cannot
+	// change callback validation or the token-exchange redirect_uri.
+	c.mu.Lock()
+	c.cfg.OAuth.RedirectURI = "http://localhost:4444/changed"
+	c.mu.Unlock()
 	var exchangeForm url.Values
 	fake := &fakeDoer{do: func(req *http.Request) (*http.Response, error) {
 		switch req.URL.String() {
@@ -213,9 +226,24 @@ func TestAuthenticateDefaultsShareOAuthEndpointsAndBoundDiscoveryOrigin(t *testi
 			return nil, errors.New("unexpected synthetic URL: " + req.URL.String())
 		}
 	}}
-	callback := defaultRedirectURI + "?" + url.Values{"code": {"SYNTHETIC_CODE"}, "state": {continuation.State}}.Encode()
+	callback := continuation.RedirectURI + "?" + url.Values{"code": {"SYNTHETIC_CODE"}, "state": {continuation.State}}.Encode()
+	wrongCallback := "http://localhost:4444/changed?" + url.Values{"code": {"SYNTHETIC_CODE"}, "state": {continuation.State}}.Encode()
+	bad, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(started.State), CallbackInput: wrongCallback}, core.InvocationServices{Transport: packageTestDoer(fake)})
+	if ge == nil || bad.Supported || fake.calls != 0 {
+		t.Fatalf("callback matching changed config dispatched against wrong session redirect: result=%+v err=%v calls=%d", bad, ge, fake.calls)
+	}
+	tampered := continuation
+	tampered.RedirectURI += "?unexpected=value"
+	tamperedState, err := json.Marshal(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad, ge = c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: tamperedState, CallbackInput: callback}, core.InvocationServices{Transport: packageTestDoer(fake)})
+	if ge == nil || bad.Supported || fake.calls != 0 {
+		t.Fatalf("malformed stored redirect dispatched: result=%+v err=%v calls=%d", bad, ge, fake.calls)
+	}
 	continued, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(started.State), CallbackInput: callback}, core.InvocationServices{Transport: packageTestDoer(fake)})
-	if ge != nil || !continued.Supported || fake.calls != 2 || exchangeForm.Get("redirect_uri") != defaultRedirectURI || exchangeForm.Get("client_id") != defaultClientID || exchangeForm.Get("client_secret") == "" || exchangeForm.Get("code_verifier") == "" || exchangeForm.Get("code") != "SYNTHETIC_CODE" {
+	if ge != nil || !continued.Supported || fake.calls != 2 || exchangeForm.Get("redirect_uri") != continuation.RedirectURI || exchangeForm.Get("client_id") != defaultClientID || exchangeForm.Get("client_secret") == "" || exchangeForm.Get("code_verifier") == "" || exchangeForm.Get("code") != "SYNTHETIC_CODE" {
 		t.Fatalf("continue defaults: result supported=%t err=%v calls=%d exchange shape invalid", continued.Supported, ge, fake.calls)
 	}
 	bundle, valid := parseOAuthCredentials(continued.Credentials["oauth"], true)

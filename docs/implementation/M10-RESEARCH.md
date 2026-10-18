@@ -87,18 +87,25 @@ PestiRoute adopts the pinned public client identity, endpoints, scope list and
 present in 9Router. It does not bundle the observed client secret. The known
 emulated client requires an operator-configured secret and fails closed before
 token exchange/refresh when absent; explicitly configured public clients may
-omit a secret. The pinned source binds a dynamically assigned
-port after starting a localhost listener (`services/oauth.js:35-50` and
-`services/antigravity.js:233-246,283-284`). PestiRoute has no callback listener,
-so its bounded manual-paste candidate uses `http://localhost:8080/callback`:
-the operator must paste the complete callback URL (including code and state)
-from the browser address bar after the localhost navigation fails. This keeps
-the redirect loopback-shaped and consistent between authorization and exchange,
-but the fixed port is not the dynamic-port behavior implemented by 9Router and
-its registration/acceptance is unverified. Do not describe this as a working or
-source-identical OAuth client; another local process could own the fixed port
-and receive the callback, so live authorization is blocked. Implementing dynamic
-loopback listener behavior would require a separately scoped decision.
+omit a secret. The pinned source binds a dynamically assigned port after
+starting a localhost listener (`services/oauth.js:35-50` and
+`services/antigravity.js:233-246,283-284`). PestiRoute starts no callback
+listener: when no redirect override is configured, `auth start` briefly binds
+loopback port 0, releases it, and records the resulting dynamic loopback URI in
+opaque continuation state. The effective redirect URI (configured override or
+generated candidate) is used unchanged for authorization, callback validation,
+and token exchange, including across separate `start` and `continue` commands
+and connector configuration changes. The operator pastes the complete callback
+URL, including code and state, from the browser address bar via
+`--callback-stdin`.
+
+Releasing the port does not reserve it or establish callback ownership; another
+local process may observe/interfere with the code or cause denial of service.
+PKCE S256 keeps the verifier protected and prevents redemption by an interceptor
+without it, but does not provide callback confidentiality or availability.
+Dynamic redirect registration/acceptance remains unverified. Do not describe
+this as a working or source-identical OAuth client or as universally safe; live
+authorization remains blocked pending provider evidence and operator authority.
 `prompt=consent` is only an
 authorization request parameter; it does not guarantee offline access or a
 refresh token, and the pinned auth-code flow does not establish refresh-grant

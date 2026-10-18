@@ -194,18 +194,23 @@ eligibility, or backend access. The published metadata URL is not used as
 `client_id`.
 
 `start` defaults to the source-pinned public client ID, endpoints, and scope
-list, plus `prompt=consent`. It uses the bounded local
-callback candidate `http://localhost:8080/callback`, matching 9Router's
-loopback host/path shape but not its dynamically allocated port. PestiRoute does
-not start a callback listener. The user must paste the complete localhost
-callback URL, including code and state, from the browser address bar after the
-navigation fails to connect; strict DEC-019 validation checks it against this
-same configured redirect. This fixed-port candidate is not demonstrated to be
-registered or accepted by Google and is not a working-client claim. Resolving
-dynamic-port behavior requires a separately scoped listener decision. Since an
-unrelated local process could already own port 8080 and receive the callback,
-live authorization using this candidate is blocked until callback handling is
-reviewed; do not use it for live sign-in.
+list, plus `prompt=consent`. Unless an operator configures a redirect URI, it
+briefly binds loopback port 0 to obtain a dynamic candidate port, closes that
+socket, and uses `http://localhost:<port>/callback`. The candidate URI is stored
+in opaque Connector continuation state and the exact value is used for
+authorization, DEC-019 callback validation, and token exchange, even if
+configuration changes between start and continue. PestiRoute does not run or
+claim a callback listener; releasing the port does not reserve it or establish
+ownership. In the remote-browser / server split, operators paste the complete
+callback URL from the browser address bar via `--callback-stdin`. An unrelated
+local process may observe/interfere with the code or cause denial of service.
+PKCE S256 keeps the verifier out of the browser and protects token redemption
+from an interceptor lacking that verifier; it does not provide callback
+confidentiality or availability. Dynamic-port registration/acceptance by Google
+is unverified and remains a live operator gate. This offline candidate is not a
+working-client or universal callback-safety claim. An SSH tunnel alone cannot
+receive the callback; forwarding only applies if a real listener is bound at
+the forwarded endpoint, which PestiRoute does not provide.
 PestiRoute also continues to require PKCE S256 although the inspected 9Router
 flow omits PKCE; this is an intentional safety addition, not an emulation claim.
 The authorization URL includes `prompt=consent`, matching the source. That

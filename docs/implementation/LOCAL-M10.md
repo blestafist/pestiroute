@@ -56,27 +56,33 @@ PestiRoute defaults to the public OAuth client identity, token endpoint and
 scopes observed in pinned 9Router v0.5.104 source; it does not bundle a client
 secret. The known emulated client requires a configured client secret before
 token exchange or refresh, and those operations fail closed when it is absent.
-The client metadata URL is not used as `client_id`. Authorization also sends
-`prompt=consent` and retains PKCE S256. The default redirect is
-`http://localhost:8080/callback`, a bounded fixed-port candidate matching the
-loopback shape only. Pinned 9Router starts a listener and chooses a dynamic port;
-PestiRoute starts no callback listener, and Google acceptance of this fixed URI
-is unverified. This is not a working-client or source-identical claim. These are
-unofficial candidate observations, not proof of Google authorization, account
-eligibility or protocol compatibility. Treat any locally configured client
-secret as a secret. Never copy user/plugin credentials.
+The client metadata URL is not used as `client_id`. Authorization sends
+`prompt=consent` and retains PKCE S256. With no configured redirect URI, each
+`auth start` briefly binds loopback port 0 to obtain a dynamic candidate port,
+releases that socket, and records `http://localhost:<port>/callback` in the
+opaque continuation. A configured redirect override is also recorded per
+session. The exact recorded URI is used for callback validation and token
+exchange even if connector configuration later changes.
+
+PestiRoute does **not** keep a callback listener bound. Releasing the port does
+not reserve or establish ownership of it: another local process may receive,
+observe, or interfere with the browser callback. PKCE S256 keeps the verifier in
+protected continuation state and prevents an interceptor lacking that verifier
+from redeeming the code; it does not provide callback confidentiality, prevent
+denial of service, or establish that the provider accepts/registers dynamic
+ports. The dynamic URI is an offline candidate based on pinned 9Router shape,
+not a working-client or provider-registration claim. These are unofficial
+observations, not proof of Google authorization, account eligibility or
+protocol compatibility. Treat any locally configured client secret as a secret.
+Never copy user/plugin credentials.
 Local endpoint, client ID/secret, redirect and scope overrides remain available.
 Custom client IDs remain configurable without a secret, allowing explicit
-public-client configurations.
+public-client configurations. `auth start` itself remains offline and emits no
+network request. Live authorization remains blocked pending separate provider
+registration evidence and operator authorization.
 
-**Live authorization is blocked.** No callback listener is running, and an
-unrelated local process may already own port 8080 and receive the callback URL
-and authorization code. Do not sign in, authorize, or run `auth continue` for
-this candidate until the planner-approved callback design and safe callback
-handling are available. `auth start` itself remains offline and emits no network
-request.
-
-Optional local overrides only (the client ID and redirect URI already default):
+Optional local overrides; absent an override, `auth start` records a new dynamic
+loopback redirect URI in that session's opaque continuation:
 
 ```sh
 # Set a client-ID override only when your reviewed local configuration requires it:
@@ -101,23 +107,28 @@ only and makes no network request:
 "$WORK/gateway" admin --db "$DB" --master-key "$MASTER_KEY" auth start --account antigravity-local
 ```
 
-The following describes the unverified candidate only; do not perform it while
-the live authorization blocker above remains. Keep the printed verification URL and session handle in the local terminal; do
-not paste them into chat or save terminal output to shared logs. This candidate
-uses a loopback redirect, unlike the official remote-SSH UX. If separately
-authorized to try it, open the URL in a local browser and after sign-in copy the
-complete redirected `http://localhost:8080/callback?...` URL from the address
-bar, including both code and state. PestiRoute has no listener; if nothing else
-owns the port the browser may show a connection failure, but another local
-process could receive the callback. Do not attempt this live while the blocker
-above remains. Do not substitute the official web callback or paste only the
-code for this flow. Browser sign-in/token exchange remains a separate
-operator-authorized live action; offline checks never perform it. A fixed-port
-candidate and pasted URL have not been verified with Google.
+The following describes the unverified candidate only; do not perform it without
+separate operator authorization. Keep the printed verification URL and session
+handle in the local terminal; do not paste them into chat or save terminal
+output to shared logs. Open the URL in a browser. After sign-in, copy the
+complete redirected callback URL, including code and state, from the browser's
+address bar and paste it into `--callback-stdin` below. Because no callback
+listener runs, the browser may show a connection failure. Do not replace the
+recorded URI with a different URI or use the official web callback. The
+connector's raw-code DEC-022 mode is also supported, but the complete URL is the
+primary remote-browser path because it preserves and validates state. Browser
+sign-in/token exchange remains a separate operator-authorized live action;
+offline checks never perform it. Provider acceptance of dynamic loopback ports
+is unverified.
 
-After the callback blocker is cleared and a separate live action is explicitly
-authorized, opt in to outbound HTTPS and continue with the session handle printed
-by `start`:
+An SSH `-L` tunnel alone cannot capture this callback: there is no PestiRoute
+listener on the forwarded server port. PestiRoute does not implement a listener
+or make an SSH-forwarding claim. Forwarding can apply only in a separately
+designed setup where a real process is already bound to the matching callback
+address and port; it is not an alternative to manual paste here.
+
+Only after separate live authorization, opt in to outbound HTTPS and continue
+with the session handle printed by `start`:
 
 ```sh
 export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1
@@ -125,14 +136,13 @@ export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1
 ```
 
 Paste the complete loopback callback URL into this command's stdin and press
-Enter. Never put the
-code/URL in command arguments, shell history, files, logs, or chat;
-`--callback-stdin` does not echo it. Continuation exchanges the one-time code and
-performs one candidate `loadCodeAssist` project lookup over HTTPS. Both requests
-require the explicit real-transport opt-in, which enables outbound auth and
-inference HTTPS; it is not a test flag. Do not run continuation during offline
-checks or task closure. Discovery metadata does not override the explicit Execute
-project, and no onboarding or fallback occurs.
+Enter. Never put the code/URL in command arguments, shell history, files, logs,
+or chat; `--callback-stdin` does not echo it. Continuation exchanges the one-time
+code and performs one candidate `loadCodeAssist` project lookup over HTTPS. Both
+requests require the explicit real-transport opt-in, which enables outbound auth
+and inference HTTPS; it is not a test flag. Do not run continuation during
+offline checks or task closure. Discovery metadata does not override the
+explicit Execute project, and no onboarding or fallback occurs.
 
 ## Protected gateway configuration and single-turn smoke
 

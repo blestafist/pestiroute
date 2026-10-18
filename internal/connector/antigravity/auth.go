@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +24,9 @@ import (
 const authResponseLimit = 64 << 10
 
 type authContinuation struct {
-	Verifier string `json:"verifier"`
-	State    string `json:"state"`
+	Verifier    string `json:"verifier"`
+	State       string `json:"state"`
+	RedirectURI string `json:"redirect_uri"`
 }
 
 func readAuthResponse(ctx context.Context, body io.ReadCloser) ([]byte, error) {
@@ -63,13 +66,21 @@ func (c *Connector) authenticateStart(ctx context.Context, cfg oauthConfig) (cor
 		return core.AuthResult{}, unavailable()
 	}
 	verifier, state := base64.RawURLEncoding.EncodeToString(verifierBytes), base64.RawURLEncoding.EncodeToString(stateBytes)
+	redirectURI := cfg.RedirectURI
+	if redirectURI == "" {
+		var err error
+		redirectURI, err = ephemeralLoopbackRedirectURI()
+		if err != nil {
+			return core.AuthResult{}, unavailable()
+		}
+	}
 	hash := sha256.Sum256([]byte(verifier))
-	continuation, _ := json.Marshal(authContinuation{Verifier: verifier, State: state})
+	continuation, _ := json.Marshal(authContinuation{Verifier: verifier, State: state, RedirectURI: redirectURI})
 	endpoint, _ := url.Parse(cfg.AuthorizationEndpoint)
 	query := endpoint.Query()
 	query.Set("response_type", "code")
 	query.Set("client_id", cfg.ClientID)
-	query.Set("redirect_uri", cfg.RedirectURI)
+	query.Set("redirect_uri", redirectURI)
 	query.Set("scope", strings.Join(cfg.Scopes, " "))
 	query.Set("access_type", "offline")
 	query.Set("prompt", "consent")
@@ -87,7 +98,7 @@ func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, d
 	var continuation authContinuation
 	d := json.NewDecoder(bytes.NewReader(req.State))
 	d.DisallowUnknownFields()
-	if !uniqueJSON(req.State) || d.Decode(&continuation) != nil || d.Decode(new(any)) != io.EOF || continuation.Verifier == "" || continuation.State == "" || len(continuation.Verifier) > 128 || len(continuation.State) > 128 {
+	if !uniqueJSON(req.State) || d.Decode(&continuation) != nil || d.Decode(new(any)) != io.EOF || continuation.Verifier == "" || continuation.State == "" || len(continuation.Verifier) > 128 || len(continuation.State) > 128 || !validRedirectURI(continuation.RedirectURI) {
 		return core.AuthResult{}, invalid("invalid_auth_state")
 	}
 	if len(req.CallbackInput) > 4096 || strings.IndexFunc(req.CallbackInput, unicode.IsControl) >= 0 {
@@ -106,7 +117,7 @@ func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, d
 			return core.AuthResult{}, invalid("invalid_auth_callback")
 		}
 		callback, err := url.Parse(input)
-		redirect, _ := url.Parse(cfg.RedirectURI)
+		redirect, _ := url.Parse(continuation.RedirectURI)
 		if err != nil || callback == nil || redirect == nil || !callback.IsAbs() || callback.Opaque != "" || callback.Scheme != redirect.Scheme || callback.Host != redirect.Host || callback.EscapedPath() != redirect.EscapedPath() || callback.User != nil || callback.Fragment != "" {
 			return core.AuthResult{}, invalid("invalid_auth_callback")
 		}
@@ -124,7 +135,7 @@ func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, d
 	if services.Transport == nil {
 		return core.AuthResult{}, unavailable()
 	}
-	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {cfg.ClientID}, "code": {code}, "redirect_uri": {cfg.RedirectURI}, "code_verifier": {continuation.Verifier}}
+	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {cfg.ClientID}, "code": {code}, "redirect_uri": {continuation.RedirectURI}, "code_verifier": {continuation.Verifier}}
 	if cfg.ClientSecret != "" {
 		form.Set("client_secret", cfg.ClientSecret)
 	}
@@ -133,6 +144,18 @@ func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, d
 		tokenEndpoint = defaultTokenEndpoint
 	}
 	return c.exchangeAuthCode(ctx, tokenEndpoint, discoveryOrigin, services.Transport, form)
+}
+
+func ephemeralLoopbackRedirectURI() (string, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		return "", err
+	}
+	return "http://localhost:" + strconv.Itoa(port) + "/callback", nil
 }
 
 func validPastedOAuthCode(code string) bool {

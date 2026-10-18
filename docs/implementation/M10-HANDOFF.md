@@ -26,7 +26,7 @@ scope; this is not remote entitlement or provider support. `auth.oauth`,
 `usage.exact`, and all other capabilities remain `Unknown`; no live claims or
 provider calls are authorized by this handoff.
 
-## Browser OAuth and pasted-callback candidate (M10-012/M10-013)
+## Browser OAuth and pasted-callback candidate (M10-012–M10-014)
 
 The official Antigravity metadata URL is not PestiRoute's `client_id`. Offline
 defaults now follow the client identity, token/auth endpoints, scopes, and
@@ -39,15 +39,21 @@ explicit custom public client may be configured without one. Do not include
 configured client secrets or user credentials in operator reports.
 
 9Router uses a dynamically allocated localhost callback with a listener.
-PestiRoute has no listener: its `http://localhost:8080/callback` redirect is a
-bounded fixed-port candidate, not source-identical or verified as registered.
-The user would need to paste the entire callback URL (code and state); an
-unrelated local process may receive it. **Live authorization is blocked** pending
-safe callback handling and a reviewed listener-scope decision. No live 401
-resolution is claimed. The existing parser still enforces the configured
-redirect, state, and PKCE S256 (an intentional addition beyond 9Router); see
-[LOCAL-M10](LOCAL-M10.md#oauth-client-and-remote-ssh-code-handling) for the
-operator evidence ceiling. Do not run live auth from this handoff.
+PestiRoute uses a per-session dynamic loopback candidate by briefly binding port
+0 and then releasing it; no listener is retained or claimed. The exact candidate
+URI is persisted in opaque continuation state and used for callback validation
+and token exchange. Remote-browser operators paste the full callback URL
+(including state) into `--callback-stdin`. An unrelated local process may
+observe/interfere with that callback or cause denial of service. PKCE S256
+protects token redemption from an interceptor without the protected verifier;
+it does not provide callback confidentiality or availability. Provider
+registration/acceptance of dynamic ports is unverified and live authorization
+remains blocked. No live 401 resolution is claimed. The Connector continues to
+enforce the exact session redirect, state, and PKCE S256 (an intentional addition
+beyond 9Router); see [LOCAL-M10](LOCAL-M10.md#oauth-client-and-remote-ssh-code-handling)
+for the operator evidence ceiling. An SSH tunnel alone cannot capture callbacks:
+forwarding needs a real listener, which PestiRoute does not supply. Do not run
+live auth from this handoff.
 
 After token exchange, one bounded `loadCodeAssist` query uses the validated
 configured inference origin, stores only validated project metadata in the

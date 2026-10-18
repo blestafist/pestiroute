@@ -48,9 +48,8 @@ const (
 	defaultAuthEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
 	defaultTokenEndpoint = "https://oauth2.googleapis.com/token"
 	// Public client identity from the pinned 9Router source; credentials remain operator-supplied.
-	defaultClientID    = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-	defaultRedirectURI = "http://localhost:8080/callback"
-	defaultScopes      = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs"
+	defaultClientID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+	defaultScopes   = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs"
 )
 
 type Connector struct {
@@ -199,9 +198,6 @@ func withOAuthDefaults(cfg oauthConfig) oauthConfig {
 	if cfg.AuthorizationEndpoint == "" {
 		cfg.AuthorizationEndpoint = defaultAuthEndpoint
 	}
-	if cfg.RedirectURI == "" {
-		cfg.RedirectURI = defaultRedirectURI
-	}
 	if len(cfg.Scopes) == 0 {
 		cfg.Scopes = strings.Fields(defaultScopes)
 	}
@@ -213,8 +209,7 @@ func validOAuthConfig(cfg oauthConfig) bool {
 		u, err := url.Parse(raw)
 		return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
 	}
-	r, err := url.Parse(cfg.RedirectURI)
-	if cfg.ClientID == "" || cfg.ClientSecret != "" && strings.TrimSpace(cfg.ClientSecret) == "" || strings.ContainsAny(cfg.ClientID+cfg.ClientSecret, "\r\n") || !endpoint(cfg.AuthorizationEndpoint) || cfg.TokenEndpoint != "" && !endpoint(cfg.TokenEndpoint) || err != nil || !r.IsAbs() || r.Host == "" || r.User != nil || r.RawQuery != "" || r.Fragment != "" || len(cfg.Scopes) == 0 {
+	if cfg.ClientID == "" || cfg.ClientSecret != "" && strings.TrimSpace(cfg.ClientSecret) == "" || strings.ContainsAny(cfg.ClientID+cfg.ClientSecret, "\r\n") || !endpoint(cfg.AuthorizationEndpoint) || cfg.TokenEndpoint != "" && !endpoint(cfg.TokenEndpoint) || cfg.RedirectURI != "" && !validRedirectURI(cfg.RedirectURI) || len(cfg.Scopes) == 0 {
 		return false
 	}
 	for _, scope := range cfg.Scopes {
@@ -224,6 +219,12 @@ func validOAuthConfig(cfg oauthConfig) bool {
 	}
 	return true
 }
+
+func validRedirectURI(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.IsAbs() && u.Opaque == "" && u.Host != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == ""
+}
+
 func (c *Connector) validate(ctx context.Context, p, m string) *core.GatewayError {
 	c.mu.Lock()
 	ready := c.state == core.HealthReady

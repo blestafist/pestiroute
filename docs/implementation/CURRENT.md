@@ -32,7 +32,7 @@ the earlier CURRENT claim that it awaited review was stale.
 
 | Milestone | Branch | First READY / active task | Scope / dependency |
 | --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-013 DONE (awaiting authorized amend) | Verified explicit PASS (ses_eb072c895ffeRt8Z3hPC461G5M); M10-001–013 complete. Secret purged; client-auth externalized; fails closed without config. Fixed localhost callback handling remains external live blocker. Next: amend 692bbf6 and push. |
+| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-014 DONE | M10-001–014 complete. Per-session redirect binding and DEC-019/DEC-022 validation verified offline; dynamic registration and loopback ownership/confidentiality remain live caveats. Next offline focus: model tool streaming (M10-015). |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
@@ -58,6 +58,6 @@ M8-008 is also BLOCKED as described above. Antigravity live browser OAuth and re
 
 Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. This cloud host lacks `/proc/<pid>/task/<tid>/children`, so existing process-inspection tests and M6 CLI smoke cannot fully pass locally; use hosted Linux CI for that gate. Parallel worktrees need distinct TMPDIR values as well as package serialization.
 
-M10-013 verified and closed DONE following authorized correction review (reviewer PASS ses_eb072c895ffeRt8Z3hPC461G5M). Bundled client secret purged; known emulated client fails closed without operator runtime configuration (`PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET`). Next action: amend unpublished commit 692bbf6 directly (single task commit) and push. Fixed localhost callback handling and port interception risk remain external live blocker. Live OAuth/discovery remains unverified and unauthorized.
+M10-014 verified and closed DONE following explicit reviewer PASS (ses_eaf1dfe2effeP7n42hD8xgPFhB). Per-session effective redirect URI is recorded in opaque continuation and enforced during exchange. Dynamic provider registration and loopback ownership/confidentiality remain unverified live caveats; manual stdin candidate carries no port ownership safety claim. Live OAuth/discovery remains unauthorized offline. Next offline action: decompose model tool response streaming (M10-015).
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.
