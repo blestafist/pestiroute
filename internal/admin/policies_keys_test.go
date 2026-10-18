@@ -67,6 +67,23 @@ func TestPolicyAndVirtualKeyAPI(t *testing.T) {
 	if got := call("PUT", "/admin/v1/policies/p", `{"expected_revision":1,"rpm":20}`).Code; got != 200 {
 		t.Fatalf("update policy=%d", got)
 	}
+	latest := call("GET", "/admin/v1/policies/p", "")
+	if latest.Code != 200 {
+		t.Fatalf("latest policy status=%d body=%s", latest.Code, latest.Body.String())
+	}
+	var latestPolicy struct {
+		Revision int `json:"revision"`
+		RPM      int `json:"rpm"`
+	}
+	if err := json.Unmarshal(latest.Body.Bytes(), &latestPolicy); err != nil {
+		t.Fatal(err)
+	}
+	if latestPolicy.Revision != 2 {
+		t.Fatalf("latest policy revision=%d", latestPolicy.Revision)
+	}
+	if latestPolicy.RPM != 20 {
+		t.Fatalf("latest policy rpm=%d", latestPolicy.RPM)
+	}
 	if got := call("GET", "/admin/v1/policies/p?revision=1", ""); got.Code != 200 || !strings.Contains(got.Body.String(), `"rpm":10`) {
 		t.Fatalf("immutable policy revision: %d %s", got.Code, got.Body.String())
 	}

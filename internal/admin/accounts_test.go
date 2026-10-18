@@ -209,6 +209,51 @@ func TestAccountAndWriteOnlyCredentialAPI(t *testing.T) {
 	clear(plain)
 }
 
+func TestCreateAccountHTTPReturnsAccountAndDefaultsEnabled(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(filepath.Join(t.TempDir(), "admin.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := sqlite.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PESTIROUTE_ADMIN_TEST_TOKEN", "operator-secret")
+	h, err := New(Config{Address: "127.0.0.1:9093", TokenEnv: "PESTIROUTE_ADMIN_TEST_TOKEN", DB: db, ReadTimeout: time.Second, WriteTimeout: time.Second, IdleTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/admin/v1/accounts", strings.NewReader(`{"id":"created","connector":"test"}`))
+	r.Host = "127.0.0.1:9093"
+	r.Header.Set("Authorization", "Bearer operator-secret")
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", w.Code, w.Body.String())
+	}
+	var got accountDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "created" {
+		t.Fatalf("account id=%q", got.ID)
+	}
+	if got.Connector != "test" {
+		t.Fatalf("account connector=%q", got.Connector)
+	}
+	if !got.Enabled {
+		t.Fatal("account enabled default is false")
+	}
+	if got.CreatedAt == "" {
+		t.Fatal("created_at missing")
+	}
+	if got.UpdatedAt == "" {
+		t.Fatal("updated_at missing")
+	}
+}
+
 func TestCredentialSecretDecoderOwnedBufferIsClearable(t *testing.T) {
 	input := []byte(`{"id":"id","secret":"a\u0062\n\uD83D\uDE00"}`)
 	parsed, ok := parseCredentialBody(input, false)

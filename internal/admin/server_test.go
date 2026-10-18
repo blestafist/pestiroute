@@ -257,6 +257,21 @@ func TestTokenFileOriginAndStaticSeam(t *testing.T) {
 	}
 }
 
+func TestStaticMountWithoutHandlerReturnsNotFound(t *testing.T) {
+	t.Setenv("PESTIROUTE_ADMIN_TEST_TOKEN", "static-test-token")
+	h, err := New(Config{Address: "127.0.0.1:9091", TokenEnv: "PESTIROUTE_ADMIN_TEST_TOKEN", ReadTimeout: time.Second, WriteTimeout: time.Second, IdleTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	r.Host = "127.0.0.1:9091"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unconfigured static mount status=%d body=%q", w.Code, w.Body.String())
+	}
+}
+
 func TestStatusSnapshotAndUsageQueryValidation(t *testing.T) {
 	t.Setenv("PESTIROUTE_ADMIN_TEST_TOKEN", "secret")
 	h, err := New(Config{Address: "127.0.0.1:9092", TokenEnv: "PESTIROUTE_ADMIN_TEST_TOKEN", ReadTimeout: time.Second, WriteTimeout: time.Second, IdleTimeout: time.Second,

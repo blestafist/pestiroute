@@ -132,7 +132,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M11 — Administrative HTTP API
 
-[M11 brief](M11-ADMIN-API.md). Branch `dev-m11-admin-api`; exact filter `/next 10 M11`. Administrative HTTP binding frozen in M11-001; M11-002, M11-003, M11-004, M11-005, and M11-006 verified and DONE; M11-007 remains DRAFT.
+[M11 brief](M11-ADMIN-API.md). Branch `dev-m11-admin-api`; exact filter `/next 10 M11`. Administrative HTTP binding frozen in M11-001; all seven tasks M11-001 through M11-007 verified and DONE. Milestone scope complete.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -142,7 +142,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | [M11-004](tasks/M11-004.md) | DONE | GPT-6 Luna (M11-004 worker) / ses_eb417d9ebffeXh81TJrhEweaKs (reviewer) | M11-003 | Expose account and write-only credential management | Account lifecycle and write-only credential operations verified; AES-256-GCM envelope encryption, CAS checks, transient buffer zeroing, and DEC-007 disablement verified; reviewer PASS ses_eb417d9ebffeXh81TJrhEweaKs | [Verification](tasks/M11-004.md#verification) |
 | [M11-005](tasks/M11-005.md) | DONE | GPT-6 Luna (M11-005 worker) / ses_eb3e29284ffeAoQYH3WjFpp5Iv (reviewer) | M11-004 | Expose virtual-key and policy administration | Policy revisions and virtual key CRUD/reassign verified; CAS conflict and disable-only enforced; one-time secret emission, permanent revocation, and immediate inference admission verified; reviewer PASS ses_eb3e29284ffeAoQYH3WjFpp5Iv | `GOFLAGS=-p=1 ./scripts/check.sh`; [evidence](tasks/M11-005.md#completion-evidence) |
 | [M11-006](tasks/M11-006.md) | DONE | GPT-6 Luna (M11-006 worker) / ses_eb395492affeBp1FWFG6MzUTrI (reviewer) | M11-004 | Bridge the existing auth coordinator to admin HTTP | Generic authenticated lifecycle HTTP wired to composed Core coordinator; sessions/continue/refresh, replay rejection, disabled/quarantined handling, and persistent DB startup verified; reviewer PASS ses_eb395492affeBp1FWFG6MzUTrI | `GOFLAGS=-p=1 ./scripts/check.sh`; [evidence](tasks/M11-006.md#completion-evidence) |
-| [M11-007](tasks/M11-007.md) | DRAFT | — | M11-005, M11-006 | Verify and publish the admin API integration handoff | — | [Verification](tasks/M11-007.md#verification) |
+| [M11-007](tasks/M11-007.md) | DONE | GPT-6 Luna (M11-007 worker) / ses_eb3428f01ffe1CEnrnNvZHDZtR (reviewer) | M11-005, M11-006 | Verify and publish the admin API integration handoff | OpenAPI/HTTP parity verified, regression tests added for account defaults, policy revision checks, and unconfigured static mount; M11-HANDOFF.md published; reviewer PASS ses_eb3428f01ffe1CEnrnNvZHDZtR | `GOFLAGS=-p=1 ./scripts/check.sh`; [evidence](tasks/M11-007.md#completion-evidence) |
 
 ## M12 — WebUI
 
