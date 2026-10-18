@@ -52,7 +52,7 @@ Lite-only originator, honest user-agent, and per-attempt correlation UUIDs are
 Connector-generated ephemeral headers, not persisted sessions; client spoofing
 is suppressed and the standard profile's header set stays unchanged.
 
-Hot reload is not required for the initial MVP. Configuration is applied in full at startup; administrative operations on keys and accounts use storage and runtime services. The initial management interface is local CLI commands; a separate admin API may be added later.
+Hot reload is not required. Configuration is applied at startup; administrative operations use storage/runtime services and do not reload routes. The CLI remains available, and the opt-in administrative HTTP listener is described by the [M11 binding](M11-BINDING.md#listener-and-operator-authentication).
 
 ## Proposed YAML
 
@@ -99,9 +99,15 @@ When estimates are unknown, explicit policies are required: `reject` or a fixed 
 
 Reconciliation is idempotent based on attempt ID. If the gateway restarts with active reservations, startup recovery marks attempts as interrupted, preserves conservative charges, and does not present unknown upstream results as canceled executions. Refresh operations and limit checks do not keep SQL transactions open during network calls.
 
-## Planned management HTTP surface
+## Administrative HTTP listener
 
-M11 will bind a separate opt-in authenticated local management listener and M12
-the operator UI (DEC-021). Existing CLI/config behavior remains the current
-implementation. No new flags, YAML keys, HTTP paths or hot reload are established
-by this plan; M11-001 owns the concrete binding before implementation.
+Gateway JSON and protected YAML may include an optional `admin` object. Set
+`listen`, exactly one of `token_file` or `token_env`, and positive
+`read_timeout`, `write_timeout`, and `idle_timeout`; `max_request_bytes` defaults
+to 65536. `allowed_hosts` adds trusted proxy Host values to the listener address
+and bind host; `allowed_origins` explicitly permits browser origins. Configure
+`tls_cert_file` and `tls_key_file` together for TLS. Non-loopback binds require
+TLS; no plaintext override or reverse-proxy mode is configured. See the [M11 binding](M11-BINDING.md#listener-and-operator-authentication)
+for bearer, Host/Origin, static asset, and API security semantics. The listener
+is independent of inference and does not add API business handlers to the public
+mux.
