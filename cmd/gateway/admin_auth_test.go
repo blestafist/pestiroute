@@ -26,10 +26,11 @@ import (
 )
 
 type antigravityAuthDoer struct {
-	calls   int
-	request *http.Request
-	err     error
-	onDo    func()
+	calls            int
+	request          *http.Request
+	tokenRequestBody string
+	err              error
+	onDo             func()
 }
 
 func (d *antigravityAuthDoer) Do(req *http.Request) (*http.Response, error) {
@@ -40,6 +41,16 @@ func (d *antigravityAuthDoer) Do(req *http.Request) (*http.Response, error) {
 	}
 	if d.err != nil {
 		return nil, d.err
+	}
+	if req.URL.Path == "/v1internal:loadCodeAssist" {
+		if req.Header.Get("Authorization") != "Bearer SYNTHETIC_LOGIN_ACCESS" {
+			return nil, errors.New("discovery did not use the exchanged access token")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"cloudaicompanionProject":{"id":"synthetic-project"}}`)), Request: req}, nil
+	}
+	if req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		d.tokenRequestBody = string(body)
 	}
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"access_token":"SYNTHETIC_LOGIN_ACCESS","refresh_token":"SYNTHETIC_LOGIN_REFRESH","expires_in":3600,"token_type":"Bearer"}`)), Request: req}, nil
 }
@@ -106,20 +117,16 @@ func TestAdminAuthAntigravityEncryptedBrowserLifecycleAndExecuteReload(t *testin
 	if state == "" || session == "" || transport.calls != 0 {
 		t.Fatal("start did not remain offline or omit state/session")
 	}
-	completed := run("http://localhost:8080/callback?code=synthetic-local-code&state="+url.QueryEscape(state)+"\n", "auth", "continue", "--session", session, "--callback-stdin")
-	if !strings.Contains(completed, "authentication complete") || transport.calls != 1 {
+	completed := run("synthetic-local-code\n", "auth", "continue", "--session", session, "--callback-stdin")
+	if !strings.Contains(completed, "authentication complete") || transport.calls != 2 {
 		t.Fatalf("continue=%q calls=%d", completed, transport.calls)
 	}
 	var duplicateOutput, duplicateError bytes.Buffer
 	duplicateArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session, "--callback-stdin"}
-	if err := runAdmin(adminEnvironment{ctx: ctx, args: duplicateArgs, stdin: strings.NewReader("http://localhost:8080/callback?code=synthetic-local-code&state=" + url.QueryEscape(state) + "\n"), stdout: &duplicateOutput, stderr: &duplicateError, authServices: services}); err == nil || transport.calls != 1 {
+	if err := runAdmin(adminEnvironment{ctx: ctx, args: duplicateArgs, stdin: strings.NewReader("http://localhost:8080/callback?code=synthetic-local-code&state=" + url.QueryEscape(state) + "\n"), stdout: &duplicateOutput, stderr: &duplicateError, authServices: services}); err == nil || transport.calls != 2 {
 		t.Fatalf("consumed continuation replay dispatched: err=%v calls=%d", err, transport.calls)
 	}
-	body, err := io.ReadAll(transport.request.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	form, err := url.ParseQuery(string(body))
+	form, err := url.ParseQuery(transport.tokenRequestBody)
 	if err != nil || form.Get("grant_type") != "authorization_code" || form.Get("client_id") != "synthetic-gateway-client" {
 		t.Fatalf("exchange form=%v error=%v", form, err)
 	}
@@ -129,11 +136,11 @@ func TestAdminAuthAntigravityEncryptedBrowserLifecycleAndExecuteReload(t *testin
 	ambiguousArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session2, "--callback-stdin"}
 	callback2 := "http://localhost:8080/callback?code=ambiguous-code&state=" + url.QueryEscape(state2) + "\n"
 	var ambiguousOut, ambiguousErr bytes.Buffer
-	if err := runAdmin(adminEnvironment{ctx: ctx, args: ambiguousArgs, stdin: strings.NewReader(callback2), stdout: &ambiguousOut, stderr: &ambiguousErr, authServices: services}); err == nil || transport.calls != 2 {
+	if err := runAdmin(adminEnvironment{ctx: ctx, args: ambiguousArgs, stdin: strings.NewReader(callback2), stdout: &ambiguousOut, stderr: &ambiguousErr, authServices: services}); err == nil || transport.calls != 3 {
 		t.Fatalf("ambiguous exchange result=%v calls=%d", err, transport.calls)
 	}
 	var replayOut, replayErr bytes.Buffer
-	if err := runAdmin(adminEnvironment{ctx: ctx, args: ambiguousArgs, stdin: strings.NewReader(callback2), stdout: &replayOut, stderr: &replayErr, authServices: services}); err == nil || transport.calls != 2 {
+	if err := runAdmin(adminEnvironment{ctx: ctx, args: ambiguousArgs, stdin: strings.NewReader(callback2), stdout: &replayOut, stderr: &replayErr, authServices: services}); err == nil || transport.calls != 3 {
 		t.Fatalf("ambiguous continuation replay dispatched: err=%v calls=%d", err, transport.calls)
 	}
 	transport.err = nil
@@ -143,7 +150,7 @@ func TestAdminAuthAntigravityEncryptedBrowserLifecycleAndExecuteReload(t *testin
 	transport.onDo = cancel
 	cancelArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session3, "--callback-stdin"}
 	var cancelOut, cancelErr bytes.Buffer
-	if err := runAdmin(adminEnvironment{ctx: cancelCtx, args: cancelArgs, stdin: strings.NewReader("http://localhost:8080/callback?code=cancel-code&state=" + url.QueryEscape(state3) + "\n"), stdout: &cancelOut, stderr: &cancelErr, authServices: services}); err == nil || transport.calls != 3 {
+	if err := runAdmin(adminEnvironment{ctx: cancelCtx, args: cancelArgs, stdin: strings.NewReader("http://localhost:8080/callback?code=cancel-code&state=" + url.QueryEscape(state3) + "\n"), stdout: &cancelOut, stderr: &cancelErr, authServices: services}); err == nil || transport.calls != 4 {
 		t.Fatalf("cancelled exchange result=%v calls=%d", err, transport.calls)
 	}
 	transport.onDo = nil
@@ -154,7 +161,7 @@ func TestAdminAuthAntigravityEncryptedBrowserLifecycleAndExecuteReload(t *testin
 		t.Fatalf("credential persistence revision=%d err=%v", stored.Revision, err)
 	}
 	plain, err := secure.Open(key, secure.Envelope{FormatVersion: stored.FormatVersion, KeyVersion: stored.KeyVersion, Nonce: stored.Nonce, Ciphertext: stored.Ciphertext}, "credentials", stored.ID, stored.AccountID)
-	if err != nil || !strings.Contains(string(plain), "SYNTHETIC_LOGIN_ACCESS") || bytes.Contains(stored.Ciphertext, []byte("SYNTHETIC_LOGIN_ACCESS")) {
+	if err != nil || !strings.Contains(string(plain), "SYNTHETIC_LOGIN_ACCESS") || !strings.Contains(string(plain), "synthetic-project") || bytes.Contains(stored.Ciphertext, []byte("SYNTHETIC_LOGIN_ACCESS")) {
 		t.Fatal("credential was not encrypted and reloadable")
 	}
 	connector := antigravity.NewConnector()

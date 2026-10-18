@@ -170,21 +170,41 @@ and refresh results carrying continuation state/action are quarantined. These
 are future offline test requirements, not implementation completed by this
 document.
 
-## Browser authorization-code candidate (M10-009)
+## Browser / remote-SSH authorization-code candidate (M10-012)
 
-The offline implementation additionally supports the existing
-`Connector.Authenticate` `start`/`continue` actions with PKCE S256 and callback
-state validation. It accepts an operator-supplied OAuth client ID and optional
-secret/endpoints/redirect/scopes; absent overrides, it uses the candidate Google
-authorization/token URLs, localhost callback and scopes listed in the M10-009
-card. These defaults are based on pinned unofficial plugin observations, not
-official Google protocol facts or a supplied/authorized client. No plugin client
-credentials are reused. `start` is local-only; `continue` exchanges the callback
-code only through the invocation-scoped transport. Gateway real HTTP transport is
-disabled unless explicitly opted in. Deterministic tests prove the local
-lifecycle, not endpoint/client authorization, account eligibility, Google OAuth
-compatibility or production readiness. Capability `auth.oauth` remains Unknown;
-this implementation authorizes no live call.
+The offline implementation supports `Connector.Authenticate` `start`/`continue`
+with PKCE S256. Official Antigravity CLI documentation describes remote-SSH
+authentication as a unique authorization URL opened in a local browser, followed
+by pasting the displayed code into the remote terminal. The official public
+client-metadata document
+[`oauth/client-metadata.json`](https://antigravity.google/oauth/client-metadata.json)
+identifies its own URL as `client_id` and lists
+`https://antigravity.google/oauth-callback` as a redirect URI. These establish
+the published UX, public identifier, and redirect string only; they do not
+establish OAuth endpoint/grant compatibility, approval for third-party use,
+scopes, account eligibility, or backend access. The published client ID is a
+public identifier, not a client secret; no plugin credentials are copied.
+
+`start` defaults to that client ID and redirect URI, retaining local overrides.
+The Antigravity CLI and runbook direct operators to paste the displayed code.
+The Connector locally accepts either a trimmed 1–512-byte visible-ASCII code
+(no whitespace or `:`, `?`, `#`, `&`) or a strict DEC-019 callback URL. URL mode
+compares raw scheme, authority and escaped path byte-for-byte; requires exactly
+one code and expected state; rejects every extra/malformed parameter; and uses
+the exact redirect URI. Malformed URLs are never reinterpreted as codes. The
+runtime continues to forward the existing string unchanged, without parsing or
+provider branching. Both modes remain bound to the runtime's single-use persisted
+auth claim and PKCE verifier/challenge. Codes/URLs are never emitted to logs/output.
+Exchange and discovery use invocation-scoped transport. After
+exchange, one bounded `loadCodeAssist` query uses the validated configured
+inference origin and may extract a strictly validated `cloudaicompanionProject`
+ID into encrypted credential metadata. This is pinned-unofficial behavior only;
+it does not change the explicitly configured Execute project. Discovery
+failure/missing project fails closed; no onboarding, retries, alternate endpoint,
+project substitution, or account fallback occurs. Token exchange and refresh
+share the same default token endpoint. Gateway real HTTP transport remains
+disabled unless explicitly opted in. OAuth/discovery compatibility remains
+Unknown; capability `auth.oauth` stays Unknown and no live call is authorized.
 
 ## Unresolved / blocked
 
@@ -192,10 +212,11 @@ Official OAuth endpoints, authorized client and scopes, grant parameters,
 refresh response/rotation guarantees, expiry and freshness policy, account
 identity, personal-subscription versus Gemini Enterprise/Cloud eligibility, and
 live exchange behavior remain **Unknown** or **Blocked** as applicable. The
-plugin scope discrepancy is unresolved. No endpoint, scope, refresh token
-format, quota policy, or account class is inferred from plugin code. Do not
-promote capabilities or make a production-provider compatibility claim. Perform
-live calls only after separate operator authorization and reviewable evidence.
+`loadCodeAssist` request/response shape is an offline candidate derived from the
+pinned MIT source, not official protocol evidence. No onboarding/provisioning is
+implemented. The plugin scope discrepancy is unresolved. Do not promote
+capabilities or make a production-provider compatibility claim. Perform live
+calls only after separate operator authorization and reviewable evidence.
 
 ## References
 

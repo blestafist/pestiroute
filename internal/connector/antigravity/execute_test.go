@@ -22,6 +22,7 @@ type fakeDoer struct {
 	err      error
 	calls    int
 	request  *http.Request
+	do       func(*http.Request) (*http.Response, error)
 }
 type ambientDoer struct {
 	calls   int
@@ -38,6 +39,9 @@ func (f *fakeDoer) antigravityOfflineFakeOnly() {}
 func (f *fakeDoer) Do(r *http.Request) (*http.Response, error) {
 	f.calls++
 	f.request = r
+	if f.do != nil {
+		return f.do(r)
+	}
 	return f.response, f.err
 }
 

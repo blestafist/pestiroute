@@ -131,28 +131,22 @@ redirect URI, scope, challenge/method, and state; and returns it only through a
 safe `AuthUserAction` projection. This browser action has the HTTPS authorization
 URL, empty `UserCode`, and zero `PollInterval`; do not invent a device code. The
 URL necessarily carries the public challenge and state parameters needed by the
-authorization protocol, but the verifier and credentials never enter
-presentation. `AuthRequest.CallbackInput` provides the separate, transient
-manual-paste path authorized by [DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input); `AuthRequest.State` remains only the runtime-loaded opaque Connector continuation state ([M3-AUTH](M3-AUTH.md#binding-the-existing-operation)).
+authorization protocol, but verifier and credentials never enter presentation.
+`AuthRequest.CallbackInput` is the separate transient manual-paste path. Callback
+URLs retain DEC-019's exact parser; DEC-022 documents Antigravity's connector-
+local alternative for raw authorization-code input. `AuthRequest.State` remains
+runtime-loaded opaque Connector continuation state
+([M3-AUTH](M3-AUTH.md#binding-the-existing-operation)).
 
 Keep verifier, expected state, and exact redirect URI in encrypted opaque
-Connector continuation state. On `continue`, the runtime supplies pasted
-callback input separately, bounded to 1–4096 printable ASCII bytes and never
-logged or persisted. The Connector alone parses it, rejects malformed or
-ambiguous input. The protected configured redirect URI must be absolute, have a
-non-empty authority, and have no query, fragment, or userinfo. Compare the
-callback's raw scheme, raw authority, and escaped
-path byte-for-byte with it, without normalization; reject userinfo, fragment,
-malformed authority/escaping, and any mismatch. Strictly decode the query and
-require exactly one non-empty, case-sensitive `code` and one non-empty,
-case-sensitive `state`; reject duplicate keys, malformed encoding, OAuth error
-parameters, and all unexpected parameters. Compare state after exactly one
-strict query-decoding pass, byte-for-byte with protected expected state before
-exchanging, and use the exact configured URI in the exchange. Fail closed
-without reflecting or logging callback input, code, or provider error details.
-The durable continuation claim makes each invoked attempt single-use; invalid or
-ambiguous attempts consume it, and no automatic poll loop, retry, or replay is
-allowed.
+Connector continuation state. Runtime bounds transient input to 1–4096 printable
+ASCII bytes. In URL mode, preserve DEC-019 byte-exact scheme/authority/escaped
+path, exact query, and protected-state validation; never normalize it. In
+connector-declared code mode, accept a trimmed 1–512 visible-ASCII value without
+whitespace or URL/query delimiters and retain PKCE S256. Never reinterpret a
+malformed URL as a code. Fail closed without reflecting/logging input or code.
+The durable continuation claim makes every attempted continuation single-use;
+invalid/ambiguous attempts consume it, and no retry or replay is allowed.
 
 DEC-019 resolves the two contract expressiveness blockers and grants bounded
 offline implementation authorization only for M7-016, M7-010, and M7-013. It

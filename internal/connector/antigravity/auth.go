@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/blestafist/pestiroute/internal/core"
 )
@@ -78,33 +79,72 @@ func (c *Connector) authenticateStart(ctx context.Context, cfg oauthConfig) (cor
 	return core.AuthResult{Supported: true, State: string(continuation), NextAction: "continue", UserAction: &core.AuthUserAction{VerificationURI: endpoint.String()}}, nil
 }
 
-func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, req core.AuthRequest, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
+func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, discoveryOrigin string, req core.AuthRequest, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
 	var continuation authContinuation
 	d := json.NewDecoder(bytes.NewReader(req.State))
 	d.DisallowUnknownFields()
 	if !uniqueJSON(req.State) || d.Decode(&continuation) != nil || d.Decode(new(any)) != io.EOF || continuation.Verifier == "" || continuation.State == "" || len(continuation.Verifier) > 128 || len(continuation.State) > 128 {
 		return core.AuthResult{}, invalid("invalid_auth_state")
 	}
-	callback, err := url.Parse(req.CallbackInput)
-	redirect, _ := url.Parse(cfg.RedirectURI)
-	if err != nil || callback == nil || redirect == nil || !callback.IsAbs() || callback.Scheme != redirect.Scheme || callback.Host != redirect.Host || callback.EscapedPath() != redirect.EscapedPath() || callback.User != nil || callback.Fragment != "" || len(req.CallbackInput) > 4096 {
+	if len(req.CallbackInput) > 4096 || strings.IndexFunc(req.CallbackInput, unicode.IsControl) >= 0 {
 		return core.AuthResult{}, invalid("invalid_auth_callback")
 	}
-	values, err := url.ParseQuery(callback.RawQuery)
-	if err != nil || len(values) != 2 || len(values["code"]) != 1 || len(values["state"]) != 1 || values.Get("code") == "" || values.Get("state") != continuation.State {
+	trimmed := strings.TrimSpace(req.CallbackInput)
+	input := trimmed
+	if input == "" {
+		return core.AuthResult{}, invalid("invalid_auth_callback")
+	}
+	code := input
+	parsed, parseErr := url.Parse(input)
+	looksLikeURL := strings.Contains(input, "://") || parseErr == nil && parsed.Scheme != ""
+	if looksLikeURL {
+		if input != req.CallbackInput {
+			return core.AuthResult{}, invalid("invalid_auth_callback")
+		}
+		callback, err := url.Parse(input)
+		redirect, _ := url.Parse(cfg.RedirectURI)
+		if err != nil || callback == nil || redirect == nil || !callback.IsAbs() || callback.Opaque != "" || callback.Scheme != redirect.Scheme || callback.Host != redirect.Host || callback.EscapedPath() != redirect.EscapedPath() || callback.User != nil || callback.Fragment != "" {
+			return core.AuthResult{}, invalid("invalid_auth_callback")
+		}
+		values, err := url.ParseQuery(callback.RawQuery)
+		if err != nil || len(values) != 2 || len(values["code"]) != 1 || len(values["state"]) != 1 || values.Get("code") == "" || values.Get("state") != continuation.State {
+			return core.AuthResult{}, invalid("invalid_auth_callback")
+		}
+		code = values.Get("code")
+	} else if !validPastedOAuthCode(input) {
+		return core.AuthResult{}, invalid("invalid_auth_callback")
+	}
+	if code == "" || strings.TrimSpace(code) == "" || len(code) > 4096 || strings.IndexFunc(code, unicode.IsControl) >= 0 {
 		return core.AuthResult{}, invalid("invalid_auth_callback")
 	}
 	if services.Transport == nil {
 		return core.AuthResult{}, unavailable()
 	}
-	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {cfg.ClientID}, "code": {values.Get("code")}, "redirect_uri": {cfg.RedirectURI}, "code_verifier": {continuation.Verifier}}
+	form := url.Values{"grant_type": {"authorization_code"}, "client_id": {cfg.ClientID}, "code": {code}, "redirect_uri": {cfg.RedirectURI}, "code_verifier": {continuation.Verifier}}
 	if cfg.ClientSecret != "" {
 		form.Set("client_secret", cfg.ClientSecret)
 	}
-	return c.exchangeAuthCode(ctx, cfg.TokenEndpoint, services.Transport, form)
+	tokenEndpoint := cfg.TokenEndpoint
+	if tokenEndpoint == "" {
+		tokenEndpoint = defaultTokenEndpoint
+	}
+	return c.exchangeAuthCode(ctx, tokenEndpoint, discoveryOrigin, services.Transport, form)
 }
 
-func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint string, transport core.HTTPDoer, form url.Values) (core.AuthResult, *core.GatewayError) {
+func validPastedOAuthCode(code string) bool {
+	if len(code) == 0 || len(code) > 512 || strings.Contains(code, "://") {
+		return false
+	}
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		if c < 0x21 || c > 0x7e || c == '?' || c == '#' || c == '&' || c == ':' {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOrigin string, transport core.HTTPDoer, form url.Values) (core.AuthResult, *core.GatewayError) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
@@ -177,6 +217,11 @@ func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint string, trans
 	if strings.TrimSpace(token.TokenType) == "" && fields["token_type"] != nil {
 		return core.AuthResult{}, invalidAuthResponse()
 	}
+	projectID, ge := discoverProject(ctx, discoveryOrigin, transport, token.AccessToken)
+	if ge != nil {
+		return core.AuthResult{}, ge
+	}
+	candidate.ProjectID = projectID
 	expires := time.Now().Add(time.Duration(token.ExpiresIn) * time.Second).UTC()
 	bundle, _ := json.Marshal(candidate)
 	if ctx.Err() != nil {
@@ -212,7 +257,7 @@ func (c *Connector) authenticateRefresh(ctx context.Context, cfg oauthConfig, se
 	}
 	endpoint := cfg.TokenEndpoint
 	if endpoint == "" {
-		endpoint = "https://oauth.synthetic.invalid/token"
+		endpoint = defaultTokenEndpoint
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -282,6 +327,7 @@ func (c *Connector) authenticateRefresh(ctx context.Context, cfg oauthConfig, se
 	if !valid {
 		return core.AuthResult{}, invalidAuthResponse()
 	}
+	candidate.ProjectID = prior.ProjectID
 	expires := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second).UTC()
 	bundle, err := json.Marshal(candidate)
 	if err != nil {
@@ -291,6 +337,69 @@ func (c *Connector) authenticateRefresh(ctx context.Context, cfg oauthConfig, se
 		return core.AuthResult{}, contextError(ctx.Err())
 	}
 	return core.AuthResult{Supported: true, Credentials: map[string][]byte{"oauth": bundle}, CredentialExpiresAt: &expires}, nil
+}
+
+func discoverProject(ctx context.Context, endpoint string, transport core.HTTPDoer, accessToken string) (string, *core.GatewayError) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	body := []byte(`{"metadata":{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1internal:loadCodeAssist", bytes.NewReader(body))
+	if err != nil {
+		return "", invalidAuthResponse()
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := transport.Do(req)
+	if err != nil {
+		closeResponse(resp)
+		if ctx.Err() != nil {
+			return "", contextError(ctx.Err())
+		}
+		return "", unavailable()
+	}
+	if resp == nil || resp.Body == nil {
+		return "", unavailable()
+	}
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8192))
+		closeResponse(resp)
+		return "", unavailable()
+	}
+	data, err := readAuthResponse(ctx, resp.Body)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", contextError(ctx.Err())
+		}
+		var gatewayError *core.GatewayError
+		if errors.As(err, &gatewayError) {
+			return "", gatewayError
+		}
+		return "", invalidAuthResponse()
+	}
+	if !uniqueJSON(data) {
+		return "", invalidAuthResponse()
+	}
+	var response struct {
+		Project json.RawMessage `json:"cloudaicompanionProject"`
+	}
+	if json.Unmarshal(data, &response) != nil {
+		return "", invalidAuthResponse()
+	}
+	var projectID string
+	if json.Unmarshal(response.Project, &projectID) != nil {
+		var project struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(response.Project, &project) != nil {
+			return "", invalidAuthResponse()
+		}
+		projectID = project.ID
+	}
+	if !projectPattern.MatchString(projectID) {
+		return "", invalidAuthResponse()
+	}
+	return projectID, nil
 }
 
 func invalidAuthResponse() *core.GatewayError {

@@ -24,21 +24,21 @@ func TestAuthenticateRefreshRotatesAndExecuteUsesOnlyAccessToken(t *testing.T) {
 	}
 	f := &fakeDoer{response: &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(strings.Replace(string(fixture), `"expires_in":3600`, `"expires_in":3600,"token_type":"Bearer"`, 1)))}}
 	c := ready(t)
-	prior := []byte(`{"access_token":"SYNTHETIC_OLD_ACCESS","refresh_token":"SYNTHETIC_OLD_REFRESH"}`)
+	prior := []byte(`{"access_token":"SYNTHETIC_OLD_ACCESS","refresh_token":"SYNTHETIC_OLD_REFRESH","project_id":"synthetic-project"}`)
 	result, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "refresh"}, core.InvocationServices{Transport: packageTestDoer(f), Credentials: credentials{data: prior}})
 	if ge != nil || !result.Supported || f.calls != 1 || result.CredentialExpiresAt == nil || !result.CredentialExpiresAt.After(time.Now()) {
 		t.Fatalf("refresh: result=%+v error=%v calls=%d", result, ge, f.calls)
 	}
-	if f.request.Method != http.MethodPost || f.request.URL.String() != "https://oauth.synthetic.invalid/token" || f.request.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+	if f.request.Method != http.MethodPost || f.request.URL.String() != defaultTokenEndpoint || f.request.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
 		t.Fatalf("bad refresh request: %+v", f.request)
 	}
 	body, _ := io.ReadAll(f.request.Body)
 	form, err := url.ParseQuery(string(body))
-	if err != nil || form.Get("grant_type") != "refresh_token" || form.Get("refresh_token") != "SYNTHETIC_OLD_REFRESH" || len(form) != 2 {
+	if err != nil || form.Get("grant_type") != "refresh_token" || form.Get("refresh_token") != "SYNTHETIC_OLD_REFRESH" || form.Get("client_id") != defaultClientID || len(form) != 3 {
 		t.Fatalf("bad refresh form %q (%v)", body, err)
 	}
 	var bundle oauthCredentials
-	if err := json.Unmarshal(result.Credentials["oauth"], &bundle); err != nil || bundle.AccessToken != "SYNTHETIC_ROTATED_ACCESS_TOKEN" || bundle.RefreshToken != "SYNTHETIC_ROTATED_REFRESH_TOKEN" {
+	if err := json.Unmarshal(result.Credentials["oauth"], &bundle); err != nil || bundle.AccessToken != "SYNTHETIC_ROTATED_ACCESS_TOKEN" || bundle.RefreshToken != "SYNTHETIC_ROTATED_REFRESH_TOKEN" || bundle.ProjectID != "synthetic-project" {
 		t.Fatalf("bad replacement bundle %s (%v)", result.Credentials["oauth"], err)
 	}
 	// Execute uses a distinct fake transport and receives the exact replacement generation.
@@ -86,8 +86,32 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 	if query.Get("code_challenge") != base64.RawURLEncoding.EncodeToString(want[:]) || len(continuation.State) < 40 {
 		t.Fatal("PKCE challenge or state is invalid")
 	}
-	fake := &fakeDoer{response: response(200, `{"access_token":"SYNTHETIC_ACCESS","refresh_token":"SYNTHETIC_REFRESH","expires_in":3600,"token_type":"Bearer"}`)}
-	for _, callback := range []string{"not-a-url", "http://localhost:8080/callback?code=x&state=" + url.QueryEscape(continuation.State) + "&extra=y", "http://localhost:8080/callback?code=x&code=y&state=" + url.QueryEscape(continuation.State)} {
+	var tokenRequestBody string
+	fake := &fakeDoer{do: func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "oauth.synthetic.invalid" {
+			body, _ := io.ReadAll(req.Body)
+			tokenRequestBody = string(body)
+			return response(200, `{"access_token":"SYNTHETIC_ACCESS","refresh_token":"SYNTHETIC_REFRESH","expires_in":3600,"token_type":"Bearer"}`), nil
+		}
+		if req.URL.String() != defaultInferenceEndpoint+"/v1internal:loadCodeAssist" || req.Header.Get("Authorization") != "Bearer SYNTHETIC_ACCESS" {
+			return nil, errors.New("unexpected synthetic discovery request")
+		}
+		return response(200, `{"cloudaicompanionProject":{"id":"synthetic-project"}}`), nil
+	}}
+	stateQuery := url.QueryEscape(continuation.State)
+	for _, callback := range []string{
+		"http://localhost:8080/callback?code=x&state=" + stateQuery + "&extra=y",
+		"http://localhost:8080/callback?code=x&code=y&state=" + stateQuery,
+		"http://LOCALHOST:8080/callback?code=x&state=" + stateQuery,
+		"http://localhost:80/callback?code=x&state=" + stateQuery,
+		"http://localhost:8080/%63allback?code=x&state=" + stateQuery,
+		" http://localhost:8080/callback?code=x&state=" + stateQuery,
+		"https:/localhost/callback?code=x&state=" + stateQuery,
+		"http://localhost:8080/callback?code=x&state=" + stateQuery + "#fragment",
+		"http://user@localhost:8080/callback?code=x&state=" + stateQuery,
+		"synthetic\ncode", "synthetic\tcode", "synthetic code", "synthetic:code",
+		"synthetic?code", "synthetic#code", "synthetic&code", strings.Repeat("x", 513),
+	} {
 		bad, err := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: callback}, core.InvocationServices{Transport: packageTestDoer(fake)})
 		if err == nil || bad.Supported || fake.calls != 0 {
 			t.Fatalf("malformed callback dispatched: %q result=%+v error=%v calls=%d", callback, bad, err, fake.calls)
@@ -97,13 +121,25 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 	if ge == nil || bad.Supported || fake.calls != 0 {
 		t.Fatalf("state mismatch dispatched: %+v %v calls=%d", bad, ge, fake.calls)
 	}
-	completed, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: "http://localhost:8080/callback?code=local&state=" + url.QueryEscape(continuation.State)}, core.InvocationServices{Transport: packageTestDoer(fake)})
-	if ge != nil || !completed.Supported || completed.CredentialExpiresAt == nil || !completed.CredentialExpiresAt.After(time.Now()) || fake.calls != 1 {
+	completed, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: "http://localhost:8080/callback?code=local-code&state=" + url.QueryEscape(continuation.State)}, core.InvocationServices{Transport: packageTestDoer(fake)})
+	if ge != nil || !completed.Supported || completed.CredentialExpiresAt == nil || !completed.CredentialExpiresAt.After(time.Now()) || fake.calls != 2 {
 		t.Fatalf("continue: %+v %v calls=%d", completed, ge, fake.calls)
 	}
-	form, err := url.ParseQuery(readFakeRequest(t, fake))
-	if err != nil || form.Get("grant_type") != "authorization_code" || form.Get("client_id") != "synthetic-client" || form.Get("code_verifier") != continuation.Verifier || form.Get("code") != "local" {
+	var creds oauthCredentials
+	if json.Unmarshal(completed.Credentials["oauth"], &creds) != nil || creds.ProjectID != "synthetic-project" {
+		t.Fatalf("project discovery was not persisted in credential metadata: %+v", creds)
+	}
+	form, err := url.ParseQuery(tokenRequestBody)
+	if err != nil || form.Get("grant_type") != "authorization_code" || form.Get("client_id") != "synthetic-client" || form.Get("code_verifier") != continuation.Verifier || form.Get("code") != "local-code" || form.Get("redirect_uri") != "http://localhost:8080/callback" {
 		t.Fatalf("invalid exchange: %v %v", form, err)
+	}
+	_, ge = c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: " 4/0Aa+_-%=x "}, core.InvocationServices{Transport: packageTestDoer(fake)})
+	if ge != nil || fake.calls != 4 {
+		t.Fatalf("pasted code continuation: error=%v calls=%d", ge, fake.calls)
+	}
+	form, err = url.ParseQuery(tokenRequestBody)
+	if err != nil || form.Get("code") != "4/0Aa+_-%=x" || form.Get("redirect_uri") != "http://localhost:8080/callback" {
+		t.Fatalf("pasted code exchange mismatch: form=%v err=%v", form, err)
 	}
 	for _, tc := range []struct {
 		status int
@@ -117,13 +153,121 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 	}
 }
 
-func readFakeRequest(t *testing.T, fake *fakeDoer) string {
-	t.Helper()
-	body, err := io.ReadAll(fake.request.Body)
+func TestAuthenticateOfficialDefaults(t *testing.T) {
+	c := NewConnector()
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	result, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "start"}, core.InvocationServices{})
+	if ge != nil || !result.Supported || result.UserAction == nil {
+		t.Fatalf("start: %+v %v", result, ge)
+	}
+	authorize, err := url.Parse(result.UserAction.VerificationURI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(body)
+	if authorize.Query().Get("client_id") != defaultClientID || authorize.Query().Get("redirect_uri") != "https://antigravity.google/oauth-callback" || authorize.Query().Get("code_challenge_method") != "S256" {
+		t.Fatalf("unexpected default OAuth request: %s", authorize)
+	}
+}
+
+func TestAuthenticateDefaultsShareOAuthEndpointsAndBoundDiscoveryOrigin(t *testing.T) {
+	c := NewConnector()
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"configured-project","endpoint":"https://discovery.synthetic.invalid"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	started, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "start"}, core.InvocationServices{})
+	if ge != nil || started.UserAction == nil {
+		t.Fatalf("start action: %+v err=%v", started, ge)
+	}
+	var exchangeForm url.Values
+	fake := &fakeDoer{do: func(req *http.Request) (*http.Response, error) {
+		switch req.URL.String() {
+		case defaultTokenEndpoint:
+			body, _ := io.ReadAll(req.Body)
+			exchangeForm, _ = url.ParseQuery(string(body))
+			if exchangeForm.Get("grant_type") == "refresh_token" {
+				return response(http.StatusOK, `{"access_token":"SYNTHETIC_REFRESHED_ACCESS","refresh_token":"SYNTHETIC_REFRESHED_REFRESH","expires_in":3600}`), nil
+			}
+			return response(http.StatusOK, `{"access_token":"SYNTHETIC_LOGIN_ACCESS","refresh_token":"SYNTHETIC_LOGIN_REFRESH","expires_in":3600}`), nil
+		case "https://discovery.synthetic.invalid/v1internal:loadCodeAssist":
+			if req.Method != http.MethodPost || req.Header.Get("Authorization") != "Bearer SYNTHETIC_LOGIN_ACCESS" {
+				return nil, errors.New("unexpected discovery request")
+			}
+			return response(http.StatusOK, `{"cloudaicompanionProject":"discovered-project"}`), nil
+		default:
+			return nil, errors.New("unexpected synthetic URL: " + req.URL.String())
+		}
+	}}
+	continued, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(started.State), CallbackInput: "4/0Synthetic+Code"}, core.InvocationServices{Transport: packageTestDoer(fake)})
+	if ge != nil || !continued.Supported || fake.calls != 2 || exchangeForm.Get("redirect_uri") != defaultRedirectURI || exchangeForm.Get("client_id") != defaultClientID {
+		t.Fatalf("continue defaults: result=%+v err=%v calls=%d form=%v", continued, ge, fake.calls, exchangeForm)
+	}
+	bundle, valid := parseOAuthCredentials(continued.Credentials["oauth"], true)
+	if !valid || bundle.ProjectID != "discovered-project" {
+		t.Fatalf("discovery metadata: %+v valid=%t", bundle, valid)
+	}
+	_, ge = c.Authenticate(context.Background(), core.AuthRequest{Action: "refresh"}, core.InvocationServices{Transport: packageTestDoer(fake), Credentials: credentials{data: continued.Credentials["oauth"]}})
+	if ge != nil || fake.calls != 3 || fake.request.URL.String() != defaultTokenEndpoint || exchangeForm.Get("grant_type") != "refresh_token" || exchangeForm.Get("client_id") != defaultClientID {
+		t.Fatalf("refresh defaults: error=%v calls=%d request=%v form=%v", ge, fake.calls, fake.request.URL, exchangeForm)
+	}
+	boundaryStart, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "start"}, core.InvocationServices{})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	_, ge = c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(boundaryStart.State), CallbackInput: strings.Repeat("x", 512)}, core.InvocationServices{Transport: packageTestDoer(fake)})
+	if ge != nil || fake.calls != 5 || exchangeForm.Get("code") != strings.Repeat("x", 512) {
+		t.Fatalf("512-byte code boundary: error=%v calls=%d code length=%d", ge, fake.calls, len(exchangeForm.Get("code")))
+	}
+}
+
+func TestAuthenticateDiscoveryFailsClosed(t *testing.T) {
+	c := NewConnector()
+	config := []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","oauth":{"client_id":"synthetic-client","auth_endpoint":"https://auth.synthetic.invalid/authorize","token_endpoint":"https://oauth.synthetic.invalid/token","redirect_uri":"http://localhost:8080/callback","scopes":["synthetic"]}}`)
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: config}); err != nil {
+		t.Fatal(err)
+	}
+	started, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "start"}, core.InvocationServices{})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+		err  error
+	}{
+		{name: "missing project", body: `{}`},
+		{name: "discovery network failure", err: errors.New("synthetic network error")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeDoer{do: func(req *http.Request) (*http.Response, error) {
+				if req.URL.Host == "oauth.synthetic.invalid" {
+					return response(http.StatusOK, `{"access_token":"SYNTHETIC_ACCESS","expires_in":3600}`), nil
+				}
+				if tc.err != nil {
+					return nil, tc.err
+				}
+				return response(http.StatusOK, tc.body), nil
+			}}
+			result, err := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(started.State), CallbackInput: "SYNTHETIC_CODE"}, core.InvocationServices{Transport: packageTestDoer(fake)})
+			if err == nil || result.Supported || len(result.Credentials) != 0 || fake.calls != 2 {
+				t.Fatalf("discovery failure leaked candidate: result=%+v error=%v calls=%d", result, err, fake.calls)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake := &fakeDoer{do: func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "oauth.synthetic.invalid" {
+			return response(http.StatusOK, `{"access_token":"SYNTHETIC_ACCESS","expires_in":3600}`), nil
+		}
+		cancel()
+		return response(http.StatusOK, `{"cloudaicompanionProject":"synthetic-project"}`), nil
+	}}
+	result, err := c.Authenticate(ctx, core.AuthRequest{Action: "continue", State: []byte(started.State), CallbackInput: "SYNTHETIC_CODE"}, core.InvocationServices{Transport: packageTestDoer(fake)})
+	if err == nil || err.Category != core.CategoryCancelled || result.Supported || len(result.Credentials) != 0 || fake.calls != 2 {
+		t.Fatalf("discovery cancellation leaked candidate: result=%+v error=%v calls=%d", result, err, fake.calls)
+	}
 }
 
 type cancelDuringReadBody struct {

@@ -26,35 +26,44 @@ scope; this is not remote entitlement or provider support. `auth.oauth`,
 `usage.exact`, and all other capabilities remain `Unknown`; no live claims or
 provider calls are authorized by this handoff.
 
-## Browser OAuth candidate (M10-009)
+## Browser OAuth and pasted-code candidate (M10-012)
 
-The connector implements PKCE S256 start/continue and the gateway exposes them
-through `gateway admin auth start --account ID` and
-`gateway admin auth continue --session ID --callback-stdin`. The operator must
-provide an authorized client through `PESTIROUTE_ANTIGRAVITY_CLIENT_ID`; optional
-`PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET`, `..._AUTH_ENDPOINT`,
-`..._TOKEN_ENDPOINT`, `..._REDIRECT_URI`, and whitespace-separated `..._SCOPES`
-override the documented candidate defaults. Defaults and plugin-derived scopes
-are hypotheses, not official Google OAuth facts; do not use plugin client
-credentials. No network request is made by `start`. Token exchange/refresh uses
-the standard HTTPS transport only when explicitly opted in with
-`PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1`, or an injected deterministic test
-transport. Native CLI usage:
+The connector implements PKCE S256 start/continue. Official Antigravity docs
+describe the remote-SSH URL → local browser → displayed code → terminal paste
+UX. The official metadata publishes a public client ID and
+`https://antigravity.google/oauth-callback` redirect; neither proves third-party
+authorization or OAuth protocol compatibility. These are the default client ID
+and redirect URI; no client secret is bundled. OAuth endpoint and scope defaults
+remain unverified hypotheses. Optional client/endpoints/redirect/scopes
+overrides remain available. The CLI/runbook direct operators to paste the
+displayed code; the Connector accepts a raw code (trimmed, 1–512 visible-ASCII
+bytes, no whitespace/URL delimiters) or a DEC-019 strict callback URL. Runtime
+continues forwarding its existing string unchanged, with no provider branch.
+Both modes use exact redirect URI, PKCE S256, and the existing runtime single-use
+claim; neither can retry/replay.
+
+After token exchange, one bounded `loadCodeAssist` query uses the validated
+configured inference origin (including explicit trusted endpoint override),
+stores only validated project metadata in the encrypted credential bundle, and
+does not override the explicit Execute project. There is no onboarding, retry,
+fallback endpoint, or account fallback. Token exchange and refresh share the
+same candidate token endpoint default. Gateway HTTPS for auth/discovery/inference
+requires explicit `PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1`, or an injected
+deterministic test transport. Native CLI usage:
 
 ```sh
-export PESTIROUTE_ANTIGRAVITY_CLIENT_ID='operator-authorized-client-id'
 export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1 # explicit HTTPS auth/inference transport opt-in
 gateway admin auth start --account ACCOUNT_ID
-# Follow verification_uri in a browser, then paste the exact callback URL:
+# Follow verification_uri in a browser, then paste the displayed code:
 gateway admin auth continue --session SESSION_ID --callback-stdin
 ```
 
-Endpoints, redirect URI and scopes can be overridden using the variables above.
-Credentials are persisted through the existing encrypted account store. This
-implementation and its synthetic tests do not establish provider
-eligibility, Google authorization, OAuth endpoint/client support, or production
-compatibility; all remain unverified and capability `auth.oauth` remains
-`Unknown`. Never use live OAuth without separate operator authorization.
+The client ID override above is optional; omit it to use the published public
+identifier. Codes/URLs are read without echo and never logged. Credentials and
+project metadata are persisted in the existing encrypted account store. The
+synthetic tests establish no provider eligibility, third-party authorization,
+OAuth/discovery compatibility, or production support; capability `auth.oauth`
+remains `Unknown`. No live OAuth is authorized by this handoff.
 
 ## Error, replay, and lifecycle boundary
 
@@ -75,12 +84,10 @@ are rejected before their frame can emit text.
 Use the M10 [brief](M10-ANTIGRAVITY.md) and [roadmap](ROADMAP.md#m10--google-antigravity-connector)
 to decompose future work only when evidence is ready:
 
-1. Review M10-009's offline browser OAuth implementation; research and bind
-   account/project association and required authority before any separately
-   authorized live gate.
-2. Research project discovery/onboarding semantics and side effects before
-   designing an offline testable slice; do not invent endpoints or provisioning.
-3. Research multi-round tool calls and thought-signature/history preservation;
+1. Any live OAuth/discovery validation requires a separate reviewed authorization,
+   current provider evidence, and a finite operator procedure; this handoff does
+   not authorize it.
+2. Research multi-round tool calls and thought-signature/history preservation;
    define an offline fake/conformance check and resolve any opaque-contract
    state requirement before implementation.
 

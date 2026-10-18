@@ -24,6 +24,7 @@ import (
 type oauthCredentials struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token,omitempty"`
+	ProjectID    string `json:"project_id,omitempty"`
 }
 
 func parseOAuthCredentials(raw []byte, requireRefresh bool) (oauthCredentials, bool) {
@@ -35,7 +36,7 @@ func parseOAuthCredentials(raw []byte, requireRefresh bool) (oauthCredentials, b
 		return oauthCredentials{}, false
 	}
 	for key := range fields {
-		if key != "access_token" && key != "refresh_token" {
+		if key != "access_token" && key != "refresh_token" && key != "project_id" {
 			return oauthCredentials{}, false
 		}
 	}
@@ -48,6 +49,9 @@ func parseOAuthCredentials(raw []byte, requireRefresh bool) (oauthCredentials, b
 		return oauthCredentials{}, false
 	}
 	if requireRefresh && !hasRefresh {
+		return oauthCredentials{}, false
+	}
+	if projectRaw, ok := fields["project_id"]; ok && (json.Unmarshal(projectRaw, &result.ProjectID) != nil || !projectPattern.MatchString(result.ProjectID)) {
 		return oauthCredentials{}, false
 	}
 	return result, true

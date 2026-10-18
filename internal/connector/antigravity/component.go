@@ -47,7 +47,8 @@ type oauthConfig struct {
 const (
 	defaultAuthEndpoint  = "https://accounts.google.com/o/oauth2/v2/auth"
 	defaultTokenEndpoint = "https://oauth2.googleapis.com/token"
-	defaultRedirectURI   = "http://localhost:8080/callback"
+	defaultClientID      = "https://antigravity.google/oauth/client-metadata.json"
+	defaultRedirectURI   = "https://antigravity.google/oauth-callback"
 	defaultScopes        = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog"
 )
 
@@ -93,11 +94,9 @@ func (c *Connector) Init(ctx context.Context, in core.ComponentConfig) error {
 	if d.Decode(&cfg) != nil || d.Decode(new(any)) != io.EOF || cfg.Profile != profile || !projectPattern.MatchString(cfg.Project) {
 		return errors.New("invalid Antigravity profile or project")
 	}
-	if cfg.OAuth.ClientID != "" || cfg.OAuth.ClientSecret != "" || cfg.OAuth.AuthorizationEndpoint != "" || cfg.OAuth.TokenEndpoint != "" || cfg.OAuth.RedirectURI != "" || len(cfg.OAuth.Scopes) != 0 {
-		cfg.OAuth = withOAuthDefaults(cfg.OAuth)
-		if !validOAuthConfig(cfg.OAuth) {
-			return errors.New("invalid Antigravity OAuth configuration")
-		}
+	cfg.OAuth = withOAuthDefaults(cfg.OAuth)
+	if !validOAuthConfig(cfg.OAuth) {
+		return errors.New("invalid Antigravity OAuth configuration")
 	}
 	if endpointOverride := strings.TrimSpace(os.Getenv("PESTIROUTE_ANTIGRAVITY_ENDPOINT")); endpointOverride != "" {
 		cfg.Endpoint = endpointOverride
@@ -172,6 +171,7 @@ func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, serv
 	}
 	c.mu.Lock()
 	cfg := c.cfg.OAuth
+	discoveryOrigin := c.cfg.Endpoint
 	c.mu.Unlock()
 	if req.Action == "start" && len(req.State) == 0 && req.CallbackInput == "" {
 		if cfg.ClientID == "" {
@@ -183,7 +183,7 @@ func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, serv
 		if cfg.ClientID == "" {
 			return core.AuthResult{Supported: false}, nil
 		}
-		return c.authenticateContinue(ctx, cfg, req, services)
+		return c.authenticateContinue(ctx, cfg, discoveryOrigin, req, services)
 	}
 	if req.Action != "refresh" || len(req.State) != 0 || req.CallbackInput != "" {
 		return core.AuthResult{Supported: false}, nil
@@ -192,11 +192,11 @@ func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, serv
 }
 
 func withOAuthDefaults(cfg oauthConfig) oauthConfig {
+	if cfg.ClientID == "" {
+		cfg.ClientID = defaultClientID
+	}
 	if cfg.AuthorizationEndpoint == "" {
 		cfg.AuthorizationEndpoint = defaultAuthEndpoint
-	}
-	if cfg.TokenEndpoint == "" {
-		cfg.TokenEndpoint = defaultTokenEndpoint
 	}
 	if cfg.RedirectURI == "" {
 		cfg.RedirectURI = defaultRedirectURI
@@ -213,7 +213,7 @@ func validOAuthConfig(cfg oauthConfig) bool {
 		return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
 	}
 	r, err := url.Parse(cfg.RedirectURI)
-	if cfg.ClientID == "" || strings.ContainsAny(cfg.ClientID+cfg.ClientSecret, "\r\n") || !endpoint(cfg.AuthorizationEndpoint) || !endpoint(cfg.TokenEndpoint) || err != nil || !r.IsAbs() || r.Host == "" || r.User != nil || r.RawQuery != "" || r.Fragment != "" || len(cfg.Scopes) == 0 {
+	if cfg.ClientID == "" || strings.ContainsAny(cfg.ClientID+cfg.ClientSecret, "\r\n") || !endpoint(cfg.AuthorizationEndpoint) || cfg.TokenEndpoint != "" && !endpoint(cfg.TokenEndpoint) || err != nil || !r.IsAbs() || r.Host == "" || r.User != nil || r.RawQuery != "" || r.Fragment != "" || len(cfg.Scopes) == 0 {
 		return false
 	}
 	for _, scope := range cfg.Scopes {

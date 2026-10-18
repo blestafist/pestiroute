@@ -32,7 +32,7 @@ the earlier CURRENT claim that it awaited review was stale.
 
 | Milestone | Branch | First READY / active task | Scope / dependency |
 | --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-011 DONE (awaiting commit) | Verified explicit PASS (ses_eb4542d06ffe2GP8AWkHJgZWk8); M10-001–011 complete. Production connector ready for browser auth with operator client/project prerequisites; tool declarations supported, but full tool calling (rounds, thought signatures, causal history) remains BLOCKED pending carrier/state specification. Next action: user sign-in; no new task |
+| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-012 DONE (awaiting commit) | Verified explicit PASS (ses_eb16a3187ffeX5XxFS5DoofYgG); M10-001–012 complete. Connector candidate binds official SSH pasted-code UX and public metadata defaults; no live calls. Next action: operator commit, then offline disposable auth start setup |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
@@ -58,6 +58,6 @@ M8-008 is also BLOCKED as described above. Antigravity live browser OAuth and re
 
 Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. This cloud host lacks `/proc/<pid>/task/<tid>/children`, so existing process-inspection tests and M6 CLI smoke cannot fully pass locally; use hosted Linux CI for that gate. Parallel worktrees need distinct TMPDIR values as well as package serialization.
 
-M10-011 focused race/tests and vet pass; full check requires hosted Linux CI (cloud host lacks `/proc/.../children` and pinned Go 1.27.1 toolchain).
+M10-012 focused Connector/gateway auth race tests, vet, gateway build, Markdown links, and `git diff --check` pass on Go 1.27.2. Whole-tree check requires hosted Linux CI (cloud host lacks `/proc/.../children` and pinned Go 1.27.1); M10-012 remains ACTIVE pending planner review. Live OAuth/discovery remains unverified and unauthorized.
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.

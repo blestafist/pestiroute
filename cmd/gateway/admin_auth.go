@@ -29,7 +29,7 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 		args = args[1:]
 	}
 	if len(args) == 0 || isHelp(args[0]) {
-		_, _ = io.WriteString(env.stdout, "usage: gateway admin [--db PATH] [--master-key PATH] auth [--debug] <start --account ID|continue --session ID [--callback-stdin]|refresh --account ID>\n")
+		_, _ = io.WriteString(env.stdout, "usage: gateway admin [--db PATH] [--master-key PATH] auth [--debug] <start --account ID|continue --session ID [--callback-stdin]|refresh --account ID>\n  --callback-stdin reads a pasted authorization code or callback URL without echoing it\n")
 		return nil
 	}
 	if args[0] != "start" && args[0] != "continue" && args[0] != "refresh" {
@@ -37,7 +37,7 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	}
 	fs := adminFlags("auth " + args[0])
 	accountID, sessionID := fs.String("account", "", "account ID"), fs.String("session", "", "opaque continuation handle")
-	callbackStdin := fs.Bool("callback-stdin", false, "read a pasted callback URL from stdin")
+	callbackStdin := fs.Bool("callback-stdin", false, "read a pasted authorization code or callback URL from stdin")
 	if err := parseAdminFlags(fs, args[1:]); err != nil {
 		return err
 	}
@@ -199,16 +199,13 @@ func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db
 	} else if isAntigravityAuthConnector(account.Connector) {
 		connector = antigravity.NewConnector()
 		oauth := map[string]any{}
-		if clientID := os.Getenv("PESTIROUTE_ANTIGRAVITY_CLIENT_ID"); clientID != "" {
-			oauth["client_id"] = clientID
-			for key, envName := range map[string]string{"client_secret": "PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET", "auth_endpoint": "PESTIROUTE_ANTIGRAVITY_AUTH_ENDPOINT", "token_endpoint": "PESTIROUTE_ANTIGRAVITY_TOKEN_ENDPOINT", "redirect_uri": "PESTIROUTE_ANTIGRAVITY_REDIRECT_URI"} {
-				if value := os.Getenv(envName); value != "" {
-					oauth[key] = value
-				}
+		for key, envName := range map[string]string{"client_id": "PESTIROUTE_ANTIGRAVITY_CLIENT_ID", "client_secret": "PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET", "auth_endpoint": "PESTIROUTE_ANTIGRAVITY_AUTH_ENDPOINT", "token_endpoint": "PESTIROUTE_ANTIGRAVITY_TOKEN_ENDPOINT", "redirect_uri": "PESTIROUTE_ANTIGRAVITY_REDIRECT_URI"} {
+			if value := os.Getenv(envName); value != "" {
+				oauth[key] = value
 			}
-			if scopes := strings.Fields(os.Getenv("PESTIROUTE_ANTIGRAVITY_SCOPES")); len(scopes) > 0 {
-				oauth["scopes"] = scopes
-			}
+		}
+		if scopes := strings.Fields(os.Getenv("PESTIROUTE_ANTIGRAVITY_SCOPES")); len(scopes) > 0 {
+			oauth["scopes"] = scopes
 		}
 		cfg := map[string]any{"profile": "antigravity-v1internal", "project": "admin-auth"}
 		if len(oauth) > 0 {

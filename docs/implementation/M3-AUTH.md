@@ -27,7 +27,7 @@ enough to skip a refresh.
 | `AuthRequest.AccountID` | Runtime-selected account ID, set by the caller and never accepted from client state. |
 | `AuthRequest.Action` | Exactly `start`, `continue`, or `refresh`. Other values fail before Connector invocation. `refresh` is runtime/internal only. |
 | `AuthRequest.State` | For `start` and `refresh`, empty. For `continue`, the Connector's opaque state bytes loaded from the runtime's protected session row. Never client-supplied or a database handle. |
-| `AuthRequest.CallbackInput` | Optional client-supplied manual callback URL, only on `continue`; when non-empty, 1–4096 printable ASCII bytes. Bound at the runtime trust boundary, forwarded separately from `State`, never logged or persisted. Empty on `start`/`refresh`; reject non-empty input there. Runtime does not parse it. |
+| `AuthRequest.CallbackInput` | Optional client-supplied transient callback URL or code input, only on `continue`; when non-empty, 1–4096 printable ASCII bytes. Bound at the runtime trust boundary, forwarded separately from `State`, never logged or persisted. Empty on `start`/`refresh`; reject non-empty input there. Runtime does not parse it. |
 | `AuthResult.Supported` | `false` means do not accept returned state/credentials. If the method was invoked, it is not evidence that no network exchange occurred; retain/quarantine any refresh marker and invalidate the interactive continuation conservatively. |
 | `AuthResult.State` | Opaque Connector state bytes encoded in the existing string field; persist as bytes without parsing. Empty means no continuation state. |
 | `AuthResult.NextAction` | Empty means the flow ended; otherwise exactly `continue`. The runtime creates/retains a session only for `continue`. It does not infer provider-specific actions. |
@@ -51,26 +51,20 @@ and checked before every
 continuation; an extension requires a future explicit policy, not a provider
 response.
 
-For a manual browser callback, the caller passes the pasted URL as
-`CallbackInput` to `AuthCoordinator.Continue`; it is transient untrusted input,
-not the session handle or `AuthRequest.State`. Enforce its byte bound before
-Connector invocation and reject invalid bounds before claiming; exclude the
-input from logs, storage, errors, and returned presentation. The configured
-redirect URI must be absolute, have a non-empty authority, and have no query,
-fragment, or userinfo. The Connector
-strictly parses callback input and compares its raw scheme, raw authority, and
-escaped path byte-for-byte with that configured URI, without normalization; it
-rejects userinfo, fragment, malformed authority/escaping, and mismatch. Strict
-query decoding requires exactly one non-empty, case-sensitive `code` and one
-non-empty, case-sensitive `state`; duplicate keys, malformed encoding, OAuth
-error parameters, and all unexpected parameters are rejected. The Connector
-compares state after exactly one strict query-decoding pass, byte-for-byte with
-protected expected state before exchange, and uses the exact configured URI in
-the exchange. Invalid callbacks fail closed without reflecting/logging input,
-code, or provider error details. The existing durable continuation claim makes
-each invoked attempt one-time: invalid callback attempts and ambiguous outcomes
-consume the claimed continuation and are not retried. Stale or consumed sessions
-fail before Connector work.
+`AuthCoordinator.Continue` forwards `CallbackInput` as transient untrusted input,
+not the session handle or `AuthRequest.State`. It enforces the shared size and
+printable-ASCII bound before claiming and excludes input from logs, storage,
+errors, and returned presentation. In callback-URL mode DEC-019 strict parsing
+is unchanged: compare raw scheme/authority/escaped path byte-for-byte, require
+exactly one non-empty `code` and `state`, compare state to protected expected
+state, and use the exact configured redirect URI. DEC-022 documents the
+Antigravity Connector's local alternative: a trimmed 1–512 visible-ASCII code
+without whitespace or URL/query delimiters, retaining the existing PKCE
+verifier/challenge. Core forwards the existing string without parsing it or
+branching on provider identity. The
+durable runtime continuation claim remains single-use for either input mode;
+invalid and ambiguous attempts are consumed and never retried. Stale/consumed
+sessions fail before Connector work.
 
 The generic `AuthRequest` field, coordinator/admin input, and protobuf/IPC
 mapping are implemented by [M7-016](tasks/M7-016.md). Offline Connector OAuth

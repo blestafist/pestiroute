@@ -84,7 +84,7 @@ func TestSQLiteAuthCoordinatorStoreAntigravityEncryptedRefreshReloadExecute(t *t
 	if err = registry.Register("antigravity", connector, core.ComponentConnector); err != nil {
 		t.Fatal(err)
 	}
-	if err = registry.Init(ctx, "antigravity", core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://antigravity.synthetic.invalid"}`)}); err != nil {
+	if err = registry.Init(ctx, "antigravity", core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://antigravity.synthetic.invalid","oauth":{"token_endpoint":"https://oauth.synthetic.invalid/token"}}`)}); err != nil {
 		t.Fatal(err)
 	}
 	coordinator, err := core.NewAuthCoordinator(registry, store, authServicesFactoryFunc(func(core.AttemptScope) core.InvocationServices {

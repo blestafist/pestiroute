@@ -508,6 +508,15 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Compatibility:** Additive future HTTP/static surface; current CLI and inference contracts stay intact. Any necessary semantic Core change still needs its own ADR. Node is a build dependency only for the future full UI distribution.
 - **Verification:** M11 contract and API behavior, M12 real browser E2E against a local gateway, M13 build/restore acceptance and existing Go/M6 CI. See the four milestone briefs and [parallel plan](../implementation/PARALLEL.md).
 
+### DEC-022 — Accept Antigravity Connector-Local Manual OAuth Code Input
+
+- **Status:** Accepted by planner resolution for M10-012 on 2026-10-18; offline-only implementation and specification synchronization.
+- **Context:** Official Antigravity remote-SSH UX presents an authorization code for terminal paste, while DEC-019 defines `CallbackInput` as a strict pasted callback URL. The existing transient string can carry either representation without changing the runtime's opaque session state; input interpretation remains Connector-local.
+- **Decision:** Keep `AuthRequest.CallbackInput string` and the existing runtime continuation/claim API and binding unchanged. Antigravity accepts a raw pasted code as Connector-local manual-code mode: one trimmed 1–512-byte visible-ASCII value with no whitespace or URL/query delimiters (`:`, `?`, `#`, `&`); plausible code punctuation such as `/`, `+`, `%`, and `=` remains valid. Callback-URL mode remains strictly governed by DEC-019: byte-exact raw scheme, authority, and escaped path; exact code/state query keys and one-time state match. Malformed URL-like input is not reinterpreted as a code. Use the exact configured redirect URI in exchange. Keep PKCE S256, runtime-owned single-use claim, no retry/replay, and no logging/persistence of input. The generic runtime continues forwarding its existing string without parsing or provider branching. This is an offline candidate only; no provider behavior is established.
+- **Compatibility / impact:** No Core, IPC/protobuf, runtime field, callback, session-storage, or schema change. Existing callback-URL peers and bindings remain unchanged. Antigravity code-mode guidance belongs in its connector documentation and CLI/runbook; other Connectors and Core remain provider-agnostic. Synchronize CONTRACT, M2-BINDING, M3-AUTH and M10 auth/runbook documentation only where semantics need clarification. No capability is promoted.
+- **Prohibitions:** No live login/provider requests, credential handling beyond the offline fake lifecycle, external traffic, fallback, onboarding, or production claim. Do not reinterpret malformed callback URLs as codes.
+- **Verification:** Test raw-code grammar boundaries; strict DEC-019 callback scheme/authority/path/state negatives; default exchange/refresh endpoints; configured discovery-origin routing; PKCE exact redirect, claim replay, cancellation, encrypted persistence/reload, and zero live transport. Run affected package/gateway race tests, vet/build, and specification/link checks.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |

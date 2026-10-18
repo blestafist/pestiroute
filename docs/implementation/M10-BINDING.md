@@ -73,23 +73,29 @@ support remain **Unknown**. Do not copy source expression or credentials.
 
 ## Project and credential scope
 
-Project identity is mandatory trusted per-instance configuration: a single
-non-empty, strictly validated identifier is supplied explicitly and bound to the
-selected connector/account. Missing or invalid
-configuration fails initialization or the pre-dispatch validation path; it is
-never inferred from credentials, environment, user identity, discovery, or a
-request. No `loadCodeAssist`, project lookup, auto-provisioning/onboarding,
-managed-project default, project substitution, or silent fallback is permitted.
-The required project identifier's real-provider semantics remain Unknown.
+Project identity for Execute is mandatory trusted per-instance configuration: a
+single non-empty, strictly validated identifier is supplied explicitly and bound
+to the selected connector/account. Missing or invalid configuration fails
+initialization or pre-dispatch validation; discovery metadata never substitutes
+for this setting or changes the selected account/project. The offline auth
+candidate may make one bounded `loadCodeAssist` discovery request after code
+exchange against the same validated configured inference origin used by this
+connector (including its trusted endpoint override) and retain a valid returned
+project ID as credential metadata. This third-party-derived behavior is not an
+official API claim; failure or a missing ID fails authentication closed. No
+`onboardUser`, retry/fallback endpoint,
+managed-project default, project substitution, or account fallback is permitted.
+Project and endpoint semantics remain Unknown.
 
 At Execute, obtain only the runtime-scoped `oauth` credential bundle for the
-selected account. Strictly decode one JSON object containing a non-empty
-`access_token`; reject empty/malformed/trailing/unknown-field values. Project
-only that access token into the candidate request's authorization header. Never
-use refresh material, credentials from another account, ambient identity, or a
-plugin-owned OAuth client. Credential acquisition/refresh is not implemented or
-authorized by this task; absent credentials fail before dispatch as
-`unauthenticated`.
+selected account. Strictly decode a JSON object containing a non-empty
+`access_token`, optional non-empty `refresh_token`, and optional validated
+`project_id` metadata; reject duplicate/malformed/trailing or unknown fields.
+Project only `access_token` into the candidate request's authorization header.
+Never use refresh material, credential project metadata, credentials from
+another account, ambient identity, or a plugin-owned OAuth client for Execute.
+Credential acquisition/refresh is connector-owned and remains an offline
+candidate; absent credentials fail before dispatch as `unauthenticated`.
 
 ## Transport opt-in and stream lifecycle
 

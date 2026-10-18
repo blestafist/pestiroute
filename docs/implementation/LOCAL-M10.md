@@ -50,27 +50,22 @@ inference until OAuth continuation replaces it.
 Future administration tooling may create the account and its initial row as one
 operator-consented action; no such combined command exists today.
 
-## OAuth client and local callback handling
+## OAuth client and remote-SSH code handling
 
-PestiRoute bundles neither a client ID/secret nor unofficial plugin credentials.
-Before attempting OAuth, obtain and use a client ID from an OAuth application
-you own **and are authorized to use for this service**; ownership alone does not
-establish Google approval or Antigravity eligibility. Do not copy client
-credentials from plugins. Client defaults, scopes, endpoints, and account
-eligibility remain unverified. Do not put a client secret in YAML, command-line
-arguments, shell history, a log, or chat.
+PestiRoute uses the public client identifier published at
+`https://antigravity.google/oauth/client-metadata.json` and redirect URI
+`https://antigravity.google/oauth-callback` by default. A client ID is a public
+identifier, not a secret; its publication does not establish third-party
+authorization or account eligibility. OAuth endpoints, scopes and protocol
+compatibility remain unverified. Do not copy plugin credentials. Local overrides
+remain available; never place a client secret in YAML, command-line arguments,
+shell history, logs, or chat.
 
-Set the required client ID through local input (or an approved local secret
-manager). If the authorized client requires a secret, enter it without echoing;
-otherwise leave that optional variable unset:
+Optional local overrides only (the client ID and redirect URI already default):
 
 ```sh
-read -r -p 'Authorized OAuth client ID: ' PESTIROUTE_ANTIGRAVITY_CLIENT_ID
-export PESTIROUTE_ANTIGRAVITY_CLIENT_ID
-# Only if your authorized client requires a secret:
-read -r -s -p 'OAuth client secret (if required): ' PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET
-printf '\n'
-export PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET
+# Set a client-ID override only when your reviewed local configuration requires it:
+# export PESTIROUTE_ANTIGRAVITY_CLIENT_ID='your-public-client-id'
 ```
 
 Optional overrides (candidate defaults are not official protocol facts):
@@ -92,20 +87,12 @@ only and makes no network request:
 ```
 
 Keep the printed verification URL and session handle in the local terminal; do
-not paste them into chat or save terminal output to shared logs. Browser login
-and callback exchange are deferred to a separately authorized manual operator
-action. Open the printed verification URL in a browser. The CLI's default
-redirect URI is exactly `http://localhost:8080/callback`; it must also be
-registered for the authorized client, which is not established by this default.
-There is no callback listener in this CLI, so the browser may show a connection
-failure after redirecting. Copy the complete resulting address-bar URL
-unchanged, including its query string. If you override
-`PESTIROUTE_ANTIGRAVITY_REDIRECT_URI`, register and use that exact redirect URI
-instead; the callback's scheme, host, and path must match it. The CLI accepts
-exactly one `code` and one `state` query parameter and rejects any additional
-query parameters. Do not edit or strip any part of the returned URL; if it
-contains extra parameters, stop and resolve the client/redirect configuration
-through its authorized local procedure.
+not paste them into chat or save terminal output to shared logs. The official
+Antigravity remote-SSH instructions say to open that URL in a local browser,
+complete sign-in, copy the displayed authorization code, and paste it into the
+remote terminal. The default redirect URI is
+`https://antigravity.google/oauth-callback`. Browser sign-in/token exchange is a
+separate operator-authorized live action; the offline checks never perform it.
 
 **Only when that live action is explicitly authorized**, opt in to outbound
 HTTPS and continue with the session handle printed by `start`:
@@ -115,12 +102,15 @@ export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1
 "$WORK/gateway" admin --db "$DB" --master-key "$MASTER_KEY" auth continue --session SESSION_ID --callback-stdin
 ```
 
-Paste that unchanged URL into this command's stdin and press Enter. Never put the
-callback URL/code in command arguments, shell history, files, logs, or chat.
-`--callback-stdin` reads the URL locally; continuation exchanges its one-time
-code over HTTPS. The `REAL_TRANSPORT=1` variable enables outbound HTTPS for auth
-and inference; it is not a test flag. Do not run the continuation command during
-offline checks or task closure.
+Paste the displayed code into this command's stdin and press Enter. A full
+callback URL is also accepted when provided by an authorized flow. Never put the
+code/URL in command arguments, shell history, files, logs, or chat;
+`--callback-stdin` does not echo it. Continuation exchanges the one-time code and
+performs one candidate `loadCodeAssist` project lookup over HTTPS. Both requests
+require the explicit real-transport opt-in, which enables outbound auth and
+inference HTTPS; it is not a test flag. Do not run continuation during offline
+checks or task closure. Discovery metadata does not override the explicit Execute
+project, and no onboarding or fallback occurs.
 
 ## Protected gateway configuration and single-turn smoke
 
