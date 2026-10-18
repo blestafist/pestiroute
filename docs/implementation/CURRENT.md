@@ -28,19 +28,33 @@ local-runtime profiles and external processes retain their individual evidence
 ceilings and existing tests. M9 branch reconciliation is merged in PR #18;
 the earlier CURRENT claim that it awaited review was stale.
 
-## Next independent lanes
+## M11–M13 integration
 
-| Milestone | Branch | First READY task | Scope / dependency |
-| --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-001 | Current Antigravity research → bounded Connector slice; no Claude dependency |
-| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | None (all 7 tasks DONE) | M11-001–007 complete and verified; M11-HANDOFF published; unblocks M12-005 integration once on main |
-| [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
-| [M13](M13-OPERATIONS.md) | `dev-m13-operations` | None (all DONE) | [M13-BINDING](M13-BINDING.md) accepted; M13-001 through M13-004 DONE; packaged release acceptance, recovery, and [M13-HANDOFF](M13-HANDOFF.md) verified; ready for batch push and PR revision CI |
+This revision reconciles M11 Admin API, the completed M12 fixture UI, and M13
+Operations against main baseline `5738253`. Integration is serial: [M11 PR #20](https://github.com/blestafist/pestiroute/pull/20),
+then [M13 PR #21](https://github.com/blestafist/pestiroute/pull/21), then the M12
+fixture integration. Each requires green CI before its merge. M10 is still in
+its own active lane and is not included here.
 
-Each has a dedicated worktree and `/next 10 M10` (or M11/M12/M13) filter.
-See [PARALLEL](PARALLEL.md) before starting; later cards are DRAFT until their
-dependencies and concrete checks are settled. Plans/branches are not implemented
-features. All new branches start from the same accepted planning baseline.
+| Milestone | Source branch / revision | Result / next step |
+| --- | --- | --- |
+| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` / `886a81d` | M11-001–007 DONE; isolated management API, [OpenAPI](../api/admin.openapi.yaml) and [handoff](M11-HANDOFF.md) |
+| [M12](M12-WEBUI.md) | `dev-m12-webui` / `fc92dbf` | M12-001–004 DONE; fixture UI only; M12-005/006 remain DRAFT |
+| [M13](M13-OPERATIONS.md) | `dev-m13-operations` / `1b0cb6e` | M13-001–004 DONE; deployment, backup/restore and [handoff](M13-HANDOFF.md); UI packaging deferred |
+
+The UI still uses fixtures. M12-005 owns the real HTTP client and memory-only
+operator authentication; M12-006 owns embedding and real gateway/SQLite browser
+E2E. After this integration reaches main, update the existing M12 worktree from
+its remote branch, reconcile fixtures with M11 DTOs, and settle M12-005's exact
+verification commands before marking it READY. Then continue `/next 10 M12`.
+Do not switch branches underneath running workers. See [PARALLEL](PARALLEL.md).
+
+The integration review resolved the CURRENT table conflict and fixed five task
+card links. Dedicated WebUI CI now runs lockfile installation, typechecking,
+fixture tests and the production asset build. Operations CI runs the packaged
+build, permissions/startup, backup/restore and protected offline release scripts
+against the integrated gateway. These deterministic gates do not satisfy any
+provider live gate or the unfinished M12-005/006 browser acceptance.
 
 ## Open gates carried forward
 
@@ -56,6 +70,13 @@ M8-008 is also BLOCKED as described above. None is a dependency of independent n
 
 ## Checks and operations
 
-Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. The pinned toolchain is installed locally (`PATH=/home/pestix/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/bin:$PATH`). Parallel worktrees and child process probes require short unique lane TMPDIR values (such as `/tmp/m11-XXXXXX`) to fit the Linux 108-byte AF_UNIX socket path bound as well as package serialization; M6 smoke and full repository check gate pass locally under these settings.
+Pinned Go 1.27.1: `GOFLAGS=-p=1 ./scripts/check.sh` performs formatting,
+vet, unit/race tests and offline build. Use a short unique TMPDIR for process
+socket probes. Source task cards record their original worker/reviewer runs;
+these are not fresh integration checks. This integration host has no Go
+executable or installed WebUI dependencies, so build, unit/race, browser and
+packaging runtime checks have not been rerun. Whitespace, shell syntax and
+changed Markdown file links were checked locally. The CI, Operations and WebUI workflows must be green before accepting this
+integration on main; source task-card checks are not fresh integration evidence.
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.
