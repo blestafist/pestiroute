@@ -43,13 +43,15 @@ its own active lane and is not included here.
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` / `1b0cb6e` | M13-001–004 DONE; deployment, backup/restore and [handoff](M13-HANDOFF.md); UI packaging deferred |
 
 M12-006 is verified and closed DONE with reviewer explicit PASS and Planner
-closure. All M12 tasks (M12-001–M12-006) are complete and verified. The WebUI
-defaults to the accepted M11 admin API client with memory-only authentication,
-embeds built assets via the M11 static seam beneath `/admin/`, retains an
-explicit HTTP 503 unavailable fallback for Go-only builds without Node, and
-passes end-to-end operator workflow validation in headless Chromium with real
-gateway and SQLite fixtures. Do not switch branches underneath workers. See
-[PARALLEL](PARALLEL.md).
+closure. Follow-up visual redesign tasks M12-007 through M12-010 are planned
+for the WebUI on `dev-m12-webui`: M12-007 (READY) establishes the operator
+design tokens and layout shell; M12-008–M12-010 (DRAFT) sequence screen
+redesigns, ergonomics, and browser regression. The WebUI defaults to the
+accepted M11 admin API client with memory-only authentication, embeds built
+assets via the M11 static seam beneath `/admin/`, retains an explicit HTTP 503
+unavailable fallback for Go-only builds without Node, and passes end-to-end
+operator workflow validation in headless Chromium with real gateway and SQLite
+fixtures. Do not switch branches underneath workers. See [PARALLEL](PARALLEL.md).
 
 The integration review resolved the CURRENT table conflict and fixed five task
 card links. Dedicated WebUI CI now runs lockfile installation, typechecking,
