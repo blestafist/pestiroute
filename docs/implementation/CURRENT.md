@@ -32,7 +32,7 @@ the earlier CURRENT claim that it awaited review was stale.
 
 | Milestone | Branch | First READY / active task | Scope / dependency |
 | --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-018 DONE | M10-001–018 complete. Next boundary: fresh operator auth with --debug after versioned external wrapper upgrade (no auth run by agents; no replay of consumed callback). |
+| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-019 DONE | M10-001–019 complete. Next boundary: clean commit, versioned build, and external wrapper promotion review, then fresh operator auth (no agent auth; no replay of consumed callback). |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
@@ -58,6 +58,6 @@ M8-008 is also BLOCKED as described above. Antigravity live browser OAuth and re
 
 Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. This cloud host lacks `/proc/<pid>/task/<tid>/children`, so existing process-inspection tests and M6 CLI smoke cannot fully pass locally; use hosted Linux CI for that gate. Parallel worktrees need distinct TMPDIR values as well as package serialization.
 
-M10-018 closed DONE following reviewer PASS (ses_eab6e26ccffe88uuSYihPGJDcP); offline secret-safe stage/reason/status diagnostics and standards-aligned token/discovery parsing verified without leaking canaries. Next boundary: fresh operator auth with --debug after versioned external wrapper upgrade (no auth run by agents; no replay of consumed callback). Live OAuth/discovery/inference remain deferred operator gates.
+M10-019 closed DONE following reviewer PASS (ses_eab468d47ffeiXE4gMn8Tu4GLv); launcher prompt, echo suppression, signal restore traps, empty-input rejection, and auth --debug position verified with synthetic PTY harness; non-interactive passthrough preserved. Next boundary: clean commit, versioned binary rebuild (no +dirty), and external wrapper promotion review, followed by fresh operator auth (no agent auth; no replay of consumed callback); live OAuth/discovery/inference remain deferred operator gates.
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.
