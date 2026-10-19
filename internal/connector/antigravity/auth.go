@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -189,10 +190,10 @@ func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOri
 		if ctx.Err() != nil {
 			return core.AuthResult{}, contextError(ctx.Err())
 		}
-		return core.AuthResult{}, unavailable()
+		return core.AuthResult{}, authTransportError()
 	}
 	if resp == nil || resp.Body == nil {
-		return core.AuthResult{}, unavailable()
+		return core.AuthResult{}, authTransportError()
 	}
 	if ctx.Err() != nil {
 		closeResponse(resp)
@@ -207,16 +208,7 @@ func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOri
 		return core.AuthResult{}, contextError(ctx.Err())
 	}
 	if resp.StatusCode != http.StatusOK {
-		switch {
-		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusBadRequest:
-			return core.AuthResult{}, unauthenticated()
-		case resp.StatusCode == http.StatusTooManyRequests:
-			return core.AuthResult{}, &core.GatewayError{Code: "auth_rate_limited", Category: core.CategoryRateLimited, RetryDisposition: core.RetryUnknown, Message: "Antigravity authentication is rate limited"}
-		case resp.StatusCode >= http.StatusInternalServerError:
-			return core.AuthResult{}, unavailable()
-		default:
-			return core.AuthResult{}, invalidAuthResponse()
-		}
+		return tokenHTTPError(resp.StatusCode)
 	}
 	if !uniqueJSON(data) {
 		return core.AuthResult{}, invalidAuthResponse()
@@ -226,7 +218,7 @@ func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOri
 		return core.AuthResult{}, invalidAuthResponse()
 	}
 	for key := range fields {
-		if key != "access_token" && key != "refresh_token" && key != "expires_in" && key != "token_type" {
+		if key != "access_token" && key != "refresh_token" && key != "expires_in" && key != "token_type" && key != "scope" && key != "id_token" {
 			return core.AuthResult{}, invalidAuthResponse()
 		}
 	}
@@ -235,6 +227,8 @@ func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOri
 		RefreshToken string `json:"refresh_token"`
 		ExpiresIn    int64  `json:"expires_in"`
 		TokenType    string `json:"token_type"`
+		Scope        string `json:"scope"`
+		IDToken      string `json:"id_token"`
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
@@ -245,7 +239,7 @@ func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOri
 	if !valid {
 		return core.AuthResult{}, invalidAuthResponse()
 	}
-	if strings.TrimSpace(token.TokenType) == "" && fields["token_type"] != nil {
+	if !validTokenMetadata(fields) || !strings.EqualFold(token.TokenType, "Bearer") {
 		return core.AuthResult{}, invalidAuthResponse()
 	}
 	projectID, ge := discoverProject(ctx, discoveryOrigin, transport, token.AccessToken)
@@ -304,10 +298,10 @@ func (c *Connector) authenticateRefresh(ctx context.Context, cfg oauthConfig, se
 		if ctx.Err() != nil {
 			return core.AuthResult{}, contextError(ctx.Err())
 		}
-		return core.AuthResult{}, unavailable()
+		return core.AuthResult{}, authTransportError()
 	}
 	if resp == nil || resp.Body == nil {
-		return core.AuthResult{}, unavailable()
+		return core.AuthResult{}, authTransportError()
 	}
 	if ctx.Err() != nil {
 		closeResponse(resp)
@@ -322,7 +316,7 @@ func (c *Connector) authenticateRefresh(ctx context.Context, cfg oauthConfig, se
 		return core.AuthResult{}, contextError(ctx.Err())
 	}
 	if resp.StatusCode != http.StatusOK {
-		return core.AuthResult{}, unauthenticated()
+		return tokenHTTPError(resp.StatusCode)
 	}
 	if !uniqueJSON(data) {
 		return core.AuthResult{}, invalidAuthResponse()
@@ -332,7 +326,7 @@ func (c *Connector) authenticateRefresh(ctx context.Context, cfg oauthConfig, se
 		return core.AuthResult{}, invalidAuthResponse()
 	}
 	for key := range fields {
-		if key != "access_token" && key != "refresh_token" && key != "expires_in" && key != "token_type" {
+		if key != "access_token" && key != "refresh_token" && key != "expires_in" && key != "token_type" && key != "scope" && key != "id_token" {
 			return core.AuthResult{}, invalidAuthResponse()
 		}
 	}
@@ -341,13 +335,15 @@ func (c *Connector) authenticateRefresh(ctx context.Context, cfg oauthConfig, se
 		RefreshToken string `json:"refresh_token"`
 		ExpiresIn    int64  `json:"expires_in"`
 		TokenType    string `json:"token_type"`
+		Scope        string `json:"scope"`
+		IDToken      string `json:"id_token"`
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
 	if d.Decode(&result) != nil || d.Decode(new(any)) != io.EOF || result.ExpiresIn <= 0 || result.ExpiresIn > int64((time.Duration(1<<63-1))/time.Second) {
 		return core.AuthResult{}, invalidAuthResponse()
 	}
-	if strings.TrimSpace(result.TokenType) == "" && fields["token_type"] != nil {
+	if !validTokenMetadata(fields) || !strings.EqualFold(result.TokenType, "Bearer") {
 		return core.AuthResult{}, invalidAuthResponse()
 	}
 	if ctx.Err() != nil {
@@ -390,15 +386,15 @@ func discoverProject(ctx context.Context, endpoint string, transport core.HTTPDo
 		if ctx.Err() != nil {
 			return "", contextError(ctx.Err())
 		}
-		return "", unavailable()
+		return "", authTransportError()
 	}
 	if resp == nil || resp.Body == nil {
-		return "", unavailable()
+		return "", authTransportError()
 	}
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8192))
 		closeResponse(resp)
-		return "", unavailable()
+		return "", discoveryHTTPError(resp.StatusCode)
 	}
 	data, err := readAuthResponse(ctx, resp.Body)
 	if err != nil {
@@ -420,6 +416,9 @@ func discoverProject(ctx context.Context, endpoint string, transport core.HTTPDo
 	if json.Unmarshal(data, &response) != nil {
 		return "", invalidAuthResponse()
 	}
+	if len(response.Project) == 0 || string(response.Project) == "null" {
+		return "", &core.GatewayError{Code: "auth_project_missing", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Authentication project data is missing"}
+	}
 	var projectID string
 	if json.Unmarshal(response.Project, &projectID) != nil {
 		var project struct {
@@ -437,5 +436,65 @@ func discoverProject(ctx context.Context, endpoint string, transport core.HTTPDo
 }
 
 func invalidAuthResponse() *core.GatewayError {
-	return &core.GatewayError{Code: "invalid_response", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Antigravity authentication response is invalid"}
+	return &core.GatewayError{Code: "auth_invalid_response", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Authentication response is invalid"}
+}
+
+func validTokenMetadata(fields map[string]json.RawMessage) bool {
+	if raw, ok := fields["scope"]; ok {
+		var scope string
+		if json.Unmarshal(raw, &scope) != nil || !validOAuthScope(scope) {
+			return false
+		}
+	}
+	if raw, ok := fields["id_token"]; ok {
+		var idToken string
+		if json.Unmarshal(raw, &idToken) != nil || idToken == "" || strings.IndexFunc(idToken, unicode.IsControl) >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func validOAuthScope(scope string) bool {
+	if scope == "" {
+		return false
+	}
+	for _, token := range strings.Split(scope, " ") {
+		if token == "" {
+			return false
+		}
+		for i := 0; i < len(token); i++ {
+			c := token[i]
+			if !(c == 0x21 || c >= 0x23 && c <= 0x5b || c >= 0x5d && c <= 0x7e) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func authTransportError() *core.GatewayError {
+	return &core.GatewayError{Code: "auth_transport_unavailable", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Authentication transport is unavailable"}
+}
+
+func tokenHTTPError(status int) (core.AuthResult, *core.GatewayError) {
+	return core.AuthResult{}, authHTTPError(status, "Authentication request failed")
+}
+
+func discoveryHTTPError(status int) *core.GatewayError {
+	return authHTTPError(status, "Authentication discovery request failed")
+}
+
+func authHTTPError(status int, message string) *core.GatewayError {
+	code, category := "auth_request_failed", core.CategoryUnavailable
+	if status == http.StatusUnauthorized || status == http.StatusForbidden || status == http.StatusBadRequest {
+		code, category = "auth_rejected", core.CategoryUnauthenticated
+	} else if status == http.StatusTooManyRequests {
+		code, category = "auth_rate_limited", core.CategoryRateLimited
+	}
+	ge := &core.GatewayError{Code: code, Category: category, RetryDisposition: core.RetryUnknown, Message: message}
+	if status >= 100 && status <= 599 {
+		ge.OriginalError = fmt.Sprintf("HTTP status %03d", status)
+	}
+	return ge
 }

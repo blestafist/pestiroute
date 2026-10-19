@@ -71,7 +71,7 @@ func TestSQLiteAuthCoordinatorStoreAntigravityEncryptedRefreshReloadExecute(t *t
 	connector := antigravity.NewConnector()
 	defer connector.Close(ctx)
 	transport, err := antigravity.NewOfflineTestTransport(
-		antigravity.OfflineTestResponse{StatusCode: http.StatusOK, Body: []byte(`{"access_token":"SYNTHETIC_ENCRYPTED_ROTATED_ACCESS","refresh_token":"SYNTHETIC_ENCRYPTED_ROTATED_REFRESH","expires_in":3600}`)},
+		antigravity.OfflineTestResponse{StatusCode: http.StatusOK, Body: []byte(`{"access_token":"SYNTHETIC_ENCRYPTED_ROTATED_ACCESS","refresh_token":"SYNTHETIC_ENCRYPTED_ROTATED_REFRESH","expires_in":3600,"token_type":"Bearer"}`)},
 		antigravity.OfflineTestResponse{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: []byte("data: {\"response\":{\"done\":true}}\n\n")},
 	)
 	if err != nil {

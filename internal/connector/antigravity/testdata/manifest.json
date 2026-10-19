@@ -15,6 +15,6 @@
     "http-403.json": "9e445960f82c6d4b9696e3430ade63aa90840984c4e89eeb048c8736beff2228",
     "http-429.json": "b0c52657329236c9f8beab2777f3f9692fa62e9624f74e360c9054ebd4120f67",
     "http-500.json": "1995e69d3d0e5906cb99c5e4a7202398d99e104a42e0d88925e8bbbc64a7bdc7",
-    "oauth-refresh-rotated.json": "2d730e7bcb86483d8889897f094cf3b763bb118a92373084f6cfdf5d68ddc460"
+    "oauth-refresh-rotated.json": "b23a1f3a11cd2ac841af9c18e7e83caedc9db92eb14f42af18edffa7e98fc725"
   }
 }

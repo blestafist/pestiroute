@@ -387,7 +387,7 @@ func TestRefreshCoordinatorQuarantinesUncertainPersistenceAndInvalidResults(t *t
 			if tc.invalid {
 				connector = continuationAuthConnector{Connector: connector}
 			}
-			transport := &fakeDoer{response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"SYNTHETIC_ROTATED_ACCESS_TOKEN","expires_in":60}`))}}
+			transport := &fakeDoer{response: &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"SYNTHETIC_ROTATED_ACCESS_TOKEN","expires_in":60,"token_type":"Bearer"}`))}}
 			coordinator := coordinatorFixture(t, store, transport, connector)
 			resolved, err := coordinator.Refresh(context.Background(), "account-a")
 			if err == nil || resolved.Valid || len(resolved.Values) != 0 || transport.calls != 1 || !store.quarantine["account-a"] {

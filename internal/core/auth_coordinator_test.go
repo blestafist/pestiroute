@@ -554,6 +554,12 @@ func TestAuthCallErrorPreservesOnlySafeDiagnosticMetadata(t *testing.T) {
 	if !errors.As(err, &diagnostic) || diagnostic.Code != "auth_rejected" || diagnostic.OriginalError != "HTTP status 403" {
 		t.Fatalf("safe diagnostic lost: %#v", diagnostic)
 	}
+	for _, code := range []string{"auth_rate_limited", "invalid_auth_callback", "auth_transport_unavailable"} {
+		err = authCallError(context.Background(), &GatewayError{Code: code, OriginalError: "HTTP status 403 private-tail"})
+		if !errors.As(err, &diagnostic) || diagnostic.Code != code || diagnostic.OriginalError != "" {
+			t.Fatalf("safe code/status filtering failed for %q: %#v", code, diagnostic)
+		}
+	}
 }
 
 func TestAuthCoordinatorCredentialFreshnessResolution(t *testing.T) {

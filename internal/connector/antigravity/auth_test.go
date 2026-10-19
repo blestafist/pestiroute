@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -22,7 +23,7 @@ func TestAuthenticateRefreshRotatesAndExecuteUsesOnlyAccessToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeDoer{response: &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(strings.Replace(string(fixture), `"expires_in":3600`, `"expires_in":3600,"token_type":"Bearer"`, 1)))}}
+	f := &fakeDoer{response: &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(fixture)))}}
 	c := ready(t)
 	c.cfg.OAuth.ClientSecret = "SYNTHETIC_CLIENT_SECRET"
 	prior := []byte(`{"access_token":"SYNTHETIC_OLD_ACCESS","refresh_token":"SYNTHETIC_OLD_REFRESH","project_id":"synthetic-project"}`)
@@ -92,7 +93,7 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 		if req.URL.Host == "oauth.synthetic.invalid" {
 			body, _ := io.ReadAll(req.Body)
 			tokenRequestBody = string(body)
-			return response(200, `{"access_token":"SYNTHETIC_ACCESS","refresh_token":"SYNTHETIC_REFRESH","expires_in":3600,"token_type":"Bearer"}`), nil
+			return response(200, `{"access_token":"SYNTHETIC_ACCESS","refresh_token":"SYNTHETIC_REFRESH","expires_in":3600,"token_type":"Bearer","scope":"synthetic scope","id_token":"SYNTHETIC_UNUSED_ID_TOKEN"}`), nil
 		}
 		if req.URL.String() != defaultInferenceEndpoint+"/v1internal:loadCodeAssist" || req.Header.Get("Authorization") != "Bearer SYNTHETIC_ACCESS" {
 			return nil, errors.New("unexpected synthetic discovery request")
@@ -130,6 +131,9 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 	if json.Unmarshal(completed.Credentials["oauth"], &creds) != nil || creds.ProjectID != "synthetic-project" {
 		t.Fatalf("project discovery was not persisted in credential metadata: %+v", creds)
 	}
+	if strings.Contains(string(completed.Credentials["oauth"]), "SYNTHETIC_UNUSED_ID_TOKEN") || strings.Contains(string(completed.Credentials["oauth"]), "synthetic scope") {
+		t.Fatalf("unused OAuth response fields persisted: %s", completed.Credentials["oauth"])
+	}
 	form, err := url.ParseQuery(tokenRequestBody)
 	if err != nil || form.Get("grant_type") != "authorization_code" || form.Get("client_id") != "synthetic-client" || form.Get("client_secret") != "" || form.Get("code_verifier") != continuation.Verifier || form.Get("code") != "local-code" || form.Get("redirect_uri") != "http://localhost:8080/callback" {
 		t.Fatalf("invalid exchange shape (parse error: %v)", err)
@@ -143,14 +147,43 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 		t.Fatalf("pasted code exchange shape mismatch (parse error: %v)", err)
 	}
 	for _, tc := range []struct {
-		status int
-		want   core.ErrorCategory
-	}{{http.StatusForbidden, core.CategoryUnauthenticated}, {http.StatusTooManyRequests, core.CategoryRateLimited}, {http.StatusBadGateway, core.CategoryUnavailable}} {
-		badTransport := &fakeDoer{response: response(tc.status, `{"error":"synthetic"}`)}
+		status   int
+		category core.ErrorCategory
+		code     string
+	}{{http.StatusUnauthorized, core.CategoryUnauthenticated, "auth_rejected"}, {http.StatusForbidden, core.CategoryUnauthenticated, "auth_rejected"}, {http.StatusTooManyRequests, core.CategoryRateLimited, "auth_rate_limited"}, {http.StatusBadGateway, core.CategoryUnavailable, "auth_request_failed"}} {
+		badTransport := &fakeDoer{response: response(tc.status, `{"error":"SYNTHETIC_PRIVATE_PROVIDER_BODY"}`)}
 		_, got := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: "http://localhost:8080/callback?code=local&state=" + url.QueryEscape(continuation.State)}, core.InvocationServices{Transport: packageTestDoer(badTransport)})
-		if got == nil || got.Category != tc.want || badTransport.calls != 1 {
+		wantStatus := fmt.Sprintf("HTTP status %03d", tc.status)
+		if got == nil || got.Code != tc.code || got.Category != tc.category || got.OriginalError != wantStatus || badTransport.calls != 1 {
 			t.Errorf("status %d: error=%+v calls=%d", tc.status, got, badTransport.calls)
+		} else if strings.Contains(got.Code+got.Message+got.OriginalError, "SYNTHETIC_PRIVATE_PROVIDER_BODY") {
+			t.Errorf("status %d leaked provider body: %+v", tc.status, got)
 		}
+	}
+}
+
+func TestDiscoverProjectFailureDiagnosticsAreSanitized(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		response *http.Response
+		wantCode string
+		wantOrig string
+	}{
+		{name: "missing project", response: response(http.StatusOK, `{}`), wantCode: "auth_project_missing"},
+		{name: "http error", response: response(http.StatusServiceUnavailable, `SYNTHETIC_PRIVATE_DISCOVERY_BODY`), wantCode: "auth_request_failed", wantOrig: "HTTP status 503"},
+		{name: "nil response", wantCode: "auth_transport_unavailable"},
+		{name: "nil body", response: &http.Response{StatusCode: http.StatusOK}, wantCode: "auth_transport_unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := &fakeDoer{response: tc.response}
+			_, got := discoverProject(context.Background(), "https://discovery.synthetic.invalid", transport, "SYNTHETIC_ACCESS")
+			if got == nil || got.Code != tc.wantCode || got.OriginalError != tc.wantOrig || transport.calls != 1 {
+				t.Fatalf("diagnostic=%+v calls=%d", got, transport.calls)
+			}
+			if strings.Contains(got.Code+got.Message+got.OriginalError, "SYNTHETIC_PRIVATE_DISCOVERY_BODY") {
+				t.Fatalf("provider body leaked: %+v", got)
+			}
+		})
 	}
 }
 
@@ -214,9 +247,9 @@ func TestAuthenticateDefaultsShareOAuthEndpointsAndBoundDiscoveryOrigin(t *testi
 			body, _ := io.ReadAll(req.Body)
 			exchangeForm, _ = url.ParseQuery(string(body))
 			if exchangeForm.Get("grant_type") == "refresh_token" {
-				return response(http.StatusOK, `{"access_token":"SYNTHETIC_REFRESHED_ACCESS","refresh_token":"SYNTHETIC_REFRESHED_REFRESH","expires_in":3600}`), nil
+				return response(http.StatusOK, `{"access_token":"SYNTHETIC_REFRESHED_ACCESS","refresh_token":"SYNTHETIC_REFRESHED_REFRESH","expires_in":3600,"token_type":"Bearer"}`), nil
 			}
-			return response(http.StatusOK, `{"access_token":"SYNTHETIC_LOGIN_ACCESS","refresh_token":"SYNTHETIC_LOGIN_REFRESH","expires_in":3600}`), nil
+			return response(http.StatusOK, `{"access_token":"SYNTHETIC_LOGIN_ACCESS","refresh_token":"SYNTHETIC_LOGIN_REFRESH","expires_in":3600,"token_type":"Bearer"}`), nil
 		case "https://discovery.synthetic.invalid/v1internal:loadCodeAssist":
 			if req.Method != http.MethodPost || req.Header.Get("Authorization") != "Bearer SYNTHETIC_LOGIN_ACCESS" {
 				return nil, errors.New("unexpected discovery request")
@@ -313,7 +346,7 @@ func TestAuthenticateDiscoveryFailsClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeDoer{do: func(req *http.Request) (*http.Response, error) {
 				if req.URL.Host == "oauth.synthetic.invalid" {
-					return response(http.StatusOK, `{"access_token":"SYNTHETIC_ACCESS","expires_in":3600}`), nil
+					return response(http.StatusOK, `{"access_token":"SYNTHETIC_ACCESS","expires_in":3600,"token_type":"Bearer"}`), nil
 				}
 				if tc.err != nil {
 					return nil, tc.err
@@ -330,7 +363,7 @@ func TestAuthenticateDiscoveryFailsClosed(t *testing.T) {
 	defer cancel()
 	fake := &fakeDoer{do: func(req *http.Request) (*http.Response, error) {
 		if req.URL.Host == "oauth.synthetic.invalid" {
-			return response(http.StatusOK, `{"access_token":"SYNTHETIC_ACCESS","expires_in":3600}`), nil
+			return response(http.StatusOK, `{"access_token":"SYNTHETIC_ACCESS","expires_in":3600,"token_type":"Bearer"}`), nil
 		}
 		cancel()
 		return response(http.StatusOK, `{"cloudaicompanionProject":"synthetic-project"}`), nil
@@ -423,7 +456,7 @@ func TestAuthenticateRejectsNewlineRefreshTokenCandidates(t *testing.T) {
 func TestAuthenticateRefreshKeepsRefreshTokenAndFailsClosed(t *testing.T) {
 	c := ready(t)
 	prior := []byte(`{"access_token":"SYNTHETIC_ACCESS","refresh_token":"SYNTHETIC_PRIOR_REFRESH"}`)
-	f := &fakeDoer{response: &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"access_token":"SYNTHETIC_NEW_ACCESS","expires_in":60}`))}}
+	f := &fakeDoer{response: &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"access_token":"SYNTHETIC_NEW_ACCESS","expires_in":60,"token_type":"Bearer"}`))}}
 	result, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "refresh"}, core.InvocationServices{Transport: packageTestDoer(f), Credentials: credentials{data: prior}})
 	var bundle oauthCredentials
 	if ge != nil || json.Unmarshal(result.Credentials["oauth"], &bundle) != nil || bundle.RefreshToken != "SYNTHETIC_PRIOR_REFRESH" {
@@ -439,6 +472,10 @@ func TestAuthenticateRefreshKeepsRefreshTokenAndFailsClosed(t *testing.T) {
 		{"unknown", `{"access_token":"x","expires_in":60,"extra":1}`, 200, nil},
 		{"duplicate", `{"access_token":"x","access_token":"y","expires_in":60}`, 200, nil},
 		{"missing expiry", `{"access_token":"x"}`, 200, nil},
+		{"missing token type", `{"access_token":"x","expires_in":60}`, 200, nil},
+		{"empty access token", `{"access_token":"","expires_in":60,"token_type":"Bearer"}`, 200, nil},
+		{"invalid scope type", `{"access_token":"x","expires_in":60,"token_type":"Bearer","scope":4}`, 200, nil},
+		{"invalid id token type", `{"access_token":"x","expires_in":60,"token_type":"Bearer","id_token":false}`, 200, nil},
 		{"empty rotated token", `{"access_token":"x","refresh_token":"","expires_in":60}`, 200, nil},
 		{"non-success", `{}`, 403, nil},
 		{"ambiguous", ``, 0, errors.New("ambiguous")},
