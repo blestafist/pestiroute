@@ -517,6 +517,14 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Prohibitions:** No live login/provider requests, credential handling beyond the offline fake lifecycle, external traffic, fallback, onboarding, or production claim. Do not reinterpret malformed callback URLs as codes.
 - **Verification:** Test raw-code grammar boundaries; strict DEC-019 callback scheme/authority/path/state negatives; default exchange/refresh endpoints; configured discovery-origin routing; PKCE exact redirect, claim replay, cancellation, encrypted persistence/reload, and zero live transport. Run affected package/gateway race tests, vet/build, and specification/link checks.
 
+### DEC-023 — Bounded Antigravity OAuth Callback Metadata
+
+- **Status:** Accepted for M10-020 on 2026-10-21; offline candidate only.
+- **Context:** Operator error was reported with cause UNKNOWN; independently, synthetic query probes confirmed the two-key rule rejects known Google metadata. RFC 6749 §4.1.2 directs clients to ignore unrecognized response parameters; it does not establish these four keys as universally present or their Antigravity-specific semantics.
+- **Decision:** Permit only Antigravity connector-local bounded optional `scope`, `authuser`, `prompt`, and `hd` query keys alongside exactly one nonempty `code` and one exact `state`. Each key must occur once; reject all other/duplicate/malformed keys and OAuth `error`. Preserve raw scheme, authority, escaped path and stored redirect byte-exact checks, fragments/userinfo/control rejection, state equality, single-use claim, and no retry. Never persist, echo, or log metadata. `hd` is not classified as safe-to-log. Diagnostics use fixed reason codes; optional CLI feedback is input kind and byte length only. Core diagnostic allowlist is extended with provider-neutral callback error codes; Core payload parsing, routing, provider branching, SQLite schema, IPC, and Claude Code remain unchanged.
+- **Compatibility / impact:** Connector-private Antigravity compatibility extension only; Core diagnostic allowlist updated with provider-neutral codes; runtime execution, IPC, and Claude Code unchanged. No general URL normalization or claim about Google callback guarantees.
+- **Verification:** Synthetic offline callback combinations, invalid cases before transport, safe-output canaries, connector/gateway race tests and documentation links; zero live calls.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |

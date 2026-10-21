@@ -103,7 +103,7 @@ func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, d
 		return core.AuthResult{}, invalid("invalid_auth_state")
 	}
 	if len(req.CallbackInput) > 4096 || strings.IndexFunc(req.CallbackInput, unicode.IsControl) >= 0 {
-		return core.AuthResult{}, invalid("invalid_auth_callback")
+		return core.AuthResult{}, invalid("callback_malformed")
 	}
 	trimmed := strings.TrimSpace(req.CallbackInput)
 	input := trimmed
@@ -115,20 +115,41 @@ func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, d
 	looksLikeURL := strings.Contains(input, "://") || parseErr == nil && parsed.Scheme != ""
 	if looksLikeURL {
 		if input != req.CallbackInput {
-			return core.AuthResult{}, invalid("invalid_auth_callback")
+			return core.AuthResult{}, invalid("callback_malformed")
 		}
 		callback, err := url.Parse(input)
 		redirect, _ := url.Parse(continuation.RedirectURI)
-		if err != nil || callback == nil || redirect == nil || !callback.IsAbs() || callback.Opaque != "" || callback.Scheme != redirect.Scheme || callback.Host != redirect.Host || callback.EscapedPath() != redirect.EscapedPath() || callback.User != nil || callback.Fragment != "" {
-			return core.AuthResult{}, invalid("invalid_auth_callback")
+		if err != nil || callback == nil || redirect == nil || !callback.IsAbs() || callback.Opaque != "" || callback.User != nil || callback.Fragment != "" || strings.Contains(input, "#") {
+			return core.AuthResult{}, invalid("callback_malformed")
+		}
+		if rawScheme(input) != rawScheme(continuation.RedirectURI) || rawAuthority(input) != rawAuthority(continuation.RedirectURI) || callback.EscapedPath() != redirect.EscapedPath() {
+			return core.AuthResult{}, invalid("callback_redirect_mismatch")
 		}
 		values, err := url.ParseQuery(callback.RawQuery)
-		if err != nil || len(values) != 2 || len(values["code"]) != 1 || len(values["state"]) != 1 || values.Get("code") == "" || values.Get("state") != continuation.State {
-			return core.AuthResult{}, invalid("invalid_auth_callback")
+		if err != nil {
+			return core.AuthResult{}, invalid("callback_malformed")
+		}
+		if _, exists := values["error"]; exists {
+			return core.AuthResult{}, invalid("callback_error_param")
+		}
+		if len(values) > 6 {
+			return core.AuthResult{}, invalid("callback_query_keys")
+		}
+		allowed := map[string]bool{"code": true, "state": true, "scope": true, "authuser": true, "prompt": true, "hd": true}
+		for key, items := range values {
+			if !allowed[key] || len(items) != 1 {
+				return core.AuthResult{}, invalid("callback_query_keys")
+			}
+		}
+		if len(values["code"]) != 1 || len(values["state"]) != 1 || values.Get("code") == "" {
+			return core.AuthResult{}, invalid("callback_query_keys")
+		}
+		if values.Get("state") != continuation.State {
+			return core.AuthResult{}, invalid("callback_state_mismatch")
 		}
 		code = values.Get("code")
 	} else if !validPastedOAuthCode(input) {
-		return core.AuthResult{}, invalid("invalid_auth_callback")
+		return core.AuthResult{}, invalid("callback_malformed")
 	}
 	if code == "" || strings.TrimSpace(code) == "" || len(code) > 4096 || strings.IndexFunc(code, unicode.IsControl) >= 0 {
 		return core.AuthResult{}, invalid("invalid_auth_callback")
@@ -145,6 +166,27 @@ func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, d
 		tokenEndpoint = defaultTokenEndpoint
 	}
 	return c.exchangeAuthCode(ctx, tokenEndpoint, discoveryOrigin, services.Transport, form)
+}
+
+func rawAuthority(value string) string {
+	colon := strings.IndexByte(value, ':')
+	if colon < 0 || !strings.HasPrefix(value[colon+1:], "//") {
+		return ""
+	}
+	start := colon + 3
+	end := strings.IndexAny(value[start:], "/?#")
+	if end < 0 {
+		return value[start:]
+	}
+	return value[start : start+end]
+}
+
+func rawScheme(value string) string {
+	colon := strings.IndexByte(value, ':')
+	if colon < 0 {
+		return ""
+	}
+	return value[:colon]
 }
 
 func ephemeralLoopbackRedirectURI() (string, error) {

@@ -101,29 +101,36 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 		return response(200, `{"cloudaicompanionProject":{"id":"synthetic-project"}}`), nil
 	}}
 	stateQuery := url.QueryEscape(continuation.State)
-	for _, callback := range []string{
-		"http://localhost:8080/callback?code=x&state=" + stateQuery + "&extra=y",
-		"http://localhost:8080/callback?code=x&code=y&state=" + stateQuery,
-		"http://LOCALHOST:8080/callback?code=x&state=" + stateQuery,
-		"http://localhost:80/callback?code=x&state=" + stateQuery,
-		"http://localhost:8080/%63allback?code=x&state=" + stateQuery,
-		" http://localhost:8080/callback?code=x&state=" + stateQuery,
-		"https:/localhost/callback?code=x&state=" + stateQuery,
-		"http://localhost:8080/callback?code=x&state=" + stateQuery + "#fragment",
-		"http://user@localhost:8080/callback?code=x&state=" + stateQuery,
-		"synthetic\ncode", "synthetic\tcode", "synthetic code", "synthetic:code",
-		"synthetic?code", "synthetic#code", "synthetic&code", strings.Repeat("x", 513),
+	for _, tc := range []struct{ input, code string }{
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&extra=y", "callback_query_keys"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&scope=a&scope=b", "callback_query_keys"},
+		{"http://localhost:8080/callback?%73cope=a&scope=b&code=x&state=" + stateQuery, "callback_query_keys"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&error=access_denied", "callback_error_param"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&hd.example=1", "callback_query_keys"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&scope=%zz", "callback_malformed"},
+		{"http://localhost:8080/callback?code=x&code=y&state=" + stateQuery, "callback_query_keys"},
+		{"http://LOCALHOST:8080/callback?code=x&state=" + stateQuery, "callback_redirect_mismatch"},
+		{"HTTP://localhost:8080/callback?code=x&state=" + stateQuery, "callback_redirect_mismatch"},
+		{"http://localhost:80/callback?code=x&state=" + stateQuery, "callback_redirect_mismatch"},
+		{"http://localhost:8080/%63allback?code=x&state=" + stateQuery, "callback_redirect_mismatch"},
+		{" http://localhost:8080/callback?code=x&state=" + stateQuery, "callback_malformed"},
+		{"https:/localhost/callback?code=x&state=" + stateQuery, "callback_redirect_mismatch"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "#fragment", "callback_malformed"},
+		{"http://user@localhost:8080/callback?code=x&state=" + stateQuery, "callback_malformed"},
+		{"synthetic\ncode", "callback_malformed"}, {"synthetic\tcode", "callback_malformed"}, {"synthetic code", "callback_malformed"}, {"synthetic:code", "callback_malformed"},
+		{"synthetic?code", "callback_malformed"}, {"synthetic#code", "callback_malformed"}, {"synthetic&code", "callback_malformed"}, {strings.Repeat("x", 513), "callback_malformed"},
 	} {
-		bad, err := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: callback}, core.InvocationServices{Transport: packageTestDoer(fake)})
-		if err == nil || bad.Supported || fake.calls != 0 {
-			t.Fatalf("malformed callback dispatched: %q result=%+v error=%v calls=%d", callback, bad, err, fake.calls)
+		bad, err := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: tc.input}, core.InvocationServices{Transport: packageTestDoer(fake)})
+		var ge *core.GatewayError
+		if err == nil || bad.Supported || fake.calls != 0 || !errors.As(err, &ge) || ge.Code != tc.code {
+			t.Fatalf("malformed callback code=%s input=%q result=%+v error=%v calls=%d", tc.code, tc.input, bad, err, fake.calls)
 		}
 	}
 	bad, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: "http://localhost:8080/callback?code=local&state=wrong"}, core.InvocationServices{Transport: packageTestDoer(fake)})
-	if ge == nil || bad.Supported || fake.calls != 0 {
+	if ge == nil || ge.Code != "callback_state_mismatch" || bad.Supported || fake.calls != 0 {
 		t.Fatalf("state mismatch dispatched: %+v %v calls=%d", bad, ge, fake.calls)
 	}
-	completed, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: "http://localhost:8080/callback?code=local-code&state=" + url.QueryEscape(continuation.State)}, core.InvocationServices{Transport: packageTestDoer(fake)})
+	completed, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: "http://localhost:8080/callback?code=local-code&state=" + url.QueryEscape(continuation.State) + "&scope=openid&authuser=0&prompt=consent&hd=example.test"}, core.InvocationServices{Transport: packageTestDoer(fake)})
 	if ge != nil || !completed.Supported || completed.CredentialExpiresAt == nil || !completed.CredentialExpiresAt.After(time.Now()) || fake.calls != 2 {
 		t.Fatalf("continue: %+v %v calls=%d", completed, ge, fake.calls)
 	}

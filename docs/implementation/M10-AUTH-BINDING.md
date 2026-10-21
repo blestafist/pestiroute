@@ -28,6 +28,12 @@ persistence formats as contract.
 
 ## Source observations, not provider facts
 
+Observed Google OAuth callback URLs may include `scope`, `authuser`, `prompt`,
+and `hd`; M10's offline parser accepts these only as an explicit connector-local
+allowlist under [DEC-023](../project/DECISIONS.md#dec-023--bounded-antigravity-oauth-callback-metadata).
+This is compatibility handling, not a claim that Google always returns them or
+that `hd` (a domain-related value) is safe to log. Values are discarded.
+
 - Rahul's pinned `refreshAntigravityAccessToken` and NoeFabris's pinned
   `refreshAccessToken` each POST form-encoded
   `grant_type=refresh_token`, `refresh_token`, and client identity fields to

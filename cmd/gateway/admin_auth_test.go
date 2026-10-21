@@ -117,6 +117,22 @@ func TestAdminAuthAntigravityEncryptedBrowserLifecycleAndExecuteReload(t *testin
 	if state == "" || session == "" || transport.calls != 0 {
 		t.Fatal("start did not remain offline or omit state/session")
 	}
+	debugStart := run("", "auth", "start", "--account", accountID)
+	debugSession := adminSessionID(debugStart)
+	const callbackCanary = "http://localhost:8080/callback?code=CODE_CANARY&state=STATE_CANARY&scope=SCOPE_CANARY&authuser=AUTHUSER_CANARY&prompt=PROMPT_CANARY&hd=HD_CANARY&error=ERROR_CANARY&provider=PROVIDER_CANARY"
+	var debugOut, debugErr bytes.Buffer
+	debugArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "--debug", "continue", "--session", debugSession, "--callback-stdin"}
+	debugCallErr := runAdmin(adminEnvironment{ctx: ctx, args: debugArgs, stdin: strings.NewReader(callbackCanary + "\n"), stdout: &debugOut, stderr: &debugErr, authServices: services})
+	debugText := debugOut.String() + debugErr.String()
+	wantClass := fmt.Sprintf("kind=callback_url length=%d", len(callbackCanary))
+	if debugCallErr == nil || transport.calls != 0 || !strings.Contains(debugText, wantClass) || !strings.Contains(debugText, "reason=callback_error_param") {
+		t.Fatalf("debug callback classification/reason missing: err=%v calls=%d class=%t reason=%t output=%q", debugCallErr, transport.calls, strings.Contains(debugText, wantClass), strings.Contains(debugText, "reason=callback_error_param"), debugText)
+	}
+	for _, canary := range []string{"CODE_CANARY", "STATE_CANARY", "SCOPE_CANARY", "AUTHUSER_CANARY", "PROMPT_CANARY", "HD_CANARY", "ERROR_CANARY", "PROVIDER_CANARY", callbackCanary} {
+		if strings.Contains(debugText+debugCallErr.Error(), canary) {
+			t.Fatalf("debug auth output leaked callback canary %q: %q", canary, debugText)
+		}
+	}
 	completed := run("synthetic-local-code\n", "auth", "continue", "--session", session, "--callback-stdin")
 	if !strings.Contains(completed, "authentication complete") || transport.calls != 2 {
 		t.Fatalf("continue=%q calls=%d", completed, transport.calls)

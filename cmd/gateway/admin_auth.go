@@ -58,6 +58,13 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 		if len(callbackInput) > 4096 {
 			return errors.New("admin: invalid callback input")
 		}
+		if debug {
+			kind := "raw_code"
+			if strings.Contains(callbackInput, "://") {
+				kind = "callback_url"
+			}
+			_, _ = fmt.Fprintf(env.stderr, "authentication input: kind=%s length=%d\n", kind, len(callbackInput))
+		}
 	}
 	accounts, credentials := sqlite.NewAccounts(db), sqlite.NewCredentials(db)
 	registry := env.authRegistry

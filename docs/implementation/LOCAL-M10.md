@@ -155,6 +155,9 @@ listener runs, the browser may show a connection failure. Do not replace the
 recorded URI with a different URI or use the official web callback. The
 connector's raw-code DEC-022 mode is also supported, but the complete URL is the
 primary remote-browser path because it preserves and validates state. Browser
+callback validation accepts only the explicit optional metadata allowlist
+(`scope`, `authuser`, `prompt`, `hd`) under DEC-023; values are not displayed,
+logged, or persisted. Their presence is not guaranteed by this procedure.
 sign-in/token exchange remains a separate operator-authorized live action;
 offline checks never perform it. Provider acceptance of dynamic loopback ports
 is unverified.
