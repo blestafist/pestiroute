@@ -107,6 +107,16 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 		{"http://localhost:8080/callback?%73cope=a&scope=b&code=x&state=" + stateQuery, "callback_query_keys"},
 		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&error=access_denied", "callback_error_param"},
 		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&hd.example=1", "callback_query_keys"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&iss=https%3A%2F%2Fevil.example", "callback_iss_mismatch"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&iss=http%3A%2F%2Faccounts.google.com", "callback_iss_mismatch"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&iss=https%3A%2F%2Faccounts.google.com%2F", "callback_iss_mismatch"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&iss=https%3A%2F%2Faccounts.google.com%2Fpath", "callback_iss_mismatch"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&iss=https%3A%2F%2Faccounts.google.com%3Fq=x", "callback_iss_mismatch"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&iss=https%3A%2F%2Faccounts.google.com%23fragment", "callback_iss_mismatch"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&iss=HTTPS%3A%2F%2Faccounts.google.com", "callback_iss_mismatch"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&iss=https%253A%252F%252Faccounts.google.com", "callback_iss_mismatch"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&%69ss=https%3A%2F%2Faccounts.google.com&iss=https%3A%2F%2Faccounts.google.com", "callback_query_keys"},
+		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&iss=https%3A%2F%2Faccounts.google.com&scope=x&authuser=0&prompt=x&hd=x&other=x", "callback_query_keys"},
 		{"http://localhost:8080/callback?code=x&state=" + stateQuery + "&scope=%zz", "callback_malformed"},
 		{"http://localhost:8080/callback?code=x&code=y&state=" + stateQuery, "callback_query_keys"},
 		{"http://LOCALHOST:8080/callback?code=x&state=" + stateQuery, "callback_redirect_mismatch"},
@@ -130,7 +140,7 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 	if ge == nil || ge.Code != "callback_state_mismatch" || bad.Supported || fake.calls != 0 {
 		t.Fatalf("state mismatch dispatched: %+v %v calls=%d", bad, ge, fake.calls)
 	}
-	completed, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: "http://localhost:8080/callback?code=local-code&state=" + url.QueryEscape(continuation.State) + "&scope=openid&authuser=0&prompt=consent&hd=example.test"}, core.InvocationServices{Transport: packageTestDoer(fake)})
+	completed, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: "http://localhost:8080/callback?code=local-code&state=" + url.QueryEscape(continuation.State) + "&scope=openid&authuser=0&prompt=consent&hd=example.test&iss=" + url.QueryEscape("https://accounts.google.com")}, core.InvocationServices{Transport: packageTestDoer(fake)})
 	if ge != nil || !completed.Supported || completed.CredentialExpiresAt == nil || !completed.CredentialExpiresAt.After(time.Now()) || fake.calls != 2 {
 		t.Fatalf("continue: %+v %v calls=%d", completed, ge, fake.calls)
 	}
@@ -141,15 +151,23 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 	if strings.Contains(string(completed.Credentials["oauth"]), "SYNTHETIC_UNUSED_ID_TOKEN") || strings.Contains(string(completed.Credentials["oauth"]), "synthetic scope") {
 		t.Fatalf("unused OAuth response fields persisted: %s", completed.Credentials["oauth"])
 	}
-	form, err := url.ParseQuery(tokenRequestBody)
-	if err != nil || form.Get("grant_type") != "authorization_code" || form.Get("client_id") != "synthetic-client" || form.Get("client_secret") != "" || form.Get("code_verifier") != continuation.Verifier || form.Get("code") != "local-code" || form.Get("redirect_uri") != "http://localhost:8080/callback" {
-		t.Fatalf("invalid exchange shape (parse error: %v)", err)
+	issuerForm, err := url.ParseQuery(tokenRequestBody)
+	if err != nil || len(issuerForm) != 5 || issuerForm.Get("grant_type") != "authorization_code" || issuerForm.Get("client_id") != "synthetic-client" || issuerForm.Get("client_secret") != "" || issuerForm.Get("code_verifier") != continuation.Verifier || issuerForm.Get("code") != "local-code" || issuerForm.Get("redirect_uri") != "http://localhost:8080/callback" {
+		t.Fatalf("issuer callback exchange form has unexpected keys or values (parse error: %v)", err)
+	}
+	withoutIssuer, ge := c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: "http://localhost:8080/callback?code=local-code&state=" + url.QueryEscape(continuation.State)}, core.InvocationServices{Transport: packageTestDoer(fake)})
+	if ge != nil || !withoutIssuer.Supported || fake.calls != 4 {
+		t.Fatalf("issuer-absent compatibility: %+v %v calls=%d", withoutIssuer, ge, fake.calls)
+	}
+	absentIssuerForm, err := url.ParseQuery(tokenRequestBody)
+	if err != nil || len(absentIssuerForm) != 5 || absentIssuerForm.Get("grant_type") != "authorization_code" || absentIssuerForm.Get("client_id") != "synthetic-client" || absentIssuerForm.Get("code_verifier") != continuation.Verifier || absentIssuerForm.Get("code") != "local-code" || absentIssuerForm.Get("redirect_uri") != "http://localhost:8080/callback" {
+		t.Fatalf("issuer-absent callback exchange form has unexpected keys or values (parse error: %v)", err)
 	}
 	_, ge = c.Authenticate(context.Background(), core.AuthRequest{Action: "continue", State: []byte(result.State), CallbackInput: " 4/0Aa+_-%=x "}, core.InvocationServices{Transport: packageTestDoer(fake)})
-	if ge != nil || fake.calls != 4 {
+	if ge != nil || fake.calls != 6 {
 		t.Fatalf("pasted code continuation: error=%v calls=%d", ge, fake.calls)
 	}
-	form, err = url.ParseQuery(tokenRequestBody)
+	form, err := url.ParseQuery(tokenRequestBody)
 	if err != nil || form.Get("code") != "4/0Aa+_-%=x" || form.Get("redirect_uri") != "http://localhost:8080/callback" {
 		t.Fatalf("pasted code exchange shape mismatch (parse error: %v)", err)
 	}

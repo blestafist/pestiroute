@@ -132,14 +132,17 @@ func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, d
 		if _, exists := values["error"]; exists {
 			return core.AuthResult{}, invalid("callback_error_param")
 		}
-		if len(values) > 6 {
+		if len(values) > 7 {
 			return core.AuthResult{}, invalid("callback_query_keys")
 		}
-		allowed := map[string]bool{"code": true, "state": true, "scope": true, "authuser": true, "prompt": true, "hd": true}
+		allowed := map[string]bool{"code": true, "state": true, "scope": true, "authuser": true, "prompt": true, "hd": true, "iss": true}
 		for key, items := range values {
 			if !allowed[key] || len(items) != 1 {
 				return core.AuthResult{}, invalid("callback_query_keys")
 			}
+		}
+		if issuers, present := values["iss"]; present && issuers[0] != "https://accounts.google.com" {
+			return core.AuthResult{}, invalid("callback_iss_mismatch")
 		}
 		if len(values["code"]) != 1 || len(values["state"]) != 1 || values.Get("code") == "" {
 			return core.AuthResult{}, invalid("callback_query_keys")

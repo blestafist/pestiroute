@@ -34,6 +34,15 @@ allowlist under [DEC-023](../project/DECISIONS.md#dec-023--bounded-antigravity-o
 This is compatibility handling, not a claim that Google always returns them or
 that `hd` (a domain-related value) is safe to log. Values are discarded.
 
+RFC 9207 additionally defines the optional authorization-response `iss`
+parameter; it is not required from authorization servers that do not support
+RFC 9207. Under [DEC-024](../project/DECISIONS.md#dec-024--verify-optional-antigravity-oauth-callback-issuer),
+Antigravity accepts it only once and only when its once-decoded value is exactly
+`https://accounts.google.com`, Google's published OpenID Connect issuer. The
+seven-key limit includes `code`, `state`, and all five optional metadata keys.
+Absent `iss` remains compatible; present malformed or untrusted values fail
+before exchange. Callback metadata is discarded and never logged or persisted.
+
 - Rahul's pinned `refreshAntigravityAccessToken` and NoeFabris's pinned
   `refreshAccessToken` each POST form-encoded
   `grant_type=refresh_token`, `refresh_token`, and client identity fields to

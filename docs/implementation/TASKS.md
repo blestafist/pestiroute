@@ -120,7 +120,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M10 — Google Antigravity Connector
 
-[M10 brief](M10-ANTIGRAVITY.md). Branch `dev-m10-antigravity`; exact filter `/next 10 M10`. M10-001–020 DONE.
+[M10 brief](M10-ANTIGRAVITY.md). Branch `dev-m10-antigravity`; exact filter `/next 10 M10`. M10-001–021 DONE.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -144,6 +144,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | [M10-018](tasks/M10-018.md) | DONE | GPT-6 Luna (M10-018 worker) / ses_eab6e26ccffe88uuSYihPGJDcP (reviewer) / Planner closure | M10-017 | Implement secret-safe auth diagnostics and align token/discovery parsers with Google OAuth specifications | Token parser accepts normative scope/id_token, Bearer type required, sanitized status/stage diagnostic codes emitted, canaries proven absent, claim/no-replay boundary verified offline | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/... ./internal/core/...` && `git diff --check`; [evidence](tasks/M10-018.md#completion-evidence) |
 | [M10-019](tasks/M10-019.md) | DONE | GPT-6 Luna (M10-019 worker) / ses_eab468d47ffeiXE4gMn8Tu4GLv (reviewer) / Planner closure | M10-018 | Add operator prompt, TTY echo-off protection, and --debug forwarding to Antigravity auth launcher | Launcher interactive prompt, echo suppression, signal restore traps, empty-input rejection, and auth --debug position verified; non-TTY passthrough preserved; no live calls | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity scripts/test-antigravity-auth-launcher.sh` && `git diff --check`; [evidence](tasks/M10-019.md#completion-evidence) |
 | [M10-020](tasks/M10-020.md) | DONE | GPT-6 Luna (M10-020 worker) / ses_ea108acdcffe5nqkeMkKxtToD2 (reviewer) / Planner closure | M10-019 | Implement bounded Google OAuth callback metadata parsing and safe callback diagnostics | Bounded callback metadata allowlist, fine-grained safe diagnostic codes, and non-sensitive paste feedback verified offline; reviewer PASS ses_ea108acdcffe5nqkeMkKxtToD2; operator root cause UNKNOWN | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/... ./internal/core/...` && `git diff --check`; [evidence](tasks/M10-020.md#completion-evidence) |
+| [M10-021](tasks/M10-021.md) | DONE | GPT-6 Luna (M10-021 worker) / ses_e96f48d6dffepEcNtjQ5pTbKfJ (reviewer) / Planner closure | M10-020 | Implement bounded Google OAuth callback issuer (iss) verification and absence compatibility | RFC 9207 trusted Google issuer verification, absence compatibility, duplicate/excess rejection, safe diagnostics, and DEC-024 synchronization verified offline; reviewer PASS ses_e96f48d6dffepEcNtjQ5pTbKfJ; operator root cause UNKNOWN | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/... ./internal/core/...` && `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity GOFLAGS=-p=1 go test -race -count=1 ./cmd/gateway -run 'Auth\|Antigravity'` && `git diff --check`; [evidence](tasks/M10-021.md#completion-evidence) |
 
 ## M11 — Administrative HTTP API
 

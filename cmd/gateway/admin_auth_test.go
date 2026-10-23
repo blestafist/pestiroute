@@ -119,7 +119,7 @@ func TestAdminAuthAntigravityEncryptedBrowserLifecycleAndExecuteReload(t *testin
 	}
 	debugStart := run("", "auth", "start", "--account", accountID)
 	debugSession := adminSessionID(debugStart)
-	const callbackCanary = "http://localhost:8080/callback?code=CODE_CANARY&state=STATE_CANARY&scope=SCOPE_CANARY&authuser=AUTHUSER_CANARY&prompt=PROMPT_CANARY&hd=HD_CANARY&error=ERROR_CANARY&provider=PROVIDER_CANARY"
+	const callbackCanary = "http://localhost:8080/callback?code=CODE_CANARY&state=STATE_CANARY&scope=SCOPE_CANARY&authuser=AUTHUSER_CANARY&prompt=PROMPT_CANARY&hd=HD_CANARY&iss=ISS_CANARY&error=ERROR_CANARY&provider=PROVIDER_CANARY"
 	var debugOut, debugErr bytes.Buffer
 	debugArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "--debug", "continue", "--session", debugSession, "--callback-stdin"}
 	debugCallErr := runAdmin(adminEnvironment{ctx: ctx, args: debugArgs, stdin: strings.NewReader(callbackCanary + "\n"), stdout: &debugOut, stderr: &debugErr, authServices: services})
@@ -128,9 +128,24 @@ func TestAdminAuthAntigravityEncryptedBrowserLifecycleAndExecuteReload(t *testin
 	if debugCallErr == nil || transport.calls != 0 || !strings.Contains(debugText, wantClass) || !strings.Contains(debugText, "reason=callback_error_param") {
 		t.Fatalf("debug callback classification/reason missing: err=%v calls=%d class=%t reason=%t output=%q", debugCallErr, transport.calls, strings.Contains(debugText, wantClass), strings.Contains(debugText, "reason=callback_error_param"), debugText)
 	}
-	for _, canary := range []string{"CODE_CANARY", "STATE_CANARY", "SCOPE_CANARY", "AUTHUSER_CANARY", "PROMPT_CANARY", "HD_CANARY", "ERROR_CANARY", "PROVIDER_CANARY", callbackCanary} {
+	for _, canary := range []string{"CODE_CANARY", "STATE_CANARY", "SCOPE_CANARY", "AUTHUSER_CANARY", "PROMPT_CANARY", "HD_CANARY", "ISS_CANARY", "ERROR_CANARY", "PROVIDER_CANARY", callbackCanary} {
 		if strings.Contains(debugText+debugCallErr.Error(), canary) {
 			t.Fatalf("debug auth output leaked callback canary %q: %q", canary, debugText)
+		}
+	}
+	issuerStart := run("", "auth", "start", "--account", accountID)
+	issuerSession, issuerState := adminAuthSessionAndState(t, issuerStart)
+	issuerCallback := "http://localhost:8080/callback?code=ISSUER_CODE_CANARY&state=" + url.QueryEscape(issuerState) + "&iss=ISSUER_VALUE_CANARY"
+	var issuerOut, issuerErr bytes.Buffer
+	issuerArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "--debug", "continue", "--session", issuerSession, "--callback-stdin"}
+	issuerCallErr := runAdmin(adminEnvironment{ctx: ctx, args: issuerArgs, stdin: strings.NewReader(issuerCallback + "\n"), stdout: &issuerOut, stderr: &issuerErr, authServices: services})
+	issuerText := issuerOut.String() + issuerErr.String() + errorString(issuerCallErr)
+	if issuerCallErr == nil || transport.calls != 0 || !strings.Contains(issuerText, "reason=callback_iss_mismatch") {
+		t.Fatalf("issuer diagnostic missing: calls=%d output=%q", transport.calls, issuerText)
+	}
+	for _, canary := range []string{"ISSUER_CODE_CANARY", "ISSUER_VALUE_CANARY", issuerCallback} {
+		if strings.Contains(issuerText, canary) {
+			t.Fatalf("issuer callback leaked canary %q", canary)
 		}
 	}
 	completed := run("synthetic-local-code\n", "auth", "continue", "--session", session, "--callback-stdin")

@@ -164,10 +164,16 @@ retains and uses that exact session URI even if configuration changes before
 byte-for-byte without normalization; strictly decodes exactly one non-empty
 `code` and `state`, rejects malformed/duplicate/unexpected parameters, compares
 state byte-for-byte with protected continuation state, and exchanges using the
-same effective URI. DEC-023 permits Antigravity alone to additionally accept
-single bounded `scope`, `authuser`, `prompt`, and `hd` parameters; they are
-discarded without logging or persistence, and are not asserted to be universal
-Google callback fields. DEC-022 additionally documents Antigravity's Connector-local
+same effective URI. DEC-023 and DEC-024 permit Antigravity alone to additionally
+accept single bounded `scope`, `authuser`, `prompt`, `hd`, and optional `iss`
+parameters, with at most seven distinct keys total. Query values are decoded
+once using normal form-query semantics; an encoded spelling of the exact
+trusted issuer is therefore equivalent, but no further normalization occurs.
+When present, `iss` must exactly equal `https://accounts.google.com`; mismatch
+fails closed before exchange. Duplicate keys, including percent-encoded key
+spellings, are rejected. Its absence remains compatible and is not asserted to
+violate RFC 9207 for authorization servers that do not support that parameter.
+These metadata values are discarded without logging or persistence. DEC-022 additionally documents Antigravity's Connector-local
 raw-code mode: trimmed 1–512 visible-ASCII bytes, with no whitespace or `:`,
 `?`, `#`, `&` delimiters; malformed callback-URL input is never reinterpreted
 as a code. Both modes use the unchanged runtime single-use continuation claim.
@@ -175,7 +181,8 @@ Connectors retain PKCE S256 and do not retry or replay. The existing callback
 input remains the only runtime/IPC field. See
 [DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input)
 and [DEC-022](../project/DECISIONS.md#dec-022--accept-antigravity-connector-local-manual-oauth-code-input).
-See also [DEC-023](../project/DECISIONS.md#dec-023--bounded-antigravity-oauth-callback-metadata).
+See also [DEC-023](../project/DECISIONS.md#dec-023--bounded-antigravity-oauth-callback-metadata)
+and [DEC-024](../project/DECISIONS.md#dec-024--verify-optional-antigravity-oauth-callback-issuer).
 
 `AuthResult.CredentialExpiresAt *time.Time` is optional absolute expiry metadata
 for the candidate credential generation, derived by the Connector from its

@@ -156,8 +156,11 @@ recorded URI with a different URI or use the official web callback. The
 connector's raw-code DEC-022 mode is also supported, but the complete URL is the
 primary remote-browser path because it preserves and validates state. Browser
 callback validation accepts only the explicit optional metadata allowlist
-(`scope`, `authuser`, `prompt`, `hd`) under DEC-023; values are not displayed,
-logged, or persisted. Their presence is not guaranteed by this procedure.
+(`scope`, `authuser`, `prompt`, `hd`, and optional `iss`) under DEC-023/024, with
+at most seven distinct query keys total. A present `iss` must decode once to the
+exact trusted value `https://accounts.google.com`; absence remains compatible.
+Values are not displayed, logged, or persisted, and their presence is not
+guaranteed by this procedure.
 sign-in/token exchange remains a separate operator-authorized live action;
 offline checks never perform it. Provider acceptance of dynamic loopback ports
 is unverified.
