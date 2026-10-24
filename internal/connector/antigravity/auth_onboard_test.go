@@ -42,6 +42,62 @@ func TestEligibleFreeTierTruthTable(t *testing.T) {
 	}
 }
 
+func TestTierEligibilityDiagnosticUsesFixedReasons(t *testing.T) {
+	for _, tc := range []struct{ body, reason string }{
+		{`{`, "schema_invalid"},
+		{`{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":"CANARY_BAD_TYPE"}]}`, "schema_invalid"},
+		{`{"allowedTiers":[{"id":"free-tier"}],"paidTier":{"id":"CANARY_PAID_ID"}}`, "paid_present"},
+		{`{"allowedTiers":[{"id":"untrusted-tier-CANARY"}]}`, "candidate_missing"},
+		{`{"allowedTiers":[{"id":"free-tier"},{"id":"free-tier"}]}`, "ambiguous"},
+		{`{"allowedTiers":[{"id":"free-tier","userDefinedCloudaicompanionProject":true}]}`, "userprojectrequired"},
+		{`{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":false}]}`, "terms"},
+		{`{"allowedTiers":[{"id":"free-tier","privacyNotice":{"showNotice":true}}]}`, "privacy"},
+		{`{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":false},{"id":"unrelated","isDefault":"bad"}]}`, "schema_invalid"},
+		{`{"allowedTiers":[{"id":"free-tier","privacyNotice":{"showNotice":true}},{"id":"unrelated","hasAcceptedTos":null}]}`, "schema_invalid"},
+		{`{"allowedTiers":[{"id":"free-tier","userDefinedCloudaicompanionProject":true},{"id":"unrelated","isDefault":"bad"}]}`, "schema_invalid"},
+		{`{"allowedTiers":[{"id":"free-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"OTHER"}]}`, "providerineligible"},
+		{`{"allowedTiers":[{"id":"free-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"VALIDATION_REQUIRED"}]}`, "validationrequired"},
+	} {
+		reason, n, candidates, _, _, _, _ := tierEligibilityDiagnostic([]byte(tc.body))
+		if reason != tc.reason || n > 1000 || candidates > 1000 {
+			t.Fatalf("reason=%q counts=%d/%d want=%q", reason, n, candidates, tc.reason)
+		}
+	}
+	_, _, _, _, _, candidateBad, unrelatedBad := tierEligibilityDiagnostic([]byte(`{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":"bad"},{"id":"OTHER_CANARY","isDefault":"bad"}]}`))
+	if !candidateBad || !unrelatedBad {
+		t.Fatalf("schema flags candidate=%t unrelated=%t", candidateBad, unrelatedBad)
+	}
+	if got := discoveredTierClasses([]byte(`{"allowedTiers":[{"id":"free-tier"},{"id":"legacy-tier"},{"id":"standard-tier"},{"id":"UNKNOWN_CANARY"}]}`)); strings.Join(got, ",") != "free,legacy,standard,other" {
+		t.Fatalf("unsafe classes %v", got)
+	}
+}
+
+func TestOnboardIneligibleDebugCanaries(t *testing.T) {
+	const payload = `{"allowedTiers":[{"id":"UNKNOWN_TIER_CANARY","isDefault":true}],"paidTier":{"id":"RAW_PAID_CANARY"},"privateField":"RAW_PAYLOAD_CANARY"}`
+	var logs bytes.Buffer
+	_, ge := onboardProject(context.Background(), "https://discovery.synthetic.invalid", &fakeDoer{}, "TOKEN_CANARY", json.RawMessage(payload), slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	if ge == nil || ge.Code != "auth_tier_paid_present" {
+		t.Fatalf("error=%+v", ge)
+	}
+	for _, canary := range []string{"UNKNOWN_TIER_CANARY", "RAW_PAID_CANARY", "RAW_PAYLOAD_CANARY", "TOKEN_CANARY"} {
+		if strings.Contains(logs.String()+ge.Code+ge.Message+ge.OriginalError, canary) {
+			t.Fatalf("leaked %s", canary)
+		}
+	}
+	if !strings.Contains(logs.String(), `tier_class=other`) {
+		t.Fatalf("fixed classification missing: %q", logs.String())
+	}
+}
+
+func TestOnboardEligibilityTelemetryRequiresDebugLogger(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	_, _ = onboardProject(context.Background(), "https://discovery.synthetic.invalid", &fakeDoer{}, "TOKEN_CANARY", json.RawMessage(`{"allowedTiers":[{"id":"UNKNOWN_CANARY"}]}`), logger)
+	if logs.Len() != 0 {
+		t.Fatalf("non-debug logger received eligibility telemetry: %q", logs.String())
+	}
+}
+
 func TestOnboardOptInPollsOncePerOperationAndValidatesProject(t *testing.T) {
 	oldInterval := operationPollInterval
 	operationPollInterval = time.Nanosecond

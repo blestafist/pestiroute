@@ -119,7 +119,7 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	}
 	var authLogger *slog.Logger
 	if debug {
-		authLogger = slog.New(slog.NewTextHandler(env.stderr, nil))
+		authLogger = slog.New(slog.NewTextHandler(env.stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
 	services := adminAuthServicesFunc(func(scope core.AttemptScope) core.InvocationServices {
 		return core.InvocationServices{Transport: transport, Credentials: adminAuthCredentialAccess{store: store, accountID: scope.AccountID}, Logger: authLogger}

@@ -338,8 +338,27 @@ func (d *adminOnboardDoer) Do(req *http.Request) (*http.Response, error) {
 	switch req.URL.Path {
 	case "/v1internal:loadCodeAssist":
 		body = `{"allowedTiers":[{"id":"free-tier"}],"currentTier":null,"paidTier":null}`
-		if d.mode == "ineligible" {
-			body = `{"allowedTiers":[{"id":"free-tier"}],"currentTier":null,"paidTier":{"id":"paid-tier"}}`
+		switch d.mode {
+		case "ineligible":
+			body = `{"allowedTiers":[{"id":"free-tier"}],"currentTier":null,"paidTier":{"id":"PAID_ID_CANARY"}}`
+		case "candidate-missing":
+			body = `{"allowedTiers":[{"id":"UNKNOWN_ID_CANARY"}]}`
+		case "ambiguous":
+			body = `{"allowedTiers":[{"id":"free-tier"},{"id":"free-tier"}]}`
+		case "userprojectrequired":
+			body = `{"allowedTiers":[{"id":"free-tier","userDefinedCloudaicompanionProject":true}]}`
+		case "terms":
+			body = `{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":false}]}`
+		case "privacy":
+			body = `{"allowedTiers":[{"id":"free-tier","privacyNotice":{"showNotice":true}}]}`
+		case "providerineligible":
+			body = `{"allowedTiers":[{"id":"free-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"OTHER_CANARY"}]}`
+		case "validationrequired":
+			body = `{"allowedTiers":[{"id":"free-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"VALIDATION_REQUIRED"}]}`
+		case "schema-invalid":
+			body = `{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":"BAD_TYPE_CANARY"}]}`
+		case "schema-unrelated":
+			body = `{"allowedTiers":[{"id":"free-tier"},{"id":"UNKNOWN_SCHEMA_ID_CANARY","isDefault":"BAD_TYPE_CANARY"}]}`
 		}
 	case "/v1internal:onboardUser":
 		if req.Method != http.MethodPost {
@@ -389,7 +408,11 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"onboard-happy", "onboard-default", "onboard-ineligible", "onboard-error", "onboard-cancel", "onboard-budget"} {
+	ids := []string{"onboard-happy", "onboard-default", "onboard-ineligible", "onboard-error", "onboard-cancel", "onboard-budget"}
+	for _, mode := range []string{"candidate-missing", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "schema-invalid", "schema-unrelated"} {
+		ids = append(ids, "diag-"+mode)
+	}
+	for _, id := range ids {
 		if _, err = sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: id, Connector: "antigravity", Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
@@ -424,11 +447,24 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 		var out, stderr bytes.Buffer
 		args := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session, "--callback-stdin"}
 		if extra != "" {
-			args = append(args, extra)
+			if strings.Contains(extra, "--debug") {
+				args = append(args[:5], append([]string{"--debug"}, args[5:]...)...)
+			}
+			for _, flag := range strings.Fields(extra) {
+				if flag != "--debug" {
+					args = append(args, flag)
+				}
+			}
 		}
 		err := runAdmin(adminEnvironment{ctx: callCtx, args: args, stdin: strings.NewReader("SYNTHETIC_CALLBACK_CODE\n"), stdout: &out, stderr: &stderr, authServices: services})
 		text := out.String() + stderr.String() + errorString(err)
-		for _, canary := range []string{"SYNTHETIC_ONBOARD_ACCESS", "SYNTHETIC_ONBOARD_REFRESH", "admin-synthetic-op", "synthetic-managed-project", "private provider response canary", "SYNTHETIC_CALLBACK_CODE"} {
+		if strings.Contains(extra, "--debug") {
+			code := map[string]string{"ineligible": "paid_present", "candidate-missing": "candidate_missing", "ambiguous": "ambiguous", "userprojectrequired": "userprojectrequired", "terms": "terms", "privacy": "privacy", "providerineligible": "providerineligible", "validationrequired": "validationrequired", "schema-invalid": "schema_invalid", "schema-unrelated": "schema_invalid"}[doer.mode]
+			if code == "" || !strings.Contains(text, "reason=auth_tier_"+code) {
+				t.Fatalf("debug diagnostic missing fixed reason for %q: %q", doer.mode, text)
+			}
+		}
+		for _, canary := range []string{"SYNTHETIC_ONBOARD_ACCESS", "SYNTHETIC_ONBOARD_REFRESH", "admin-synthetic-op", "synthetic-managed-project", "private provider response canary", "SYNTHETIC_CALLBACK_CODE", "PAID_ID_CANARY", "UNKNOWN_ID_CANARY", "OTHER_CANARY", "BAD_TYPE_CANARY", "UNKNOWN_SCHEMA_ID_CANARY"} {
 			if strings.Contains(text, canary) {
 				t.Fatalf("auth output leaked canary %q", canary)
 			}
@@ -456,7 +492,7 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 	}
 	doer.mode = "ineligible"
 	before := doer.calls
-	if err = runContinue("onboard-ineligible", "--allow-onboard"); err == nil {
+	if err = runContinue("onboard-ineligible", "--allow-onboard --debug"); err == nil {
 		t.Fatal("ineligible tier unexpectedly succeeded")
 	}
 	if doer.calls-before != 2 {
@@ -467,6 +503,16 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 	}
 	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 6 {
 		t.Fatalf("ineligible budget=%d err=%v", budget, err)
+	}
+	for _, mode := range []string{"candidate-missing", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "schema-invalid", "schema-unrelated"} {
+		doer.mode = mode
+		before = doer.calls
+		if err = runContinue("diag-"+mode, "--allow-onboard --debug"); err == nil || doer.calls-before != 2 {
+			t.Fatalf("%s err=%v requests=%d", mode, err, doer.calls-before)
+		}
+	}
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 24 {
+		t.Fatalf("diagnostic budget=%d err=%v", budget, err)
 	}
 	for _, scenario := range []struct{ name, mode string }{{"onboard-error", "error"}, {"onboard-cancel", "cancel"}} {
 		doer.mode = scenario.mode
@@ -486,7 +532,7 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 			t.Fatalf("%s credential revision=%d err=%v", scenario.name, stored.Revision, getErr)
 		}
 	}
-	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 12 {
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 30 {
 		t.Fatalf("failure/cancel budget=%d err=%v", budget, err)
 	}
 	doer.mode = ""
