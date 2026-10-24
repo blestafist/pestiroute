@@ -117,7 +117,8 @@ shared terminal capture: its child prints the authorization URL and session
 handle there. It does not log or store the URL itself. Use the session handle
 only as a command argument; callback codes and URLs must never be arguments.
 The launcher has no implicit onboarding, retry, database setup, or credential
-creation behavior.
+creation behavior. Managed-project onboarding is experimental, source-derived,
+and not evidence of Google compatibility or account eligibility.
 
 Optional local overrides; absent an override, `auth start` records a new dynamic
 loopback redirect URI in that session's opaque continuation:
@@ -178,6 +179,8 @@ with the session handle printed by `start`:
 # Only after separate operator authorization; keep protected client-secret
 # configuration in the process environment, not in this command.
 export PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT=1
+# Optional separate opt-in only after separate authorization/review:
+# export PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD=1
 scripts/antigravity-auth.sh continue SESSION_ID
 ```
 
@@ -187,9 +190,12 @@ does not echo or log the pasted value. Never put the code/URL in command
 arguments, shell history, files, logs, or chat. Continuation exchanges the one-time
 code and performs one candidate `loadCodeAssist` project lookup over HTTPS. Both
 requests require the explicit real-transport opt-in, which enables outbound auth
-and inference HTTPS; it is not a test flag. Do not run continuation during
-offline checks or task closure. Discovery metadata does not override the
-explicit Execute project, and no onboarding or fallback occurs.
+and inference HTTPS; it is not a test flag. Onboarding is disabled unless the
+additional `PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD=1` opt-in is set; it only
+permits the guarded managed `free-tier` path and remains experimental/Unknown.
+Do not set it for offline checks. Do not run continuation during offline checks
+or task closure. Discovery metadata does not override the explicit Execute
+project. No fallback or onboarding POST retry occurs.
 
 ## Protected gateway configuration and single-turn smoke
 

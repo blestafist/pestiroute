@@ -27,10 +27,11 @@ const (
 var projectPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}[a-z0-9]$|^[a-z]$`)
 
 type config struct {
-	Profile  string      `json:"profile"`
-	Project  string      `json:"project"`
-	Endpoint string      `json:"endpoint,omitempty"`
-	OAuth    oauthConfig `json:"oauth"`
+	Profile      string      `json:"profile"`
+	Project      string      `json:"project"`
+	Endpoint     string      `json:"endpoint,omitempty"`
+	AllowOnboard bool        `json:"allow_onboard,omitempty"`
+	OAuth        oauthConfig `json:"oauth"`
 }
 
 const defaultInferenceEndpoint = "https://cloudcode-pa.googleapis.com"
@@ -172,6 +173,7 @@ func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, serv
 	c.mu.Lock()
 	cfg := c.cfg.OAuth
 	discoveryOrigin := c.cfg.Endpoint
+	allowOnboard := c.cfg.AllowOnboard
 	c.mu.Unlock()
 	if req.Action == "start" && len(req.State) == 0 && req.CallbackInput == "" {
 		if cfg.ClientID == "" {
@@ -183,7 +185,7 @@ func (c *Connector) Authenticate(ctx context.Context, req core.AuthRequest, serv
 		if cfg.ClientID == "" {
 			return core.AuthResult{Supported: false}, nil
 		}
-		return c.authenticateContinue(ctx, cfg, discoveryOrigin, req, services)
+		return c.authenticateContinue(ctx, cfg, discoveryOrigin, allowOnboard, req, services)
 	}
 	if req.Action != "refresh" || len(req.State) != 0 || req.CallbackInput != "" {
 		return core.AuthResult{Supported: false}, nil

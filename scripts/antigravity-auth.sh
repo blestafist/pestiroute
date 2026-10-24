@@ -3,12 +3,16 @@ set -eu
 set +x
 
 usage() {
-  echo 'usage: PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT=/persistent/path GATEWAY_BIN=/path/to/gateway scripts/antigravity-auth.sh [--debug] start | continue SESSION_ID' >&2
+  echo 'usage: PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT=/persistent/path GATEWAY_BIN=/path/to/gateway scripts/antigravity-auth.sh [--debug] start | continue SESSION_ID (PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD=1 opts in)' >&2
   exit 2
 }
 
 [ "$#" -ge 1 ] || usage
 debug_flag=
+onboard_flag=
+if [ "${PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD:-}" = 1 ]; then
+  onboard_flag=--allow-onboard
+fi
 if [ "${1:-}" = --debug ]; then
   debug_flag=--debug
   shift
@@ -66,9 +70,9 @@ case "$action" in
         *[![:space:]]*) ;;
         *) echo 'callback input is required' >&2; exit 2 ;;
       esac
-      printf '%s\n' "$callback" | "$gateway" admin --db "$root/gateway.db" --master-key "$root/master.key" auth ${debug_flag:+'--debug'} continue --session "$1" --callback-stdin
+      printf '%s\n' "$callback" | "$gateway" admin --db "$root/gateway.db" --master-key "$root/master.key" auth ${debug_flag:+'--debug'} continue --session "$1" --callback-stdin ${onboard_flag:+'--allow-onboard'}
     else
-      "$gateway" admin --db "$root/gateway.db" --master-key "$root/master.key" auth ${debug_flag:+'--debug'} continue --session "$1" --callback-stdin
+      "$gateway" admin --db "$root/gateway.db" --master-key "$root/master.key" auth ${debug_flag:+'--debug'} continue --session "$1" --callback-stdin ${onboard_flag:+'--allow-onboard'}
     fi
     ;;
   *) usage ;;

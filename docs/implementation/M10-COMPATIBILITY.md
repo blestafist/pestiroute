@@ -19,14 +19,18 @@ and [handoff](M10-HANDOFF.md).
 | Event omissions | No `response.output_item.added`, `response.content_part.added`, `response.output_text.done`, `response.content_part.done`, or `response.output_item.done` | Clients requiring item/part lifecycle or text-done events are not established as compatible |
 | Usage | Reads available prompt/candidate token counts from the synthetic terminal frame; missing counts remain unknown | Synthetic mapping only; `usage.exact` remains Unknown |
 | Errors/replay | 401/403 map to `unauthenticated` (`false / unsafe`); 429 to `rate_limited` (`true / unknown`); 5xx may be retryable (`true / unknown`). No connector-internal retry. | Status classification is not safe-replay evidence; ambiguous transport failures remain unknown and unsafe for fallback |
+| Missing-project onboarding | Disabled by default; explicit `auth continue --allow-onboard` permits only the unique managed `free-tier` after the pinned CLI tier/consent checks. A single POST and bounded same-origin GET polling are durably request-budgeted. | Experimental, source-derived behavior only. No live provider/account eligibility or Google compatibility claim; remains Unknown and requires independent review before live use |
 
 Admission fails closed for unsupported protocol/mode, model, input, malformed
-or duplicate-key JSON, unknown fields, missing project, invalid/missing scoped
-OAuth access token, and unavailable/non-fake transport. Function declarations
+or duplicate-key JSON, missing project unless the separately documented explicit
+onboarding opt-in applies, invalid/missing scoped OAuth access token, and
+unavailable/non-fake transport. Function declarations
 and supported function history are candidate-translated; orphan, duplicate,
 interleaved and dangling calls fail before dispatch. Reasoning/signatures,
-multimodal inputs, structured output, project discovery,
-OAuth exchange/refresh, and live authentication are unsupported or Unknown.
+multimodal inputs, structured output, OAuth exchange/refresh, and live
+authentication are unsupported or Unknown. Project discovery/onboarding is a
+synthetic experimental auth candidate and does not change Execute's configured
+project.
 These constraints and the exact retry dispositions are specified in the
 [binding](M10-BINDING.md); this matrix does not promote them to live behavior.
 No standard Responses carrier with verifiable origin/scope for Gemini thought

@@ -19,6 +19,10 @@ func TestFixturesIntegrity(t *testing.T) {
 		"request-positive.json", "stream-text.sse", "stream-usage.sse",
 		"stream-premature-eof.sse", "stream-malformed.sse", "stream-function-calls.sse", "http-401.json",
 		"http-403.json", "http-429.json", "http-500.json", "oauth-refresh-rotated.json",
+		"onboard-load-eligible-free-tier.json", "onboard-load-rejected-terms-false.json",
+		"onboard-load-rejected-user-project.json", "onboard-load-rejected-paid-tier.json",
+		"onboard-load-rejected-current-tier.json", "onboard-response-lro-progress.json",
+		"onboard-poll-terminal-success.json",
 	}
 	manifestBytes, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "provenance": "Synthetic fixtures authored for PestiRoute from documented candidate-only observations; SYNTHETIC_ONLY_NOT_PROVIDER_CAPTURE; no live provider captures, credentials, or production claims.",
+  "provenance": "Synthetic fixtures authored for PestiRoute from documented candidate-only observations, including google-gemini/gemini-cli@cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005 for onboarding; SYNTHETIC_ONLY_NOT_PROVIDER_CAPTURE; no live provider captures, credentials, or production claims.",
   "source_observation": "Rahularya01/opencode-antigravity@874ef4d6cc44f852401e6298790c6b34804e2978",
   "provider_capture": false,
   "license": "MIT",
@@ -15,6 +15,13 @@
     "http-403.json": "9e445960f82c6d4b9696e3430ade63aa90840984c4e89eeb048c8736beff2228",
     "http-429.json": "b0c52657329236c9f8beab2777f3f9692fa62e9624f74e360c9054ebd4120f67",
     "http-500.json": "1995e69d3d0e5906cb99c5e4a7202398d99e104a42e0d88925e8bbbc64a7bdc7",
-    "oauth-refresh-rotated.json": "b23a1f3a11cd2ac841af9c18e7e83caedc9db92eb14f42af18edffa7e98fc725"
+    "oauth-refresh-rotated.json": "b23a1f3a11cd2ac841af9c18e7e83caedc9db92eb14f42af18edffa7e98fc725",
+    "onboard-load-eligible-free-tier.json": "038a76687a07bd1e7b654bbdc8c08a30b94c3544bc2f609c6942162e45af17c1",
+    "onboard-load-rejected-current-tier.json": "7519bb0f148bbeb422875f0e22e1e4e060a56771c15af6a04f740584c3a77aa1",
+    "onboard-load-rejected-paid-tier.json": "259c2a545b0f0fa2d2b0c6040a074e2847b8076a87339cf7950f9006d8f2c317",
+    "onboard-load-rejected-terms-false.json": "bebec8ed18a71ea283a82d88ca8f07bd135cdb5e5d3e576ece30df8d73b2f68e",
+    "onboard-load-rejected-user-project.json": "4adf43d553fbde04ac5d57a4538932fe438b55790f38ce75cbf8f180198a2098",
+    "onboard-poll-terminal-success.json": "a13fb8f3f2301191ebd69e5610308d2f0a8dbfc8a67d915b9091dc38080cb9d4",
+    "onboard-response-lro-progress.json": "4c80b88fb4bc59be8b0f57c3340701a200f037f5f9baf946753a80222780de5d"
   }
 }

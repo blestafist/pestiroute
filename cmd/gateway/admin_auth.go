@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -29,7 +30,7 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 		args = args[1:]
 	}
 	if len(args) == 0 || isHelp(args[0]) {
-		_, _ = io.WriteString(env.stdout, "usage: gateway admin [--db PATH] [--master-key PATH] auth [--debug] <start --account ID|continue --session ID [--callback-stdin]|refresh --account ID>\n  --callback-stdin reads a pasted authorization code or callback URL without echoing it\n")
+		_, _ = io.WriteString(env.stdout, "usage: gateway admin [--db PATH] [--master-key PATH] auth [--debug] <start --account ID|continue --session ID [--callback-stdin] [--allow-onboard]|refresh --account ID>\n  --callback-stdin reads a pasted authorization code or callback URL without echoing it\n  --allow-onboard opts in to experimental Antigravity managed-project onboarding\n")
 		return nil
 	}
 	if args[0] != "start" && args[0] != "continue" && args[0] != "refresh" {
@@ -38,10 +39,11 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	fs := adminFlags("auth " + args[0])
 	accountID, sessionID := fs.String("account", "", "account ID"), fs.String("session", "", "opaque continuation handle")
 	callbackStdin := fs.Bool("callback-stdin", false, "read a pasted authorization code or callback URL from stdin")
+	allowOnboard := fs.Bool("allow-onboard", false, "allow experimental Antigravity managed-project onboarding")
 	if err := parseAdminFlags(fs, args[1:]); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || args[0] == "continue" && (*sessionID == "" || *accountID != "") || args[0] != "continue" && (*accountID == "" || *sessionID != "") || args[0] != "continue" && *callbackStdin {
+	if fs.NArg() != 0 || args[0] == "continue" && (*sessionID == "" || *accountID != "") || args[0] != "continue" && (*accountID == "" || *sessionID != "") || args[0] != "continue" && (*callbackStdin || *allowOnboard) {
 		return errors.New("admin: invalid auth command arguments")
 	}
 	var callbackInput string
@@ -70,7 +72,7 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	registry := env.authRegistry
 	if registry == nil {
 		var err error
-		registry, err = defaultAdminAuthRegistry(env.ctx, accounts, db, *accountID, args[0] == "continue", *sessionID)
+		registry, err = defaultAdminAuthRegistry(env.ctx, accounts, db, *accountID, args[0] == "continue", *sessionID, *allowOnboard)
 		if err != nil {
 			return err
 		}
@@ -94,6 +96,9 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 			useDefaultTransport = false
 		}
 	}
+	if *allowOnboard && (!isAntigravityAuthConnector(connectorID) || args[0] != "continue") {
+		return errors.New("admin: onboarding opt-in is only valid for Antigravity continue")
+	}
 	var transport core.HTTPDoer
 	if useDefaultTransport {
 		transport = &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}, CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -112,8 +117,12 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 		}
 		transport = core.BudgetedHTTPDoer{Next: transport, Budget: budgets, Account: sqlite.AntigravityOperatorBudgetID}
 	}
+	var authLogger *slog.Logger
+	if debug {
+		authLogger = slog.New(slog.NewTextHandler(env.stderr, nil))
+	}
 	services := adminAuthServicesFunc(func(scope core.AttemptScope) core.InvocationServices {
-		return core.InvocationServices{Transport: transport, Credentials: adminAuthCredentialAccess{store: store, accountID: scope.AccountID}}
+		return core.InvocationServices{Transport: transport, Credentials: adminAuthCredentialAccess{store: store, accountID: scope.AccountID}, Logger: authLogger}
 	})
 	coordinator, err := core.NewAuthCoordinator(registry, store, services, 10*time.Minute)
 	if err != nil {
@@ -188,7 +197,7 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	return nil
 }
 
-func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db *sql.DB, accountID string, continuing bool, sessionID string) (*core.Registry, error) {
+func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db *sql.DB, accountID string, continuing bool, sessionID string, allowOnboard bool) (*core.Registry, error) {
 	if continuing {
 		if err := db.QueryRowContext(ctx, `SELECT account_id FROM auth_sessions WHERE id=? AND kind='interactive' AND lifecycle='active' AND expires_at>?`, sessionID, time.Now().UnixMilli()).Scan(&accountID); err != nil {
 			return nil, errors.New("admin: authentication session unavailable")
@@ -221,7 +230,7 @@ func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db
 		if scopes := strings.Fields(os.Getenv("PESTIROUTE_ANTIGRAVITY_SCOPES")); len(scopes) > 0 {
 			oauth["scopes"] = scopes
 		}
-		cfg := map[string]any{"profile": "antigravity-v1internal", "project": "admin-auth"}
+		cfg := map[string]any{"profile": "antigravity-v1internal", "project": "admin-auth", "allow_onboard": allowOnboard}
 		if len(oauth) > 0 {
 			cfg["oauth"] = oauth
 		}

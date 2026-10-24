@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -322,6 +323,205 @@ func TestAdminAuthAntigravityBudgetCompositionAndNonRefund(t *testing.T) {
 	}
 	if err := run(ctx); err == nil || doer.calls != 2 {
 		t.Fatalf("store failure refresh err=%v dispatches=%d", err, doer.calls)
+	}
+}
+
+type adminOnboardDoer struct {
+	calls  int
+	mode   string
+	cancel context.CancelFunc
+}
+
+func (d *adminOnboardDoer) Do(req *http.Request) (*http.Response, error) {
+	d.calls++
+	status, body := http.StatusOK, `{"access_token":"SYNTHETIC_ONBOARD_ACCESS","refresh_token":"SYNTHETIC_ONBOARD_REFRESH","expires_in":3600,"token_type":"Bearer"}`
+	switch req.URL.Path {
+	case "/v1internal:loadCodeAssist":
+		body = `{"allowedTiers":[{"id":"free-tier"}],"currentTier":null,"paidTier":null}`
+		if d.mode == "ineligible" {
+			body = `{"allowedTiers":[{"id":"free-tier"}],"currentTier":null,"paidTier":{"id":"paid-tier"}}`
+		}
+	case "/v1internal:onboardUser":
+		if req.Method != http.MethodPost {
+			return nil, errors.New("onboarding was not POST")
+		}
+		var payload map[string]json.RawMessage
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			return nil, err
+		}
+		if _, ok := payload["cloudaicompanionProject"]; ok {
+			return nil, errors.New("project hint was not omitted")
+		}
+		if d.mode == "error" {
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("private provider response canary")), Request: req}, nil
+		}
+		if d.mode == "cancel" && d.cancel != nil {
+			d.cancel()
+		}
+		body = `{"name":"v1internal/operations/admin-synthetic-op","done":false}`
+	case "/v1internal/operations/admin-synthetic-op":
+		if req.Method != http.MethodGet {
+			return nil, errors.New("operation was not GET")
+		}
+		body = `{"done":true,"response":{"cloudaicompanionProject":{"id":"synthetic-managed-project"}}}`
+	default:
+		if req.URL.Host == "oauth.synthetic.invalid" {
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+		}
+		return nil, errors.New("unexpected synthetic path")
+	}
+	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+}
+
+func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "1")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD", "")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_CLIENT_ID", "synthetic-onboard-client")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET", "SYNTHETIC_CLIENT_SECRET")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_TOKEN_ENDPOINT", "https://oauth.synthetic.invalid/token")
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	ctx := context.Background()
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"onboard-happy", "onboard-default", "onboard-ineligible", "onboard-error", "onboard-cancel", "onboard-budget"} {
+		if _, err = sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: id, Connector: "antigravity", Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		sealed, sealErr := secure.Seal(key, 1, "v1", "credentials", id+"-oauth", id, []byte(`{"access_token":"SYNTHETIC_OLD_ACCESS"}`))
+		if sealErr != nil {
+			t.Fatal(sealErr)
+		}
+		if _, err = sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: id + "-oauth", AccountID: id, FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	doer := &adminOnboardDoer{}
+	services := adminAuthServicesFunc(func(core.AttemptScope) core.InvocationServices { return core.InvocationServices{Transport: doer} })
+	runStart := func(account string) string {
+		var out, stderr bytes.Buffer
+		err := runAdmin(adminEnvironment{ctx: ctx, args: []string{"--db", dbPath, "--master-key", keyPath, "auth", "start", "--account", account}, stdout: &out, stderr: &stderr, authServices: services})
+		if err != nil {
+			t.Fatalf("start: %v %s", err, stderr.String())
+		}
+		return out.String()
+	}
+	runContinue := func(account, extra string, contexts ...context.Context) error {
+		callCtx := ctx
+		if len(contexts) != 0 {
+			callCtx = contexts[0]
+		}
+		started := runStart(account)
+		session := adminSessionID(started)
+		var out, stderr bytes.Buffer
+		args := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session, "--callback-stdin"}
+		if extra != "" {
+			args = append(args, extra)
+		}
+		err := runAdmin(adminEnvironment{ctx: callCtx, args: args, stdin: strings.NewReader("SYNTHETIC_CALLBACK_CODE\n"), stdout: &out, stderr: &stderr, authServices: services})
+		text := out.String() + stderr.String() + errorString(err)
+		for _, canary := range []string{"SYNTHETIC_ONBOARD_ACCESS", "SYNTHETIC_ONBOARD_REFRESH", "admin-synthetic-op", "synthetic-managed-project", "private provider response canary", "SYNTHETIC_CALLBACK_CODE"} {
+			if strings.Contains(text, canary) {
+				t.Fatalf("auth output leaked canary %q", canary)
+			}
+		}
+		return err
+	}
+	if err = runContinue("onboard-happy", "--allow-onboard"); err != nil {
+		t.Fatalf("opt-in onboarding: %v", err)
+	}
+	if doer.calls != 4 {
+		t.Fatalf("successful dispatch count=%d want=4", doer.calls)
+	}
+	verify := mustOpenAdminDB(t, dbPath)
+	var budget int
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 4 {
+		t.Fatalf("budget=%d err=%v", budget, err)
+	}
+	stored, err := sqlite.NewCredentials(verify).Get(ctx, "onboard-happy", "onboard-happy-oauth")
+	if err != nil || stored.Revision != 2 {
+		t.Fatalf("credential revision=%d err=%v", stored.Revision, err)
+	}
+	plain, err := secure.Open(key, secure.Envelope{FormatVersion: stored.FormatVersion, KeyVersion: stored.KeyVersion, Nonce: stored.Nonce, Ciphertext: stored.Ciphertext}, "credentials", stored.ID, stored.AccountID)
+	if err != nil || !strings.Contains(string(plain), "synthetic-managed-project") {
+		t.Fatalf("confirmed project not persisted: %v", err)
+	}
+	doer.mode = "ineligible"
+	before := doer.calls
+	if err = runContinue("onboard-ineligible", "--allow-onboard"); err == nil {
+		t.Fatal("ineligible tier unexpectedly succeeded")
+	}
+	if doer.calls-before != 2 {
+		t.Fatalf("ineligible dispatches=%d want 2", doer.calls-before)
+	}
+	if stored, err = sqlite.NewCredentials(verify).Get(ctx, "onboard-ineligible", "onboard-ineligible-oauth"); err != nil || stored.Revision != 1 {
+		t.Fatalf("ineligible credential revision=%d err=%v", stored.Revision, err)
+	}
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 6 {
+		t.Fatalf("ineligible budget=%d err=%v", budget, err)
+	}
+	for _, scenario := range []struct{ name, mode string }{{"onboard-error", "error"}, {"onboard-cancel", "cancel"}} {
+		doer.mode = scenario.mode
+		before = doer.calls
+		callCtx, cancel := context.WithCancel(ctx)
+		if scenario.mode == "cancel" {
+			doer.cancel = cancel
+		}
+		err = runContinue(scenario.name, "--allow-onboard", callCtx)
+		cancel()
+		doer.cancel = nil
+		if err == nil || doer.calls-before != 3 {
+			t.Fatalf("%s err=%v calls=%d", scenario.name, err, doer.calls-before)
+		}
+		stored, getErr := sqlite.NewCredentials(verify).Get(ctx, scenario.name, scenario.name+"-oauth")
+		if getErr != nil || stored.Revision != 1 {
+			t.Fatalf("%s credential revision=%d err=%v", scenario.name, stored.Revision, getErr)
+		}
+	}
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 12 {
+		t.Fatalf("failure/cancel budget=%d err=%v", budget, err)
+	}
+	doer.mode = ""
+	before = doer.calls
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD", "1")
+	if err = runContinue("onboard-default", ""); err == nil {
+		t.Fatal("default mode unexpectedly onboarded")
+	}
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD", "")
+	if doer.calls-before != 2 {
+		t.Fatalf("default mode requests=%d want 2", doer.calls-before)
+	}
+	stored, err = sqlite.NewCredentials(verify).Get(ctx, "onboard-default", "onboard-default-oauth")
+	if err != nil || stored.Revision != 1 {
+		t.Fatalf("default mutated credentials revision=%d err=%v", stored.Revision, err)
+	}
+	if _, err = verify.ExecContext(ctx, `UPDATE operator_request_budgets SET consumed=999 WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID); err != nil {
+		t.Fatal(err)
+	}
+	before = doer.calls
+	if err = runContinue("onboard-budget", "--allow-onboard"); err == nil {
+		t.Fatal("budget exhaustion unexpectedly succeeded")
+	}
+	if doer.calls-before != 1 {
+		t.Fatalf("budget exhaustion dispatched %d requests after final available reservation", doer.calls-before)
+	}
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 1000 {
+		t.Fatalf("exhausted budget=%d err=%v", budget, err)
+	}
+	stored, err = sqlite.NewCredentials(verify).Get(ctx, "onboard-budget", "onboard-budget-oauth")
+	if err != nil || stored.Revision != 1 {
+		t.Fatalf("budget failure mutated credentials revision=%d err=%v", stored.Revision, err)
+	}
+	if err = verify.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -814,7 +1014,7 @@ func TestAdminAuthClaudeCodeAccountAliases(t *testing.T) {
 		if _, err := accounts.Create(context.Background(), sqlite.Account{ID: accountID, Connector: connectorID, Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
-		registry, err := defaultAdminAuthRegistry(context.Background(), accounts, db, accountID, false, "")
+		registry, err := defaultAdminAuthRegistry(context.Background(), accounts, db, accountID, false, "", false)
 		if err != nil {
 			t.Fatalf("connector %q rejected: %v", connectorID, err)
 		}

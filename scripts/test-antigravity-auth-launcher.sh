@@ -61,9 +61,14 @@ grep -Fx 'arg=<--debug>' "$CAPTURE" >/dev/null
 grep -Fx 'arg=<continue>' "$CAPTURE" >/dev/null
 grep -Fx 'arg=<safe-session>' "$CAPTURE" >/dev/null
 grep -Fx 'arg=<--callback-stdin>' "$CAPTURE" >/dev/null
+! grep -Fx 'arg=<--allow-onboard>' "$CAPTURE" >/dev/null
 grep -Fx "arg=<$WORK/root/gateway.db>" "$CAPTURE" >/dev/null
 grep -Fx "arg=<$WORK/root/master.key>" "$CAPTURE" >/dev/null
 [ ! -s "$INPUT_CAPTURE" ]
+
+PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD=1 "$SCRIPT_DIR/antigravity-auth.sh" continue onboard-session </dev/null
+grep -Fx 'arg=<--allow-onboard>' "$CAPTURE" >/dev/null
+unset PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD
 
 env -u PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET PESTIROUTE_ANTIGRAVITY_CLIENT_ID=synthetic-public-client \
   "$SCRIPT_DIR/antigravity-auth.sh" continue public-session </dev/null

@@ -475,7 +475,7 @@ func (e authCallFailure) Unwrap() []error    { return []error{ErrAuthUnavailable
 
 func safeAuthDiagnosticCode(code string) string {
 	switch code {
-	case "auth_rejected", "auth_invalid_response", "auth_project_missing", "invalid_auth_callback", "invalid_auth_state", "callback_malformed", "callback_redirect_mismatch", "callback_query_keys", "callback_iss_mismatch", "callback_state_mismatch", "callback_error_param", "scope_mismatch", "auth_transport_unavailable", "auth_request_failed", "auth_rate_limited", "auth_cancelled", "auth_expired", "auth_invalid_state":
+	case "auth_rejected", "auth_invalid_response", "auth_project_missing", "auth_onboarding_started", "auth_onboarding_polling", "auth_onboarding_failed", "auth_tier_ineligible", "request_budget_exceeded", "invalid_auth_callback", "invalid_auth_state", "callback_malformed", "callback_redirect_mismatch", "callback_query_keys", "callback_iss_mismatch", "callback_state_mismatch", "callback_error_param", "scope_mismatch", "auth_transport_unavailable", "auth_request_failed", "auth_rate_limited", "auth_cancelled", "auth_expired", "auth_invalid_state":
 		return code
 	default:
 		return "auth_unavailable"

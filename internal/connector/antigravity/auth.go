@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -92,7 +93,7 @@ func (c *Connector) authenticateStart(ctx context.Context, cfg oauthConfig) (cor
 	return core.AuthResult{Supported: true, State: string(continuation), NextAction: "continue", UserAction: &core.AuthUserAction{VerificationURI: endpoint.String()}}, nil
 }
 
-func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, discoveryOrigin string, req core.AuthRequest, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
+func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, discoveryOrigin string, allowOnboard bool, req core.AuthRequest, services core.InvocationServices) (core.AuthResult, *core.GatewayError) {
 	if requiresConfiguredClientSecret(cfg) {
 		return core.AuthResult{}, unauthenticated()
 	}
@@ -168,7 +169,7 @@ func (c *Connector) authenticateContinue(ctx context.Context, cfg oauthConfig, d
 	if tokenEndpoint == "" {
 		tokenEndpoint = defaultTokenEndpoint
 	}
-	return c.exchangeAuthCode(ctx, tokenEndpoint, discoveryOrigin, services.Transport, form)
+	return c.exchangeAuthCode(ctx, tokenEndpoint, discoveryOrigin, allowOnboard, services.Transport, services.Logger, form)
 }
 
 func rawAuthority(value string) string {
@@ -221,7 +222,7 @@ func requiresConfiguredClientSecret(cfg oauthConfig) bool {
 	return cfg.ClientID == defaultClientID && cfg.ClientSecret == ""
 }
 
-func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOrigin string, transport core.HTTPDoer, form url.Values) (core.AuthResult, *core.GatewayError) {
+func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOrigin string, allowOnboard bool, transport core.HTTPDoer, logger *slog.Logger, form url.Values) (core.AuthResult, *core.GatewayError) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
@@ -290,7 +291,10 @@ func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOri
 	if !validTokenMetadata(fields) || !strings.EqualFold(token.TokenType, "Bearer") {
 		return core.AuthResult{}, invalidAuthResponse()
 	}
-	projectID, ge := discoverProject(ctx, discoveryOrigin, transport, token.AccessToken)
+	projectID, discovery, ge := discoverProjectInfo(ctx, discoveryOrigin, transport, token.AccessToken)
+	if ge != nil && ge.Code == "auth_project_missing" && allowOnboard {
+		projectID, ge = onboardProject(ctx, discoveryOrigin, transport, token.AccessToken, discovery, logger)
+	}
 	if ge != nil {
 		return core.AuthResult{}, ge
 	}
@@ -421,12 +425,17 @@ func (c *Connector) authenticateRefresh(ctx context.Context, cfg oauthConfig, se
 }
 
 func discoverProject(ctx context.Context, endpoint string, transport core.HTTPDoer, accessToken string) (string, *core.GatewayError) {
+	projectID, _, ge := discoverProjectInfo(ctx, endpoint, transport, accessToken)
+	return projectID, ge
+}
+
+func discoverProjectInfo(ctx context.Context, endpoint string, transport core.HTTPDoer, accessToken string) (string, json.RawMessage, *core.GatewayError) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	body := []byte(`{"metadata":{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}`)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1internal:loadCodeAssist", bytes.NewReader(body))
 	if err != nil {
-		return "", invalidAuthResponse()
+		return "", nil, invalidAuthResponse()
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -435,43 +444,43 @@ func discoverProject(ctx context.Context, endpoint string, transport core.HTTPDo
 	if err != nil {
 		closeResponse(resp)
 		if errors.Is(err, core.ErrRequestBudgetExceeded) {
-			return "", requestBudgetError()
+			return "", nil, requestBudgetError()
 		}
 		if ctx.Err() != nil {
-			return "", contextError(ctx.Err())
+			return "", nil, contextError(ctx.Err())
 		}
-		return "", authTransportError()
+		return "", nil, authTransportError()
 	}
 	if resp == nil || resp.Body == nil {
-		return "", authTransportError()
+		return "", nil, authTransportError()
 	}
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8192))
 		closeResponse(resp)
-		return "", discoveryHTTPError(resp.StatusCode)
+		return "", nil, discoveryHTTPError(resp.StatusCode)
 	}
 	data, err := readAuthResponse(ctx, resp.Body)
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", contextError(ctx.Err())
+			return "", nil, contextError(ctx.Err())
 		}
 		var gatewayError *core.GatewayError
 		if errors.As(err, &gatewayError) {
-			return "", gatewayError
+			return "", nil, gatewayError
 		}
-		return "", invalidAuthResponse()
+		return "", nil, invalidAuthResponse()
 	}
 	if !uniqueJSON(data) {
-		return "", invalidAuthResponse()
+		return "", nil, invalidAuthResponse()
 	}
 	var response struct {
 		Project json.RawMessage `json:"cloudaicompanionProject"`
 	}
 	if json.Unmarshal(data, &response) != nil {
-		return "", invalidAuthResponse()
+		return "", nil, invalidAuthResponse()
 	}
 	if len(response.Project) == 0 || string(response.Project) == "null" {
-		return "", &core.GatewayError{Code: "auth_project_missing", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Authentication project data is missing"}
+		return "", data, &core.GatewayError{Code: "auth_project_missing", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Authentication project data is missing"}
 	}
 	var projectID string
 	if json.Unmarshal(response.Project, &projectID) != nil {
@@ -479,14 +488,14 @@ func discoverProject(ctx context.Context, endpoint string, transport core.HTTPDo
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(response.Project, &project) != nil {
-			return "", invalidAuthResponse()
+			return "", nil, invalidAuthResponse()
 		}
 		projectID = project.ID
 	}
 	if !projectPattern.MatchString(projectID) {
-		return "", invalidAuthResponse()
+		return "", nil, invalidAuthResponse()
 	}
-	return projectID, nil
+	return projectID, data, nil
 }
 
 func invalidAuthResponse() *core.GatewayError {
