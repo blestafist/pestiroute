@@ -270,6 +270,64 @@ implemented. The plugin scope discrepancy is unresolved. Do not promote
 capabilities or make a production-provider compatibility claim. Perform live
 calls only after separate operator authorization and reviewable evidence.
 
+## Missing-project onboarding audit (M10-022)
+
+[DEC-025](../project/DECISIONS.md#dec-025--bound-experimental-antigravity-managed-project-onboarding)
+accepts only a bounded experimental candidate, not Google protocol support or
+Antigravity compatibility. Default behavior remains fail-closed on missing/null
+`cloudaicompanionProject`; no provisioning without an explicit opt-in. The
+source audit and limits are in
+[M10-RESEARCH](M10-RESEARCH.md#missing-project-onboarding-source-audit-m10-022).
+No `onboardUser` dispatch, tier auto-selection, terms acceptance, or operation
+poll is implemented. The candidate applies only when `currentTier` is absent and
+`allowedTiers` contains one unambiguous eligible default managed free tier. An
+existing `currentTier` with no project, missing/ambiguous default, ineligible or
+paid tier, user-defined-project requirement, or unresolved/unaccepted privacy or
+terms condition fails closed without onboarding. Never choose a fallback tier.
+
+Under that explicit opt-in, experimental flow sends exactly one `onboardUser`
+POST with selected tier and metadata, omitting `cloudaicompanionProject`. Accept
+an immediate terminal success or a valid LRO name. Poll only by GET to the same
+configured origin under `/v1internal/` plus a strictly validated relative
+operation path; reject absolute URLs, authority changes, query/fragment,
+backslash, dot-segment/traversal, or malformed/encoded path components. Bound to
+at most 12 GET polls, fixed 2-second interval, and a 30-second overall context
+deadline (whichever comes first); honor cancellation before each dispatch. Do
+not retry POST or replay any ambiguous outcome. Fail closed on HTTP/JSON error,
+terminal LRO error, missing/invalid operation name, deadline/cancellation, or
+missing/invalid terminal project. Only after the returned project identifier
+passes validation and account binding verification may the existing atomic
+encrypted credential write persist credentials. Any failure leaves credentials
+unsaved.
+Safe stage codes may be `auth_onboarding_started`,
+`auth_onboarding_polling`, `auth_onboarding_failed`, `auth_tier_ineligible`, and
+`request_budget_exceeded`; expose fixed code/stage only, never provider text,
+operation name, project value, callback, or credential.
+
+Before a live test, an operator-owned durable global counter must cover every
+provider HTTP operation for the authorized test account: auth/token exchange,
+discovery, onboarding, polls, inference, refresh, and retries. Each potential
+dispatch atomically consumes one slot before network handoff under cross-process
+serialization. Exhaustion fails closed. Do not refund once dispatch may have
+started, including cancellation, process death, timeout, or unknown response.
+Count conservatively if transport cannot distinguish pre-dispatch failure from
+an ambiguous outcome. The ceiling is <=1000, not permission to consume it; use
+the fewest calls. Durable-budget implementation and review are downstream of
+this research task and required before live dispatch. No account switch, paid
+resources, billing changes, or destructive action is authorized.
+
+Synthetic-only future fixture requirements (not captures or implemented tests):
+
+| Case | Input / expected outcome | Safe assertion |
+| --- | --- | --- |
+| absent/null project + eligible default tier | Existing behavior fails closed; explicit opt-in sends one POST with project omitted | No dispatch by default; no credentials saved before project confirmation |
+| operation in-progress then done | Fake returns valid relative operation name then terminal response with fake project ID | Same-origin GET only; max 12 polls / 2s / 30s; persist only after verified project |
+| ineligible tier | Synthetic denied/ineligible result | Fixed `auth_tier_ineligible`; no payload echo or credential save |
+| poll timeout/cancellation | Fake remains pending or context cancels | Stop; no retry/replay; any possible dispatch remains charged |
+
+`onboardUser` and its LRO shape remain unverified third-party observations; no
+endpoint, tier, interval, or retry policy is promoted to supported compatibility.
+
 ## References
 
 - [M10 research and pinned source inventory](M10-RESEARCH.md)

@@ -187,3 +187,33 @@ mapping, incremental stream, usage, signature continuity and safe cancellation/
 retry semantics with reproducible authorized evidence. These protocol and
 live-compatibility questions remain **Unknown**. No provider call or login was
 needed or authorized for this audit.
+
+## Missing-project onboarding source audit (M10-022)
+
+Audit date: 2026-10-24. Public source fetch only; no provider endpoint, OAuth,
+account, or private local credential activity.
+
+| Source | Revision and inspected files | Observed schema/flow | Confidence |
+| --- | --- | --- | --- |
+| Google `google-gemini/gemini-cli` | `cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005`, `packages/core/src/code_assist/codeAssist.ts:21-35`, `setup.ts:213-332`, `server.ts:257-264,415-467,524-537`, `types.ts:93-105,162-195` | This is an actual CLI setup flow, not just types: codeAssist calls `setupUser`. When `currentTier` exists but project is absent, setup uses explicit environment project if supplied; otherwise reports ineligible/project-required and does not onboard. When `currentTier` is absent, it selects `allowedTiers[].isDefault`, else legacy fallback; the free managed tier sends `onboardUser` with `cloudaicompanionProject` omitted. It polls operation by GET `v1internal/{operationName}` every 5 seconds until done (unbounded in this CLI implementation). LRO `error` is not handled explicitly in setup; PestiRoute must fail closed. Types expose tier privacy/TOS/user-project indicators. | High for behavior in this pinned Gemini CLI flow; not proof that its client metadata, eligibility, or flow is supported for Antigravity accounts. [codeAssist.ts](https://github.com/google-gemini/gemini-cli/blob/cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005/packages/core/src/code_assist/codeAssist.ts), [setup.ts](https://github.com/google-gemini/gemini-cli/blob/cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005/packages/core/src/code_assist/setup.ts), [server.ts](https://github.com/google-gemini/gemini-cli/blob/cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005/packages/core/src/code_assist/server.ts), [types.ts](https://github.com/google-gemini/gemini-cli/blob/cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005/packages/core/src/code_assist/types.ts). |
+| `kimws/gemini-oauth` | `35b51d2d85180c181b1eb64e818dce32b043f400`, `src/project.ts:143-163,209-245`, `src/constants.ts` | Calls `loadCodeAssist`; prefers `free-tier`, else default, else first `allowedTiers`; calls `onboardUser` with chosen tier and project hint; response may be immediate `done` or contain operation `name`; polls via GET `${base}/${name}` with bearer auth; 12 iterations and 2s delay in constants; returns nested project ID only when done. Does not inspect `hasAcceptedTos`, privacy notice, or ineligible reasons before choosing in this flow. | High for source observation; low for wire compatibility; unofficial. [Pinned project.ts](https://github.com/kimws/gemini-oauth/blob/35b51d2d85180c181b1eb64e818dce32b043f400/src/project.ts), [constants.ts](https://github.com/kimws/gemini-oauth/blob/35b51d2d85180c181b1eb64e818dce32b043f400/src/constants.ts). |
+| `decolua/9router` | `87a74e1bda3677193c6f71a7e2100c90311f0689`, `open-sse/services/projectId.js:173-190,204-248`, `src/lib/oauth/providers/antigravity.js:45-82` | Corrected audit: project service returns immediately if project exists; if missing, chooses a default allowed tier (legacy fallback), then calls onboarding. It sends `{tierId, metadata}`, expects immediate done or repeats the onboarding POST up to 2 by default (configurable), with 12-second delay plus jitter; it does not GET an LRO operation. Separate post-exchange code has fire-and-forget onboarding when project already exists. | High for pinned source; Antigravity-labeled unofficial implementation only, no provider confirmation. [Pinned projectId.js](https://github.com/decolua/9router/blob/87a74e1bda3677193c6f71a7e2100c90311f0689/open-sse/services/projectId.js), [antigravity.js](https://github.com/decolua/9router/blob/87a74e1bda3677193c6f71a7e2100c90311f0689/src/lib/oauth/providers/antigravity.js). |
+
+Conclusion: bounded experimental onboarding is a defensible source-derived
+candidate, not universal Google approval or an Antigravity compatibility claim.
+The official CLI has a concrete missing-project flow only when `currentTier` is
+absent; when `currentTier` exists without a project it fails closed or requires
+an explicit project. The Antigravity-labeled 9router source also enters onboarding
+when project is missing, but retries POST rather than polling. The selected
+candidate therefore follows the pinned CLI's managed-free/default-tier request
+shape and GET operation polling, while adding strict bounded fail-closed
+semantics. It must reject unresolved current tier, paid or user-defined-project
+tiers, and any terms/privacy condition lacking explicit authorized acceptance.
+Keep default `auth_project_missing`, persist no credential before project
+confirmation, and make no claim that the wire is supported by Google or known to
+work for the user's still-uninspected account tier; actual account tier is
+unknown. DEC-025 records this bounded
+experimental scope; durable-budget implementation/review is downstream and is
+not a research-task blocker. Live dispatch remains gated on the required review.
+See [DEC-025](../project/DECISIONS.md#dec-025--bound-experimental-antigravity-managed-project-onboarding)
+and the [M10 auth binding](M10-AUTH-BINDING.md#missing-project-onboarding-audit-m10-022).
