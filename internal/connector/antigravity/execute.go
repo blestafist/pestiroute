@@ -81,8 +81,11 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		c.mu.Lock()
 		runtimeTransport := c.doer
 		c.mu.Unlock()
-		transport = runtimeTransport
+		transport = services.Transport
 		runtimeDoer, isRuntimeDoer := services.Transport.(*runtimeHTTPDoer)
+		if wrapped, isWrapped := services.Transport.(interface{ UnderlyingHTTPDoer() core.HTTPDoer }); isWrapped {
+			runtimeDoer, isRuntimeDoer = wrapped.UnderlyingHTTPDoer().(*runtimeHTTPDoer)
+		}
 		ok = runtimeTransport != nil && isRuntimeDoer && runtimeDoer == runtimeTransport
 	}
 	if !ok {
@@ -147,6 +150,9 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	resp, err := transport.Do(httpReq)
 	if err != nil {
 		closeResponse(resp)
+		if errors.Is(err, core.ErrRequestBudgetExceeded) {
+			return core.ExecutionResponse{}, requestBudgetError()
+		}
 		if ctx.Err() != nil {
 			return core.ExecutionResponse{}, contextError(ctx.Err())
 		}
@@ -656,6 +662,9 @@ func unsupported() *core.GatewayError {
 }
 func unauthenticated() *core.GatewayError {
 	return &core.GatewayError{Code: "unauthenticated", Category: core.CategoryUnauthenticated, RetryDisposition: core.RetryUnsafe, Message: "Antigravity credentials are unavailable or invalid"}
+}
+func requestBudgetError() *core.GatewayError {
+	return &core.GatewayError{Code: "request_budget_exceeded", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnsafe, Message: "Provider request budget is unavailable"}
 }
 func statusError(status int) *core.GatewayError {
 	switch {

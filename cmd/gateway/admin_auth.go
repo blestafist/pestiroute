@@ -105,6 +105,13 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 			transport = testServices.Transport
 		}
 	}
+	if isAntigravityAuthConnector(connectorID) && os.Getenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT") == "1" {
+		budgets := sqlite.NewOperatorRequestBudgets(db)
+		if err := budgets.VerifyCeiling(env.ctx, sqlite.AntigravityOperatorBudgetID, 1000); err != nil {
+			return errors.New("admin: request budget unavailable")
+		}
+		transport = core.BudgetedHTTPDoer{Next: transport, Budget: budgets, Account: sqlite.AntigravityOperatorBudgetID}
+	}
 	services := adminAuthServicesFunc(func(scope core.AttemptScope) core.InvocationServices {
 		return core.InvocationServices{Transport: transport, Credentials: adminAuthCredentialAccess{store: store, accountID: scope.AccountID}}
 	})

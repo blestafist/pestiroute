@@ -219,6 +219,42 @@ policies: {standard: policy-id-a}
 	if upstreamCalls.Load() != 3 {
 		t.Fatalf("upstream calls=%d want 3", upstreamCalls.Load())
 	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	verifyBudgetDB, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var consumed int
+	if err := verifyBudgetDB.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&consumed); err != nil || consumed != 3 {
+		t.Fatalf("reopened budget consumed=%d err=%v; want 3", consumed, err)
+	}
+	if _, err := prepared.runtimeDB.ExecContext(ctx, `UPDATE operator_request_budgets SET consumed=ceiling WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID); err != nil {
+		t.Fatal(err)
+	}
+	denied, err := post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"input":"budget exhausted"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedBody, _ := io.ReadAll(denied.Body)
+	_ = denied.Body.Close()
+	if !strings.Contains(string(deniedBody), "request_budget_exceeded") || upstreamCalls.Load() != 3 {
+		t.Fatalf("exhausted response=%q upstream calls=%d", deniedBody, upstreamCalls.Load())
+	}
+	if _, err := prepared.runtimeDB.ExecContext(ctx, `DROP TABLE operator_request_budgets`); err != nil {
+		t.Fatal(err)
+	}
+	denied, err = post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"input":"budget store unavailable"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedBody, _ = io.ReadAll(denied.Body)
+	_ = denied.Body.Close()
+	if !strings.Contains(string(deniedBody), "request_budget_exceeded") || upstreamCalls.Load() != 3 {
+		t.Fatalf("store failure response=%q upstream calls=%d", deniedBody, upstreamCalls.Load())
+	}
+	_ = verifyBudgetDB.Close()
 }
 
 func readGatewayUntil(t *testing.T, reader *bufio.Reader, marker string) string {

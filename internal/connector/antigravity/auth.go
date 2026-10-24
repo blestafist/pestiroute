@@ -232,6 +232,9 @@ func (c *Connector) exchangeAuthCode(ctx context.Context, endpoint, discoveryOri
 	resp, err := transport.Do(req)
 	if err != nil {
 		closeResponse(resp)
+		if errors.Is(err, core.ErrRequestBudgetExceeded) {
+			return core.AuthResult{}, requestBudgetError()
+		}
 		if ctx.Err() != nil {
 			return core.AuthResult{}, contextError(ctx.Err())
 		}
@@ -340,6 +343,9 @@ func (c *Connector) authenticateRefresh(ctx context.Context, cfg oauthConfig, se
 	resp, err := services.Transport.Do(req)
 	if err != nil {
 		closeResponse(resp)
+		if errors.Is(err, core.ErrRequestBudgetExceeded) {
+			return core.AuthResult{}, requestBudgetError()
+		}
 		if ctx.Err() != nil {
 			return core.AuthResult{}, contextError(ctx.Err())
 		}
@@ -428,6 +434,9 @@ func discoverProject(ctx context.Context, endpoint string, transport core.HTTPDo
 	resp, err := transport.Do(req)
 	if err != nil {
 		closeResponse(resp)
+		if errors.Is(err, core.ErrRequestBudgetExceeded) {
+			return "", requestBudgetError()
+		}
 		if ctx.Err() != nil {
 			return "", contextError(ctx.Err())
 		}

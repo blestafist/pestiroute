@@ -120,7 +120,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M10 — Google Antigravity Connector
 
-[M10 brief](M10-ANTIGRAVITY.md). Branch `dev-m10-antigravity`; exact filter `/next 10 M10`. M10-001–022 DONE.
+[M10 brief](M10-ANTIGRAVITY.md). Branch `dev-m10-antigravity`; exact filter `/next 10 M10`. M10-001–023 DONE.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -146,6 +146,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | [M10-020](tasks/M10-020.md) | DONE | GPT-6 Luna (M10-020 worker) / ses_ea108acdcffe5nqkeMkKxtToD2 (reviewer) / Planner closure | M10-019 | Implement bounded Google OAuth callback metadata parsing and safe callback diagnostics | Bounded callback metadata allowlist, fine-grained safe diagnostic codes, and non-sensitive paste feedback verified offline; reviewer PASS ses_ea108acdcffe5nqkeMkKxtToD2; operator root cause UNKNOWN | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/... ./internal/core/...` && `git diff --check`; [evidence](tasks/M10-020.md#completion-evidence) |
 | [M10-021](tasks/M10-021.md) | DONE | GPT-6 Luna (M10-021 worker) / ses_e96f48d6dffepEcNtjQ5pTbKfJ (reviewer) / Planner closure | M10-020 | Implement bounded Google OAuth callback issuer (iss) verification and absence compatibility | RFC 9207 trusted Google issuer verification, absence compatibility, duplicate/excess rejection, safe diagnostics, and DEC-024 synchronization verified offline; reviewer PASS ses_e96f48d6dffepEcNtjQ5pTbKfJ; operator root cause UNKNOWN | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/... ./internal/core/...` && `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity GOFLAGS=-p=1 go test -race -count=1 ./cmd/gateway -run 'Auth\|Antigravity'` && `git diff --check`; [evidence](tasks/M10-021.md#completion-evidence) |
 | [M10-022](tasks/M10-022.md) | DONE | GPT-6 Luna (M10-022 worker) / ses_e92bad44fffekzyx6d1csqpPhv (reviewer) / Planner closure | M10-021 | Research and bind Antigravity missing-project onboarding, LRO poll semantics, and durable request budget | Corrected pinned-source flow audit; bounded experimental managed-free-tier candidate, fail-closed guards, and durable budget requirements documented under DEC-025; no runtime or live work | `git diff --check`; [evidence](tasks/M10-022.md#completion-evidence) |
+| [M10-023](tasks/M10-023.md) | DONE | GPT-6 Luna (M10-023 worker) / ses_e92a922eeffe97htPXeysdzb2o (reviewer) / Planner closure | M10-022 | Implement durable pre-dispatch request budget accounting and provider-neutral HTTP transport wrapper | Schema v7 operator request budget, atomic reservation, provider-neutral HTTPDoer wrapper, non-refund on error/cancel, and gateway wiring verified offline; 0 live calls | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity GOFLAGS=-p=1 go test -race -count=1 ./internal/storage/sqlite/... ./internal/core/... ./cmd/gateway/... ./internal/connector/antigravity/...` && `git diff --check`; [evidence](tasks/M10-023.md#completion-evidence) |
 
 ## M11 — Administrative HTTP API
 

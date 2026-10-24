@@ -239,6 +239,92 @@ func TestAdminAuthAntigravityDefaultTransportRequiresOptIn(t *testing.T) {
 	}
 }
 
+func TestAdminAuthAntigravityBudgetCompositionAndNonRefund(t *testing.T) {
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "1")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET", "SYNTHETIC_CLIENT_SECRET")
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	ctx := context.Background()
+	const accountID = "synthetic-budget-auth-account"
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: "antigravity", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := secure.Seal(key, 1, "v1", "credentials", "synthetic-oauth", accountID, []byte(`{"access_token":"SYNTHETIC_OLD_ACCESS","refresh_token":"SYNTHETIC_OLD_REFRESH"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: "synthetic-oauth", AccountID: accountID, FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	doer := &antigravityAuthDoer{}
+	services := adminAuthServicesFunc(func(core.AttemptScope) core.InvocationServices { return core.InvocationServices{Transport: doer} })
+	run := func(callCtx context.Context) error {
+		var out, stderr bytes.Buffer
+		return runAdmin(adminEnvironment{ctx: callCtx, args: []string{"--db", dbPath, "--master-key", keyPath, "auth", "refresh", "--account", accountID}, stdout: &out, stderr: &stderr, authServices: services})
+	}
+	if err := run(ctx); err != nil || doer.calls != 1 {
+		t.Fatalf("refresh err=%v dispatches=%d", err, doer.calls)
+	}
+	checkConsumed := func(want int) {
+		t.Helper()
+		db, err := sqlite.Open(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var consumed int
+		if err := db.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&consumed); err != nil || consumed != want {
+			t.Fatalf("persisted auth budget=%d err=%v want=%d", consumed, err, want)
+		}
+	}
+	checkConsumed(1)
+	cancelCtx, cancel := context.WithCancel(ctx)
+	doer.onDo = cancel
+	doer.err = errors.New("synthetic timeout after dispatch")
+	if err := run(cancelCtx); err == nil || doer.calls != 2 {
+		t.Fatalf("cancelled refresh err=%v dispatches=%d", err, doer.calls)
+	}
+	cancel()
+	doer.onDo, doer.err = nil, nil
+	checkConsumed(2)
+	db, err = sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE operator_request_budgets SET consumed=ceiling WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(ctx); err == nil || doer.calls != 2 {
+		t.Fatalf("exhausted refresh err=%v dispatches=%d", err, doer.calls)
+	}
+	db, err = sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE operator_request_budgets`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(ctx); err == nil || doer.calls != 2 {
+		t.Fatalf("store failure refresh err=%v dispatches=%d", err, doer.calls)
+	}
+}
+
 type adminTestCredential struct{ value []byte }
 
 func (c adminTestCredential) Get(context.Context, string) ([]byte, error) {

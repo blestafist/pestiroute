@@ -869,7 +869,23 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			cleanup()
 			return nil, nil, fmt.Errorf("connector %q has no scoped transport", route.Connector)
 		}
-		transports[route.Account] = managed.HTTPDoer()
+		doer := managed.HTTPDoer()
+		for _, item := range c.Components {
+			if item.ID != route.Connector || item.Implementation != antigravityImplementation || os.Getenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT") != "1" {
+				continue
+			}
+			if persistentDB == nil {
+				cleanup()
+				return nil, nil, errors.New("Antigravity request budget requires persistent storage")
+			}
+			budgets := sqlite.NewOperatorRequestBudgets(persistentDB)
+			if err := budgets.VerifyCeiling(context.Background(), sqlite.AntigravityOperatorBudgetID, 1000); err != nil {
+				cleanup()
+				return nil, nil, errors.New("Antigravity request budget unavailable")
+			}
+			doer = core.BudgetedHTTPDoer{Next: doer, Budget: budgets, Account: sqlite.AntigravityOperatorBudgetID}
+		}
+		transports[route.Account] = doer
 	}
 	var services interface {
 		ForAttempt(core.AttemptScope) core.InvocationServices
