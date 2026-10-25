@@ -22,20 +22,26 @@ func TestEligibleFreeTierTruthTable(t *testing.T) {
 		name, body string
 		want       bool
 	}{
-		{"free-tier absent tos accepted", `{"allowedTiers":[{"id":"free-tier"}],"currentTier":null,"paidTier":null}`, true},
-		{"unknown id default", `{"allowedTiers":[{"id":"standard-tier","isDefault":true}]}`, false},
-		{"duplicate", `{"allowedTiers":[{"id":"free-tier"},{"id":"free-tier"}]}`, false},
-		{"tos false", `{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":false}]}`, false},
-		{"user project", `{"allowedTiers":[{"id":"free-tier","userDefinedCloudaicompanionProject":true}]}`, false},
-		{"bad boolean", `{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":"true"}]}`, false},
-		{"paid", `{"allowedTiers":[{"id":"free-tier"}],"paidTier":{"id":"paid"}}`, false},
-		{"current tier", `{"allowedTiers":[{"id":"free-tier"}],"currentTier":{"id":"free-tier"}}`, false},
-		{"privacy notice", `{"allowedTiers":[{"id":"free-tier","privacyNotice":{"showNotice":true}}]}`, false},
-		{"nullable user project false", `{"allowedTiers":[{"id":"free-tier","userDefinedCloudaicompanionProject":null}]}`, true},
-		{"null terms malformed", `{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":null}]}`, false},
+		{"free-tier default accepted", `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"currentTier":null,"paidTier":null}`, true},
+		{"standard-tier default accepted", `{"allowedTiers":[{"id":"standard-tier","isDefault":true}]}`, true},
+		{"standard-tier null privacy notice", `{"allowedTiers":[{"id":"standard-tier","isDefault":true,"privacyNotice":{"showNotice":null}}]}`, true},
+		{"non-default standard", `{"allowedTiers":[{"id":"standard-tier","isDefault":false}]}`, false},
+		{"legacy default", `{"allowedTiers":[{"id":"legacy-tier","isDefault":true}]}`, false},
+		{"duplicate", `{"allowedTiers":[{"id":"free-tier","isDefault":true},{"id":"free-tier","isDefault":false}]}`, false},
+		{"multiple defaults", `{"allowedTiers":[{"id":"free-tier","isDefault":true},{"id":"standard-tier","isDefault":true}]}`, false},
+		{"tos false", `{"allowedTiers":[{"id":"free-tier","isDefault":true,"hasAcceptedTos":false}]}`, false},
+		{"user project", `{"allowedTiers":[{"id":"free-tier","isDefault":true,"userDefinedCloudaicompanionProject":true}]}`, false},
+		{"bad boolean", `{"allowedTiers":[{"id":"free-tier","isDefault":true,"hasAcceptedTos":"true"}]}`, false},
+		{"paid", `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"paidTier":{"id":"paid"}}`, false},
+		{"current tier", `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"currentTier":{"id":"free-tier"}}`, false},
+		{"privacy notice", `{"allowedTiers":[{"id":"free-tier","isDefault":true,"privacyNotice":{"showNotice":true}}]}`, false},
+		{"nullable user project false", `{"allowedTiers":[{"id":"free-tier","isDefault":true,"userDefinedCloudaicompanionProject":null}]}`, true},
+		{"null terms malformed", `{"allowedTiers":[{"id":"free-tier","isDefault":true,"hasAcceptedTos":null}]}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := eligibleFreeTier([]byte(tc.body)); got != tc.want {
+			selected, reason, _, _, _, _, _ := analyzeOnboardingTier([]byte(tc.body))
+			got := selected != "" && reason == ""
+			if got != tc.want {
 				t.Fatalf("got %t want %t", got, tc.want)
 			}
 		})
@@ -45,18 +51,22 @@ func TestEligibleFreeTierTruthTable(t *testing.T) {
 func TestTierEligibilityDiagnosticUsesFixedReasons(t *testing.T) {
 	for _, tc := range []struct{ body, reason string }{
 		{`{`, "schema_invalid"},
-		{`{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":"CANARY_BAD_TYPE"}]}`, "schema_invalid"},
+		{`{"allowedTiers":[{"id":"free-tier","isDefault":true,"hasAcceptedTos":"CANARY_BAD_TYPE"}]}`, "schema_invalid"},
 		{`{"allowedTiers":[{"id":"free-tier"}],"paidTier":{"id":"CANARY_PAID_ID"}}`, "paid_present"},
 		{`{"allowedTiers":[{"id":"untrusted-tier-CANARY"}]}`, "candidate_missing"},
-		{`{"allowedTiers":[{"id":"free-tier"},{"id":"free-tier"}]}`, "ambiguous"},
-		{`{"allowedTiers":[{"id":"free-tier","userDefinedCloudaicompanionProject":true}]}`, "userprojectrequired"},
-		{`{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":false}]}`, "terms"},
-		{`{"allowedTiers":[{"id":"free-tier","privacyNotice":{"showNotice":true}}]}`, "privacy"},
+		{`{"allowedTiers":[{"id":"free-tier","isDefault":true},{"id":"free-tier","isDefault":false}]}`, "ambiguous"},
+		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true,"userDefinedCloudaicompanionProject":true}]}`, "userprojectrequired"},
+		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true,"hasAcceptedTos":false}]}`, "terms"},
+		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true,"privacyNotice":{"showNotice":true}}]}`, "privacy"},
 		{`{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":false},{"id":"unrelated","isDefault":"bad"}]}`, "schema_invalid"},
 		{`{"allowedTiers":[{"id":"free-tier","privacyNotice":{"showNotice":true}},{"id":"unrelated","hasAcceptedTos":null}]}`, "schema_invalid"},
 		{`{"allowedTiers":[{"id":"free-tier","userDefinedCloudaicompanionProject":true},{"id":"unrelated","isDefault":"bad"}]}`, "schema_invalid"},
-		{`{"allowedTiers":[{"id":"free-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"OTHER"}]}`, "providerineligible"},
-		{`{"allowedTiers":[{"id":"free-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"VALIDATION_REQUIRED"}]}`, "validationrequired"},
+		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"standard-tier","reasonCode":"OTHER"}]}`, "providerineligible"},
+		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"standard-tier","reasonCode":"VALIDATION_REQUIRED"}]}`, "validationrequired"},
+		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true}],"ineligibleTiers":"bad"}`, "schema_invalid"},
+		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true,"privacyNotice":{"showNotice":"false"}}]}`, "schema_invalid"},
+		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true},{"id":"free-tier","isDefault":false}]}`, ""},
+		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true,"privacyNotice":{"showNotice":null}}]}`, ""},
 	} {
 		reason, n, candidates, _, _, _, _ := tierEligibilityDiagnostic([]byte(tc.body))
 		if reason != tc.reason || n > 1000 || candidates > 1000 {
@@ -98,6 +108,41 @@ func TestOnboardEligibilityTelemetryRequiresDebugLogger(t *testing.T) {
 	}
 }
 
+func TestOnboardDiagnosticEvaluatesAllCandidateFlags(t *testing.T) {
+	const payload = `{"allowedTiers":[{"id":"standard-tier","isDefault":true,"userDefinedCloudaicompanionProject":true,"hasAcceptedTos":false,"privacyNotice":{"showNotice":true}}],"ineligibleTiers":[{"tierId":"standard-tier","reasonCode":"VALIDATION_REQUIRED"}]}`
+	var logs bytes.Buffer
+	doer := &fakeDoer{}
+	_, ge := onboardProject(context.Background(), "https://discovery.synthetic.invalid", doer, "SYNTHETIC_ACCESS", json.RawMessage(payload), slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	if ge == nil || ge.Code != "auth_tier_terms" || doer.calls != 0 {
+		t.Fatalf("error=%+v dispatches=%d", ge, doer.calls)
+	}
+	for _, field := range []string{"tier_class=standard", "default=true", "userproject=true", "terms=true", "privacy=true", "ineligible=true", "validation_required=true"} {
+		if !strings.Contains(logs.String(), field) {
+			t.Fatalf("missing %s in safe diagnostics: %q", field, logs.String())
+		}
+	}
+}
+
+func TestOnboardCurrentTierLogsAllSafeCandidateFlagsWithoutDispatch(t *testing.T) {
+	const payload = `{"currentTier":{"id":"PRIVATE_CURRENT_CANARY"},"allowedTiers":[{"id":"standard-tier","isDefault":true,"userDefinedCloudaicompanionProject":true,"hasAcceptedTos":false,"privacyNotice":{"showNotice":true}}],"ineligibleTiers":[{"tierId":"standard-tier","reasonCode":"VALIDATION_REQUIRED"}]}`
+	var logs bytes.Buffer
+	doer := &fakeDoer{}
+	_, ge := onboardProject(context.Background(), "https://discovery.synthetic.invalid", doer, "TOKEN_CANARY", json.RawMessage(payload), slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	if ge == nil || ge.Code != "auth_project_missing" || doer.calls != 0 {
+		t.Fatalf("error=%+v dispatches=%d", ge, doer.calls)
+	}
+	for _, field := range []string{"reason=auth_project_missing", "tier_class=standard", "default=true", "userproject=true", "terms=true", "privacy=true", "ineligible=true", "validation_required=true"} {
+		if !strings.Contains(logs.String(), field) {
+			t.Fatalf("missing %s in safe diagnostics: %q", field, logs.String())
+		}
+	}
+	for _, canary := range []string{"PRIVATE_CURRENT_CANARY", "TOKEN_CANARY", "standard-tier", "VALIDATION_REQUIRED"} {
+		if strings.Contains(logs.String()+ge.Code+ge.Message+ge.OriginalError, canary) {
+			t.Fatalf("diagnostics leaked %q: %q", canary, logs.String())
+		}
+	}
+}
+
 func TestOnboardOptInPollsOncePerOperationAndValidatesProject(t *testing.T) {
 	oldInterval := operationPollInterval
 	operationPollInterval = time.Nanosecond
@@ -122,7 +167,7 @@ func TestOnboardOptInPollsOncePerOperationAndValidatesProject(t *testing.T) {
 		case "https://oauth.synthetic.invalid/token":
 			return response(http.StatusOK, `{"access_token":"SYNTHETIC_ACCESS","refresh_token":"SYNTHETIC_REFRESH","expires_in":3600,"token_type":"Bearer"}`), nil
 		case "https://discovery.synthetic.invalid/v1internal:loadCodeAssist":
-			return response(http.StatusOK, `{"allowedTiers":[{"id":"free-tier"}],"currentTier":null,"paidTier":null}`), nil
+			return response(http.StatusOK, `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"currentTier":null,"paidTier":null}`), nil
 		case "https://discovery.synthetic.invalid/v1internal:onboardUser":
 			if req.Method != http.MethodPost {
 				return nil, errors.New("expected POST")
@@ -180,7 +225,7 @@ func TestOnboardPollExhaustionCancellationAndBudgetFailure(t *testing.T) {
 	oldInterval := operationPollInterval
 	operationPollInterval = time.Nanosecond
 	t.Cleanup(func() { operationPollInterval = oldInterval })
-	load := json.RawMessage(`{"allowedTiers":[{"id":"free-tier"}]}`)
+	load := json.RawMessage(`{"allowedTiers":[{"id":"free-tier","isDefault":true}]}`)
 	t.Run("poll limit", func(t *testing.T) {
 		calls := 0
 		fake := &fakeDoer{do: func(req *http.Request) (*http.Response, error) {
@@ -222,7 +267,7 @@ func TestOnboardPollExhaustionCancellationAndBudgetFailure(t *testing.T) {
 	})
 	t.Run("existing current tier does not onboard", func(t *testing.T) {
 		fake := &fakeDoer{}
-		_, ge := onboardProject(context.Background(), "https://discovery.synthetic.invalid", packageTestDoer(fake), "SYNTHETIC_ACCESS", []byte(`{"currentTier":{"id":"free-tier"},"allowedTiers":[{"id":"free-tier"}]}`), nil)
+		_, ge := onboardProject(context.Background(), "https://discovery.synthetic.invalid", packageTestDoer(fake), "SYNTHETIC_ACCESS", []byte(`{"currentTier":{"id":"free-tier"},"allowedTiers":[{"id":"free-tier","isDefault":true}]}`), nil)
 		if ge == nil || ge.Code != "auth_project_missing" || fake.calls != 0 {
 			t.Fatalf("error=%+v dispatches=%d", ge, fake.calls)
 		}
@@ -233,7 +278,7 @@ func TestOnboardImmediateProjectAndTerminalErrors(t *testing.T) {
 	oldInterval := operationPollInterval
 	operationPollInterval = time.Nanosecond
 	t.Cleanup(func() { operationPollInterval = oldInterval })
-	load := json.RawMessage(`{"allowedTiers":[{"id":"free-tier"}]}`)
+	load := json.RawMessage(`{"allowedTiers":[{"id":"free-tier","isDefault":true}]}`)
 	for _, tc := range []struct {
 		name                  string
 		post, poll            string

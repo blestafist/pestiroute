@@ -327,9 +327,11 @@ func TestAdminAuthAntigravityBudgetCompositionAndNonRefund(t *testing.T) {
 }
 
 type adminOnboardDoer struct {
-	calls  int
-	mode   string
-	cancel context.CancelFunc
+	calls      int
+	postCalls  int
+	postTierID string
+	mode       string
+	cancel     context.CancelFunc
 }
 
 func (d *adminOnboardDoer) Do(req *http.Request) (*http.Response, error) {
@@ -337,30 +339,41 @@ func (d *adminOnboardDoer) Do(req *http.Request) (*http.Response, error) {
 	status, body := http.StatusOK, `{"access_token":"SYNTHETIC_ONBOARD_ACCESS","refresh_token":"SYNTHETIC_ONBOARD_REFRESH","expires_in":3600,"token_type":"Bearer"}`
 	switch req.URL.Path {
 	case "/v1internal:loadCodeAssist":
-		body = `{"allowedTiers":[{"id":"free-tier"}],"currentTier":null,"paidTier":null}`
+		body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"currentTier":null,"paidTier":null}`
 		switch d.mode {
+		case "standard":
+			body = `{"allowedTiers":[{"id":"standard-tier","isDefault":true,"privacyNotice":{"showNotice":null}}],"currentTier":null,"paidTier":null}`
+		case "standard-nondefault":
+			body = `{"allowedTiers":[{"id":"standard-tier","isDefault":false}]}`
+		case "legacy":
+			body = `{"allowedTiers":[{"id":"legacy-tier","isDefault":true}]}`
+		case "standard-invalid-default":
+			body = `{"allowedTiers":[{"id":"standard-tier","isDefault":"true"}]}`
+		case "standard-invalid-project":
+			body = `{"allowedTiers":[{"id":"standard-tier","isDefault":true,"userDefinedCloudaicompanionProject":"false"}]}`
 		case "ineligible":
-			body = `{"allowedTiers":[{"id":"free-tier"}],"currentTier":null,"paidTier":{"id":"PAID_ID_CANARY"}}`
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"currentTier":null,"paidTier":{"id":"PAID_ID_CANARY"}}`
 		case "candidate-missing":
 			body = `{"allowedTiers":[{"id":"UNKNOWN_ID_CANARY"}]}`
 		case "ambiguous":
-			body = `{"allowedTiers":[{"id":"free-tier"},{"id":"free-tier"}]}`
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true},{"id":"standard-tier","isDefault":true}]}`
 		case "userprojectrequired":
-			body = `{"allowedTiers":[{"id":"free-tier","userDefinedCloudaicompanionProject":true}]}`
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true,"userDefinedCloudaicompanionProject":true}]}`
 		case "terms":
-			body = `{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":false}]}`
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true,"hasAcceptedTos":false}]}`
 		case "privacy":
-			body = `{"allowedTiers":[{"id":"free-tier","privacyNotice":{"showNotice":true}}]}`
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true,"privacyNotice":{"showNotice":true}}]}`
 		case "providerineligible":
-			body = `{"allowedTiers":[{"id":"free-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"OTHER_CANARY"}]}`
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"OTHER_CANARY"}]}`
 		case "validationrequired":
-			body = `{"allowedTiers":[{"id":"free-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"VALIDATION_REQUIRED"}]}`
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"VALIDATION_REQUIRED"}]}`
 		case "schema-invalid":
-			body = `{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":"BAD_TYPE_CANARY"}]}`
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true,"hasAcceptedTos":"BAD_TYPE_CANARY"}]}`
 		case "schema-unrelated":
-			body = `{"allowedTiers":[{"id":"free-tier"},{"id":"UNKNOWN_SCHEMA_ID_CANARY","isDefault":"BAD_TYPE_CANARY"}]}`
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true},{"id":"UNKNOWN_SCHEMA_ID_CANARY","isDefault":"BAD_TYPE_CANARY"}]}`
 		}
 	case "/v1internal:onboardUser":
+		d.postCalls++
 		if req.Method != http.MethodPost {
 			return nil, errors.New("onboarding was not POST")
 		}
@@ -371,6 +384,15 @@ func (d *adminOnboardDoer) Do(req *http.Request) (*http.Response, error) {
 		if _, ok := payload["cloudaicompanionProject"]; ok {
 			return nil, errors.New("project hint was not omitted")
 		}
+		var tierID string
+		if json.Unmarshal(payload["tierId"], &tierID) != nil {
+			return nil, errors.New("tierId missing from onboarding POST")
+		}
+		var metadata map[string]string
+		if len(payload) != 2 || json.Unmarshal(payload["metadata"], &metadata) != nil || metadata["ideType"] != "IDE_UNSPECIFIED" || metadata["platform"] != "PLATFORM_UNSPECIFIED" || metadata["pluginType"] != "GEMINI" {
+			return nil, errors.New("onboarding POST shape was not the bounded metadata form")
+		}
+		d.postTierID = tierID
 		if d.mode == "error" {
 			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("private provider response canary")), Request: req}, nil
 		}
@@ -408,8 +430,8 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids := []string{"onboard-happy", "onboard-default", "onboard-ineligible", "onboard-error", "onboard-cancel", "onboard-budget"}
-	for _, mode := range []string{"candidate-missing", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "schema-invalid", "schema-unrelated"} {
+	ids := []string{"onboard-happy", "onboard-standard", "onboard-default", "onboard-ineligible", "onboard-error", "onboard-cancel", "onboard-budget"}
+	for _, mode := range []string{"candidate-missing", "standard-nondefault", "legacy", "standard-invalid-default", "standard-invalid-project", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "schema-invalid", "schema-unrelated"} {
 		ids = append(ids, "diag-"+mode)
 	}
 	for _, id := range ids {
@@ -459,9 +481,12 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 		err := runAdmin(adminEnvironment{ctx: callCtx, args: args, stdin: strings.NewReader("SYNTHETIC_CALLBACK_CODE\n"), stdout: &out, stderr: &stderr, authServices: services})
 		text := out.String() + stderr.String() + errorString(err)
 		if strings.Contains(extra, "--debug") {
-			code := map[string]string{"ineligible": "paid_present", "candidate-missing": "candidate_missing", "ambiguous": "ambiguous", "userprojectrequired": "userprojectrequired", "terms": "terms", "privacy": "privacy", "providerineligible": "providerineligible", "validationrequired": "validationrequired", "schema-invalid": "schema_invalid", "schema-unrelated": "schema_invalid"}[doer.mode]
-			if code == "" || !strings.Contains(text, "reason=auth_tier_"+code) {
+			code := map[string]string{"ineligible": "paid_present", "candidate-missing": "candidate_missing", "standard-nondefault": "candidate_missing", "legacy": "candidate_missing", "standard-invalid-default": "schema_invalid", "standard-invalid-project": "schema_invalid", "ambiguous": "ambiguous", "userprojectrequired": "userprojectrequired", "terms": "terms", "privacy": "privacy", "providerineligible": "providerineligible", "validationrequired": "validationrequired", "schema-invalid": "schema_invalid", "schema-unrelated": "schema_invalid"}[doer.mode]
+			if code != "" && !strings.Contains(text, "reason=auth_tier_"+code) {
 				t.Fatalf("debug diagnostic missing fixed reason for %q: %q", doer.mode, text)
+			}
+			if doer.mode == "standard" && !strings.Contains(text, "reason=auth_onboarding_started") {
+				t.Fatalf("debug onboarding stage missing for standard candidate: %q", text)
 			}
 		}
 		for _, canary := range []string{"SYNTHETIC_ONBOARD_ACCESS", "SYNTHETIC_ONBOARD_REFRESH", "admin-synthetic-op", "synthetic-managed-project", "private provider response canary", "SYNTHETIC_CALLBACK_CODE", "PAID_ID_CANARY", "UNKNOWN_ID_CANARY", "OTHER_CANARY", "BAD_TYPE_CANARY", "UNKNOWN_SCHEMA_ID_CANARY"} {
@@ -471,15 +496,25 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 		}
 		return err
 	}
+	before, beforePosts := doer.calls, doer.postCalls
 	if err = runContinue("onboard-happy", "--allow-onboard"); err != nil {
 		t.Fatalf("opt-in onboarding: %v", err)
 	}
-	if doer.calls != 4 {
+	if doer.calls != 4 || doer.postCalls-beforePosts != 1 || doer.postTierID != "free-tier" {
 		t.Fatalf("successful dispatch count=%d want=4", doer.calls)
 	}
+	doer.mode = "standard"
+	before, beforePosts = doer.calls, doer.postCalls
+	if err = runContinue("onboard-standard", "--allow-onboard --debug"); err != nil {
+		t.Fatalf("standard-tier opt-in onboarding: %v", err)
+	}
+	if doer.calls-before != 4 || doer.postCalls-beforePosts != 1 || doer.postTierID != "standard-tier" {
+		t.Fatalf("standard dispatches=%d POSTs=%d tier=%q", doer.calls-before, doer.postCalls-beforePosts, doer.postTierID)
+	}
+	doer.mode = ""
 	verify := mustOpenAdminDB(t, dbPath)
 	var budget int
-	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 4 {
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 8 {
 		t.Fatalf("budget=%d err=%v", budget, err)
 	}
 	stored, err := sqlite.NewCredentials(verify).Get(ctx, "onboard-happy", "onboard-happy-oauth")
@@ -491,7 +526,7 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 		t.Fatalf("confirmed project not persisted: %v", err)
 	}
 	doer.mode = "ineligible"
-	before := doer.calls
+	before = doer.calls
 	if err = runContinue("onboard-ineligible", "--allow-onboard --debug"); err == nil {
 		t.Fatal("ineligible tier unexpectedly succeeded")
 	}
@@ -501,17 +536,17 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 	if stored, err = sqlite.NewCredentials(verify).Get(ctx, "onboard-ineligible", "onboard-ineligible-oauth"); err != nil || stored.Revision != 1 {
 		t.Fatalf("ineligible credential revision=%d err=%v", stored.Revision, err)
 	}
-	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 6 {
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 10 {
 		t.Fatalf("ineligible budget=%d err=%v", budget, err)
 	}
-	for _, mode := range []string{"candidate-missing", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "schema-invalid", "schema-unrelated"} {
+	for _, mode := range []string{"candidate-missing", "standard-nondefault", "legacy", "standard-invalid-default", "standard-invalid-project", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "schema-invalid", "schema-unrelated"} {
 		doer.mode = mode
 		before = doer.calls
 		if err = runContinue("diag-"+mode, "--allow-onboard --debug"); err == nil || doer.calls-before != 2 {
 			t.Fatalf("%s err=%v requests=%d", mode, err, doer.calls-before)
 		}
 	}
-	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 24 {
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 36 {
 		t.Fatalf("diagnostic budget=%d err=%v", budget, err)
 	}
 	for _, scenario := range []struct{ name, mode string }{{"onboard-error", "error"}, {"onboard-cancel", "cancel"}} {
@@ -532,7 +567,7 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 			t.Fatalf("%s credential revision=%d err=%v", scenario.name, stored.Revision, getErr)
 		}
 	}
-	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 30 {
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 42 {
 		t.Fatalf("failure/cancel budget=%d err=%v", budget, err)
 	}
 	doer.mode = ""

@@ -63,11 +63,46 @@ func tierCandidateClass(data json.RawMessage) string {
 	for _, raw := range tiers {
 		var tier map[string]json.RawMessage
 		var id string
-		if json.Unmarshal(raw, &tier) == nil && json.Unmarshal(tier["id"], &id) == nil && id == "free-tier" {
+		var isDefault bool
+		if json.Unmarshal(raw, &tier) == nil && json.Unmarshal(tier["id"], &id) == nil && (id == "free-tier" || id == "standard-tier") && json.Unmarshal(tier["isDefault"], &isDefault) == nil && isDefault {
 			return safeTierClass(id)
 		}
 	}
 	return "other"
+}
+
+func tierEligibilityFlags(data json.RawMessage) (bool, bool, bool, bool, bool, bool) {
+	var root map[string]json.RawMessage
+	var tiers []json.RawMessage
+	if json.Unmarshal(data, &root) != nil || json.Unmarshal(root["allowedTiers"], &tiers) != nil {
+		return false, false, false, false, false, false
+	}
+	var foundDefault, userProject, terms, privacyRequired bool
+	ineligible := listedIneligible(root, "free-tier") || listedIneligible(root, "standard-tier")
+	validationRequired := ineligibleReason(root, "free-tier") == "validationrequired" || ineligibleReason(root, "standard-tier") == "validationrequired"
+	for _, raw := range tiers[:min(len(tiers), 1000)] {
+		var tier map[string]json.RawMessage
+		var id string
+		if json.Unmarshal(raw, &tier) != nil || json.Unmarshal(tier["id"], &id) != nil || (id != "free-tier" && id != "standard-tier") {
+			continue
+		}
+		if value, ok := tierBool(tier, "isDefault"); ok && value {
+			foundDefault = true
+		}
+		if value, ok := tierBoolNullable(tier, "userDefinedCloudaicompanionProject"); ok && value {
+			userProject = true
+		}
+		if value, ok := tierBool(tier, "hasAcceptedTos"); ok && !value && len(tier["hasAcceptedTos"]) > 0 {
+			terms = true
+		}
+		var privacy map[string]json.RawMessage
+		if json.Unmarshal(tier["privacyNotice"], &privacy) == nil {
+			if value, ok := tierBoolNullable(privacy, "showNotice"); ok && value {
+				privacyRequired = true
+			}
+		}
+	}
+	return foundDefault, userProject, terms, privacyRequired, ineligible, validationRequired
 }
 
 func discoveredTierClasses(data json.RawMessage) []string {
@@ -91,98 +126,157 @@ func discoveredTierClasses(data json.RawMessage) []string {
 	return classes
 }
 
-func eligibleFreeTier(data json.RawMessage) bool {
+// analyzeOnboardingTier evaluates the complete bounded discovery shape before
+// selecting an explicitly advertised managed candidate.
+func analyzeOnboardingTier(data json.RawMessage) (string, string, int, int, bool, bool, bool) {
 	if !uniqueJSON(data) {
-		return false
+		return "", "schema_invalid", 0, 0, false, true, false
 	}
 	var root map[string]json.RawMessage
 	if json.Unmarshal(data, &root) != nil {
-		return false
+		return "", "schema_invalid", 0, 0, false, true, false
 	}
 	for _, key := range []string{"currentTier", "paidTier"} {
 		if raw, ok := root[key]; ok && string(raw) != "null" {
-			return false
+			if key == "paidTier" {
+				return "", "paid_present", 0, 0, false, false, false
+			}
+			return "", "auth_tier_ineligible", 0, 0, false, false, false
 		}
 	}
 	var tiersRaw []json.RawMessage
 	if raw := root["allowedTiers"]; len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &tiersRaw) != nil {
-		return false
+		return "", "schema_invalid", 0, 0, false, true, false
 	}
-	var candidate map[string]json.RawMessage
-	count := 0
+	total := min(len(tiersRaw), 1000)
+	type tierInfo struct {
+		id        string
+		isDefault bool
+		reason    string
+	}
+	var candidates []tierInfo
+	counts := map[string]int{}
+	defaultCount := 0
+	malformed, candidateMalformed, unrelatedMalformed := false, false, false
 	for _, raw := range tiersRaw {
 		var tier map[string]json.RawMessage
-		if json.Unmarshal(raw, &tier) != nil {
-			return false
-		}
-		for _, key := range []string{"isDefault", "hasAcceptedTos", "userDefinedCloudaicompanionProject"} {
-			var ok bool
-			if key == "userDefinedCloudaicompanionProject" {
-				_, ok = tierBoolNullable(tier, key)
-			} else {
-				_, ok = tierBool(tier, key)
-			}
-			if !ok {
-				return false
-			}
-		}
-		if privacyRaw := tier["privacyNotice"]; len(privacyRaw) != 0 && string(privacyRaw) != "null" {
-			var privacy map[string]json.RawMessage
-			if json.Unmarshal(privacyRaw, &privacy) != nil {
-				return false
-			}
-			if _, ok := tierBool(privacy, "showNotice"); !ok {
-				return false
-			}
+		if json.Unmarshal(raw, &tier) != nil || tier == nil {
+			malformed, unrelatedMalformed = true, true
+			continue
 		}
 		var id string
-		if json.Unmarshal(tier["id"], &id) != nil {
+		if len(tier["id"]) == 0 || string(tier["id"]) == "null" || json.Unmarshal(tier["id"], &id) != nil {
+			malformed, unrelatedMalformed = true, true
+			continue
+		}
+		candidate := id == "free-tier" || id == "standard-tier"
+		isDefault, defaultOK := tierBool(tier, "isDefault")
+		accepted, termsOK := tierBool(tier, "hasAcceptedTos")
+		project, projectOK := tierBoolNullable(tier, "userDefinedCloudaicompanionProject")
+		invalid := !defaultOK || !termsOK || !projectOK
+		privacy := false
+		if pr := tier["privacyNotice"]; len(pr) != 0 && string(pr) != "null" {
+			var p map[string]json.RawMessage
+			if json.Unmarshal(pr, &p) != nil || p == nil {
+				invalid = true
+			} else {
+				var ok bool
+				privacy, ok = tierBoolNullable(p, "showNotice")
+				invalid = invalid || !ok
+			}
+		}
+		if invalid {
+			malformed = true
+			if candidate {
+				candidateMalformed = true
+			} else {
+				unrelatedMalformed = true
+			}
+		}
+		if isDefault && defaultOK {
+			defaultCount++
+		}
+		if candidate {
+			counts[id]++
+			reason := ""
+			if !accepted && len(tier["hasAcceptedTos"]) > 0 && termsOK {
+				reason = "terms"
+			}
+			if privacy && reason == "" {
+				reason = "privacy"
+			}
+			if project && reason == "" {
+				reason = "userprojectrequired"
+			}
+			candidates = append(candidates, tierInfo{id: id, isDefault: isDefault && defaultOK, reason: reason})
+		}
+	}
+	if !ineligibleSchemaValid(root) {
+		malformed = true
+		unrelatedMalformed = true
+	}
+	if malformed {
+		return "", "schema_invalid", total, len(candidates), false, candidateMalformed, unrelatedMalformed
+	}
+	for _, n := range counts {
+		if n > 1 {
+			return "", "ambiguous", total, len(candidates), false, false, false
+		}
+	}
+	if defaultCount > 1 {
+		return "", "ambiguous", total, len(candidates), false, false, false
+	}
+	if defaultCount == 0 {
+		return "", "candidate_missing", total, len(candidates), false, false, false
+	}
+	var selected tierInfo
+	selectedFound := false
+	for _, candidate := range candidates {
+		if candidate.isDefault {
+			selected = candidate
+			selectedFound = true
+			break
+		}
+	}
+	if !selectedFound {
+		return "", "candidate_missing", total, len(candidates), false, false, false
+	}
+	ineligible := listedIneligible(root, selected.id)
+	ineligibleReasonCode := ""
+	if ineligible {
+		ineligibleReasonCode = ineligibleReason(root, selected.id)
+	}
+	if selected.reason != "" {
+		return "", selected.reason, total, len(candidates), ineligibleReasonCode == "validationrequired", false, false
+	}
+	if ineligible {
+		return "", ineligibleReasonCode, total, len(candidates), ineligibleReasonCode == "validationrequired", false, false
+	}
+	return selected.id, "", total, len(candidates), false, false, false
+}
+
+func ineligibleSchemaValid(root map[string]json.RawMessage) bool {
+	raw := root["ineligibleTiers"]
+	if len(raw) == 0 || string(raw) == "null" {
+		return true
+	}
+	var entries []json.RawMessage
+	if json.Unmarshal(raw, &entries) != nil {
+		return false
+	}
+	for _, raw := range entries {
+		var entry map[string]json.RawMessage
+		if json.Unmarshal(raw, &entry) != nil || entry == nil {
 			return false
 		}
-		if id == "free-tier" {
-			candidate = tier
-			count++
-		}
-	}
-	if count != 1 {
-		return false
-	}
-	for key, value := range candidate {
-		switch key {
-		case "isDefault", "hasAcceptedTos", "userDefinedCloudaicompanionProject":
-			var ok bool
-			if key == "userDefinedCloudaicompanionProject" {
-				_, ok = tierBoolNullable(candidate, key)
-			} else {
-				_, ok = tierBool(candidate, key)
-			}
-			if !ok {
-				return false
-			}
-		case "privacyNotice":
-			if string(value) == "null" {
-				continue
-			}
-			var privacy map[string]json.RawMessage
-			if json.Unmarshal(value, &privacy) != nil {
-				return false
-			}
-			show, ok := tierBool(privacy, "showNotice")
-			if !ok || show {
-				return false
+		for _, key := range []string{"tierId", "reasonCode"} {
+			if value, exists := entry[key]; exists && string(value) != "null" {
+				var text string
+				if json.Unmarshal(value, &text) != nil {
+					return false
+				}
 			}
 		}
-	}
-	userProject, ok := tierBoolNullable(candidate, "userDefinedCloudaicompanionProject")
-	if !ok || userProject {
-		return false
-	}
-	accepted, ok := tierBool(candidate, "hasAcceptedTos")
-	if !ok || !accepted && len(candidate["hasAcceptedTos"]) != 0 {
-		return false
-	}
-	if listedIneligible(root, "free-tier") {
-		return false
 	}
 	return true
 }
@@ -190,127 +284,25 @@ func eligibleFreeTier(data json.RawMessage) bool {
 // tierEligibilityDiagnostic returns only fixed classifications and bounded
 // structural telemetry. It does not participate in the eligibility decision.
 func tierEligibilityDiagnostic(data json.RawMessage) (string, int, int, bool, bool, bool, bool) {
-	if !uniqueJSON(data) {
-		return "schema_invalid", 0, 0, false, false, false, false
-	}
-	var root map[string]json.RawMessage
-	if json.Unmarshal(data, &root) != nil || root == nil {
-		return "schema_invalid", 0, 0, false, false, false, false
-	}
-	for _, key := range []string{"currentTier", "paidTier"} {
-		if raw, ok := root[key]; ok && string(raw) != "null" {
-			if key == "paidTier" {
-				return "paid_present", 0, 0, false, false, false, false
-			}
-			return "auth_tier_ineligible", 0, 0, false, false, false, false
+	_, reason, total, candidates, validationRequired, candidateBad, unrelatedBad := analyzeOnboardingTier(data)
+	malformed := candidateBad || unrelatedBad
+	return reason, total, candidates, validationRequired, malformed, candidateBad, unrelatedBad
+}
+
+func ineligibleReason(root map[string]json.RawMessage, candidate string) string {
+	var entries []json.RawMessage
+	_ = json.Unmarshal(root["ineligibleTiers"], &entries)
+	for _, raw := range entries {
+		var entry map[string]json.RawMessage
+		_ = json.Unmarshal(raw, &entry)
+		var id, code string
+		_ = json.Unmarshal(entry["tierId"], &id)
+		_ = json.Unmarshal(entry["reasonCode"], &code)
+		if id == candidate && code == "VALIDATION_REQUIRED" {
+			return "validationrequired"
 		}
 	}
-	var tiers []json.RawMessage
-	if raw := root["allowedTiers"]; len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &tiers) != nil {
-		return "schema_invalid", 0, 0, false, false, false, false
-	}
-	total := min(len(tiers), 1000)
-	candidateCount, malformed := 0, false
-	candidateSchemaInvalid, unrelatedSchemaInvalid := false, false
-	candidateReason := ""
-	for _, raw := range tiers {
-		var tier map[string]json.RawMessage
-		if json.Unmarshal(raw, &tier) != nil || tier == nil {
-			malformed = true
-			unrelatedSchemaInvalid = true
-			continue
-		}
-		var id string
-		if json.Unmarshal(tier["id"], &id) != nil {
-			malformed = true
-			unrelatedSchemaInvalid = true
-			continue
-		}
-		isCandidate := id == "free-tier"
-		if isCandidate {
-			candidateCount++
-		}
-		invalid := false
-		for _, key := range []string{"isDefault", "hasAcceptedTos", "userDefinedCloudaicompanionProject"} {
-			var ok bool
-			if key == "userDefinedCloudaicompanionProject" {
-				_, ok = tierBoolNullable(tier, key)
-			} else {
-				_, ok = tierBool(tier, key)
-			}
-			if !ok {
-				invalid = true
-			}
-		}
-		if isCandidate {
-			candidateSchemaInvalid = candidateSchemaInvalid || invalid
-		}
-		if !isCandidate && invalid {
-			unrelatedSchemaInvalid = true
-		}
-		if isCandidate {
-			if accepted, ok := tierBool(tier, "hasAcceptedTos"); ok && !accepted && len(tier["hasAcceptedTos"]) != 0 {
-				if candidateReason == "" {
-					candidateReason = "terms"
-				}
-			}
-			if required, ok := tierBoolNullable(tier, "userDefinedCloudaicompanionProject"); ok && required {
-				if candidateReason == "" {
-					candidateReason = "userprojectrequired"
-				}
-			}
-		}
-		if pr := tier["privacyNotice"]; len(pr) > 0 && string(pr) != "null" {
-			var p map[string]json.RawMessage
-			if json.Unmarshal(pr, &p) != nil {
-				if isCandidate {
-					candidateSchemaInvalid = true
-				} else {
-					unrelatedSchemaInvalid = true
-				}
-			} else if show, ok := tierBool(p, "showNotice"); ok && show {
-				if isCandidate {
-					if candidateReason == "" {
-						candidateReason = "privacy"
-					}
-				}
-			} else if !ok {
-				if isCandidate {
-					candidateSchemaInvalid = true
-				} else {
-					unrelatedSchemaInvalid = true
-				}
-			}
-		}
-		malformed = candidateSchemaInvalid || unrelatedSchemaInvalid
-	}
-	if malformed {
-		return "schema_invalid", total, min(candidateCount, 1000), false, true, candidateSchemaInvalid, unrelatedSchemaInvalid
-	}
-	if candidateCount == 0 {
-		return "candidate_missing", total, 0, false, false, false, false
-	}
-	if candidateCount > 1 {
-		return "ambiguous", total, min(candidateCount, 1000), false, false, false, false
-	}
-	if candidateReason != "" {
-		return candidateReason, total, 1, false, false, false, false
-	}
-	if listedIneligible(root, "free-tier") {
-		reason := "providerineligible"
-		var entries []json.RawMessage
-		_ = json.Unmarshal(root["ineligibleTiers"], &entries)
-		for _, entryRaw := range entries {
-			var entry map[string]json.RawMessage
-			_ = json.Unmarshal(entryRaw, &entry)
-			var code string
-			if json.Unmarshal(entry["reasonCode"], &code) == nil && code == "VALIDATION_REQUIRED" {
-				reason = "validationrequired"
-			}
-		}
-		return reason, total, 1, true, false, false, false
-	}
-	return "auth_tier_ineligible", total, 1, false, false, false, false
+	return "providerineligible"
 }
 
 func hasCurrentTier(data json.RawMessage) bool {
@@ -343,7 +335,7 @@ func listedIneligible(root map[string]json.RawMessage, candidate string) bool {
 		if json.Unmarshal(entry["reasonCode"], &reason) != nil && len(entry["reasonCode"]) != 0 {
 			return true
 		}
-		if id == candidate || reason == "VALIDATION_REQUIRED" {
+		if id == candidate {
 			return true
 		}
 	}
@@ -352,12 +344,18 @@ func listedIneligible(root map[string]json.RawMessage, candidate string) bool {
 
 func onboardProject(ctx context.Context, origin string, transport core.HTTPDoer, token string, discovery json.RawMessage, logger *slog.Logger) (string, *core.GatewayError) {
 	if hasCurrentTier(discovery) {
+		if logger != nil {
+			defaultFlag, userProjectFlag, termsFlag, privacyFlag, ineligibleFlag, validationRequired := tierEligibilityFlags(discovery)
+			logger.Debug("authentication diagnostic", "reason", "auth_project_missing", "tier_class", tierCandidateClass(discovery), "tier_classes", discoveredTierClasses(discovery), "default", defaultFlag, "userproject", userProjectFlag, "terms", termsFlag, "privacy", privacyFlag, "ineligible", ineligibleFlag, "validation_required", validationRequired)
+		}
 		return "", &core.GatewayError{Code: "auth_project_missing", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Authentication project data is missing"}
 	}
-	if !eligibleFreeTier(discovery) {
+	selected, eligibilityReason, _, _, _, _, _ := analyzeOnboardingTier(discovery)
+	if selected == "" || eligibilityReason != "" {
 		reason, allowedCount, candidateCount, validationRequired, malformedEntry, candidateSchemaInvalid, unrelatedSchemaInvalid := tierEligibilityDiagnostic(discovery)
 		if logger != nil {
-			logger.Debug("authentication diagnostic", "reason", "auth_tier_"+reason, "tier_class", tierCandidateClass(discovery), "tier_classes", discoveredTierClasses(discovery), "allowed_count", allowedCount, "candidate_count", candidateCount, "validation_required", validationRequired, "malformed_entry", malformedEntry, "candidate_schema_invalid", candidateSchemaInvalid, "unrelated_schema_invalid", unrelatedSchemaInvalid)
+			defaultFlag, userProjectFlag, termsFlag, privacyFlag, ineligibleFlag, _ := tierEligibilityFlags(discovery)
+			logger.Debug("authentication diagnostic", "reason", "auth_tier_"+reason, "tier_class", tierCandidateClass(discovery), "tier_classes", discoveredTierClasses(discovery), "allowed_count", allowedCount, "candidate_count", candidateCount, "default", defaultFlag, "userproject", userProjectFlag, "terms", termsFlag, "privacy", privacyFlag, "ineligible", ineligibleFlag, "validation_required", validationRequired, "malformed_entry", malformedEntry, "candidate_schema_invalid", candidateSchemaInvalid, "unrelated_schema_invalid", unrelatedSchemaInvalid)
 		}
 		code := "auth_tier_" + reason
 		if reason == "auth_tier_ineligible" {
@@ -370,7 +368,18 @@ func onboardProject(ctx context.Context, origin string, transport core.HTTPDoer,
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	body := []byte(`{"tierId":"free-tier","metadata":{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}`)
+	body, _ := json.Marshal(struct {
+		TierID   string `json:"tierId"`
+		Metadata struct {
+			IDEType    string `json:"ideType"`
+			Platform   string `json:"platform"`
+			PluginType string `json:"pluginType"`
+		} `json:"metadata"`
+	}{TierID: selected, Metadata: struct {
+		IDEType    string `json:"ideType"`
+		Platform   string `json:"platform"`
+		PluginType string `json:"pluginType"`
+	}{IDEType: "IDE_UNSPECIFIED", Platform: "PLATFORM_UNSPECIFIED", PluginType: "GEMINI"}})
 	resp, ge := onboardingRequest(ctx, transport, http.MethodPost, origin+"/v1internal:onboardUser", token, body)
 	if ge != nil {
 		return "", ge

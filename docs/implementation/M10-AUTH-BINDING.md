@@ -275,15 +275,23 @@ calls only after separate operator authorization and reviewable evidence.
 [DEC-025](../project/DECISIONS.md#dec-025--bound-experimental-antigravity-managed-project-onboarding)
 accepts only a bounded experimental candidate, not Google protocol support or
 Antigravity compatibility. Default behavior remains fail-closed on missing/null
-`cloudaicompanionProject`; no provisioning without an explicit opt-in. The
-source audit and limits are in
+`cloudaicompanionProject`; no onboarding without an explicit operator opt-in.
+Source audit and provenance are in
 [M10-RESEARCH](M10-RESEARCH.md#missing-project-onboarding-source-audit-m10-022).
-No `onboardUser` dispatch, tier auto-selection, terms acceptance, or operation
-poll is implemented. The candidate applies only when `currentTier` is absent and
-`allowedTiers` contains one unambiguous eligible default managed free tier. An
-existing `currentTier` with no project, missing/ambiguous default, ineligible or
-paid tier, user-defined-project requirement, or unresolved/unaccepted privacy or
-terms condition fails closed without onboarding. Never choose a fallback tier.
+The 2026-10-25 report that discovery advertised `standard-tier` as default
+explains the local `free-tier`-only gate; it is not retained as a private fixture
+or evidence of billing or provider compatibility. The explicit bounded flow
+accepts only one known candidate (`free-tier` or `standard-tier`) with
+`isDefault: true`. Multiple defaults or duplicate candidate entries are
+ambiguous; never use legacy, unknown, non-default, or arbitrary fallback tiers.
+An existing `currentTier` with no project, paid tier, provider ineligibility,
+user-project requirement, privacy notice, or unaccepted/invalid terms fails
+closed. User-project flag may be absent/null/false; terms absent/true; privacy
+notice absent/null/false. The `standard-tier` label does not prove free billing
+or zero charge; this onboarding is bounded to the account's existing
+entitlements, has no billing/payment/API-enablement/resource-creation/user-project
+endpoint, and is not authorization for new billing. Evaluate all discovered
+candidate eligibility flags before reporting a diagnostic.
 
 Under that explicit opt-in, experimental flow sends exactly one `onboardUser`
 POST with selected tier and metadata, omitting `cloudaicompanionProject`. Accept
