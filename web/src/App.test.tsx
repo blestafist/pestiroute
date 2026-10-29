@@ -376,6 +376,45 @@ describe('live administration mode', () => {
     await waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(expected.length))
     for (const endpoint of expected) expect(fetcher.mock.calls.some(([url]) => url === endpoint)).toBe(true)
   })
+  it('presents live route topology with advertised capabilities and links without guessing unknown metadata', async () => {
+    const user = userEvent.setup()
+    const fetcher = stubLiveAPI(url => url.endsWith('/status') ? response({ ...statusDTO, components: [
+      { id: 'connector-a', kind: 'connector', implementation: 'native', health: 'ready', capabilities: { streaming: 'supported', tools: 'unknown' } },
+      { id: 'connector-b', kind: 'connector', implementation: 'translated', health: 'unknown', capabilities: {} },
+    ], routes: [
+      { protocol: 'responses', mode: 'native', model: 'alias-a', adapter_id: 'adapter-a', connector_id: 'connector-a', account_id: 'acct/a' },
+      { protocol: 'chat', mode: 'translated', model: 'alias-b', adapter_id: 'adapter-b', connector_id: 'connector-b', account_id: 'acct b' },
+    ] }) : response({ items: [], limit: 50, offset: 0, total: 0 }))
+    render(<MemoryRouter initialEntries={['/routing']}><App /></MemoryRouter>)
+    await connect(user)
+    expect(await screen.findByText('alias-a')).toBeInTheDocument()
+    expect(screen.getByText('CONFIGURATION-BACKED')).toBeInTheDocument()
+    expect(screen.getByText('CONFIGURATION-BACKED')).toHaveClass('state-configuration')
+    expect(screen.getByText('native')).toHaveClass('state-native')
+    expect(screen.getByText('translated')).toHaveClass('state-translated')
+    expect(screen.getByText('streaming: supported')).toBeInTheDocument()
+    expect(screen.getByText('tools: unknown')).toBeInTheDocument()
+    expect(screen.getByText('Capabilities: unknown')).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Connections →' })).toHaveLength(2)
+    expect(screen.getAllByRole('link', { name: 'Connections →' })[1]).toHaveAttribute('href', '/connections')
+    const usageLinks = screen.getAllByRole('link', { name: /Related usage/ })
+    expect(usageLinks[0]).toHaveAttribute('href', '/usage?account_id=acct%2Fa')
+    expect(usageLinks[1]).toHaveAttribute('href', '/usage?account_id=acct%20b')
+    expect(fetcher.mock.calls.some(([url]) => url === '/admin/v1/status')).toBe(true)
+  })
+  it('renders one live Components heading and states missing diagnostics without fabricated correlation data', async () => {
+    const user = userEvent.setup()
+    stubLiveAPI(url => url.endsWith('/status') ? response({ ...statusDTO, version: '2.0', readiness: 'unknown', components: [] }) : response({ items: [], limit: 50, offset: 0, total: 0 }))
+    render(<MemoryRouter initialEntries={['/settings']}><App /></MemoryRouter>)
+    await connect(user)
+    expect(await screen.findByText('2.0')).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { name: 'Components' })).toHaveLength(1)
+    expect(screen.getByText('No diagnostic correlation ID is available.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Copy correlation ID' })).not.toBeInTheDocument()
+    expect(screen.getByText('Component diagnostics are unavailable.')).toBeInTheDocument()
+    expect(screen.getByText('Not exposed by the accepted administration API; no values are inferred.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Log out and clear cached views' })).toBeInTheDocument()
+  })
   it('paginates the live ledger with server totals and resets offset for supported filters', async () => {
     const user = userEvent.setup()
     const fetcher = stubLiveAPI(url => {

@@ -45,9 +45,9 @@ against the real local gateway/SQLite fixture. Packaging uses Node 24, matching 
 
 The live console is a functional baseline, not the full UX outcome.
 M12-007 design foundation, M12-008 management workflows (Overview, Connections,
-Keys & Policies), and M12-011 live ledger controls are verified DONE on
-`dev-m12-webui` with 59 WebUI tests passing.
-M12-009 data/diagnostics presentation follows, then M12-010 visual/browser acceptance.
+Keys & Policies), M12-011 live ledger controls, and M12-009 data/diagnostics
+presentation are verified DONE on `dev-m12-webui` with 61 WebUI tests passing.
+M12-010 visual/browser acceptance gate follows.
 See [TASKS](TASKS.md#m12--webui) and [parallel ownership](PARALLEL.md).
 
 Antigravity (`dev-m10-antigravity`) remains in progress and excluded from this

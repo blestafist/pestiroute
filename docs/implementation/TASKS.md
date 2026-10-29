@@ -146,7 +146,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M12 — WebUI
 
-[M12 brief](M12-WEBUI.md). Branch `dev-m12-webui`; exact filter `/next 10 M12`. M12-001 through M12-008 and M12-011 are DONE; M12-009–010 complete operator UX. Execute 009 → 010.
+[M12 brief](M12-WEBUI.md). Branch `dev-m12-webui`; exact filter `/next 10 M12`. M12-001 through M12-009 and M12-011 are DONE; M12-010 completes visual/browser operator UX.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -158,7 +158,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | [M12-006](tasks/M12-006.md) | DONE | GPT-6 Luna (M12-006 worker) / reviewer PASS / Planner closure | M12-005 | Package embedded UI assets and verify complete operator E2E | Embedded UI, standard MIME serving, live modal accessibility, SQLite gateway and packaged Chromium E2E verified; Go sweeps pass | `TMPDIR=/tmp/m12-6/t GOFLAGS=-p=1 python3 scripts/e2e-m12-webui.py`; [evidence](tasks/M12-006.md#completion-evidence) |
 | [M12-007](tasks/M12-007.md) | DONE | GPT-6 Luna (M12-007 worker) / reviewer PASS / Planner closure | M12-006 | Establish operator design foundation, theme tokens, and shell layout | Design foundation tokens, theme-aware technical shell, accessible unpersisted login card, contrast/responsive checks and 47 WebUI tests verified | `npm --prefix web run build && npm --prefix web test`; [evidence](tasks/M12-007.md#completion-evidence) |
 | [M12-008](tasks/M12-008.md) | DONE | GPT-6 Luna (M12-008 worker) / reviewer PASS / Planner closure | M12-007 | Redesign core operator screens: Overview, Connections, Keys & Policies | Redesigned Overview, Connections, Keys & Policies in live and fixture modes; live write-only credentials, CAS 409 preservation, one-time secret modal, named revoke confirmation, known-zero distinction, and plain View Usage links verified; reviewer PASS | `npm --prefix web run build && npm --prefix web test`; [evidence](tasks/M12-008.md#completion-evidence) |
-| [M12-009](tasks/M12-009.md) | DRAFT | — | M12-011 | Redesign data and diagnostics screens: Usage, Routing, Settings | — | `npm --prefix web run build && npm --prefix web test`; [card](tasks/M12-009.md) |
+| [M12-009](tasks/M12-009.md) | DONE | GPT-6 Luna (M12-009 worker) / reviewer PASS / Planner closure | M12-011 | Redesign data and diagnostics screens: Usage, Routing, Settings | Tabular Usage summary, route topology cards with declared capability badges, and safe diagnostics/correlation presentation verified with 61 WebUI tests; duplicate Settings/styles fixed; reviewer PASS | `npm --prefix web run build && npm --prefix web test`; [evidence](tasks/M12-009.md#completion-evidence) |
 | [M12-010](tasks/M12-010.md) | DRAFT | — | M12-009 | Visual polish, responsive ergonomics, accessibility audit, and E2E regression | — | `npm --prefix web run build && npm --prefix web test`; [card](tasks/M12-010.md) |
 | [M12-011](tasks/M12-011.md) | DONE | GPT-6 Luna (M12-011 worker) / reviewer PASS / Planner closure | M12-008 | Complete real ledger filtering, server pagination and attempt details | Real ledger pagination (limit/offset/total), account/key/date filtering, summary alignment, joined attempt details with nullable usage, out-of-order suppression, out-of-range recovery, and session invalidation verified with 59 WebUI tests; reviewer PASS | `npm --prefix web run build && npm --prefix web test`; [evidence](tasks/M12-011.md#completion-evidence) |
 
