@@ -6,9 +6,9 @@ permissions:
   contents: read
 
 jobs:
-  fixture-ui:
+  webui:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: web
@@ -19,7 +19,25 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - run: go mod download
+        working-directory: .
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run typecheck:e2e
       - run: npm test
       - run: npm run build
+      - name: Build the embedded operator console
+        working-directory: .
+        env:
+          GOFLAGS: -p=1
+        run: ./scripts/release-build.sh --with-ui bin/gateway
+      - run: npx playwright install --with-deps chromium
+      - name: Real gateway and SQLite browser acceptance
+        working-directory: .
+        env:
+          M12_E2E_GATEWAY: ${{ github.workspace }}/bin/gateway
+        run: npm --prefix web run e2e

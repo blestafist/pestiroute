@@ -28,37 +28,32 @@ local-runtime profiles and external processes retain their individual evidence
 ceilings and existing tests. M9 branch reconciliation is merged in PR #18;
 the earlier CURRENT claim that it awaited review was stale.
 
-## M11–M13 integration
+## Operator console integration and next work
 
-This revision reconciles M11 Admin API, the completed M12 fixture UI, and M13
-Operations against main baseline `5738253`. Integration is serial: [M11 PR #20](https://github.com/blestafist/pestiroute/pull/20),
-then [M13 PR #21](https://github.com/blestafist/pestiroute/pull/21), then the M12
-fixture integration. Each requires green CI before its merge. M10 is still in
-its own active lane and is not included here.
+M11 Admin API, M13 Operations and the fixture UI are merged through PRs
+[#20](https://github.com/blestafist/pestiroute/pull/20),
+[#21](https://github.com/blestafist/pestiroute/pull/21) and
+[#22](https://github.com/blestafist/pestiroute/pull/22); accepted main baseline
+`831f2d4`. Their integration CI, Operations and WebUI runs passed on `87b5694`.
 
-| Milestone | Source branch / revision | Result / next step |
-| --- | --- | --- |
-| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` / `886a81d` | M11-001–007 DONE; isolated management API, [OpenAPI](../api/admin.openapi.yaml) and [handoff](M11-HANDOFF.md) |
-| [M12](M12-WEBUI.md) | `dev-m12-webui` / `771b206` | M12-001–006 DONE; complete operator WebUI, asset embedding, and packaged Chromium E2E; [handoff](M12-HANDOFF.md) |
-| [M13](M13-OPERATIONS.md) | `dev-m13-operations` / `1b0cb6e` | M13-001–004 DONE; deployment, backup/restore and [handoff](M13-HANDOFF.md); UI packaging deferred |
+The follow-up integration includes `dev-m12-webui` through `c573113`:
+M12-005 real Admin API/authentication and M12-006 embedding/browser workflow.
+Source evidence is in [M12-HANDOFF](M12-HANDOFF.md) and task cards; integration
+acceptance requires green CI, Operations and WebUI on the new PR revision.
+The WebUI workflow now also builds the embedded binary and runs Chromium
+against the real local gateway/SQLite fixture. Packaging uses Node 24, matching CI.
 
-M12-006 is verified and closed DONE with reviewer explicit PASS and Planner
-closure. Follow-up visual redesign tasks M12-007 through M12-010 are planned
-for the WebUI on `dev-m12-webui`: M12-007 (READY) establishes the operator
-design tokens and layout shell; M12-008–M12-010 (DRAFT) sequence screen
-redesigns, ergonomics, and browser regression. The WebUI defaults to the
-accepted M11 admin API client with memory-only authentication, embeds built
-assets via the M11 static seam beneath `/admin/`, retains an explicit HTTP 503
-unavailable fallback for Go-only builds without Node, and passes end-to-end
-operator workflow validation in headless Chromium with real gateway and SQLite
-fixtures. Do not switch branches underneath workers. See [PARALLEL](PARALLEL.md).
+The live console is a functional baseline, not the full UX outcome: Usage still
+loads only its first 50 rows and lacks the fixture view's filtering/pagination.
+Next execute M12-007 shell/themes, M12-008 management workflows, M12-011 live
+ledger controls, M12-009 data/diagnostics presentation, then M12-010 visual and
+browser acceptance. M12-011 is a bounded functional task, not cosmetic work.
+See [TASKS](TASKS.md#m12--webui) and [parallel ownership](PARALLEL.md).
 
-The integration review resolved the CURRENT table conflict and fixed five task
-card links. Dedicated WebUI CI now runs lockfile installation, typechecking,
-fixture tests and the production asset build. Operations CI runs the packaged
-build, permissions/startup, backup/restore and protected offline release scripts
-against the integrated gateway. These deterministic gates do not satisfy any
-provider live gate or the unfinished M12-005/006 browser acceptance.
+Antigravity (`dev-m10-antigravity`) remains in progress and excluded from this
+integration by operator direction. Do not merge, restart or claim completion of
+that lane; its branch-local task registry is authoritative for its newer work.
+M11/M13 need no separate new worker session for their already merged scope.
 
 ## Open gates carried forward
 
@@ -76,11 +71,12 @@ M8-008 is also BLOCKED as described above. None is a dependency of independent n
 
 Pinned Go 1.27.1: `GOFLAGS=-p=1 ./scripts/check.sh` performs formatting,
 vet, unit/race tests and offline build. Use a short unique TMPDIR for process
-socket probes. Source task cards record their original worker/reviewer runs;
-these are not fresh integration checks. This integration host has no Go
-executable or installed WebUI dependencies, so build, unit/race, browser and
-packaging runtime checks have not been rerun. Whitespace, shell syntax and
-changed Markdown file links were checked locally. The CI, Operations and WebUI workflows must be green before accepting this
-integration on main; source task-card checks are not fresh integration evidence.
+socket probes. UI checks use Node 24, `npm --prefix web ci`, typecheck,
+`typecheck:e2e`, tests and build. Full UI release and browser commands are in
+[M12-HANDOFF](M12-HANDOFF.md). No provider access is needed.
+
+Source task evidence is historical; current integration evidence must come from
+its CI revision. The planning host has no Go executable; no local Go or packaged
+browser run is claimed. New verification is recorded in the integration PR.
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema v6 migration requires a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.

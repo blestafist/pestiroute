@@ -13,8 +13,7 @@ go test ./...
 ```
 
 The default release script remains Go-only. UI packaging is an explicit option
-and is the only release path requiring Node: use Node.js `22.16.0` and npm
-`10.9.2`, then run from the repository root:
+and is the only release path requiring Node: use Node.js `24` and its bundled npm, then run from the repository root:
 
 ```sh
 ./scripts/release-build.sh --with-ui bin/gateway

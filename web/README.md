@@ -1,13 +1,19 @@
 # PestiRoute WebUI
 
-Local React operator-console shell. Every displayed value comes from synthetic in-memory fixtures and is marked **DEMO DATA — NOT LIVE**. The adapter makes no HTTP requests; there are no provider SDKs or CDN assets. This is not the M11 API integration.
+The operator console defaults to the local Admin API at `/admin/v1`. Operator
+bearer tokens remain in memory; reloading or logging out clears the session.
+Demo data is available only through the explicit demo action.
 
-Requirements: Node >=20 and npm >=10.
+Use Node.js 24 and its bundled npm. From the repository root:
 
 ```sh
-npm ci
-npm run typecheck
-npm run build
-npm test
-npm run dev
+npm --prefix web ci
+npm --prefix web run typecheck
+npm --prefix web run typecheck:e2e
+npm --prefix web test
+npm --prefix web run build
 ```
+
+For embedded release builds and real gateway/SQLite browser verification, see
+[the handoff](../docs/implementation/M12-HANDOFF.md). No Node process or external
+provider access is needed at gateway runtime.

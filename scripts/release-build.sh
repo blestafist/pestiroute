@@ -30,8 +30,8 @@ trap cleanup EXIT
 
 cd "$root"
 if $with_ui; then
-  [[ $(node --version) == v22.16.0 && $(npm --version) == 10.9.2 ]] || {
-    echo "UI packaging requires Node.js v22.16.0 and npm 10.9.2" >&2
+  [[ $(node --version) == v24.* ]] || {
+    echo "UI packaging requires Node.js 24 and npm" >&2
     exit 1
   }
   npm --prefix web ci

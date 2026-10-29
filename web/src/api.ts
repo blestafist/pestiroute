@@ -31,7 +31,7 @@ export class AdminApi {
     if (token) headers.set('Authorization', `Bearer ${token}`)
     if (init.body !== undefined) headers.set('Content-Type', 'application/json')
     let response: Response
-    try { response = await this.request(`${this.base}${path}`, { ...init, headers, credentials: 'omit' }) }
+    try { response = await this.request(`${this.base}${path}`, { ...init, headers, credentials: 'omit', cache: 'no-store' }) }
     catch { throw new ApiError(0, 'disconnected', 'The administration API could not be reached. Check the gateway and retry.', '') }
     if (!response.ok) {
       let e: ErrorEnvelope | undefined

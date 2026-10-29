@@ -10,6 +10,7 @@ describe('admin API client', () => {
     const [, init] = fetcher.mock.calls[0]
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer operator-token')
     expect(init.credentials).toBe('omit')
+    expect(init.cache).toBe('no-store')
   })
   it('parses the standard error envelope with status and request id', async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { code: 'revision_conflict', message: 'Revision is stale', request_id: 'req-123' } }), { status: 409 }))
