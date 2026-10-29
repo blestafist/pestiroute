@@ -43,13 +43,11 @@ acceptance requires green CI, Operations and WebUI on the new PR revision.
 The WebUI workflow now also builds the embedded binary and runs Chromium
 against the real local gateway/SQLite fixture. Packaging uses Node 24, matching CI.
 
-The live console is a functional baseline, not the full UX outcome: Usage still
-loads only its first 50 rows and lacks the fixture view's filtering/pagination.
-M12-007 design foundation and M12-008 management workflows (Overview, Connections,
-Keys & Policies) are verified DONE on `dev-m12-webui` with 51 WebUI tests passing.
-Next execute M12-011 live ledger controls, M12-009 data/diagnostics presentation,
-and M12-010 visual/browser acceptance. M12-011 is a bounded functional task, not
-cosmetic work.
+The live console is a functional baseline, not the full UX outcome.
+M12-007 design foundation, M12-008 management workflows (Overview, Connections,
+Keys & Policies), and M12-011 live ledger controls are verified DONE on
+`dev-m12-webui` with 59 WebUI tests passing.
+M12-009 data/diagnostics presentation follows, then M12-010 visual/browser acceptance.
 See [TASKS](TASKS.md#m12--webui) and [parallel ownership](PARALLEL.md).
 
 Antigravity (`dev-m10-antigravity`) remains in progress and excluded from this

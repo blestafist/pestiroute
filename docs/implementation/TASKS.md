@@ -146,7 +146,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M12 — WebUI
 
-[M12 brief](M12-WEBUI.md). Branch `dev-m12-webui`; exact filter `/next 10 M12`. M12-001 through M12-008 are DONE; M12-009–010 and M12-011 complete operator UX and live ledger controls. Execute 011 → 009 → 010.
+[M12 brief](M12-WEBUI.md). Branch `dev-m12-webui`; exact filter `/next 10 M12`. M12-001 through M12-008 and M12-011 are DONE; M12-009–010 complete operator UX. Execute 009 → 010.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -160,7 +160,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | [M12-008](tasks/M12-008.md) | DONE | GPT-6 Luna (M12-008 worker) / reviewer PASS / Planner closure | M12-007 | Redesign core operator screens: Overview, Connections, Keys & Policies | Redesigned Overview, Connections, Keys & Policies in live and fixture modes; live write-only credentials, CAS 409 preservation, one-time secret modal, named revoke confirmation, known-zero distinction, and plain View Usage links verified; reviewer PASS | `npm --prefix web run build && npm --prefix web test`; [evidence](tasks/M12-008.md#completion-evidence) |
 | [M12-009](tasks/M12-009.md) | DRAFT | — | M12-011 | Redesign data and diagnostics screens: Usage, Routing, Settings | — | `npm --prefix web run build && npm --prefix web test`; [card](tasks/M12-009.md) |
 | [M12-010](tasks/M12-010.md) | DRAFT | — | M12-009 | Visual polish, responsive ergonomics, accessibility audit, and E2E regression | — | `npm --prefix web run build && npm --prefix web test`; [card](tasks/M12-010.md) |
-| [M12-011](tasks/M12-011.md) | DRAFT | — | M12-008 | Complete real ledger filtering, server pagination and attempt details | — | `npm --prefix web run typecheck && npm --prefix web test && npm --prefix web run build`; [card](tasks/M12-011.md) |
+| [M12-011](tasks/M12-011.md) | DONE | GPT-6 Luna (M12-011 worker) / reviewer PASS / Planner closure | M12-008 | Complete real ledger filtering, server pagination and attempt details | Real ledger pagination (limit/offset/total), account/key/date filtering, summary alignment, joined attempt details with nullable usage, out-of-order suppression, out-of-range recovery, and session invalidation verified with 59 WebUI tests; reviewer PASS | `npm --prefix web run build && npm --prefix web test`; [evidence](tasks/M12-011.md#completion-evidence) |
 
 ## M13 — Deployment and Recovery
 

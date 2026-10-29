@@ -365,7 +365,7 @@ describe('live administration mode', () => {
     ['/', ['/admin/v1/status', '/admin/v1/usage/summary', '/admin/v1/accounts', '/admin/v1/usage/requests?limit=5']],
     ['/connections', ['/admin/v1/status', '/admin/v1/accounts']],
     ['/keys', ['/admin/v1/keys', '/admin/v1/policies']],
-    ['/usage', ['/admin/v1/usage/summary', '/admin/v1/usage/requests?limit=50', '/admin/v1/usage/attempts?limit=50']],
+    ['/usage', ['/admin/v1/usage/summary', '/admin/v1/usage/requests?limit=50&offset=0']],
     ['/routing', ['/admin/v1/status']],
     ['/settings', ['/admin/v1/status']],
   ])('loads %s from its accepted API endpoints', async (path, expected) => {
@@ -375,6 +375,183 @@ describe('live administration mode', () => {
     await connect(user)
     await waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(expected.length))
     for (const endpoint of expected) expect(fetcher.mock.calls.some(([url]) => url === endpoint)).toBe(true)
+  })
+  it('paginates the live ledger with server totals and resets offset for supported filters', async () => {
+    const user = userEvent.setup()
+    const fetcher = stubLiveAPI(url => {
+      if (url.includes('/usage/summary')) return response({ requests: 51, attempts: 51, input_tokens: null, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 0, actual_tokens: null, effective_charge: 0 })
+      if (url.includes('/usage/requests')) {
+        const query = new URL(url, 'http://local').searchParams
+        const offset = Number(query.get('offset') ?? 0), limit = Number(query.get('limit') ?? 50)
+        const count = offset === 0 ? limit : Math.max(0, 51 - offset)
+        return response({ items: Array.from({ length: count }, (_, i) => ({ id: `request-${offset + i}`, accepted_at: '2026-10-29T12:00:00Z', model: 'model-live', state: 'future-state', attempts: [] })), limit, offset, total: 51 })
+      }
+      return response({ items: [], limit: 50, offset: 0, total: 0 })
+    })
+    render(<MemoryRouter initialEntries={['/usage?offset=0&limit=50']}><App /><LocationSearch /></MemoryRouter>)
+    await connect(user)
+    expect(await screen.findByText('Showing 1–50 of 51 matching requests · page size')).toBeInTheDocument()
+    expect(screen.getAllByText('future-state').length).toBeGreaterThan(0)
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(await screen.findByText('Showing 51–51 of 51 matching requests · page size')).toBeInTheDocument()
+    await waitFor(() => expect(fetcher.mock.calls.some(([url]) => url.includes('/usage/requests?') && new URL(url, 'http://local').searchParams.get('offset') === '50')).toBe(true))
+    fireEvent.change(screen.getByLabelText('Filter by account ID'), { target: { value: 'acct/a' } })
+    fireEvent.change(screen.getByLabelText('Filter by key ID'), { target: { value: 'key b' } })
+    fireEvent.change(screen.getByLabelText('Usage since'), { target: { value: '2026-10-01' } })
+    fireEvent.change(screen.getByLabelText('Usage until'), { target: { value: '2026-10-29' } })
+    await waitFor(() => {
+      const query = new URL(fetcher.mock.calls.map(([url]) => url).filter(url => url.includes('/usage/requests?')).at(-1)!, 'http://local').searchParams
+      expect(query.get('account_id')).toBe('acct/a')
+      expect(query.get('key_id')).toBe('key b')
+      expect(query.get('since')).toBe('2026-10-01T00:00:00Z')
+      expect(query.get('until')).toBe('2026-10-29T23:59:59.999Z')
+      expect(query.get('offset')).toBe('0')
+      expect(screen.getByTestId('location-search')).toHaveTextContent('account_id=acct%2Fa')
+    })
+    expect(fetcher.mock.calls.some(([url]) => url.includes('/usage/summary?') && new URL(url, 'http://local').searchParams.get('account_id') === 'acct/a')).toBe(true)
+    await user.click(screen.getByRole('link', { name: /Connections/ }))
+    await user.click(screen.getByRole('link', { name: /Usage/ }))
+    expect(screen.getByLabelText('Filter by account ID')).toHaveValue('acct/a')
+    expect(screen.getByLabelText('Filter by key ID')).toHaveValue('key b')
+  })
+  it('validates date ranges before dispatch and loads selected ordered attempt details only', async () => {
+    const user = userEvent.setup()
+    const fetcher = stubLiveAPI(url => {
+      if (url.includes('/usage/summary')) return response({ requests: 1, attempts: 2, input_tokens: null, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 0, actual_tokens: null, effective_charge: 0 })
+      if (url.includes('/usage/requests')) return response({ items: [{ id: 'req-selected', accepted_at: '2026-10-29T12:00:00Z', model: 'model', state: 'future-state', attempts: [] }], limit: 50, offset: 0, total: 1 })
+      if (url.includes('/usage/attempts')) return response({ items: [
+        { id: 'attempt-2', request_id: 'req-selected', ordinal: 2, account_id: 'acct-two', connector: 'conn-two', route_id: 'route-two', state: 'failed', estimate_tokens: 0, committed: false, error_category: 'upstream', error_reason: 'safe failure', dispatched_at: null, finished_at: null, usage: null, reservation: { estimated_tokens: 0, actual_tokens: null, effective_charge: 0, state: 'released' } },
+        { id: 'attempt-1', request_id: 'req-selected', ordinal: 1, account_id: 'acct-one', connector: 'conn-one', route_id: 'route-one', state: 'unknown-state', estimate_tokens: 0, committed: false, error_category: null, error_reason: null, dispatched_at: null, finished_at: null, usage: { input_tokens: null, output_tokens: 4, reasoning_tokens: null, cached_tokens: null, source: 'test', completeness: 'partial', recorded_at: '2026-10-29T12:00:00Z' }, reservation: { estimated_tokens: 0, actual_tokens: null, effective_charge: 0, state: 'reserved' } },
+      ], limit: 500, offset: 0, total: 2 })
+      return response({ items: [], limit: 50, offset: 0, total: 0 })
+    })
+    render(<MemoryRouter initialEntries={['/usage?since=2026-10-30&until=2026-10-29']}><App /><LocationSearch /></MemoryRouter>)
+    await connect(user)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/valid dates with Since on or before Until/)
+    expect(fetcher.mock.calls.some(([url]) => url.includes('/usage/requests'))).toBe(false)
+    expect(screen.getByLabelText('Usage since')).toHaveValue('2026-10-30')
+    fireEvent.change(screen.getByLabelText('Usage until'), { target: { value: '2026-10-31' } })
+    await user.click(await screen.findByRole('button', { name: 'Show attempts' }))
+    expect(await screen.findByText(/conn-one \/ acct-one/)).toBeInTheDocument()
+    expect(screen.getByText(/conn-two \/ acct-two/)).toBeInTheDocument()
+    expect(screen.getByText(/input Unknown, output 4/)).toBeInTheDocument()
+    expect(fetcher.mock.calls.some(([url]) => url.includes('/usage/attempts?') && new URL(url, 'http://local').searchParams.get('request_id') === 'req-selected')).toBe(true)
+    expect(screen.getByText('future-state')).toBeInTheDocument()
+  })
+  it('invalidates delayed detail reads on filter changes and clears cached details on refresh', async () => {
+    const user = userEvent.setup()
+    let resolveFirst!: (response: Response) => void
+    let detailCalls = 0
+    const fetcher = vi.fn((url: string) => {
+      if (url.includes('/usage/summary')) return Promise.resolve(response({ requests: 1, attempts: 1, input_tokens: null, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 0, actual_tokens: null, effective_charge: 0 }))
+      if (url.includes('/usage/requests')) {
+        const id = new URL(url, 'http://local').searchParams.has('account_id') ? 'req-after' : 'req-before'
+        return Promise.resolve(response({ items: [{ id, accepted_at: '2026-10-29T12:00:00Z', model: 'model', state: 'ok', attempts: [] }], limit: 50, offset: 0, total: 1 }))
+      }
+      if (url.includes('/usage/attempts')) {
+        detailCalls++
+        if (detailCalls === 1) return new Promise<Response>(resolve => { resolveFirst = resolve })
+        const target = `detail-target-${detailCalls}`
+        return Promise.resolve(response({ items: [{ id: target, request_id: new URL(url, 'http://local').searchParams.get('request_id'), ordinal: 1, account_id: target, connector: 'test', route_id: target, state: 'ok', estimate_tokens: 0, committed: false, error_category: null, error_reason: null, dispatched_at: null, finished_at: null, usage: null, reservation: { estimated_tokens: 0, actual_tokens: null, effective_charge: 0, state: 'reserved' } }], limit: 500, offset: 0, total: 1 }))
+      }
+      return Promise.resolve(response({ items: [], limit: 50, offset: 0, total: 0 }))
+    })
+    vi.stubGlobal('fetch', fetcher)
+    render(<MemoryRouter initialEntries={['/usage']}><App /></MemoryRouter>)
+    await connect(user)
+    await user.click(await screen.findByRole('button', { name: 'Show attempts' }))
+    await waitFor(() => expect(resolveFirst).toBeDefined())
+    fireEvent.change(screen.getByLabelText('Filter by account ID'), { target: { value: 'acct-new' } })
+    expect(await screen.findByText('req-after')).toBeInTheDocument()
+    expect(screen.queryByText('Loading attempt details…')).not.toBeInTheDocument()
+    resolveFirst(response({ items: [{ id: 'stale-detail', request_id: 'req-before', ordinal: 1, account_id: 'stale-detail', connector: 'test', route_id: 'stale-detail', state: 'ok', estimate_tokens: 0, committed: false, error_category: null, error_reason: null, dispatched_at: null, finished_at: null, usage: null, reservation: { estimated_tokens: 0, actual_tokens: null, effective_charge: 0, state: 'reserved' } }], limit: 500, offset: 0, total: 1 }))
+    await user.click(await screen.findByRole('button', { name: 'Show attempts' }))
+    expect(await screen.findAllByText(/detail-target-2/)).not.toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Hide attempts' }))
+    await user.click(screen.getByRole('button', { name: 'Show attempts' }))
+    expect(screen.getAllByText(/detail-target-2/).length).toBeGreaterThan(0)
+    expect(detailCalls).toBe(2)
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(screen.queryByText(/detail-target-2/)).not.toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Show attempts' }))
+    expect(await screen.findAllByText(/detail-target-3/)).not.toHaveLength(0)
+    expect(detailCalls).toBe(3)
+  })
+  it('shows a retry action when attempt details fail', async () => {
+    const user = userEvent.setup()
+    let attempts = 0
+    stubLiveAPI(url => {
+      if (url.includes('/usage/summary')) return response({ requests: 1, attempts: 1, input_tokens: null, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 0, actual_tokens: null, effective_charge: 0 })
+      if (url.includes('/usage/requests')) return response({ items: [{ id: 'req-retry', accepted_at: '2026-10-29T12:00:00Z', model: 'model', state: 'ok', attempts: [] }], limit: 50, offset: 0, total: 1 })
+      if (url.includes('/usage/attempts')) {
+        attempts++
+        if (attempts === 1) return response({ error: { code: 'unavailable', message: 'Attempt service unavailable', request_id: 'req-attempt-error' } }, 503)
+        return response({ items: [{ id: 'retried-attempt', request_id: 'req-retry', ordinal: 1, account_id: 'acct-retry', connector: 'test', route_id: 'route', state: 'ok', estimate_tokens: 0, committed: false, error_category: null, error_reason: null, dispatched_at: null, finished_at: null, usage: null, reservation: { estimated_tokens: 0, actual_tokens: null, effective_charge: 0, state: 'reserved' } }], limit: 500, offset: 0, total: 1 })
+      }
+      return response({ items: [], limit: 50, offset: 0, total: 0 })
+    })
+    render(<MemoryRouter initialEntries={['/usage']}><App /></MemoryRouter>)
+    await connect(user)
+    await user.click(await screen.findByRole('button', { name: 'Show attempts' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Attempt service unavailable')
+    await user.click(screen.getByRole('button', { name: 'Retry details' }))
+    expect(await screen.findByText(/acct-retry/)).toBeInTheDocument()
+    expect(attempts).toBe(2)
+  })
+  it('offers a first-page recovery when an empty page has a nonzero server total', async () => {
+    const user = userEvent.setup()
+    const fetcher = stubLiveAPI(url => {
+      if (url.includes('/usage/summary')) return response({ requests: 6, attempts: 0, input_tokens: null, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 0, actual_tokens: null, effective_charge: 0 })
+      if (url.includes('/usage/requests')) {
+        const query = new URL(url, 'http://local').searchParams
+        const offset = Number(query.get('offset') ?? 0)
+        return response({ items: offset >= 6 ? [] : [{ id: 'first-result', accepted_at: '2026-10-29T12:00:00Z', model: 'model', state: 'ok', attempts: [] }], limit: 25, offset, total: 6 })
+      }
+      return response({ items: [], limit: 50, offset: 0, total: 0 })
+    })
+    render(<MemoryRouter initialEntries={['/usage?account_id=acct-kept&limit=25&offset=50']}><App /></MemoryRouter>)
+    await connect(user)
+    expect(await screen.findByText(/beyond the last matching request/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Return to first page' }))
+    expect(await screen.findByText('first-result')).toBeInTheDocument()
+    await waitFor(() => {
+      const query = new URL(fetcher.mock.calls.map(([url]) => url).filter(url => url.includes('/usage/requests?')).at(-1)!, 'http://local').searchParams
+      expect(query.get('offset')).toBe('0')
+      expect(query.get('account_id')).toBe('acct-kept')
+    })
+  })
+  it('ignores a delayed response from an older live ledger query', async () => {
+    const user = userEvent.setup()
+    let resolveOld!: (response: Response) => void
+    const fetcher = vi.fn((url: string) => {
+      if (url.includes('/usage/summary')) return Promise.resolve(response({ requests: 1, attempts: 0, input_tokens: null, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 0, actual_tokens: null, effective_charge: 0 }))
+      if (url.includes('/usage/requests') && !url.includes('account_id')) return new Promise<Response>(resolve => { resolveOld = resolve })
+      if (url.includes('/usage/requests')) return Promise.resolve(response({ items: [{ id: 'new-query-request', accepted_at: '2026-10-29T12:00:00Z', model: 'model', state: 'ok', attempts: [] }], limit: 50, offset: 0, total: 1 }))
+      return Promise.resolve(response({ items: [], limit: 50, offset: 0, total: 0 }))
+    })
+    vi.stubGlobal('fetch', fetcher)
+    render(<MemoryRouter initialEntries={['/usage']}><App /></MemoryRouter>)
+    await connect(user)
+    await waitFor(() => expect(resolveOld).toBeDefined())
+    fireEvent.change(screen.getByLabelText('Filter by account ID'), { target: { value: 'acct-new' } })
+    expect(await screen.findByText('new-query-request')).toBeInTheDocument()
+    resolveOld(response({ items: [{ id: 'old-query-request', accepted_at: '2026-10-29T12:00:00Z', model: 'model', state: 'ok', attempts: [] }], limit: 50, offset: 0, total: 1 }))
+    await waitFor(() => expect(screen.queryByText('old-query-request')).not.toBeInTheDocument())
+    expect(screen.getByText('new-query-request')).toBeInTheDocument()
+  })
+  it.each([503, 401])('retains filter navigation on HTTP %i and clears the session on 401', async status => {
+    const user = userEvent.setup()
+    stubLiveAPI(url => url.includes('/usage/requests') ? response({ error: { code: 'unavailable', message: 'Ledger read failed', request_id: 'req-ledger' } }, status) : url.includes('/usage/summary') ? response({ requests: 0, attempts: 0, input_tokens: null, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 0, actual_tokens: null, effective_charge: 0 }) : response({ items: [], limit: 50, offset: 0, total: 0 }))
+    render(<MemoryRouter initialEntries={['/usage?account_id=acct-filter&limit=25&offset=50']}><App /><LocationSearch /></MemoryRouter>)
+    await connect(user)
+    if (status === 401) {
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'PestiRoute administration' })).toBeInTheDocument())
+      expect(hasOperatorToken()).toBe(false)
+    } else {
+      expect(await screen.findByRole('alert')).toHaveTextContent('req-ledger')
+      expect(screen.getByLabelText('Filter by account ID')).toHaveValue('acct-filter')
+      expect(screen.getByTestId('location-search')).toHaveTextContent('offset=50')
+    }
   })
   it('shows Unknown for failed Overview account and summary reads without hiding successful siblings', async () => {
     const user = userEvent.setup()
@@ -524,13 +701,13 @@ describe('live administration mode', () => {
     expect(alert).toHaveTextContent(`req-${status}`)
     expect(alert).toHaveTextContent(status === 403 ? 'Access denied' : status === 404 ? 'Resource not found' : status === 413 ? 'too large' : status === 503 ? 'unavailable' : 'server could not complete')
   })
-  it('renders successful sibling data while a related usage endpoint fails', async () => {
+  it('renders the filtered summary when the request page fails', async () => {
     const user = userEvent.setup()
-    stubLiveAPI(url => url.endsWith('/summary') ? response({ requests: 4, attempts: 5, input_tokens: 12, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 12, actual_tokens: null, effective_charge: 12 }) : url.includes('/usage/requests') ? response({ error: { code: 'denied', message: 'Requests unavailable', request_id: 'req-partial' } }, 403) : url.includes('/usage/attempts') ? response({ items: [{ id: 'attempt-1', state: 'failed', error_reason: null }], limit: 50, offset: 0, total: 1 }) : response({}))
+    stubLiveAPI(url => url.endsWith('/summary') ? response({ requests: 4, attempts: 5, input_tokens: 12, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 12, actual_tokens: null, effective_charge: 12 }) : url.includes('/usage/requests') ? response({ error: { code: 'denied', message: 'Requests unavailable', request_id: 'req-partial' } }, 403) : response({}))
     render(<MemoryRouter initialEntries={['/usage']}><App /></MemoryRouter>)
     await connect(user)
     expect(await screen.findByText(/Requests 4 · Attempts 5/)).toBeInTheDocument()
-    expect(screen.getByText(/attempt-1 · failed/)).toBeInTheDocument()
+    expect(screen.getByText('Request ledger unavailable.')).toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('req-partial')
   })
   it('keeps auth session identifiers in memory, displays advertised user action, and submits transient callback input', async () => {
