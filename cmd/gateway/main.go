@@ -33,6 +33,7 @@ import (
 	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
+	"github.com/blestafist/pestiroute/internal/ui"
 )
 
 type config struct {
@@ -1313,6 +1314,7 @@ func runWithFinalize(ctx context.Context, args []string, finalize func(core.Atte
 		c.runtimeDB, c.runtimeKey = db, key
 	}
 	if c.Admin != nil {
+		adminConfig.Static = ui.Handler()
 		adminConfig.DB = c.runtimeDB
 		adminConfig.MasterKey = c.runtimeKey
 		adminConfig.Version = "dev"
