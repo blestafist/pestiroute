@@ -45,9 +45,10 @@ against the real local gateway/SQLite fixture. Packaging uses Node 24, matching 
 
 The live console is a functional baseline, not the full UX outcome: Usage still
 loads only its first 50 rows and lacks the fixture view's filtering/pagination.
-Next execute M12-007 shell/themes, M12-008 management workflows, M12-011 live
-ledger controls, M12-009 data/diagnostics presentation, then M12-010 visual and
-browser acceptance. M12-011 is a bounded functional task, not cosmetic work.
+M12-007 design foundation, theme tokens and shell layout are verified DONE. Next
+execute M12-008 management workflows, M12-011 live ledger controls, M12-009
+data/diagnostics presentation, then M12-010 visual and browser acceptance.
+M12-011 is a bounded functional task, not cosmetic work.
 See [TASKS](TASKS.md#m12--webui) and [parallel ownership](PARALLEL.md).
 
 Antigravity (`dev-m10-antigravity`) remains in progress and excluded from this

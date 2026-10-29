@@ -8,6 +8,10 @@ const pages = [
   ['Usage', '/usage', '04'], ['Routing', '/routing', '05'], ['Settings & Diagnostics', '/settings', '06'],
 ] as const
 
+function Brand() {
+  return <Link className="brand" to="/"><span className="brand-mark" aria-hidden="true">PR</span><span className="brand-name">PestiRoute<span>CONTROL PLANE</span></span></Link>
+}
+
 function Screen({ title, children }: { title: string; children: React.ReactNode }) {
   return <section aria-labelledby="page-title"><p className="eyebrow">OPERATOR CONSOLE / {title.toUpperCase()}</p><h1 id="page-title">{title}</h1>{children}</section>
 }
@@ -110,10 +114,9 @@ function Usage() {
 function Routing() { return <Screen title="Routing"><p role="note">Configuration-backed topology. Changes require configuration and restart; routes are read-only.</p>{fixtureData.routes.map(r => <article key={`${r.protocol}-${r.model}`}><h2>{r.protocol} · {r.model}</h2><p>Target: {r.target}</p><p>Capabilities: {Object.entries(r.capabilities).map(([name, value]) => <span className={`badge capability-${value}`} key={name}>{name}: {value}</span>)}</p><Link to="/connections">Connections</Link> · <Link to={`/usage?model=${encodeURIComponent(r.model)}`}>Usage</Link></article>)}</Screen> }
 function Settings({ onLogout }: { onLogout: () => void }) { const [copy, setCopy] = useState(''); async function copyId() { try { await navigator.clipboard.writeText(fixtureData.diagnostics.correlationId); setCopy('Correlation ID copied.') } catch { setCopy('Clipboard unavailable; correlation ID is safe to copy manually.') } } return <Screen title="Settings & Diagnostics"><h2>Gateway</h2><p>Version: {fixtureData.diagnostics.version}</p><h2>Components</h2>{fixtureData.diagnostics.components.map(c => <p key={c.name}>{c.name}: {c.ready === null ? 'Unknown' : c.ready ? 'Ready' : 'Not ready'}</p>)}<h2>Endpoints</h2>{fixtureData.diagnostics.endpoints.map(e => <p key={e}>{e}</p>)}<h2>Runtime settings</h2>{fixtureData.diagnostics.settings.map(s => <p key={s.name}>{s.name}: {s.value} {s.restartRequired && <span className="badge">Restart required</span>}</p>)}<p>Diagnostic correlation ID: <code>{fixtureData.diagnostics.correlationId}</code></p><button onClick={() => void copyId()}>Copy correlation ID</button><p role="status">{copy}</p><button onClick={onLogout}>Log out and clear cached views</button></Screen> }
 
-function DemoApp() {
+function DemoApp({ theme, setTheme }: { theme: 'light' | 'dark'; setTheme: React.Dispatch<React.SetStateAction<'light' | 'dark'>> }) {
   const location = useLocation()
   const [lastUsageQuery, setLastUsageQuery] = useState('')
-  const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const [token, setToken] = useState(getSessionToken())
   const [demoToken, setDemoToken] = useState('')
   const [fixtureMode, setFixtureMode] = useState<SimulatedState>('ready')
@@ -130,7 +133,7 @@ function DemoApp() {
   function logout() { clearSession(); setToken(null); setDemoToken(''); setViewSession(value => value + 1) }
   return <div className={`app theme-${theme}`}>
     <div className="demo-banner" role="status">DEMO DATA — NOT LIVE</div>
-    <header className="topbar"><Link className="brand" to="/">PestiRoute <span>CONTROL PLANE</span></Link><div className="top-status"><span><i className="status-dot" />Gateway demo</span><span>{token ? 'Demo operator session active' : 'No operator session'}</span><button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}>{theme === 'light' ? '◐' : '☼'} Theme</button>{token ? <button onClick={logout}>Log out</button> : <form className="session-form" onSubmit={login}><label htmlFor="demo-token">Demo-only bearer token</label><input id="demo-token" type="password" autoComplete="off" value={demoToken} onChange={event => setDemoToken(event.target.value)} /><button type="submit">Start demo session</button></form>}</div></header>
+    <header className="topbar"><Brand /><div className="top-status"><span><i className="status-dot" />Gateway demo</span><span>{token ? 'Demo operator session active' : 'No operator session'}</span><button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}>{theme === 'light' ? '◐' : '☼'} Theme</button>{token ? <button onClick={logout}>Log out</button> : <form className="session-form" onSubmit={login}><label htmlFor="demo-token">Demo-only bearer token</label><input id="demo-token" type="password" autoComplete="off" value={demoToken} onChange={event => setDemoToken(event.target.value)} /><button type="submit">Start demo session</button></form>}</div></header>
      <div className="layout"><nav aria-label="Primary navigation" className="side-nav">{pages.map(([label, path, number]) => <NavLink key={path} to={path === '/usage' && lastUsageQuery ? `${path}${lastUsageQuery}` : path} end={path === '/'}><span>{number}</span>{label}</NavLink>)}</nav><main>
       <label className="fixture-control">Simulate fixture state <select aria-label="Simulate fixture state" value={fixtureMode} onChange={event => setFixtureMode(event.target.value as SimulatedState)}><option value="ready">Ready</option><option value="loading">Loading</option><option value="error">Error</option><option value="conflict">Conflict</option></select></label>
       {fixtureResult.status === 'loading' && <p className="fixture-state" role="status">Loading synthetic fixture data…</p>}
@@ -148,12 +151,13 @@ function LiveApp() {
   const [token, setToken] = useState(hasOperatorToken())
   const [entry, setEntry] = useState('')
   const [demo, setDemo] = useState(false)
+  const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const [epoch, setEpoch] = useState(0)
   function logout() { clearOperatorToken(); setToken(false); setEntry(''); setEpoch(value => value + 1) }
   function login(event: React.FormEvent) { event.preventDefault(); if (!entry.trim()) return; setOperatorToken(entry); setEntry(''); setToken(true); setEpoch(value => value + 1) }
-  if (demo) return <DemoApp />
-  if (!token) return <main className="login"><h1>PestiRoute administration</h1><p>Enter the operator bearer token. It remains in memory only.</p><form onSubmit={login}><label htmlFor="operator-token">Operator bearer token</label><input id="operator-token" type="password" autoComplete="off" value={entry} onChange={e => setEntry(e.target.value)} required /><button>Connect</button></form><button type="button" onClick={() => setDemo(true)}>Use demo data</button></main>
-  return <div className="app"><header className="topbar"><Link className="brand" to="/">PestiRoute <span>CONTROL PLANE</span></Link><div className="top-status">Live administration API <button onClick={logout}>Log out</button></div></header><div className="layout"><nav aria-label="Primary navigation" className="side-nav">{livePages.map(([name, path]) => <NavLink key={path} to={path} end={path === '/'}>{name}</NavLink>)}</nav><main><LiveScreen key={`${location.pathname}:${epoch}`} path={location.pathname} onUnauthorized={logout} /><footer>Connected to the local administration API</footer></main></div></div>
+  if (demo) return <DemoApp theme={theme} setTheme={setTheme} />
+  if (!token) return <div className={`app theme-${theme} auth-shell`}><header className="topbar"><Brand /><span className="environment-tag">LOCAL ADMINISTRATION</span></header><main className="login"><p className="eyebrow">SECURE OPERATOR ACCESS</p><h1>PestiRoute administration</h1><p className="login-intro">Connect to your local gateway control plane.</p><form onSubmit={login}><label htmlFor="operator-token">Operator bearer token</label><input id="operator-token" type="password" autoComplete="off" value={entry} onChange={e => setEntry(e.target.value)} required /><p className="security-note"><span aria-hidden="true">◆</span> Your token is held in memory only and is never saved to this browser.</p><button className="primary-action">Connect</button></form><div className="login-divider"><span>or</span></div><button className="secondary-action" type="button" onClick={() => { setEntry(''); setDemo(true) }}>Use demo data</button><footer>Self-hosted · Private by design</footer></main><button className="login-theme" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}>{theme === 'light' ? '◐' : '☼'} Theme</button></div>
+  return <div className={`app theme-${theme}`}><header className="topbar"><Brand /><div className="header-meta"><span className="environment-tag">LOCAL GATEWAY</span><span className="connection-state"><i className="status-dot" />Live administration API</span><button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}>{theme === 'light' ? '◐' : '☼'} Theme</button><button className="logout-action" onClick={logout}>Log out</button></div></header><div className="layout"><nav aria-label="Primary navigation" className="side-nav"><p className="nav-caption">WORKSPACE</p>{livePages.map(([name, path], index) => <NavLink key={path} to={path} end={path === '/'}><span className="nav-index">{String(index + 1).padStart(2, '0')}</span>{name}</NavLink>)}<div className="nav-foot"><span className="status-dot" />Gateway access secured</div></nav><main><LiveScreen key={`${location.pathname}:${epoch}`} path={location.pathname} onUnauthorized={logout} /><footer><span>PESTI·ROUTE / LOCAL CONTROL PLANE</span><span>Connected to the local administration API</span></footer></main></div></div>
 }
 
 function LiveScreen({ path, onUnauthorized }: { path: string; onUnauthorized: () => void }) {
