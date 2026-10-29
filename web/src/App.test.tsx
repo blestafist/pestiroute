@@ -362,7 +362,7 @@ describe('live administration mode', () => {
     expect(sessionStorage.length).toBe(0)
   })
   it.each([
-    ['/', ['/admin/v1/status', '/admin/v1/usage/summary']],
+    ['/', ['/admin/v1/status', '/admin/v1/usage/summary', '/admin/v1/accounts', '/admin/v1/usage/requests?limit=5']],
     ['/connections', ['/admin/v1/status', '/admin/v1/accounts']],
     ['/keys', ['/admin/v1/keys', '/admin/v1/policies']],
     ['/usage', ['/admin/v1/usage/summary', '/admin/v1/usage/requests?limit=50', '/admin/v1/usage/attempts?limit=50']],
@@ -375,6 +375,58 @@ describe('live administration mode', () => {
     await connect(user)
     await waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(expected.length))
     for (const endpoint of expected) expect(fetcher.mock.calls.some(([url]) => url === endpoint)).toBe(true)
+  })
+  it('shows Unknown for failed Overview account and summary reads without hiding successful siblings', async () => {
+    const user = userEvent.setup()
+    stubLiveAPI(url => {
+      if (url.endsWith('/status')) return response(statusDTO)
+      if (url.endsWith('/accounts')) return response({ error: { code: 'unavailable', message: 'Accounts unavailable', request_id: 'req-accounts' } }, 503)
+      if (url.endsWith('/summary')) return response({ error: { code: 'unavailable', message: 'Summary unavailable', request_id: 'req-summary' } }, 503)
+      if (url.includes('/usage/requests')) return response({ items: [{ id: 'req-live-1', accepted_at: '2026-10-29T12:00:00Z', model: 'model-live', state: 'failed', attempts: [] }], limit: 5, offset: 0, total: 1 })
+      return response({})
+    })
+    render(<MemoryRouter><App /></MemoryRouter>)
+    await connect(user)
+    await screen.findByRole('heading', { name: 'Components' })
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2))
+    expect(screen.getByText('Enabled accounts').closest('.metric-card')).toHaveTextContent('Unknown')
+    expect(screen.getByText('Local ledger requests').closest('.metric-card')).toHaveTextContent('Unknown')
+    expect(screen.getAllByRole('alert').map(alert => alert.textContent).join(' ')).toContain('Accounts unavailable')
+    expect(screen.getAllByRole('alert').map(alert => alert.textContent).join(' ')).toContain('Summary unavailable')
+    expect(screen.getByRole('link', { name: 'View Usage — req-live-1' })).toHaveAttribute('href', '/usage')
+  })
+  it('preserves a known zero summary when the account read fails', async () => {
+    const user = userEvent.setup()
+    stubLiveAPI(url => {
+      if (url.endsWith('/status')) return response(statusDTO)
+      if (url.endsWith('/accounts')) return response({ error: { code: 'unavailable', message: 'Accounts unavailable', request_id: 'req-accounts' } }, 503)
+      if (url.endsWith('/summary')) return response({ requests: 0, attempts: 0, input_tokens: null, output_tokens: null, reasoning_tokens: null, cached_tokens: null, estimated_tokens: 0, actual_tokens: null, effective_charge: 0 })
+      if (url.includes('/usage/requests')) return response({ items: [], limit: 5, offset: 0, total: 0 })
+      return response({})
+    })
+    render(<MemoryRouter><App /></MemoryRouter>)
+    await connect(user)
+    await screen.findByRole('alert')
+    expect(screen.getByText('Enabled accounts').closest('.metric-card')).toHaveTextContent('Unknown')
+    expect(screen.getByText('Local ledger requests').closest('.metric-card')).toHaveTextContent('0')
+    expect(screen.getByRole('heading', { name: 'Components' })).toBeInTheDocument()
+  })
+  it('preserves the enabled account count when the Overview summary read fails', async () => {
+    const user = userEvent.setup()
+    stubLiveAPI(url => {
+      if (url.endsWith('/status')) return response(statusDTO)
+      if (url.endsWith('/accounts')) return response(accountPage)
+      if (url.endsWith('/summary')) return response({ error: { code: 'unavailable', message: 'Summary unavailable', request_id: 'req-summary' } }, 503)
+      if (url.includes('/usage/requests')) return response({ items: [], limit: 5, offset: 0, total: 0 })
+      return response({})
+    })
+    render(<MemoryRouter><App /></MemoryRouter>)
+    await connect(user)
+    await screen.findByRole('heading', { name: 'Components' })
+    await screen.findByRole('alert')
+    expect(screen.getByText('Enabled accounts').closest('.metric-card')).toHaveTextContent('1')
+    expect(screen.getByText('Local ledger requests').closest('.metric-card')).toHaveTextContent('Unknown')
+    expect(screen.getByRole('alert')).toHaveTextContent('Summary unavailable')
   })
   it('keeps mutation inputs on 409 and offers an explicit refresh', async () => {
     const user = userEvent.setup()
@@ -438,12 +490,29 @@ describe('live administration mode', () => {
     expect(within(dialog).getByText('pr_live_one_time')).toBeInTheDocument()
     expect(dialog).toContainElement(document.activeElement as HTMLElement)
     await user.tab()
-    expect(within(dialog).getByRole('button', { name: 'Dismiss secret' })).toHaveFocus()
+    expect(within(dialog).getByRole('button', { name: 'Copy key' })).toHaveFocus()
     await user.tab()
     expect(within(dialog).getByRole('button', { name: 'Dismiss secret' })).toHaveFocus()
+    await user.tab()
+    expect(within(dialog).getByRole('button', { name: 'Copy key' })).toHaveFocus()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(trigger).toHaveFocus()
+  })
+  it('requires named confirmation before revoking a live virtual key', async () => {
+    const user = userEvent.setup()
+    const key = { id: 'key-record-7', key_id: 'vr_live_named', policy_id: 'policy-default', policy_revision: 3, revision: 2, enabled: true, revoked: false, created_at: '2026-10-01T00:00:00Z', revoked_at: null }
+    const fetcher = stubLiveAPI(url => url.endsWith('/keys') ? response({ items: [key], limit: 50, offset: 0, total: 1 }) : url.endsWith('/policies') ? response({ items: [{ id: key.policy_id, revision: 3, enabled: true, models: ['model-a'], connectors: ['conn-a'], rpm: 30, tpm: 5000 }], limit: 50, offset: 0, total: 1 }) : url.endsWith('/status') ? response(statusDTO) : response({}, 204))
+    render(<MemoryRouter initialEntries={['/keys']}><App /></MemoryRouter>)
+    await connect(user)
+    await user.click(await screen.findByRole('button', { name: 'Revoke' }))
+    expect(screen.getByRole('dialog', { name: 'Revoke vr_live_named?' })).toBeInTheDocument()
+    expect(fetcher.mock.calls.some(([url, init]) => url.endsWith('/key-record-7') && init?.method === 'DELETE')).toBe(false)
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Revoke' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm revoke vr_live_named' }))
+    await waitFor(() => expect(fetcher.mock.calls.some(([url, init]) => url.endsWith('/key-record-7') && init?.method === 'DELETE')).toBe(true))
   })
   it.each([403, 404, 413, 500, 503])('renders an actionable alert with request id for HTTP %i', async status => {
     const user = userEvent.setup()

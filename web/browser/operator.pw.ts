@@ -59,8 +59,9 @@ test('packaged entry routing and complete live operator workflow', async ({ page
   await expect(page.getByRole('heading', { name: 'Keys & Policies' })).toBeVisible()
 
   await page.getByRole('link', { name: 'Overview' }).click()
-  await expect(page.getByText(/Gateway readiness: unknown · Version dev/)).toBeVisible()
-  await expect(page.getByText(/m12-connector \(connector\)/)).toBeVisible()
+  await expect(page.getByText('Gateway readiness')).toBeVisible()
+  await expect(page.getByText(/Gateway vdev/)).toBeVisible()
+  await expect(page.getByText('m12-connector')).toBeVisible()
   await page.getByRole('link', { name: 'Settings & Diagnostics' }).click()
   await expect(page.getByText(/Readiness: unknown; components: 2; routes: 1/)).toBeVisible()
 
@@ -93,6 +94,8 @@ test('packaged entry routing and complete live operator workflow', async ({ page
   expect(secret).toBeTruthy()
   await expect(dialog.getByRole('heading')).toBeFocused()
   await page.keyboard.press('Tab')
+  await expect(dialog.getByRole('button', { name: 'Copy key' })).toBeFocused()
+  await page.keyboard.press('Tab')
   await expect(dialog.getByRole('button', { name: 'Dismiss secret' })).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
@@ -108,6 +111,9 @@ test('packaged entry routing and complete live operator workflow', async ({ page
 
   await page.getByRole('link', { name: 'Keys & Policies' }).click()
   await page.getByRole('button', { name: 'Revoke', exact: true }).click()
+  const revokeDialog = page.getByRole('dialog', { name: /Revoke/ })
+  await expect(revokeDialog).toBeVisible()
+  await revokeDialog.getByRole('button', { name: /Confirm revoke/ }).click()
   await expect(page.getByText('Key revoked.')).toBeVisible()
   const afterRevoke = await request.post(`${fixture.client}/v1/responses`, {
     headers: { Authorization: `Bearer ${secret}` },
