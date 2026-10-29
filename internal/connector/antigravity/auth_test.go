@@ -98,6 +98,10 @@ func TestAuthenticateBrowserPKCEStartContinue(t *testing.T) {
 		if req.URL.String() != defaultInferenceEndpoint+"/v1internal:loadCodeAssist" || req.Header.Get("Authorization") != "Bearer SYNTHETIC_ACCESS" {
 			return nil, errors.New("unexpected synthetic discovery request")
 		}
+		body, _ := io.ReadAll(req.Body)
+		if string(body) != `{"metadata":{"ideType":9,"platform":3,"pluginType":2}}` || req.Header.Get("User-Agent") != antigravityAuthUserAgent || req.Header.Get("X-Request-Source") != antigravityRequestSource {
+			return nil, errors.New("discovery identity did not match pinned Antigravity request")
+		}
 		return response(200, `{"cloudaicompanionProject":{"id":"synthetic-project"}}`), nil
 	}}
 	stateQuery := url.QueryEscape(continuation.State)

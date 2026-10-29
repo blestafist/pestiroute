@@ -25,6 +25,11 @@ import (
 
 const authResponseLimit = 64 << 10
 
+const (
+	antigravityAuthUserAgent = "antigravity/ide/2.22.0 darwin/arm64"
+	antigravityRequestSource = "local"
+)
+
 type authContinuation struct {
 	Verifier    string `json:"verifier"`
 	State       string `json:"state"`
@@ -432,7 +437,7 @@ func discoverProject(ctx context.Context, endpoint string, transport core.HTTPDo
 func discoverProjectInfo(ctx context.Context, endpoint string, transport core.HTTPDoer, accessToken string) (string, json.RawMessage, *core.GatewayError) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	body := []byte(`{"metadata":{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}`)
+	body := []byte(`{"metadata":{"ideType":9,"platform":3,"pluginType":2}}`)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1internal:loadCodeAssist", bytes.NewReader(body))
 	if err != nil {
 		return "", nil, invalidAuthResponse()
@@ -440,6 +445,8 @@ func discoverProjectInfo(ctx context.Context, endpoint string, transport core.HT
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", antigravityAuthUserAgent)
+	req.Header.Set("X-Request-Source", antigravityRequestSource)
 	resp, err := transport.Do(req)
 	if err != nil {
 		closeResponse(resp)

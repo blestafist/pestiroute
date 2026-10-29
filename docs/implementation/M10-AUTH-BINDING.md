@@ -245,11 +245,16 @@ provider branching. Both modes remain bound to the runtime's single-use persiste
 auth claim and PKCE verifier/challenge. Codes/URLs are never emitted to logs/output.
 Exchange and discovery use invocation-scoped transport. After
 exchange, one bounded `loadCodeAssist` query uses the validated configured
-inference origin and may extract a strictly validated `cloudaicompanionProject`
-ID into encrypted credential metadata. This is pinned-unofficial behavior only;
-it does not change the explicitly configured Execute project. Discovery
-failure/missing project fails closed; no onboarding, retries, alternate endpoint,
-project substitution, or account fallback occurs. Token exchange and refresh
+ inference origin and may extract a strictly validated `cloudaicompanionProject`
+ ID into encrypted credential metadata. Discovery and explicitly opted-in
+ onboarding use the pinned 9router Antigravity identity: `User-Agent:
+ antigravity/ide/2.22.0 darwin/arm64`, `X-Request-Source: local`, and numeric
+ metadata `{ideType: 9, platform: 3, pluginType: 2}`. This is an unofficial,
+ source-pinned emulation, not Google-supported identity. It does not change the
+ explicitly configured Execute project or inference request identity. Discovery
+ failure/missing project fails closed unless onboarding is separately opted in;
+ no retries, alternate endpoint, project substitution, or account fallback
+ occurs. Token exchange and refresh
 share the source-pinned default token endpoint. PestiRoute retains the public
 client identity but bundles no client secret; the known emulated client fails
 closed before exchange or refresh unless an operator configures its secret.
@@ -264,9 +269,17 @@ Official OAuth endpoints, authorized client and scopes, grant parameters,
 refresh response/rotation guarantees, expiry and freshness policy, account
 identity, personal-subscription versus Gemini Enterprise/Cloud eligibility, and
 live exchange behavior remain **Unknown** or **Blocked** as applicable. The
-`loadCodeAssist` request/response shape is an offline candidate derived from the
-pinned MIT source, not official protocol evidence. No onboarding/provisioning is
-implemented. The plugin scope discrepancy is unresolved. Do not promote
+`loadCodeAssist` and opt-in `onboardUser` request/response shapes are offline
+candidates derived from pinned MIT source, not official protocol evidence. The
+client identity corrects earlier Gemini CLI metadata claims: the pinned
+Antigravity-labeled 9router call uses the fixed Antigravity UA and request-source
+header with numeric metadata `9/3/2`; this particular platform value is not a
+host-dynamic or macOS-arm64 enum claim. Candidate-specific `ineligible` telemetry
+is distinct from aggregate `aggregate_ineligible`; raw provider reason strings
+are never exposed. `UNSUPPORTED_CLIENT` maps only to fixed safe code
+`unsupportedclient`. All opt-in guards remain fail-closed, including present
+`currentTier`/`paidTier`, user-project requirement, terms, privacy, budget and
+one-POST/12-poll limits. The plugin scope discrepancy is unresolved. Do not promote
 capabilities or make a production-provider compatibility claim. Perform live
 calls only after separate operator authorization and reviewable evidence.
 

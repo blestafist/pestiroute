@@ -339,8 +339,14 @@ func (d *adminOnboardDoer) Do(req *http.Request) (*http.Response, error) {
 	status, body := http.StatusOK, `{"access_token":"SYNTHETIC_ONBOARD_ACCESS","refresh_token":"SYNTHETIC_ONBOARD_REFRESH","expires_in":3600,"token_type":"Bearer"}`
 	switch req.URL.Path {
 	case "/v1internal:loadCodeAssist":
+		requestBody, _ := io.ReadAll(req.Body)
+		if string(requestBody) != `{"metadata":{"ideType":9,"platform":3,"pluginType":2}}` || req.Header.Get("User-Agent") != "antigravity/ide/2.22.0 darwin/arm64" || req.Header.Get("X-Request-Source") != "local" {
+			return nil, errors.New("discovery identity did not match pinned Antigravity request")
+		}
 		body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"currentTier":null,"paidTier":null}`
 		switch d.mode {
+		case "existing":
+			body = `{"cloudaicompanionProject":{"id":"synthetic-existing-project"},"allowedTiers":[]}`
 		case "standard":
 			body = `{"allowedTiers":[{"id":"standard-tier","isDefault":true,"privacyNotice":{"showNotice":null}}],"currentTier":null,"paidTier":null}`
 		case "standard-nondefault":
@@ -367,6 +373,8 @@ func (d *adminOnboardDoer) Do(req *http.Request) (*http.Response, error) {
 			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"OTHER_CANARY"}]}`
 		case "validationrequired":
 			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"VALIDATION_REQUIRED"}]}`
+		case "unsupportedclient":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"UNSUPPORTED_CLIENT"}]}`
 		case "schema-invalid":
 			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true,"hasAcceptedTos":"BAD_TYPE_CANARY"}]}`
 		case "schema-unrelated":
@@ -376,6 +384,9 @@ func (d *adminOnboardDoer) Do(req *http.Request) (*http.Response, error) {
 		d.postCalls++
 		if req.Method != http.MethodPost {
 			return nil, errors.New("onboarding was not POST")
+		}
+		if req.Header.Get("User-Agent") != "antigravity/ide/2.22.0 darwin/arm64" || req.Header.Get("X-Request-Source") != "local" {
+			return nil, errors.New("onboarding headers did not match pinned Antigravity identity")
 		}
 		var payload map[string]json.RawMessage
 		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
@@ -388,8 +399,8 @@ func (d *adminOnboardDoer) Do(req *http.Request) (*http.Response, error) {
 		if json.Unmarshal(payload["tierId"], &tierID) != nil {
 			return nil, errors.New("tierId missing from onboarding POST")
 		}
-		var metadata map[string]string
-		if len(payload) != 2 || json.Unmarshal(payload["metadata"], &metadata) != nil || metadata["ideType"] != "IDE_UNSPECIFIED" || metadata["platform"] != "PLATFORM_UNSPECIFIED" || metadata["pluginType"] != "GEMINI" {
+		var metadata map[string]int
+		if len(payload) != 2 || json.Unmarshal(payload["metadata"], &metadata) != nil || metadata["ideType"] != 9 || metadata["platform"] != 3 || metadata["pluginType"] != 2 {
 			return nil, errors.New("onboarding POST shape was not the bounded metadata form")
 		}
 		d.postTierID = tierID
@@ -430,8 +441,8 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids := []string{"onboard-happy", "onboard-standard", "onboard-default", "onboard-ineligible", "onboard-error", "onboard-cancel", "onboard-budget"}
-	for _, mode := range []string{"candidate-missing", "standard-nondefault", "legacy", "standard-invalid-default", "standard-invalid-project", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "schema-invalid", "schema-unrelated"} {
+	ids := []string{"onboard-happy", "onboard-standard", "onboard-existing", "onboard-default", "onboard-ineligible", "onboard-error", "onboard-cancel", "onboard-budget"}
+	for _, mode := range []string{"candidate-missing", "standard-nondefault", "legacy", "standard-invalid-default", "standard-invalid-project", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "unsupportedclient", "schema-invalid", "schema-unrelated"} {
 		ids = append(ids, "diag-"+mode)
 	}
 	for _, id := range ids {
@@ -481,7 +492,7 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 		err := runAdmin(adminEnvironment{ctx: callCtx, args: args, stdin: strings.NewReader("SYNTHETIC_CALLBACK_CODE\n"), stdout: &out, stderr: &stderr, authServices: services})
 		text := out.String() + stderr.String() + errorString(err)
 		if strings.Contains(extra, "--debug") {
-			code := map[string]string{"ineligible": "paid_present", "candidate-missing": "candidate_missing", "standard-nondefault": "candidate_missing", "legacy": "candidate_missing", "standard-invalid-default": "schema_invalid", "standard-invalid-project": "schema_invalid", "ambiguous": "ambiguous", "userprojectrequired": "userprojectrequired", "terms": "terms", "privacy": "privacy", "providerineligible": "providerineligible", "validationrequired": "validationrequired", "schema-invalid": "schema_invalid", "schema-unrelated": "schema_invalid"}[doer.mode]
+			code := map[string]string{"ineligible": "paid_present", "candidate-missing": "candidate_missing", "standard-nondefault": "candidate_missing", "legacy": "candidate_missing", "standard-invalid-default": "schema_invalid", "standard-invalid-project": "schema_invalid", "ambiguous": "ambiguous", "userprojectrequired": "userprojectrequired", "terms": "terms", "privacy": "privacy", "providerineligible": "providerineligible", "validationrequired": "validationrequired", "unsupportedclient": "unsupportedclient", "schema-invalid": "schema_invalid", "schema-unrelated": "schema_invalid"}[doer.mode]
 			if code != "" && !strings.Contains(text, "reason=auth_tier_"+code) {
 				t.Fatalf("debug diagnostic missing fixed reason for %q: %q", doer.mode, text)
 			}
@@ -489,7 +500,7 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 				t.Fatalf("debug onboarding stage missing for standard candidate: %q", text)
 			}
 		}
-		for _, canary := range []string{"SYNTHETIC_ONBOARD_ACCESS", "SYNTHETIC_ONBOARD_REFRESH", "admin-synthetic-op", "synthetic-managed-project", "private provider response canary", "SYNTHETIC_CALLBACK_CODE", "PAID_ID_CANARY", "UNKNOWN_ID_CANARY", "OTHER_CANARY", "BAD_TYPE_CANARY", "UNKNOWN_SCHEMA_ID_CANARY"} {
+		for _, canary := range []string{"SYNTHETIC_ONBOARD_ACCESS", "SYNTHETIC_ONBOARD_REFRESH", "admin-synthetic-op", "synthetic-managed-project", "private provider response canary", "SYNTHETIC_CALLBACK_CODE", "PAID_ID_CANARY", "UNKNOWN_ID_CANARY", "OTHER_CANARY", "UNSUPPORTED_CLIENT", "BAD_TYPE_CANARY", "UNKNOWN_SCHEMA_ID_CANARY"} {
 			if strings.Contains(text, canary) {
 				t.Fatalf("auth output leaked canary %q", canary)
 			}
@@ -503,6 +514,14 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 	if doer.calls != 4 || doer.postCalls-beforePosts != 1 || doer.postTierID != "free-tier" {
 		t.Fatalf("successful dispatch count=%d want=4", doer.calls)
 	}
+	doer.mode = "existing"
+	before, beforePosts = doer.calls, doer.postCalls
+	if err = runContinue("onboard-existing", "--debug"); err != nil {
+		t.Fatalf("existing-project discovery: %v", err)
+	}
+	if doer.calls-before != 2 || doer.postCalls != beforePosts {
+		t.Fatalf("existing project dispatches=%d POSTs=%d", doer.calls-before, doer.postCalls-beforePosts)
+	}
 	doer.mode = "standard"
 	before, beforePosts = doer.calls, doer.postCalls
 	if err = runContinue("onboard-standard", "--allow-onboard --debug"); err != nil {
@@ -514,7 +533,7 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 	doer.mode = ""
 	verify := mustOpenAdminDB(t, dbPath)
 	var budget int
-	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 8 {
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 10 {
 		t.Fatalf("budget=%d err=%v", budget, err)
 	}
 	stored, err := sqlite.NewCredentials(verify).Get(ctx, "onboard-happy", "onboard-happy-oauth")
@@ -536,17 +555,17 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 	if stored, err = sqlite.NewCredentials(verify).Get(ctx, "onboard-ineligible", "onboard-ineligible-oauth"); err != nil || stored.Revision != 1 {
 		t.Fatalf("ineligible credential revision=%d err=%v", stored.Revision, err)
 	}
-	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 10 {
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 12 {
 		t.Fatalf("ineligible budget=%d err=%v", budget, err)
 	}
-	for _, mode := range []string{"candidate-missing", "standard-nondefault", "legacy", "standard-invalid-default", "standard-invalid-project", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "schema-invalid", "schema-unrelated"} {
+	for _, mode := range []string{"candidate-missing", "standard-nondefault", "legacy", "standard-invalid-default", "standard-invalid-project", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "unsupportedclient", "schema-invalid", "schema-unrelated"} {
 		doer.mode = mode
 		before = doer.calls
 		if err = runContinue("diag-"+mode, "--allow-onboard --debug"); err == nil || doer.calls-before != 2 {
 			t.Fatalf("%s err=%v requests=%d", mode, err, doer.calls-before)
 		}
 	}
-	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 36 {
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 40 {
 		t.Fatalf("diagnostic budget=%d err=%v", budget, err)
 	}
 	for _, scenario := range []struct{ name, mode string }{{"onboard-error", "error"}, {"onboard-cancel", "cancel"}} {
@@ -567,7 +586,7 @@ func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
 			t.Fatalf("%s credential revision=%d err=%v", scenario.name, stored.Revision, getErr)
 		}
 	}
-	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 42 {
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 46 {
 		t.Fatalf("failure/cancel budget=%d err=%v", budget, err)
 	}
 	doer.mode = ""

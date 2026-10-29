@@ -71,14 +71,16 @@ func tierCandidateClass(data json.RawMessage) string {
 	return "other"
 }
 
-func tierEligibilityFlags(data json.RawMessage) (bool, bool, bool, bool, bool, bool) {
+func tierEligibilityFlags(data json.RawMessage) (bool, bool, bool, bool, bool, bool, bool) {
 	var root map[string]json.RawMessage
 	var tiers []json.RawMessage
 	if json.Unmarshal(data, &root) != nil || json.Unmarshal(root["allowedTiers"], &tiers) != nil {
-		return false, false, false, false, false, false
+		return false, false, false, false, false, false, false
 	}
 	var foundDefault, userProject, terms, privacyRequired bool
-	ineligible := listedIneligible(root, "free-tier") || listedIneligible(root, "standard-tier")
+	var defaultCandidate string
+	defaultCount := 0
+	aggregateIneligible := listedIneligible(root, "free-tier") || listedIneligible(root, "standard-tier")
 	validationRequired := ineligibleReason(root, "free-tier") == "validationrequired" || ineligibleReason(root, "standard-tier") == "validationrequired"
 	for _, raw := range tiers[:min(len(tiers), 1000)] {
 		var tier map[string]json.RawMessage
@@ -88,6 +90,8 @@ func tierEligibilityFlags(data json.RawMessage) (bool, bool, bool, bool, bool, b
 		}
 		if value, ok := tierBool(tier, "isDefault"); ok && value {
 			foundDefault = true
+			defaultCount++
+			defaultCandidate = id
 		}
 		if value, ok := tierBoolNullable(tier, "userDefinedCloudaicompanionProject"); ok && value {
 			userProject = true
@@ -102,7 +106,11 @@ func tierEligibilityFlags(data json.RawMessage) (bool, bool, bool, bool, bool, b
 			}
 		}
 	}
-	return foundDefault, userProject, terms, privacyRequired, ineligible, validationRequired
+	if defaultCount != 1 {
+		defaultCandidate = ""
+	}
+	candidateIneligible := defaultCandidate != "" && listedIneligible(root, defaultCandidate)
+	return foundDefault, userProject, terms, privacyRequired, candidateIneligible, aggregateIneligible, validationRequired
 }
 
 func discoveredTierClasses(data json.RawMessage) []string {
@@ -298,8 +306,13 @@ func ineligibleReason(root map[string]json.RawMessage, candidate string) string 
 		var id, code string
 		_ = json.Unmarshal(entry["tierId"], &id)
 		_ = json.Unmarshal(entry["reasonCode"], &code)
-		if id == candidate && code == "VALIDATION_REQUIRED" {
-			return "validationrequired"
+		if id == candidate {
+			switch code {
+			case "VALIDATION_REQUIRED":
+				return "validationrequired"
+			case "UNSUPPORTED_CLIENT":
+				return "unsupportedclient"
+			}
 		}
 	}
 	return "providerineligible"
@@ -345,8 +358,8 @@ func listedIneligible(root map[string]json.RawMessage, candidate string) bool {
 func onboardProject(ctx context.Context, origin string, transport core.HTTPDoer, token string, discovery json.RawMessage, logger *slog.Logger) (string, *core.GatewayError) {
 	if hasCurrentTier(discovery) {
 		if logger != nil {
-			defaultFlag, userProjectFlag, termsFlag, privacyFlag, ineligibleFlag, validationRequired := tierEligibilityFlags(discovery)
-			logger.Debug("authentication diagnostic", "reason", "auth_project_missing", "tier_class", tierCandidateClass(discovery), "tier_classes", discoveredTierClasses(discovery), "default", defaultFlag, "userproject", userProjectFlag, "terms", termsFlag, "privacy", privacyFlag, "ineligible", ineligibleFlag, "validation_required", validationRequired)
+			defaultFlag, userProjectFlag, termsFlag, privacyFlag, ineligibleFlag, aggregateIneligibleFlag, validationRequired := tierEligibilityFlags(discovery)
+			logger.Debug("authentication diagnostic", "reason", "auth_project_missing", "tier_class", tierCandidateClass(discovery), "tier_classes", discoveredTierClasses(discovery), "default", defaultFlag, "userproject", userProjectFlag, "terms", termsFlag, "privacy", privacyFlag, "ineligible", ineligibleFlag, "aggregate_ineligible", aggregateIneligibleFlag, "validation_required", validationRequired)
 		}
 		return "", &core.GatewayError{Code: "auth_project_missing", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Authentication project data is missing"}
 	}
@@ -354,8 +367,8 @@ func onboardProject(ctx context.Context, origin string, transport core.HTTPDoer,
 	if selected == "" || eligibilityReason != "" {
 		reason, allowedCount, candidateCount, validationRequired, malformedEntry, candidateSchemaInvalid, unrelatedSchemaInvalid := tierEligibilityDiagnostic(discovery)
 		if logger != nil {
-			defaultFlag, userProjectFlag, termsFlag, privacyFlag, ineligibleFlag, _ := tierEligibilityFlags(discovery)
-			logger.Debug("authentication diagnostic", "reason", "auth_tier_"+reason, "tier_class", tierCandidateClass(discovery), "tier_classes", discoveredTierClasses(discovery), "allowed_count", allowedCount, "candidate_count", candidateCount, "default", defaultFlag, "userproject", userProjectFlag, "terms", termsFlag, "privacy", privacyFlag, "ineligible", ineligibleFlag, "validation_required", validationRequired, "malformed_entry", malformedEntry, "candidate_schema_invalid", candidateSchemaInvalid, "unrelated_schema_invalid", unrelatedSchemaInvalid)
+			defaultFlag, userProjectFlag, termsFlag, privacyFlag, ineligibleFlag, aggregateIneligibleFlag, _ := tierEligibilityFlags(discovery)
+			logger.Debug("authentication diagnostic", "reason", "auth_tier_"+reason, "tier_class", tierCandidateClass(discovery), "tier_classes", discoveredTierClasses(discovery), "allowed_count", allowedCount, "candidate_count", candidateCount, "default", defaultFlag, "userproject", userProjectFlag, "terms", termsFlag, "privacy", privacyFlag, "ineligible", ineligibleFlag, "aggregate_ineligible", aggregateIneligibleFlag, "validation_required", validationRequired, "malformed_entry", malformedEntry, "candidate_schema_invalid", candidateSchemaInvalid, "unrelated_schema_invalid", unrelatedSchemaInvalid)
 		}
 		code := "auth_tier_" + reason
 		if reason == "auth_tier_ineligible" {
@@ -371,15 +384,15 @@ func onboardProject(ctx context.Context, origin string, transport core.HTTPDoer,
 	body, _ := json.Marshal(struct {
 		TierID   string `json:"tierId"`
 		Metadata struct {
-			IDEType    string `json:"ideType"`
-			Platform   string `json:"platform"`
-			PluginType string `json:"pluginType"`
+			IDEType    int `json:"ideType"`
+			Platform   int `json:"platform"`
+			PluginType int `json:"pluginType"`
 		} `json:"metadata"`
 	}{TierID: selected, Metadata: struct {
-		IDEType    string `json:"ideType"`
-		Platform   string `json:"platform"`
-		PluginType string `json:"pluginType"`
-	}{IDEType: "IDE_UNSPECIFIED", Platform: "PLATFORM_UNSPECIFIED", PluginType: "GEMINI"}})
+		IDEType    int `json:"ideType"`
+		Platform   int `json:"platform"`
+		PluginType int `json:"pluginType"`
+	}{IDEType: 9, Platform: 3, PluginType: 2}})
 	resp, ge := onboardingRequest(ctx, transport, http.MethodPost, origin+"/v1internal:onboardUser", token, body)
 	if ge != nil {
 		return "", ge
@@ -491,6 +504,10 @@ func onboardingRequest(ctx context.Context, transport core.HTTPDoer, method, end
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+		if method == http.MethodPost {
+			req.Header.Set("User-Agent", antigravityAuthUserAgent)
+			req.Header.Set("X-Request-Source", antigravityRequestSource)
+		}
 	}
 	resp, err := transport.Do(req)
 	if err != nil {

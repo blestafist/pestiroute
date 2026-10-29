@@ -63,6 +63,7 @@ func TestTierEligibilityDiagnosticUsesFixedReasons(t *testing.T) {
 		{`{"allowedTiers":[{"id":"free-tier","userDefinedCloudaicompanionProject":true},{"id":"unrelated","isDefault":"bad"}]}`, "schema_invalid"},
 		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"standard-tier","reasonCode":"OTHER"}]}`, "providerineligible"},
 		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"standard-tier","reasonCode":"VALIDATION_REQUIRED"}]}`, "validationrequired"},
+		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"standard-tier","reasonCode":"UNSUPPORTED_CLIENT"}]}`, "unsupportedclient"},
 		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true}],"ineligibleTiers":"bad"}`, "schema_invalid"},
 		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true,"privacyNotice":{"showNotice":"false"}}]}`, "schema_invalid"},
 		{`{"allowedTiers":[{"id":"standard-tier","isDefault":true},{"id":"free-tier","isDefault":false}]}`, ""},
@@ -76,6 +77,10 @@ func TestTierEligibilityDiagnosticUsesFixedReasons(t *testing.T) {
 	_, _, _, _, _, candidateBad, unrelatedBad := tierEligibilityDiagnostic([]byte(`{"allowedTiers":[{"id":"free-tier","hasAcceptedTos":"bad"},{"id":"OTHER_CANARY","isDefault":"bad"}]}`))
 	if !candidateBad || !unrelatedBad {
 		t.Fatalf("schema flags candidate=%t unrelated=%t", candidateBad, unrelatedBad)
+	}
+	_, _, _, _, candidateIneligible, aggregateIneligible, _ := tierEligibilityFlags([]byte(`{"allowedTiers":[{"id":"free-tier","isDefault":true},{"id":"standard-tier","isDefault":false}],"ineligibleTiers":[{"tierId":"standard-tier","reasonCode":"UNSUPPORTED_CLIENT"}]}`))
+	if candidateIneligible || !aggregateIneligible {
+		t.Fatalf("candidate/aggregate ineligibility conflated: candidate=%t aggregate=%t", candidateIneligible, aggregateIneligible)
 	}
 	if got := discoveredTierClasses([]byte(`{"allowedTiers":[{"id":"free-tier"},{"id":"legacy-tier"},{"id":"standard-tier"},{"id":"UNKNOWN_CANARY"}]}`)); strings.Join(got, ",") != "free,legacy,standard,other" {
 		t.Fatalf("unsafe classes %v", got)
@@ -172,8 +177,14 @@ func TestOnboardOptInPollsOncePerOperationAndValidatesProject(t *testing.T) {
 			if req.Method != http.MethodPost {
 				return nil, errors.New("expected POST")
 			}
+			if req.Header.Get("User-Agent") != antigravityAuthUserAgent || req.Header.Get("X-Request-Source") != antigravityRequestSource {
+				return nil, errors.New("onboarding headers did not match pinned Antigravity identity")
+			}
 			var body map[string]json.RawMessage
 			_ = json.NewDecoder(req.Body).Decode(&body)
+			if string(body["metadata"]) != `{"ideType":9,"platform":3,"pluginType":2}` {
+				return nil, errors.New("onboarding metadata did not match pinned Antigravity identity")
+			}
 			if _, exists := body["cloudaicompanionProject"]; exists {
 				return nil, errors.New("project hint must be omitted")
 			}

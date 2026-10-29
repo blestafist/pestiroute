@@ -199,15 +199,46 @@ account, or private local credential activity.
 | `kimws/gemini-oauth` | `35b51d2d85180c181b1eb64e818dce32b043f400`, `src/project.ts:143-163,209-245`, `src/constants.ts` | Calls `loadCodeAssist`; prefers `free-tier`, else default, else first `allowedTiers`; calls `onboardUser` with chosen tier and project hint; response may be immediate `done` or contain operation `name`; polls via GET `${base}/${name}` with bearer auth; 12 iterations and 2s delay in constants; returns nested project ID only when done. Does not inspect `hasAcceptedTos`, privacy notice, or ineligible reasons before choosing in this flow. | High for source observation; low for wire compatibility; unofficial. [Pinned project.ts](https://github.com/kimws/gemini-oauth/blob/35b51d2d85180c181b1eb64e818dce32b043f400/src/project.ts), [constants.ts](https://github.com/kimws/gemini-oauth/blob/35b51d2d85180c181b1eb64e818dce32b043f400/src/constants.ts). |
 | `decolua/9router` | `87a74e1bda3677193c6f71a7e2100c90311f0689`, `open-sse/services/projectId.js:173-190,204-248`, `src/lib/oauth/providers/antigravity.js:45-82` | Corrected audit: project service returns immediately if project exists; if missing, chooses a default allowed tier (legacy fallback), then calls onboarding. It sends `{tierId, metadata}`, expects immediate done or repeats the onboarding POST up to 2 by default (configurable), with 12-second delay plus jitter; it does not GET an LRO operation. Separate post-exchange code has fire-and-forget onboarding when project already exists. | High for pinned source; Antigravity-labeled unofficial implementation only, no provider confirmation. [Pinned projectId.js](https://github.com/decolua/9router/blob/87a74e1bda3677193c6f71a7e2100c90311f0689/open-sse/services/projectId.js), [antigravity.js](https://github.com/decolua/9router/blob/87a74e1bda3677193c6f71a7e2100c90311f0689/src/lib/oauth/providers/antigravity.js). |
 
-Conclusion: bounded experimental onboarding is a defensible source-derived
-candidate, not universal Google approval or an Antigravity compatibility claim.
+## Antigravity discovery/onboarding identity correction (M10-027)
+
+Audit date: 2026-10-29. Read-only public-source inspection of the pinned
+`decolua/9router` commit above; no endpoint, account, token, or private local
+state was accessed. The exact provider-specific `postExchange` path in
+[`antigravity.js`](https://github.com/decolua/9router/blob/87a74e1bda3677193c6f71a7e2100c90311f0689/src/lib/oauth/providers/antigravity.js)
+constructs a `loadHeaders` object with the Antigravity desktop UA and
+`x-request-source: local`; its `loadCodeAssist` POST sends
+`JSON.stringify({metadata})`, then its `onboardUser` POST reuses those same
+headers and sends `{tierId, metadata}`. The pinned
+[`appConstants.js`](https://github.com/decolua/9router/blob/87a74e1bda3677193c6f71a7e2100c90311f0689/open-sse/config/appConstants.js)
+defines the UA as `antigravity/ide/2.22.0 darwin/arm64`, `ideType` as 9,
+`pluginType` as 2, and platform enum 3 as Linux AMD64; its metadata builder
+computes platform from the running host, so `{ideType:9,platform:3,pluginType:2}`
+is the Linux AMD64 result. PestiRoute pins that requested source-observed value;
+it is not a claim that platform 3 describes the UA's macOS ARM host. The source
+computes platform dynamically on other hosts. The separate
+`projectId.js` service uses a different header constant and has configurable
+POST retries; it is not the canonical call path used to pin these headers.
+`kimws/gemini-oauth` does not establish this Antigravity identity.
+
+The earlier use of Gemini CLI `IDE_UNSPECIFIED`/string metadata and the claim
+that this client identity was absent are corrected for Antigravity discovery and
+onboarding only. Whether client identity changes account tier advertisement or
+eligibility is plausible but unproven. PestiRoute retains stricter existing
+guards and bounded one-POST/same-origin-GET behavior; this source correction is
+not a compatibility finding or permission for live calls. In diagnostics,
+`ineligible` means the selected default candidate and `aggregate_ineligible`
+means either recognized candidate is listed; neither exposes raw reason text.
+Only `UNSUPPORTED_CLIENT` maps to fixed safe enum `unsupportedclient`.
+
+Conclusion: bounded experimental onboarding is a source-derived candidate, not
+universal Google approval or an Antigravity compatibility claim.
 The official CLI has a concrete missing-project flow only when `currentTier` is
 absent; when `currentTier` exists without a project it fails closed or requires
 an explicit project. The Antigravity-labeled 9router source also enters onboarding
 when project is missing, but retries POST rather than polling. The selected
-candidate therefore follows the pinned CLI's managed-free/default-tier request
-shape and GET operation polling, while adding strict bounded fail-closed
-semantics. It must reject unresolved current tier, paid or user-defined-project
+candidate follows the inspected pinned-source request metadata and separately
+uses bounded same-origin GET operation polling; the 9router retrying POST flow
+is not copied. It rejects unresolved current tier, paid or user-defined-project
 tiers, and any terms/privacy condition lacking explicit authorized acceptance.
 Keep default `auth_project_missing`, persist no credential before project
 confirmation, and make no claim that the wire is supported by Google or known to
