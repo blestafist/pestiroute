@@ -55,7 +55,7 @@ func TestSQLiteAuthCoordinatorStoreAntigravityEncryptedRefreshReloadExecute(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := []byte(`{"access_token":"SYNTHETIC_EXPIRED_ACCESS","refresh_token":"SYNTHETIC_ORIGINAL_REFRESH"}`)
+	initial := []byte(`{"access_token":"SYNTHETIC_EXPIRED_ACCESS","refresh_token":"SYNTHETIC_ORIGINAL_REFRESH","project_id":"synthetic-project"}`)
 	envelope, err := secure.Seal(key, 1, "key-v1", "credentials", "credential", "antigravity-account", initial)
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestSQLiteAuthCoordinatorStoreAntigravityEncryptedRefreshReloadExecute(t *t
 	if err != nil || refreshed.Revision != 2 || refreshed.ExpiresAt == nil || !refreshed.ExpiresAt.After(time.Now()) || len(refreshed.Values) != 1 {
 		t.Fatalf("refresh=%+v err=%v", refreshed, err)
 	}
-	if string(refreshed.Values["oauth"]) != `{"access_token":"SYNTHETIC_ENCRYPTED_ROTATED_ACCESS","refresh_token":"SYNTHETIC_ENCRYPTED_ROTATED_REFRESH"}` {
+	if string(refreshed.Values["oauth"]) != `{"access_token":"SYNTHETIC_ENCRYPTED_ROTATED_ACCESS","refresh_token":"SYNTHETIC_ENCRYPTED_ROTATED_REFRESH","project_id":"synthetic-project"}` {
 		t.Fatalf("unexpected replacement oauth bundle %q", refreshed.Values["oauth"])
 	}
 	requests := transport.Requests()

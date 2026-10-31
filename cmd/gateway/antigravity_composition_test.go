@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -67,7 +68,7 @@ func TestAntigravityProtectedYAMLStreamsAndCancelsWithRealHTTPClients(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealed, err := secure.Seal(key, 1, "test-v1", "credentials", "oauth", accountID, []byte(`{"access_token":"SYNTHETIC_ACCESS_TOKEN"}`))
+	sealed, err := secure.Seal(key, 1, "test-v1", "credentials", "oauth", accountID, []byte(`{"access_token":"SYNTHETIC_ACCESS_TOKEN","project_id":"synthetic-project"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +173,33 @@ policies: {standard: policy-id-a}
 		return gateway.Client().Do(req)
 	}
 
+	// Dispatch requires a generated route for the exact requested model; connector
+	// allowlisting alone is insufficient. Keep the fixed pre-dispatch code visible
+	// in this local-only regression without ever reaching the provider transport.
+	unsupported, err := post(context.Background(), `{"model":"gemini-2.5-flash","stream":true,"input":"synthetic prompt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupportedBody, err := io.ReadAll(unsupported.Body)
+	_ = unsupported.Body.Close()
+	if err != nil || unsupported.StatusCode != http.StatusBadRequest || !strings.Contains(string(unsupportedBody), `"code":"unsupported_target"`) || upstreamCalls.Load() != 0 {
+		t.Fatalf("unrouted model status=%d err=%v upstream calls=%d", unsupported.StatusCode, err, upstreamCalls.Load())
+	}
+	checkSmokeDiagnostic(t, unsupportedBody, unsupported.Header.Get("Content-Type"), "unsupported_target")
+
+	// The old live runner included store:false. Admission rejects even a false
+	// value because store is outside the connector's supported field subset.
+	rejected, err := post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"store":false,"input":"synthetic prompt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectedBody, err := io.ReadAll(rejected.Body)
+	_ = rejected.Body.Close()
+	if err != nil || rejected.StatusCode != http.StatusBadRequest || upstreamCalls.Load() != 0 {
+		t.Fatalf("store field status=%d err=%v upstream calls=%d", rejected.StatusCode, err, upstreamCalls.Load())
+	}
+	checkSmokeDiagnostic(t, rejectedBody, rejected.Header.Get("Content-Type"), "unsupported_feature")
+
 	response, err := post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"input":"synthetic prompt"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -255,6 +283,16 @@ policies: {standard: policy-id-a}
 		t.Fatalf("store failure response=%q upstream calls=%d", deniedBody, upstreamCalls.Load())
 	}
 	_ = verifyBudgetDB.Close()
+}
+
+func checkSmokeDiagnostic(t *testing.T, body []byte, contentType, code string) {
+	t.Helper()
+	cmd := exec.Command("python3", "-c", `import sys; sys.path.insert(0, '../../scripts'); from antigravity_smoke_response import diagnostic; print(diagnostic(sys.stdin.buffer.read(), sys.argv[1]))`, contentType)
+	cmd.Stdin = strings.NewReader(string(body))
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "fixed_code="+code+" reason=recognized_code") {
+		t.Fatalf("sanitized diagnostic mismatch: err=%v", err)
+	}
 }
 
 func readGatewayUntil(t *testing.T, reader *bufio.Reader, marker string) string {

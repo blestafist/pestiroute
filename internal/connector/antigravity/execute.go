@@ -113,6 +113,9 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if !valid {
 		return core.ExecutionResponse{}, unauthenticated()
 	}
+	if !projectPattern.MatchString(creds.ProjectID) {
+		return core.ExecutionResponse{}, unauthenticated()
+	}
 	request := map[string]any{"contents": contents}
 	if len(tools) != 0 {
 		request["tools"] = tools
@@ -126,8 +129,8 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	}
 	executionID := hex.EncodeToString(requestID[:])
 	body, err := json.Marshal(map[string]any{
-		"project": cfg.Project, "model": model, "request": request,
-		"requestType": "agent", "userAgent": "antigravity", "requestId": "agent/" + executionID + "/" + time.Now().UTC().Format("20060102T150405.000Z"),
+		"project": creds.ProjectID, "model": model, "request": request,
+		"userAgent": "antigravity", "requestId": "agent/" + executionID + "/" + time.Now().UTC().Format("20060102T150405.000Z"),
 	})
 	if err != nil {
 		return core.ExecutionResponse{}, invalid("invalid_request")
@@ -135,7 +138,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	requestURL := cfg.Endpoint + "/v1internal:streamGenerateContent?alt=sse"
 	endpoint, _ := url.Parse(cfg.Endpoint)
 	if strings.EqualFold(endpoint.Hostname(), "antigravity.synthetic.invalid") {
-		requestURL = cfg.Endpoint + "/v1internal/projects/" + cfg.Project + ":generateContent?alt=sse"
+		requestURL = cfg.Endpoint + "/v1internal/projects/" + creds.ProjectID + ":generateContent?alt=sse"
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
@@ -144,6 +147,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	httpReq.Header.Set("Authorization", "Bearer "+creds.AccessToken)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("User-Agent", antigravityAuthUserAgent)
 	if ctx.Err() != nil {
 		return core.ExecutionResponse{}, contextError(ctx.Err())
 	}
@@ -166,9 +170,9 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		return core.ExecutionResponse{}, contextError(ctx.Err())
 	}
 	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 8192))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		_ = resp.Body.Close()
-		return core.ExecutionResponse{}, statusError(resp.StatusCode)
+		return core.ExecutionResponse{}, statusError(resp.StatusCode, body)
 	}
 	mediaType, params, parseErr := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if parseErr != nil || mediaType != "text/event-stream" || (params["charset"] != "" && !strings.EqualFold(params["charset"], "utf-8")) || (resp.Header.Get("Content-Encoding") != "" && !strings.EqualFold(resp.Header.Get("Content-Encoding"), "identity")) {
@@ -666,11 +670,30 @@ func unauthenticated() *core.GatewayError {
 func requestBudgetError() *core.GatewayError {
 	return &core.GatewayError{Code: "request_budget_exceeded", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnsafe, Message: "Provider request budget is unavailable"}
 }
-func statusError(status int) *core.GatewayError {
+func statusError(status int, body []byte) *core.GatewayError {
+	var upstream struct {
+		Error struct {
+			Status string `json:"status"`
+		} `json:"error"`
+	}
+	if len(body) != 0 && uniqueJSON(body) && json.Unmarshal(body, &upstream) == nil {
+		switch upstream.Error.Status {
+		case "UNAUTHENTICATED":
+			return unauthenticated()
+		case "PERMISSION_DENIED":
+			return &core.GatewayError{Code: "permission_denied", Category: core.CategoryPermissionDenied, RetryDisposition: core.RetryUnsafe, Message: "Antigravity permission was denied"}
+		case "RESOURCE_EXHAUSTED":
+			return &core.GatewayError{Code: "rate_limited", Category: core.CategoryRateLimited, Retryable: true, RetryDisposition: core.RetryUnknown, Message: "Antigravity request was rate limited"}
+		case "INVALID_ARGUMENT":
+			return invalid("invalid_request")
+		}
+	}
 	switch {
-	case status == 401 || status == 403:
+	case status == http.StatusUnauthorized:
 		return unauthenticated()
-	case status == 429:
+	case status == http.StatusForbidden:
+		return &core.GatewayError{Code: "permission_denied", Category: core.CategoryPermissionDenied, RetryDisposition: core.RetryUnsafe, Message: "Antigravity permission was denied"}
+	case status == http.StatusTooManyRequests:
 		return &core.GatewayError{Code: "rate_limited", Category: core.CategoryRateLimited, Retryable: true, RetryDisposition: core.RetryUnknown, Message: "Antigravity request was rate limited"}
 	case status >= 500 && status <= 599:
 		return &core.GatewayError{Code: "upstream_unavailable", Category: core.CategoryUnavailable, Retryable: true, RetryDisposition: core.RetryUnknown, Message: "Antigravity service is unavailable"}

@@ -60,30 +60,37 @@ provider-model claim is implied.
 The private backend request is a candidate-only translation based on pinned MIT
 plugin observations: Rahularya01 `opencode-antigravity` revision
 `874ef4d6cc44f852401e6298790c6b34804e2978` (`src/client/client.ts`,
-`src/stream/transform.ts`, `src/utils/util.ts`, `src/types/enums.ts`). Use outer
-keys `project`, `model`, `request`, `requestType`, `userAgent`, and `requestId`;
-`request` contains `contents` and admitted `tools`. `requestType: agent`,
-`userAgent: antigravity`, and `functionDeclarations[].parametersJsonSchema` are
-pinned-source candidate values. Generate a fresh request ID per invocation; its
-format is not verified. Map the text prompt to one user-role content with one
-text part and bind the explicit project/model. Do not include system-instruction,
-session, labels, or multimodal fields. The selected endpoint candidate is
-`https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`.
-This production host is observed as the `ENDPOINT_PROD` constant in the pinned
-community source; that client defaults to a daily host. This is not official API
-evidence. Keep `/v1internal/projects/{project}:generateContent?alt=sse` only for
-the `antigravity.synthetic.invalid` fixture destination. Project semantics,
+`src/stream/transform.ts`, `src/utils/util.ts`, `src/types/enums.ts`) and
+decolua/9router revision `87a74e1bda3677193c6f71a7e2100c90311f0689`
+(`open-sse/providers/shared.js:95-97`,
+`open-sse/providers/registry/antigravity.js:27`,
+`open-sse/executors/antigravity.js:153-159,331-344`). Use outer keys `project`,
+`model`, `request`, `userAgent`, and `requestId`; `request` contains `contents`
+and admitted `tools`. Do not send `requestType: agent`. Generate a fresh request
+ID per invocation; its format is not verified. Map the text prompt to one
+user-role content with one text part and bind the project from the selected
+stored OAuth credential's `project_id`, never from connector configuration or
+generated fallback. Existing configured `project` is accepted only as an
+optional, deprecated compatibility field and has no inference effect. Missing or
+invalid stored project fails before HTTP dispatch. Do not include
+system-instruction, session, labels, or multimodal fields. The default endpoint
+candidate is `https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`;
+the explicit inference identity is `User-Agent: antigravity/ide/2.22.0 darwin/arm64`
+and no `X-Request-Source` header. Keep
+`/v1internal/projects/{project}:generateContent?alt=sse` only for the
+`antigravity.synthetic.invalid` fixture destination. Project semantics,
 endpoint/action compatibility, headers, envelope acceptance, and provider wire
 support remain **Unknown**. Do not copy source expression or credentials.
 
 ## Project and credential scope
 
-Project identity for Execute is mandatory trusted per-instance configuration: a
-single non-empty, strictly validated identifier is supplied explicitly and bound
-to the selected connector/account. Missing or invalid configuration fails
-initialization or pre-dispatch validation; discovery metadata never substitutes
-for this setting or changes the selected account/project. The offline auth
-candidate may make one bounded `loadCodeAssist` discovery request after code
+Project identity for Execute comes only from the selected stored OAuth credential:
+a single non-empty, strictly validated `project_id` is bound to the selected
+account. Missing or invalid credential metadata fails before dispatch; there is
+no configuration fallback or generated project. The prior connector `project`
+setting remains optional and accepted for configuration compatibility, but is
+ignored for inference. Discovery metadata never changes the selected account.
+The offline auth candidate may make one bounded `loadCodeAssist` discovery request after code
 exchange against the same validated configured inference origin used by this
 connector (including its trusted endpoint override) and retain a valid returned
 project ID as credential metadata. This third-party-derived behavior is not an
@@ -96,9 +103,10 @@ At Execute, obtain only the runtime-scoped `oauth` credential bundle for the
 selected account. Strictly decode a JSON object containing a non-empty
 `access_token`, optional non-empty `refresh_token`, and optional validated
 `project_id` metadata; reject duplicate/malformed/trailing or unknown fields.
-Project only `access_token` into the candidate request's authorization header.
-Never use refresh material, credential project metadata, credentials from
-another account, ambient identity, or a plugin-owned OAuth client for Execute.
+`project_id` is required for inference even though refresh/auth parsing may admit
+its absence. Project only `access_token` into the candidate request's
+authorization header. Never use refresh material, credentials from another
+account, ambient identity, or a plugin-owned OAuth client for Execute.
 Credential acquisition/refresh is connector-owned and remains an offline
 candidate; absent credentials fail before dispatch as `unauthenticated`.
 
@@ -165,14 +173,19 @@ Connector must set retry disposition explicitly and must never internally replay
 | Missing scoped transport or real-transport opt-in unavailable | Pre-dispatch `unavailable` | `false / unknown` |
 | Transport `Do` error, nil response/body, or invalid status after invocation starts | Fail; close any available body. Delivery may be ambiguous. | `false / unknown` |
 | Redirect response | Reject and close; transport must not follow redirects | `false / unknown` |
-| 401/403 | `unauthenticated`; bounded error-body drain then close | `false / unsafe` |
-| 429 | `rate_limited`; bounded drain/close; parse Retry-After only via existing Connector rules | `true / unknown` |
-| Other non-2xx | Bounded drain/close; 5xx may be transient, other statuses are not assumed transient | 5xx `true / unknown`; otherwise `false / unknown` |
+| 401 | `unauthenticated`; bounded error-body parse then close | `false / unsafe` |
+| 403 | `permission_denied`; bounded error-body parse then close | `false / unsafe` |
+| 429 | `rate_limited`; bounded error-body parse then close; parse Retry-After only via existing Connector rules | `true / unknown` |
+| Other non-2xx | Bounded error-body parse then close; 5xx may be transient, other statuses are not assumed transient | 5xx `true / unknown`; otherwise `false / unknown` |
 | 2xx with invalid content type/encoding or malformed initial stream data | Reject before Head, close response | `false / unknown` |
 | Malformed/truncated/read-failed stream after Head | Incomplete/failed terminal outcome if possible; no replacement response | `false / unknown` |
 
-Every error-body read is bounded and every non-nil response body is closed on
-all paths. Status alone never marks replay safe. Core may fallback only before
+Error bodies are read at most 8192 bytes and never logged, returned, or retained.
+Only the fixed upstream status enums `UNAUTHENTICATED`, `PERMISSION_DENIED`,
+`RESOURCE_EXHAUSTED`, and `INVALID_ARGUMENT` affect classification; malformed,
+duplicate-key, unknown, or absent values fall back to HTTP status. Public errors
+contain only fixed gateway codes/messages, never upstream text or tokens. Every
+non-nil response body is closed on all paths. Status alone never marks replay safe. Core may fallback only before
 commit when `Retryable=true`, disposition is `safe`, and policy/deadline permit
 it. This binding classifies ambiguous post-`Do` failures as unknown/unsafe for
 fallback. Once the adapter receives Head and commits the response, no fallback

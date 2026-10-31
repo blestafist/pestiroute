@@ -28,13 +28,13 @@ var projectPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}[a-z0-9]$|^[a-z]$`
 
 type config struct {
 	Profile      string      `json:"profile"`
-	Project      string      `json:"project"`
+	Project      string      `json:"project,omitempty"` // Deprecated compatibility field; inference uses stored credential project identity.
 	Endpoint     string      `json:"endpoint,omitempty"`
 	AllowOnboard bool        `json:"allow_onboard,omitempty"`
 	OAuth        oauthConfig `json:"oauth"`
 }
 
-const defaultInferenceEndpoint = "https://cloudcode-pa.googleapis.com"
+const defaultInferenceEndpoint = "https://daily-cloudcode-pa.googleapis.com"
 
 type oauthConfig struct {
 	ClientID              string   `json:"client_id"`
@@ -92,7 +92,7 @@ func (c *Connector) Init(ctx context.Context, in core.ComponentConfig) error {
 	}
 	d := json.NewDecoder(bytes.NewReader(in.Data))
 	d.DisallowUnknownFields()
-	if d.Decode(&cfg) != nil || d.Decode(new(any)) != io.EOF || cfg.Profile != profile || !projectPattern.MatchString(cfg.Project) {
+	if d.Decode(&cfg) != nil || d.Decode(new(any)) != io.EOF || cfg.Profile != profile || cfg.Project != "" && !projectPattern.MatchString(cfg.Project) {
 		return errors.New("invalid Antigravity profile or project")
 	}
 	cfg.OAuth = withOAuthDefaults(cfg.OAuth)

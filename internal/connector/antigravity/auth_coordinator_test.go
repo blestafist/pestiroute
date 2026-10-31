@@ -312,8 +312,8 @@ func newCoordinatorFixtureStore(resolveErr error) *coordinatorFixtureStore {
 			"account-b": {ID: "account-b", ConnectorID: "antigravity", Enabled: true},
 		},
 		credentials: map[string]core.AuthCredentials{
-			"account-a": {Revision: 4, Valid: true, Values: map[string][]byte{"oauth": []byte(`{"access_token":"SYNTHETIC_A_EXPIRED_ACCESS","refresh_token":"SYNTHETIC_A_REFRESH"}`)}, ExpiresAt: &expired},
-			"account-b": {Revision: 9, Valid: true, Values: map[string][]byte{"oauth": []byte(`{"access_token":"SYNTHETIC_B_ACCESS","refresh_token":"SYNTHETIC_B_REFRESH"}`)}, ExpiresAt: &expired},
+			"account-a": {Revision: 4, Valid: true, Values: map[string][]byte{"oauth": []byte(`{"access_token":"SYNTHETIC_A_EXPIRED_ACCESS","refresh_token":"SYNTHETIC_A_REFRESH","project_id":"synthetic-project-a"}`)}, ExpiresAt: &expired},
+			"account-b": {Revision: 9, Valid: true, Values: map[string][]byte{"oauth": []byte(`{"access_token":"SYNTHETIC_B_ACCESS","refresh_token":"SYNTHETIC_B_REFRESH","project_id":"synthetic-project-b"}`)}, ExpiresAt: &expired},
 		},
 		markers: map[string]bool{}, quarantine: map[string]bool{}, resolveErr: resolveErr,
 		sessions: map[string]core.AuthSession{}, states: map[string][]byte{}, claimed: map[string]bool{},

@@ -100,7 +100,7 @@ func request(body string) core.ExecutionRequest {
 	return core.ExecutionRequest{Payload: core.RawPayload{Protocol: protocol, ContentType: "application/json", Body: []byte(body)}}
 }
 func services(fake *fakeDoer) core.InvocationServices {
-	return core.InvocationServices{Transport: packageTestDoer(fake), Credentials: credentials{data: []byte(`{"access_token":"synthetic-token"}`)}}
+	return core.InvocationServices{Transport: packageTestDoer(fake), Credentials: credentials{data: []byte(`{"access_token":"synthetic-token","project_id":"synthetic-project"}`)}}
 }
 func response(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
@@ -123,7 +123,7 @@ func TestExecuteStreamsIncrementallyAndBuildsCandidateRequest(t *testing.T) {
 	if ge != nil {
 		t.Fatal(ge)
 	}
-	if f.calls != 1 || f.request.URL.String() != "https://antigravity.synthetic.invalid/v1internal/projects/synthetic-project:generateContent?alt=sse" || f.request.Header.Get("Authorization") != "Bearer synthetic-token" {
+	if f.calls != 1 || f.request.URL.String() != "https://antigravity.synthetic.invalid/v1internal/projects/synthetic-project:generateContent?alt=sse" || f.request.Header.Get("Authorization") != "Bearer synthetic-token" || f.request.Header.Get("User-Agent") != antigravityAuthUserAgent || f.request.Header.Get("X-Request-Source") != "" {
 		t.Fatalf("bad dispatch: calls=%d request=%v", f.calls, f.request)
 	}
 	reqBody, err := io.ReadAll(f.request.Body)
@@ -131,7 +131,7 @@ func TestExecuteStreamsIncrementallyAndBuildsCandidateRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	var candidate map[string]any
-	if err := json.Unmarshal(reqBody, &candidate); err != nil || candidate["project"] != "synthetic-project" || candidate["requestType"] != "agent" {
+	if err := json.Unmarshal(reqBody, &candidate); err != nil || candidate["project"] != "synthetic-project" || candidate["requestType"] != nil {
 		t.Fatalf("bad candidate envelope %s (%v)", reqBody, err)
 	}
 	s := out.Stream
@@ -235,7 +235,7 @@ func TestSeparateExecutionsUseDistinctResponseAndMessageIDs(t *testing.T) {
 
 func TestInferenceEndpointDefaultsAndOverride(t *testing.T) {
 	for _, tc := range []struct{ name, config, env, want string }{
-		{"production default", `{"profile":"antigravity-v1internal","project":"synthetic-project"}`, "", "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"},
+		{"production default", `{"profile":"antigravity-v1internal"}`, "", "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"},
 		{"environment override", `{"profile":"antigravity-v1internal","project":"synthetic-project"}`, "https://api.example.invalid", "https://api.example.invalid/v1internal:streamGenerateContent?alt=sse"},
 		{"environment overrides configured endpoint", `{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://configured.example.invalid"}`, "https://api.example.invalid", "https://api.example.invalid/v1internal:streamGenerateContent?alt=sse"},
 		{"explicit endpoint", `{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://api.example.invalid"}`, "", "https://api.example.invalid/v1internal:streamGenerateContent?alt=sse"},
@@ -848,21 +848,86 @@ func TestCredentialAndHTTPFailures(t *testing.T) {
 	}
 	f := &fakeDoer{response: response(200, "data: {\"response\":{\"done\":true}}\n\n")}
 	svc := services(f)
-	svc.Credentials = credentials{data: []byte(`{"access_token":"SYNTHETIC_ACCESS","refresh_token":"SYNTHETIC_REFRESH"}`)}
+	svc.Credentials = credentials{data: []byte(`{"access_token":"SYNTHETIC_ACCESS","refresh_token":"SYNTHETIC_REFRESH","project_id":"synthetic-project"}`)}
 	out, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: core.ModeTranslation}, svc)
 	if ge != nil || f.calls != 1 || f.request == nil || f.request.Header.Get("Authorization") != "Bearer SYNTHETIC_ACCESS" {
 		t.Fatalf("oauth bundle dispatch: error=%v calls=%d", ge, f.calls)
 	}
 	_ = out.Stream.Close()
-	for status, category := range map[int]core.ErrorCategory{401: core.CategoryUnauthenticated, 403: core.CategoryUnauthenticated, 429: core.CategoryRateLimited, 500: core.CategoryUnavailable, 302: core.CategoryUnavailable} {
+	for status, want := range map[int]struct {
+		code     string
+		category core.ErrorCategory
+	}{
+		401: {"unauthenticated", core.CategoryUnauthenticated},
+		403: {"permission_denied", core.CategoryPermissionDenied},
+		429: {"rate_limited", core.CategoryRateLimited},
+		500: {"upstream_unavailable", core.CategoryUnavailable},
+		302: {"upstream_unavailable", core.CategoryUnavailable},
+	} {
 		limited := &trackingBody{Reader: strings.NewReader(strings.Repeat("x", 20000))}
 		f := &fakeDoer{response: &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: limited}}
 		_, ge := c.Execute(context.Background(), req, core.AttemptScope{Mode: core.ModeTranslation}, services(f))
-		if ge == nil || ge.Category != category || f.calls != 1 {
+		if ge == nil || ge.Code != want.code || ge.Category != want.category || f.calls != 1 {
 			t.Errorf("status %d: error=%v calls=%d", status, ge, f.calls)
 		}
 		if limited.read > 8192 || !limited.closed {
 			t.Errorf("status %d body drain=%d closed=%t", status, limited.read, limited.closed)
+		}
+	}
+}
+
+func TestInferenceUsesStoredProjectAndRejectsMissingProjectBeforeDispatch(t *testing.T) {
+	c := NewConnector()
+	config := `{"profile":"antigravity-v1internal","project":"config-project","endpoint":"https://antigravity.synthetic.invalid"}`
+	if err := c.Init(context.Background(), core.ComponentConfig{Data: []byte(config)}); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
+	svc := services(f)
+	svc.Credentials = credentials{data: []byte(`{"access_token":"synthetic-token","project_id":"stored-project"}`)}
+	out, ge := c.Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, svc)
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	_ = out.Stream.Close()
+	body, err := io.ReadAll(f.request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope map[string]any
+	if json.Unmarshal(body, &envelope) != nil || envelope["project"] != "stored-project" || envelope["requestType"] != nil || f.request.URL.Path != "/v1internal/projects/stored-project:generateContent" {
+		t.Fatalf("request did not bind stored project: url=%s body=%s", f.request.URL, body)
+	}
+	for _, bundle := range []string{`{"access_token":"synthetic-token"}`, `{"access_token":"synthetic-token","project_id":""}`} {
+		f = &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
+		svc = services(f)
+		svc.Credentials = credentials{data: []byte(bundle)}
+		_, ge = c.Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, svc)
+		if ge == nil || ge.Code != "unauthenticated" || f.calls != 0 {
+			t.Errorf("missing stored project dispatched or misclassified: bundle=%s error=%v calls=%d", bundle, ge, f.calls)
+		}
+	}
+}
+
+func TestUpstreamErrorEnumsAreBoundedAndSecretSafe(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		enum   string
+		code   string
+		cat    core.ErrorCategory
+	}{
+		{401, "UNAUTHENTICATED", "unauthenticated", core.CategoryUnauthenticated},
+		{403, "PERMISSION_DENIED", "permission_denied", core.CategoryPermissionDenied},
+		{429, "RESOURCE_EXHAUSTED", "rate_limited", core.CategoryRateLimited},
+		{400, "INVALID_ARGUMENT", "invalid_request", core.CategoryInvalidRequest},
+	} {
+		const canary = "DO_NOT_LEAK_TOKEN_OR_MESSAGE"
+		body := `{"error":{"status":"` + tc.enum + `","message":"` + canary + `"}}`
+		limited := &trackingBody{Reader: strings.NewReader(body)}
+		f := &fakeDoer{response: &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: limited}}
+		_, ge := ready(t).Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+		if ge == nil || ge.Code != tc.code || ge.Category != tc.cat || strings.Contains(ge.Message, canary) || limited.read > 8192 || !limited.closed || f.calls != 1 {
+			t.Errorf("unsafe/misclassified upstream error: status=%d error=%+v read=%d closed=%t calls=%d", tc.status, ge, limited.read, limited.closed, f.calls)
 		}
 	}
 }
