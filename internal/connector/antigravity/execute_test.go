@@ -399,7 +399,7 @@ func TestStreamTerminalEvidenceAndReasoningAdmission(t *testing.T) {
 		{"candidate after STOP", stop + "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"late\"}]}}]}}\n\n", false},
 		{"conflicting finish after STOP", stop + "data: {\"response\":{\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}}\n\n", false},
 		{"content after trailing usage", stop + "data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":1}}}\n\ndata: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"late\"}]}}]}}\n\n", false},
-		{"synthetic done", "data: {\"response\":{\"done\":true}}\n\n", true},
+		{"synthetic done without output", "data: {\"response\":{\"done\":true}}\n\n", false},
 		{"usage alone", "data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":1}}}\n\n", false},
 		{"truncated after STOP", stop + "data: {\"response\":", false},
 		{"thought", "data: {\"response\":{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"hidden\",\"thought\":true}]}}]}}\n\n", true},
@@ -637,7 +637,7 @@ func TestFunctionCallWithoutCandidateIDGetsScopedID(t *testing.T) {
 	}
 }
 
-func TestDoneOnlyStreamCompletesWithEmptyOutputArray(t *testing.T) {
+func TestDoneOnlyStreamFailsClosedWithoutOutput(t *testing.T) {
 	f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
 	out, ge := ready(t).Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
 	if ge != nil {
@@ -647,27 +647,14 @@ func TestDoneOnlyStreamCompletesWithEmptyOutputArray(t *testing.T) {
 	for {
 		frame, err := out.Stream.Next(context.Background())
 		if err != nil {
-			t.Fatal(err)
-		}
-		if frame.Type != core.FrameBody || !strings.Contains(string(frame.Body.Data), `"type":"response.completed"`) {
-			if frame.Type == core.FrameComplete {
-				t.Fatal("missing response.completed event")
+			if errors.Is(err, errEmptyContent) {
+				return
 			}
-			continue
-		}
-		var event struct {
-			Response struct {
-				Output json.RawMessage `json:"output"`
-			} `json:"response"`
-		}
-		line := strings.TrimPrefix(strings.Split(string(frame.Body.Data), "\n")[1], "data: ")
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatal(err)
 		}
-		if string(event.Response.Output) != "[]" {
-			t.Fatalf("done-only response output=%s, want []", event.Response.Output)
+		if frame.Type == core.FrameComplete || frame.Type == core.FrameBody && strings.Contains(string(frame.Body.Data), `"type":"response.completed"`) {
+			t.Fatal("empty output fabricated a successful completion")
 		}
-		return
 	}
 }
 

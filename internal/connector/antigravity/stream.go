@@ -33,6 +33,19 @@ var (
 	errInvalidOrder            = errors.New("invalid candidate frame order")
 )
 
+type invalidContentSubkind string
+
+const (
+	invalidContentDoneWithCandidates   invalidContentSubkind = "done_with_candidates"
+	invalidContentTextWithFunctionCall invalidContentSubkind = "text_with_function_call"
+	invalidContentInvalidUTF8Text      invalidContentSubkind = "invalid_utf8_text"
+)
+
+type invalidContentError struct{ subkind invalidContentSubkind }
+
+func (e invalidContentError) Error() string        { return errInvalidContent.Error() }
+func (e invalidContentError) Is(target error) bool { return target == errInvalidContent }
+
 type stream struct {
 	r                *bufio.Reader
 	body             io.ReadCloser
@@ -148,6 +161,12 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 			return bodyFrame(s.pop()), nil
 		}
 	}
+	if len(s.outputs) == 0 {
+		err := errEmptyContent
+		s.logStreamError(err, false)
+		_ = s.Close()
+		return core.StreamFrame{}, err
+	}
 	s.phase = 2
 	if s.outputs == nil {
 		s.outputs = make([]map[string]any, 0)
@@ -218,6 +237,14 @@ func (s *stream) logStreamError(err error, precommit bool) {
 	if category == "precommit_unsupported_reasoning" {
 		s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "kind", s.reasoningKind, "signature_type", s.signatureType)
 		return
+	}
+	var invalid invalidContentError
+	if category == "precommit_invalid_content" && errors.As(err, &invalid) {
+		switch invalid.subkind {
+		case invalidContentDoneWithCandidates, invalidContentTextWithFunctionCall, invalidContentInvalidUTF8Text:
+			s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "subkind", invalid.subkind)
+			return
+		}
 	}
 	s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category)
 }
@@ -367,7 +394,7 @@ func (s *stream) consume(raw []byte) error {
 	}
 	if resp.Done != nil && *resp.Done {
 		if len(resp.Candidates) > 0 {
-			return errInvalidContent
+			return invalidContentError{subkind: invalidContentDoneWithCandidates}
 		}
 		if resp.Usage != nil {
 			if (resp.Usage.Prompt != nil && *resp.Usage.Prompt < 0) || (resp.Usage.Candidates != nil && *resp.Usage.Candidates < 0) {
@@ -394,6 +421,7 @@ func (s *stream) consume(raw []byte) error {
 	}
 	var parts []parsedPart
 	finished := false
+	sawEmptyText := false
 	retainedBytes := s.retainedBytes
 	var stagedCallIDs map[string]bool
 	var stagedUsage *core.UsageReport
@@ -418,11 +446,15 @@ func (s *stream) consume(raw []byte) error {
 				return errUnsupportedReasoning
 			}
 			if part.Text != nil && len(part.FunctionCall) != 0 {
-				return errInvalidContent
+				return invalidContentError{subkind: invalidContentTextWithFunctionCall}
 			}
 			if part.Text != nil {
-				if *part.Text == "" || !utf8.ValidString(*part.Text) {
-					return errInvalidContent
+				if !utf8.ValidString(*part.Text) {
+					return invalidContentError{subkind: invalidContentInvalidUTF8Text}
+				}
+				if *part.Text == "" {
+					sawEmptyText = true
+					continue
 				}
 				if len(*part.Text) > maxRequestBytes-retainedBytes {
 					return errSSEBounds
@@ -567,7 +599,7 @@ func (s *stream) consume(raw []byte) error {
 		)
 	}
 	s.retainedBytes = retainedBytes
-	if len(s.pending) == 0 && !finished && resp.Usage == nil {
+	if len(s.pending) == 0 && !finished && resp.Usage == nil && !sawEmptyText {
 		return errEmptyContent
 	}
 	return nil

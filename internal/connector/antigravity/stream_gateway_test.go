@@ -264,7 +264,6 @@ func TestSemanticConsumeErrorsHaveFixedCategories(t *testing.T) {
 		{"no candidates", `{"response":{"candidates":[]}}`, "precommit_empty_content", nil},
 		{"empty parts", `{"response":{"candidates":[{"content":{"parts":[]}}]}}`, "precommit_empty_content", nil},
 		{"unsupported part", `{"response":{"candidates":[{"content":{"parts":[{}]}}]}}`, "precommit_empty_content", nil},
-		{"empty text", `{"response":{"candidates":[{"content":{"parts":[{"text":""}]}}]}}`, "precommit_invalid_content", nil},
 		{"terminal candidate content", `{"response":{"done":true,"candidates":[{"content":{"parts":[{"text":"x"}]}}]}}`, "precommit_invalid_content", nil},
 		{"after terminal", `{"response":{"done":true}}`, "precommit_invalid_order", func(s *stream) { s.terminal = true }},
 		{"after finish", `{"response":{"candidates":[{"content":{"parts":[{"text":"x"}]}}]}}`, "precommit_invalid_order", func(s *stream) { s.sawFinish = true }},

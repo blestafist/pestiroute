@@ -24,6 +24,7 @@ def stream_diagnostics(log_text):
     """Extract only the pairs emitted by stream.go logStreamError."""
     pattern = re.compile(r'msg="Antigravity stream failure" phase="?([a-z_]+)"? category="?([a-z_]+)"?(?=\s|$)')
     reasoning = re.compile(r'\bkind=(?:"(thought_only|signature_only|both)"|(thought_only|signature_only|both))\s+signature_type=(?:"(absent|null|string|other)"|(absent|null|string|other))(?=\s|$)')
+    invalid_content = re.compile(r'\bsubkind="?(done_with_candidates|text_with_function_call|invalid_utf8_text)"?(?=\s|$)')
     found = []
     for line in log_text.splitlines():
         match = pattern.search(line)
@@ -38,6 +39,12 @@ def stream_diagnostics(log_text):
                 kind = detail.group(1) or detail.group(2)
                 signature_type = detail.group(3) or detail.group(4)
                 result += f" kind={kind} signature_type={signature_type}"
+            elif category == "precommit_invalid_content":
+                detail = invalid_content.search(line)
+                if detail:
+                    if len(re.findall(r'\bsubkind=', line)) != 1:
+                        continue
+                    result += f" subkind={detail.group(1)}"
             found.append(result)
     return found
 

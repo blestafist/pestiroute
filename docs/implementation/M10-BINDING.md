@@ -147,6 +147,18 @@ remain unsupported. Google's public [Gemini thinking documentation](https://ai.g
 describes public thought summaries and signatures, but does not establish
 Antigravity support. See [DEC-028](../project/DECISIONS.md#dec-028--translate-unsigned-antigravity-thought-summaries-incrementally)
 for pinned 9router implementation references.
+An unsigned part with present empty `text` is a no-op, including an empty
+`thought: true` part: it creates no output item or delta and adds no retained
+bytes. Empty parts may occur before, between, or after real parts without
+changing order, usage extraction, incremental delivery, or bounded retention.
+Any present `thoughtSignature` (including JSON `null`) and any text plus
+`functionCall` combination remain atomic fail-closed errors, including the
+empty-text case. A terminal stream with no actual output fails closed; it never
+fabricates a successful empty completion. These narrow source-derived semantics
+are recorded in [DEC-029](../project/DECISIONS.md#dec-029--ignore-unsigned-empty-antigravity-text-parts); the provider cause of M10-028 remains unknown.
+Invalid-content debug logs retain the `precommit_invalid_content` wire category
+and may include only fixed subkinds `done_with_candidates`,
+`text_with_function_call`, or `invalid_utf8_text`.
 For
 `gemini-2.5-flash` only, the candidate request envelope sets
 `generationConfig.thinkingConfig.thinkingBudget` to `0` and
