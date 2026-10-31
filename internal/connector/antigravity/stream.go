@@ -55,6 +55,8 @@ type stream struct {
 	messageStarted   bool
 	messageIndex     int
 	usage            *core.UsageReport
+	reasoningKind    string
+	signatureType    string
 	sawFinish        bool
 	sawTrailingUsage bool
 	skipLF           bool
@@ -207,7 +209,25 @@ func (s *stream) logStreamError(err error, precommit bool) {
 			category = "precommit_invalid_order"
 		}
 	}
+	if category == "precommit_unsupported_reasoning" {
+		s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "kind", s.reasoningKind, "signature_type", s.signatureType)
+		return
+	}
 	s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category)
+}
+
+func classifySignature(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "absent"
+	}
+	switch raw[0] {
+	case '"':
+		return "string"
+	case 'n':
+		return "null"
+	default:
+		return "other"
+	}
 }
 func (s *stream) pop() []byte { b := s.pending[0]; s.pending = s.pending[1:]; return b }
 func bodyFrame(b []byte) core.StreamFrame {
@@ -378,6 +398,15 @@ func (s *stream) consume(raw []byte) error {
 		}
 		for _, part := range candidate.Content.Parts {
 			if part.Thought != nil && *part.Thought || len(part.ThoughtSignature) != 0 {
+				thought := part.Thought != nil && *part.Thought
+				signature := len(part.ThoughtSignature) != 0
+				s.reasoningKind = "signature_only"
+				if thought && signature {
+					s.reasoningKind = "both"
+				} else if thought {
+					s.reasoningKind = "thought_only"
+				}
+				s.signatureType = classifySignature(part.ThoughtSignature)
 				return errUnsupportedReasoning
 			}
 			if part.Text != nil && len(part.FunctionCall) != 0 {

@@ -196,6 +196,58 @@ func TestStreamDebugFailureClassificationIsSecretSafe(t *testing.T) {
 	}
 }
 
+func TestUnsupportedReasoningDiagnosticMatrix(t *testing.T) {
+	const canary = "PRIVATE-REASONING-SIGNATURE-CANARY"
+	thoughts := []struct {
+		name, raw string
+		active    bool
+	}{{"true", "true", true}, {"false", "false", false}, {"missing", "", false}}
+	signatures := []struct{ name, raw, kind string }{{"absent", "", "absent"}, {"null", `null`, "null"}, {"string", `"` + canary + `"`, "string"}, {"object", `{"value":"` + canary + `"}`, "other"}, {"bool", `true`, "other"}, {"empty", `""`, "string"}}
+	for _, thought := range thoughts {
+		for _, signature := range signatures {
+			t.Run(thought.name+"/"+signature.name, func(t *testing.T) {
+				fields := `"text":"PRIVATE-CANDIDATE-TEXT"`
+				if thought.raw != "" {
+					fields += `,"thought":` + thought.raw
+				}
+				if signature.raw != "" {
+					fields += `,"thoughtSignature":` + signature.raw
+				}
+				raw := []byte(`{"response":{"candidates":[{"content":{"parts":[{` + fields + `}]}}]}}`)
+				var logs strings.Builder
+				s := newStream(&chunkReadCloser{r: strings.NewReader("")}, "r", "m", slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+				err := s.consume(raw)
+				fails := thought.active || signature.raw != ""
+				if !fails {
+					if err != nil {
+						t.Fatalf("unexpected rejection: %v", err)
+					}
+					return
+				}
+				if !errors.Is(err, errUnsupportedReasoning) {
+					t.Fatalf("error=%v", err)
+				}
+				s.logStreamError(err, true)
+				kind := "signature_only"
+				if thought.active && signature.raw != "" {
+					kind = "both"
+				} else if thought.active {
+					kind = "thought_only"
+				}
+				got := logs.String()
+				for _, want := range []string{"category=precommit_unsupported_reasoning", "kind=" + kind, "signature_type=" + signature.kind} {
+					if !strings.Contains(got, want) {
+						t.Errorf("missing %q in %q", want, got)
+					}
+				}
+				if strings.Contains(got, "PRIVATE-") || strings.Contains(got, canary) {
+					t.Fatalf("leaked private data: %q", got)
+				}
+			})
+		}
+	}
+}
+
 func TestSemanticConsumeErrorsHaveFixedCategories(t *testing.T) {
 	const private = "PRIVATE-SEMANTIC-CANARY"
 	tests := []struct {

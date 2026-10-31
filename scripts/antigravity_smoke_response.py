@@ -20,17 +20,25 @@ STREAM_FAILURES = frozenset({
     ("precommit", "precommit_invalid_order"),
     ("postcommit", "postcommit_error"),
 })
-
-
 def stream_diagnostics(log_text):
     """Extract only the pairs emitted by stream.go logStreamError."""
     pattern = re.compile(r'msg="Antigravity stream failure" phase="?([a-z_]+)"? category="?([a-z_]+)"?(?=\s|$)')
+    reasoning = re.compile(r'\bkind=(?:"(thought_only|signature_only|both)"|(thought_only|signature_only|both))\s+signature_type=(?:"(absent|null|string|other)"|(absent|null|string|other))(?=\s|$)')
     found = []
     for line in log_text.splitlines():
         match = pattern.search(line)
         if match and match.groups() in STREAM_FAILURES:
             phase, category = match.groups()
-            found.append(f"phase={phase} category={category}")
+            result = f"phase={phase} category={category}"
+            if category == "precommit_unsupported_reasoning":
+                detail = reasoning.search(line)
+                if (not detail or len(re.findall(r'\bkind=', line)) != 1
+                        or len(re.findall(r'\bsignature_type=', line)) != 1):
+                    continue
+                kind = detail.group(1) or detail.group(2)
+                signature_type = detail.group(3) or detail.group(4)
+                result += f" kind={kind} signature_type={signature_type}"
+            found.append(result)
     return found
 
 
