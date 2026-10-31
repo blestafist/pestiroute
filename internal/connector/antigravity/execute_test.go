@@ -169,6 +169,50 @@ func TestExecuteStreamsIncrementallyAndBuildsCandidateRequest(t *testing.T) {
 	}
 }
 
+func TestExecuteThinkingConfigIsFlashOnly(t *testing.T) {
+	for _, tc := range []struct {
+		model string
+		want  bool
+	}{
+		{"gemini-2.5-flash", true},
+		{"gemini-2.5-pro", false},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
+			out, ge := ready(t).Execute(context.Background(), request(`{"model":"`+tc.model+`","input":"Synthetic prompt","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+			if ge != nil {
+				t.Fatal(ge)
+			}
+			_ = out.Stream.Close()
+			body, err := io.ReadAll(f.request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var envelope struct {
+				Request map[string]json.RawMessage `json:"request"`
+			}
+			if err := json.Unmarshal(body, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			config, exists := envelope.Request["generationConfig"]
+			if exists != tc.want {
+				t.Fatalf("generationConfig present=%v want %v: %s", exists, tc.want, body)
+			}
+			if tc.want {
+				var got struct {
+					ThinkingConfig struct {
+						ThinkingBudget  *int  `json:"thinkingBudget"`
+						IncludeThoughts *bool `json:"includeThoughts"`
+					} `json:"thinkingConfig"`
+				}
+				if err := json.Unmarshal(config, &got); err != nil || got.ThinkingConfig.ThinkingBudget == nil || *got.ThinkingConfig.ThinkingBudget != 0 || got.ThinkingConfig.IncludeThoughts == nil || *got.ThinkingConfig.IncludeThoughts {
+					t.Fatalf("unexpected Flash thinking config %s (%v)", config, err)
+				}
+			}
+		})
+	}
+}
+
 func TestSeparateExecutionsUseDistinctResponseAndMessageIDs(t *testing.T) {
 	c := ready(t)
 	type streamIDs struct{ response, message string }
@@ -360,6 +404,7 @@ func TestStreamTerminalEvidenceAndReasoningAdmission(t *testing.T) {
 		{"truncated after STOP", stop + "data: {\"response\":", false},
 		{"thought", "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hidden\",\"thought\":true}]}}]}}\n\n", false},
 		{"signature", "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hidden\",\"thoughtSignature\":\"sig\"}]}}]}}\n\n", false},
+		{"null signature", "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hidden\",\"thoughtSignature\":null}]}}]}}\n\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStream(io.NopCloser(strings.NewReader(tc.wire)), "resp_test", "msg_test")

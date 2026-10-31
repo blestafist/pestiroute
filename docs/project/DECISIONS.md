@@ -553,6 +553,15 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Compatibility / impact:** Antigravity connector configuration only; prior YAML/JSON `project` remains accepted but no longer controls inference and can be omitted. Existing stored credentials without valid project metadata now fail closed before HTTP dispatch. No Core/Adapter/Connector public API, credential schema, or provider-specific public contract growth. Endpoint, identity, request envelope and error mapping remain unofficial source-derived candidates; no provider support or live verification is claimed.
 - **Verification:** Offline exact-wire tests for daily/default and synthetic override, User-Agent/no request-source, credential project vs distinct config project, absent project with zero dispatch, envelope omission, bounded fixed-enum status mapping and canary non-leakage; retain streaming, tools, cancellation and budget regressions. Zero live/provider calls and no private-state reads.
 
+### DEC-027 — Disable Dynamic Thinking in the Antigravity Flash Candidate
+
+- **Status:** Accepted for bounded M10-035 offline implementation only; not Google protocol approval or a compatibility claim.
+- **Context:** Google Gemini's public thinking documentation lists `gemini-2.5-flash` as a thinking model, documents thinking controls, and describes thought signatures as reasoning continuity metadata. It does not document Antigravity's `thinkingBudget: 0` envelope or guarantee that this setting disables thinking for Antigravity. The pinned 9router reference (`87a74e1b`) applies `thinkingConfig: {thinkingBudget: 0, includeThoughts: false}` for its `gemini-budget` Flash format, while leaving Pro configuration separate. Antigravity's connector currently fails closed on thought-bearing stream parts.
+- **Decision:** For the candidate Antigravity request only, add that exact `generationConfig` to `gemini-2.5-flash`; leave `gemini-2.5-pro` and all other model envelopes unchanged. Preserve atomic rejection of any `thought: true` part and any present `thoughtSignature` (including JSON `null`) before emitting candidate content. Do not discard reasoning metadata, relabel models, alter the public Responses/Core contract, or add provider HTTP dispatches.
+- **Alternatives rejected:** Silently strip thoughts/signatures (loses opaque reasoning state); apply the setting to Pro or all models (exceeds the pinned evidence); weaken the guard based on a request hint (does not establish upstream behavior).
+- **Compatibility / impact:** Antigravity connector request-default change for Flash only. No Core API, adapter schema, provider call, retry, accounting, or capability promotion change. Upstream behavior remains unverified; live execution is outside this decision.
+- **Verification:** Offline exact-wire Flash/Pro assertions and fail-closed thought/signature cases, plus existing tool/history, multipart streaming, usage, cancellation, and durable-budget regressions. No live/provider calls or budget deduction.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |

@@ -134,7 +134,12 @@ further candidate content and conflicting finish markers; after the optional
 usage frame, reject all further events. Usage metadata alone is never terminal
 evidence. Truncated or partial SSE framing fails, including after `STOP`. Parts marked `thought: true`
 or carrying `thoughtSignature` are rejected before any content in that frame is
-emitted. Candidate function calls are complete part values, not inferred
+emitted; presence is rejected even when `thoughtSignature` is JSON `null`. For
+`gemini-2.5-flash` only, the candidate request envelope sets
+`generationConfig.thinkingConfig.thinkingBudget` to `0` and
+`includeThoughts` to `false`; `gemini-2.5-pro` and other models remain unchanged.
+This is an offline, source-derived compatibility default, not a Google-supported
+Antigravity guarantee. Candidate function calls are complete part values, not inferred
 argument-growth fragments: each JSON object is streamed through the Responses
 added/delta/done item lifecycle, and final output retains text and calls in
 candidate/part order. Retained text and arguments share a 1 MiB bound. The

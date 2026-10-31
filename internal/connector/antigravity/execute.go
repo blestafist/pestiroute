@@ -122,6 +122,9 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		return core.ExecutionResponse{}, unauthenticated()
 	}
 	request := map[string]any{"contents": contents}
+	if model == "gemini-2.5-flash" {
+		request["generationConfig"] = map[string]any{"thinkingConfig": map[string]any{"thinkingBudget": 0, "includeThoughts": false}}
+	}
 	if len(tools) != 0 {
 		request["tools"] = tools
 	}
