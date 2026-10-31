@@ -364,20 +364,31 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestCapabilitiesOnlyPromoteVerifiedTranslationStreaming(t *testing.T) {
+func TestCapabilitiesAreScopedToVerifiedTranslationAndModels(t *testing.T) {
 	c := ready(t)
 	for _, tc := range []struct {
 		protocol string
 		mode     string
-		want     core.CapabilityState
+		model    string
+		tools    core.CapabilityState
 	}{
-		{protocol, core.ModeTranslation, core.Supported},
-		{protocol, core.ModeNative, core.Unknown},
-		{"other.protocol", core.ModeTranslation, core.Unknown},
+		{protocol, core.ModeTranslation, "gemini-2.5-pro", core.Supported},
+		{protocol, core.ModeTranslation, "gemini-2.5-flash", core.Supported},
+		{protocol, core.ModeTranslation, "", core.Unknown},
+		{protocol, core.ModeTranslation, "unknown-model", core.Unknown},
+		{protocol, core.ModeTranslation, "gpt-4o", core.Unknown},
+		{protocol, core.ModeNative, "gemini-2.5-flash", core.Unknown},
+		{"other.protocol", core.ModeTranslation, "gemini-2.5-flash", core.Unknown},
 	} {
-		result := c.Capabilities(context.Background(), core.CapabilityScope{Protocol: tc.protocol, Mode: tc.mode})
-		if got := result.Values["llm.streaming"]; (tc.want == core.Supported && got != core.Supported) || (tc.want != core.Supported && got == core.Supported) {
-			t.Errorf("scope %+v streaming=%v want supported=%v", tc, got, tc.want == core.Supported)
+		result := c.Capabilities(context.Background(), core.CapabilityScope{Protocol: tc.protocol, Mode: tc.mode, Model: tc.model})
+		if got := result.Values["llm.tools"]; (tc.tools == core.Supported && got != core.Supported) || (tc.tools != core.Supported && got == core.Supported) {
+			t.Errorf("scope %+v tools=%v want supported=%v", tc, got, tc.tools == core.Supported)
+		}
+		if tc.protocol == protocol && tc.mode == core.ModeTranslation && result.Values["llm.streaming"] != core.Supported {
+			t.Errorf("scope %+v streaming=%v want supported", tc, result.Values["llm.streaming"])
+		}
+		if result.Values["llm.tools.parallel"] == core.Supported {
+			t.Errorf("scope %+v unexpectedly supports parallel tools", tc)
 		}
 		for _, cap := range []core.Capability{"auth.oauth", "usage.exact"} {
 			if result.Values[cap] == core.Supported {

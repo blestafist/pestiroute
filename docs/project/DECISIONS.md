@@ -30,6 +30,7 @@
 | D21 | Accepted | Manual OAuth callback contract and narrowly bounded offline scope extension | Adds transient callback input; authorizes only M7-016, M7-010, and M7-013 offline work; see DEC-019 |
 | D22 | Accepted | Antigravity project onboarding remains disabled absent explicit reviewed opt-in and durable request budget | Prevents hidden provisioning and an unbounded cross-process provider-request total; see DEC-025 |
 | D23 | Accepted | Antigravity encrypted reasoning continuity is explicit opt-in and locally scoped | Preserves opaque provider parts without exposing the master key, broad decryption, or provider semantics to Core; see DEC-031 |
+| D24 | Accepted | Antigravity tool capability is a scoped local translation claim | Admits only implemented Responses function translation on the two allowlisted models; does not imply provider support or parallel tools; see DEC-032 |
 
 ## Contract ADRs
 
@@ -600,6 +601,15 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Alternatives rejected:** Pass the master key or general store to the Connector; persist signatures in an unscoped cache; drop signatures and continue; infer association from neighboring tool names or a reusable pending signature; claim exactly-once or replay protection without state.
 - **Compatibility / impact:** This documentation-only decision adds no Core, Adapter, public contract, schema, YAML/runtime configuration, retry, capability, or live behavior change. The existing boundary exposes selected account, model, and selected-account credentials, sufficient to validate account/model/project scope without fallback. `InvocationServices` does not currently expose a continuation codec; any implementation transport must be separately specified/reviewed as a generic invocation-scoped least-authority seal/open capability, never a Core provider-reasoning API. Requests that do not opt in never receive the private carrier. External clients may ignore unknown response fields or reject them; interoperability beyond the documented Responses schema remains Unknown. The stateless-default versus gateway-explicit-include difference is intentional.
 - **Verification:** Future synthetic tests cover direct signed parts and an adjacent signature-only part in one ordered provider parts array; reject ambiguous/non-adjacent/cross-frame signatures terminally without invented provider input. Verify strict version-1 plaintext schema, exact carrier placement and association, opt-in/omission, delta timing, visible signed text, tool history, AAD tampering and scope drift before dispatch, 24h/5m clock edges, 1 MiB bounds, key rotation invalidation, fixed safe errors/no leak canaries, repeated legitimate history, and unchanged retry policy. No live calls are authorized.
+
+### DEC-032 — Scope Antigravity Tool Capability
+
+- **Status:** Accepted for the M10 offline connector binding; not evidence of Google/Antigravity support or account entitlement.
+- **Context:** Core admission correctly rejects `llm.tools` when a connector reports it Unknown. The Antigravity connector implements candidate Responses function declaration, choice, call, and result translation, but does not implement parallel-tool capability.
+- **Decision:** Report `llm.tools: supported` only when the connector is ready and the capability scope is exactly `openai.responses.v1`, translation mode, and model `gemini-2.5-pro` or `gemini-2.5-flash`. Report Unknown for other models, native mode, protocols, or model-agnostic scope. Do not report `llm.tools.parallel`, `auth.oauth`, or `usage.exact` as supported. Core admission remains mandatory and provider payloads remain opaque to Core. DEC-031's exact encrypted-content opt-in and fail-closed signed-part behavior are unchanged.
+- **Alternatives rejected:** Mark tools supported for every model/protocol; allow the gateway to bypass capability admission; imply parallel support or provider acceptance from local translation tests.
+- **Compatibility / impact:** This scopes an existing connector capability declaration; no Core contract/API, adapter parsing, native request bytes, retry policy, or live behavior changes. Existing native/unknown-model routes stay ineligible. This is a local implementation claim, not remote feature support.
+- **Verification:** Offline connector capability matrix and production gateway composition test must demonstrate admitted two-turn function calling with an opted-in signed carrier, pre-dispatch unsupported-model rejection with zero provider requests, and unchanged absent-include fail-closed behavior. No live provider calls or budget consumption.
 
 ## Questions Before Implementation
 

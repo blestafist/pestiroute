@@ -145,7 +145,11 @@ func (c *Connector) Capabilities(_ context.Context, scope core.CapabilityScope) 
 	if c.state != core.HealthReady || scope.Protocol != protocol || scope.Mode != core.ModeTranslation {
 		return core.CapabilityResult{}
 	}
-	return core.CapabilityResult{Values: map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported, "auth.oauth": core.Unknown, "usage.exact": core.Unknown}}
+	values := map[core.Capability]core.CapabilityState{"llm.streaming": core.Supported, "auth.oauth": core.Unknown, "usage.exact": core.Unknown}
+	if scope.Model == "gemini-2.5-pro" || scope.Model == "gemini-2.5-flash" {
+		values["llm.tools"] = core.Supported
+	}
+	return core.CapabilityResult{Values: values}
 }
 func (c *Connector) Close(context.Context) error {
 	c.mu.Lock()
