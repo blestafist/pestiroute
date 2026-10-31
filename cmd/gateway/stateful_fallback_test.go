@@ -95,7 +95,8 @@ func (s *affinityResponseStream) Next(context.Context) (core.StreamFrame, error)
 	s.index++
 	switch s.index {
 	case 1:
-		return core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: responsesProtocol, ContentType: "application/json"}}, nil
+		status := http.StatusOK
+		return core.StreamFrame{Type: core.FrameHead, Head: &core.HeadFrame{Protocol: responsesProtocol, HTTPStatus: &status, ContentType: "application/json"}}, nil
 	case 2:
 		return core.StreamFrame{Type: core.FrameBody, Body: &core.BodyFrame{Data: []byte(`{"status":"completed"}`)}}, nil
 	case 3:

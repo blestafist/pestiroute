@@ -973,10 +973,18 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 				return
 			}
 			encode := func(pa core.ProtocolAdapter, gatewayErr *core.GatewayError, response core.ExecutionResponse) {
+				var err error
+				tracked := newCommitTrackingWriter(w)
 				if protocol == chatProtocol {
-					_ = pa.Encode(r.Context(), core.ClientResponse{Transport: chatadapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, response)
+					err = pa.Encode(r.Context(), core.ClientResponse{Transport: chatadapter.HTTPResponse{Writer: tracked.writer, Request: r}}, gatewayErr, response)
 				} else {
-					_ = pa.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, response)
+					err = pa.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: tracked.writer, Request: r}}, gatewayErr, response)
+				}
+				if err != nil && c.logger != nil {
+					c.logger.Debug("protocol response encoding failed", "phase", "response_encode", "category", "adapter_encode")
+				}
+				if err != nil && !tracked.committed && r.Context().Err() == nil {
+					tracked.writeSafeFailure()
 				}
 			}
 			if accountingFailed.Load() {
@@ -1042,6 +1050,44 @@ func validateDispatcherRouteGroups(routes []topologyRoute) error {
 		groups[key] = current
 	}
 	return nil
+}
+
+type commitTrackingWriter struct {
+	http.ResponseWriter
+	committed bool
+	writer    http.ResponseWriter
+}
+
+type commitTrackingFlusher struct{ *commitTrackingWriter }
+
+func newCommitTrackingWriter(w http.ResponseWriter) *commitTrackingWriter {
+	tracked := &commitTrackingWriter{ResponseWriter: w}
+	tracked.writer = tracked
+	if _, ok := w.(http.Flusher); ok {
+		tracked.writer = commitTrackingFlusher{tracked}
+	}
+	return tracked
+}
+
+func (w *commitTrackingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+func (w *commitTrackingWriter) WriteHeader(status int) {
+	if !w.committed {
+		w.committed = true
+		w.ResponseWriter.WriteHeader(status)
+	}
+}
+func (w *commitTrackingWriter) Write(p []byte) (int, error) {
+	w.committed = true
+	return w.ResponseWriter.Write(p)
+}
+func (w commitTrackingFlusher) Flush() {
+	w.committed = true
+	w.ResponseWriter.(http.Flusher).Flush()
+}
+func (w *commitTrackingWriter) writeSafeFailure() {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = io.WriteString(w, `{"error":{"message":"Response encoding failed","type":"unavailable","code":"adapter_encode_error"}}`)
 }
 
 type sqliteVirtualKeyStore struct{ keys *sqlite.VirtualKeys }

@@ -199,11 +199,11 @@ func TestEncodeWritesBeforeStreamCompletes(t *testing.T) {
 	}
 }
 
-func TestEncodePreHeadFailureDoesNotInventResponse(t *testing.T) {
+func TestEncodePreHeadFailureBecomesSafeGatewayError(t *testing.T) {
 	s := &encodeStream{err: errors.New("pre-head failure")}
 	w := httptest.NewRecorder()
 	err := Encode(w, httptest.NewRequest("POST", "/v1/responses", nil), core.ExecutionResponse{Stream: s}, nil)
-	if err == nil || !strings.Contains(err.Error(), "pre-head failure") || !s.closed || w.Body.Len() != 0 || w.Code != 200 {
+	if err != nil || !s.closed || w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"code":"upstream_stream_error"`) || strings.Contains(w.Body.String(), "pre-head failure") {
 		t.Fatalf("pre-head: %v %#v", err, w)
 	}
 }

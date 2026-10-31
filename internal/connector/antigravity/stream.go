@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,10 +17,16 @@ import (
 
 const maxSSELine = 1 << 20
 
+var (
+	errMalformedSSEJSON        = errors.New("malformed SSE JSON")
+	errMalformedCandidateFrame = errors.New("malformed candidate frame")
+)
+
 type stream struct {
 	r                *bufio.Reader
 	body             io.ReadCloser
 	mu               sync.Mutex
+	logger           *slog.Logger
 	closed           bool
 	once             sync.Once
 	closeErr         error
@@ -41,8 +48,12 @@ type stream struct {
 	sawTrailingUsage bool
 }
 
-func newStream(body io.ReadCloser, responseID, messageID string) *stream {
-	return &stream{r: bufio.NewReader(body), body: body, responseID: responseID, messageID: messageID, messageIndex: -1}
+func newStream(body io.ReadCloser, responseID, messageID string, logger ...*slog.Logger) *stream {
+	s := &stream{r: bufio.NewReader(body), body: body, responseID: responseID, messageID: messageID, messageIndex: -1}
+	if len(logger) > 0 {
+		s.logger = logger[0]
+	}
+	return s
 }
 func (s *stream) Close() error {
 	s.once.Do(func() { s.mu.Lock(); s.closed = true; s.mu.Unlock(); s.closeErr = s.body.Close() })
@@ -73,6 +84,7 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 	if s.phase == 0 {
 		e, err := s.nextEvent(ctx)
 		if err != nil {
+			s.logStreamError(err, s.phase == 0)
 			if errors.Is(err, io.EOF) {
 				err = io.ErrUnexpectedEOF
 			}
@@ -80,6 +92,7 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 			return core.StreamFrame{}, err
 		}
 		if err = s.consume(e); err != nil {
+			s.logStreamError(err, s.phase == 0)
 			_ = s.Close()
 			return core.StreamFrame{}, err
 		}
@@ -104,10 +117,12 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 				_ = s.Close()
 				return core.StreamFrame{}, ctx.Err()
 			}
+			s.logStreamError(err, false)
 			_ = s.Close()
 			return core.StreamFrame{}, err
 		}
 		if err = s.consume(e); err != nil {
+			s.logStreamError(err, false)
 			_ = s.Close()
 			return core.StreamFrame{}, err
 		}
@@ -149,6 +164,22 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 	s.phase = 3
 	_ = s.Close()
 	return core.StreamFrame{Type: core.FrameComplete, Complete: &core.CompleteFrame{Outcome: core.OutcomeSucceeded, Usage: s.usage}}, nil
+}
+
+func (s *stream) logStreamError(err error, precommit bool) {
+	if s.logger == nil {
+		return
+	}
+	phase, category := "postcommit", "postcommit_error"
+	if precommit {
+		phase, category = "precommit", "precommit_framing"
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			category = "precommit_eof"
+		} else if errors.Is(err, errMalformedSSEJSON) || errors.Is(err, errMalformedCandidateFrame) {
+			category = "precommit_invalid_json"
+		}
+	}
+	s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category)
 }
 func (s *stream) pop() []byte { b := s.pending[0]; s.pending = s.pending[1:]; return b }
 func bodyFrame(b []byte) core.StreamFrame {
@@ -217,7 +248,7 @@ func (s *stream) readLine() (string, error) {
 
 func (s *stream) consume(raw []byte) error {
 	if !utf8.Valid(raw) || !uniqueJSON(raw) {
-		return errors.New("malformed SSE JSON")
+		return errMalformedSSEJSON
 	}
 	type functionCall struct {
 		Name string          `json:"name"`
@@ -245,7 +276,7 @@ func (s *stream) consume(raw []byte) error {
 		} `json:"response"`
 	}
 	if json.Unmarshal(raw, &outer) != nil {
-		return errors.New("malformed candidate frame")
+		return errMalformedCandidateFrame
 	}
 	resp := outer.Response
 	if s.terminal {

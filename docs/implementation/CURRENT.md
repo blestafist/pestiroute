@@ -32,7 +32,7 @@ the earlier CURRENT claim that it awaited review was stale.
 
 | Milestone | Branch | First READY / active task | Scope / dependency |
 | --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-028 BLOCKED | M10-029–032 closed DONE. M10-032 verified metadata HTTP 200 (budget 13→14/1000), gemini-2.5-pro/flash present. M10-028 remains frozen BLOCKED (upstream 503). |
+| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-028 BLOCKED | M10-029–033 closed DONE. M10-033 verified uncommitted gateway streaming error handling and safe precommit debug diagnostics offline. M10-028 remains frozen BLOCKED (budget 14/1000). |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |

@@ -188,7 +188,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		logInferenceDiagnostic(services.Logger, resp.StatusCode, "invalid_response", "none", "none")
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "invalid_response", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Antigravity response is invalid"}
 	}
-	return core.ExecutionResponse{Stream: newStream(resp.Body, "resp_"+executionID, "msg_"+executionID)}, nil
+	return core.ExecutionResponse{Stream: newStream(resp.Body, "resp_"+executionID, "msg_"+executionID, services.Logger)}, nil
 }
 
 func logInferenceDiagnostic(logger *slog.Logger, status int, branch, upstream, transport string) {
