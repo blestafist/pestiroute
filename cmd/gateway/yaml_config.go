@@ -232,7 +232,7 @@ func validateConnectorSettingsFields(root *yaml.Node) error {
 				allowed[key] = true
 			}
 		case "pestiroute.antigravity.v1internal":
-			for _, key := range []string{"project", "model", "account_id", "endpoint"} {
+			for _, key := range []string{"project", "model", "account_id", "credential_id", "endpoint"} {
 				allowed[key] = true
 			}
 		default:
@@ -578,6 +578,9 @@ func validateAntigravitySettings(prefix string, s nativeSettings) error {
 	if strings.TrimSpace(s.Project) == "" || strings.TrimSpace(s.Model) == "" || strings.TrimSpace(s.AccountID) == "" {
 		return fmt.Errorf("%s requires non-empty project, model, and account_id", prefix)
 	}
+	if s.CredentialID != "" && strings.TrimSpace(s.CredentialID) == "" {
+		return fmt.Errorf("%s.credential_id cannot be whitespace", prefix)
+	}
 	if len(s.Project) > 64 || s.Project[0] < 'a' || s.Project[0] > 'z' || !(s.Project[len(s.Project)-1] >= 'a' && s.Project[len(s.Project)-1] <= 'z' || s.Project[len(s.Project)-1] >= '0' && s.Project[len(s.Project)-1] <= '9') {
 		return fmt.Errorf("%s.project is invalid", prefix)
 	}
@@ -592,7 +595,7 @@ func validateAntigravitySettings(prefix string, s nativeSettings) error {
 			return fmt.Errorf("%s.endpoint must be an HTTPS origin", prefix)
 		}
 	}
-	if s.BaseURL != "" || s.CredentialEnv != "" || s.CredentialID != "" || s.Profile != "" || s.RuntimeProfile != "" || s.AuthMode != "" || s.UpstreamProtocol != "" || s.Mode != "" || s.Capabilities != nil || s.MaxRequestBodyBytes != 0 || s.MaxRequestHeaderBytes != 0 || s.ConnectTimeout != "" || s.TLSHandshakeTimeout != "" || s.ResponseHeaderTimeout != "" || s.StreamIdleTimeout != "" {
+	if s.BaseURL != "" || s.CredentialEnv != "" || s.Profile != "" || s.RuntimeProfile != "" || s.AuthMode != "" || s.UpstreamProtocol != "" || s.Mode != "" || s.Capabilities != nil || s.MaxRequestBodyBytes != 0 || s.MaxRequestHeaderBytes != 0 || s.ConnectTimeout != "" || s.TLSHandshakeTimeout != "" || s.ResponseHeaderTimeout != "" || s.StreamIdleTimeout != "" {
 		return fmt.Errorf("%s has unsupported Antigravity settings", prefix)
 	}
 	return nil

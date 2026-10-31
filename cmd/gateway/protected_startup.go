@@ -124,7 +124,12 @@ func prepareProtectedConfig(ctx context.Context, c config) (config, error) {
 			component.HeaderTimeout, component.IdleTimeout = s.ResponseHeaderTimeout, s.StreamIdleTimeout
 		case "pestiroute.antigravity.v1internal":
 			component.Endpoint, component.Project, component.Model, component.AccountID = s.Endpoint, s.Project, s.Model, s.AccountID
-			component.CredentialEnv = "oauth"
+			component.CredentialEnv = strings.TrimSpace(s.CredentialID)
+			if s.CredentialID == "" {
+				component.CredentialEnv = "oauth"
+			} else if component.CredentialEnv == "" {
+				return fail(db.Close, fmt.Errorf("connector %q: Antigravity credential_id cannot be whitespace", item.ID))
+			}
 			component.MaxBodyBytes, component.MaxHeaderBytes = min(p.Server.MaxRequestBytes, 1<<20), 16<<10
 		default:
 			return fail(db.Close, fmt.Errorf("connector %q: unsupported implementation", item.ID))
