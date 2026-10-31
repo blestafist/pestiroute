@@ -3,6 +3,7 @@ package antigravity
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/blestafist/pestiroute/internal/core"
@@ -52,44 +54,74 @@ type usageMetadata struct {
 	Total      *int64 `json:"totalTokenCount"`
 }
 
+type streamFunctionCall struct {
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
+	ID   string          `json:"id"`
+}
+type streamPart struct {
+	text                                          string
+	thought                                       bool
+	call                                          *streamFunctionCall
+	args, callID, itemID                          string
+	signature                                     []byte
+	providerPartID                                *string
+	candidateIndex, partIndex, signaturePartIndex int
+	association                                   string
+}
+
 type stream struct {
-	r                *bufio.Reader
-	body             io.ReadCloser
-	mu               sync.Mutex
-	logger           *slog.Logger
-	closed           bool
-	once             sync.Once
-	closeErr         error
-	phase            uint8
-	pending          [][]byte
-	terminal         bool
-	sequence         int
-	responseID       string
-	messageID        string
-	text             strings.Builder
-	outputs          []map[string]any
-	outputIndex      int
-	usedCallIDs      map[string]bool
-	retainedBytes    int
-	messageStarted   bool
-	messageIndex     int
-	reasoningStarted bool
-	reasoningIndex   int
-	reasoningID      string
-	reasoningText    strings.Builder
-	usage            *core.UsageReport
-	reasoningKind    string
-	signatureType    string
-	sawFinish        bool
-	sawTrailingUsage bool
-	skipLF           bool
+	r                  *bufio.Reader
+	body               io.ReadCloser
+	mu                 sync.Mutex
+	logger             *slog.Logger
+	closed             bool
+	once               sync.Once
+	closeErr           error
+	phase              uint8
+	pending            [][]byte
+	terminal           bool
+	sequence           int
+	responseID         string
+	messageID          string
+	currentMessageID   string
+	text               strings.Builder
+	outputs            []map[string]any
+	outputIndex        int
+	usedCallIDs        map[string]bool
+	seenSignatures     map[string]bool
+	retainedBytes      int
+	messageStarted     bool
+	messageIndex       int
+	reasoningStarted   bool
+	reasoningIndex     int
+	reasoningID        string
+	reasoningText      strings.Builder
+	reasoningEncrypted string
+	carrierBytes       int
+	codec              *ReasoningCodec
+	includeReasoning   bool
+	scope              reasoningScope
+	usage              *core.UsageReport
+	reasoningKind      string
+	signatureType      string
+	sawFinish          bool
+	sawTrailingUsage   bool
+	skipLF             bool
 }
 
 func newStream(body io.ReadCloser, responseID, messageID string, logger ...*slog.Logger) *stream {
-	s := &stream{r: bufio.NewReader(body), body: body, responseID: responseID, messageID: messageID, messageIndex: -1}
-	if len(logger) > 0 {
-		s.logger = logger[0]
+	return newReasoningStream(body, responseID, messageID, loggerOrNil(logger), nil, false, reasoningScope{})
+}
+func loggerOrNil(logger []*slog.Logger) *slog.Logger {
+	if len(logger) != 0 {
+		return logger[0]
 	}
+	return nil
+}
+func newReasoningStream(body io.ReadCloser, responseID, messageID string, logger *slog.Logger, codec *ReasoningCodec, include bool, scope reasoningScope) *stream {
+	s := &stream{r: bufio.NewReader(body), body: body, responseID: responseID, messageID: messageID, messageIndex: -1}
+	s.logger, s.codec, s.includeReasoning, s.scope = logger, codec, include && codec != nil, scope
 	return s
 }
 func (s *stream) Close() error {
@@ -179,15 +211,7 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 	}
 	final := map[string]any{"id": s.responseID, "object": "response", "status": "completed", "output": s.outputs}
 	s.closeReasoning()
-	if s.messageStarted {
-		item := s.outputs[s.messageIndex]
-		item["status"] = "completed"
-		content := item["content"].([]any)[0].(map[string]any)
-		s.pending = append(s.pending,
-			emitEvent("response.output_text.done", map[string]any{"item_id": s.messageID, "output_index": s.messageIndex, "content_index": 0, "text": content["text"]}, &s.sequence),
-			emitEvent("response.output_item.done", map[string]any{"output_index": s.messageIndex, "item": item}, &s.sequence),
-		)
-	}
+	s.closeMessage()
 	final["output"] = s.outputs
 	if s.usage != nil {
 		u := map[string]int64{}
@@ -399,11 +423,7 @@ func (s *stream) consume(raw []byte) error {
 	if !utf8.Valid(raw) || !uniqueJSON(raw) {
 		return errMalformedSSEJSON
 	}
-	type functionCall struct {
-		Name string          `json:"name"`
-		Args json.RawMessage `json:"args"`
-		ID   string          `json:"id"`
-	}
+	type functionCall = streamFunctionCall
 	var outer struct {
 		Response struct {
 			Candidates []struct {
@@ -414,6 +434,7 @@ func (s *stream) consume(raw []byte) error {
 						FunctionCall     json.RawMessage `json:"functionCall"`
 						Thought          *bool           `json:"thought"`
 						ThoughtSignature json.RawMessage `json:"thoughtSignature"`
+						ID               *string         `json:"id"`
 					} `json:"parts"`
 				} `json:"content"`
 			} `json:"candidates"`
@@ -458,32 +479,56 @@ func (s *stream) consume(raw []byte) error {
 		s.terminal = true
 		return nil
 	}
-	type parsedPart struct {
-		text    string
-		thought bool
-		call    *functionCall
-		args    string
-		callID  string
-		itemID  string
-	}
-	var parts []parsedPart
+	var parts []streamPart
 	finished := false
 	sawEmptyText := false
 	retainedBytes := s.retainedBytes
 	var stagedCallIDs map[string]bool
+	stagedSignatures := make(map[string]bool)
 	var stagedUsage *core.UsageReport
-	for _, candidate := range resp.Candidates {
+	for candidateIndex, candidate := range resp.Candidates {
 		if candidate.FinishReason != "" {
 			if candidate.FinishReason != "STOP" {
 				return errUnsupportedFinish
 			}
 			finished = true
 		}
-		for _, part := range candidate.Content.Parts {
-			if len(part.ThoughtSignature) != 0 || part.Thought != nil && *part.Thought && part.Text == nil {
+		for partIndex, part := range candidate.Content.Parts {
+			signature, signaturePresent := partSignature(part.ThoughtSignature)
+			if len(part.ThoughtSignature) != 0 && !signaturePresent {
 				thought := part.Thought != nil && *part.Thought
-				signature := len(part.ThoughtSignature) != 0
 				s.reasoningKind = "signature_only"
+				if thought {
+					s.reasoningKind = "both"
+				}
+				s.signatureType = classifySignature(part.ThoughtSignature)
+				return errUnsupportedReasoning
+			}
+			if signaturePresent && part.Text == nil && len(part.FunctionCall) == 0 {
+				s.reasoningKind, s.signatureType = "signature_only", classifySignature(part.ThoughtSignature)
+				if part.Thought != nil && *part.Thought {
+					s.reasoningKind = "both"
+				}
+				if part.Thought != nil && *part.Thought || len(parts) == 0 || parts[len(parts)-1].signature != nil || parts[len(parts)-1].candidateIndex != candidateIndex || parts[len(parts)-1].partIndex != partIndex-1 {
+					return errUnsupportedReasoning
+				}
+				previous := &parts[len(parts)-1]
+				if !s.includeReasoning {
+					s.reasoningKind, s.signatureType = "signature_only", "string"
+					return errUnsupportedReasoning
+				}
+				key := string(signature)
+				if s.seenSignatures[key] || stagedSignatures[key] {
+					return errUnsupportedReasoning
+				}
+				stagedSignatures[key] = true
+				previous.signature, previous.signaturePartIndex, previous.association = signature, partIndex, "adjacent"
+				continue
+			}
+			if part.Thought != nil && *part.Thought && part.Text == nil {
+				thought := part.Thought != nil && *part.Thought
+				signature := signaturePresent
+				s.reasoningKind = "thought_only"
 				if thought && signature {
 					s.reasoningKind = "both"
 				} else if thought {
@@ -491,6 +536,20 @@ func (s *stream) consume(raw []byte) error {
 				}
 				s.signatureType = classifySignature(part.ThoughtSignature)
 				return errUnsupportedReasoning
+			}
+			if signaturePresent && !s.includeReasoning {
+				s.reasoningKind, s.signatureType = "signature_only", classifySignature(part.ThoughtSignature)
+				if part.Thought != nil && *part.Thought {
+					s.reasoningKind = "both"
+				}
+				return errUnsupportedReasoning
+			}
+			if signaturePresent {
+				key := string(signature)
+				if s.seenSignatures[key] || stagedSignatures[key] {
+					return errUnsupportedReasoning
+				}
+				stagedSignatures[key] = true
 			}
 			if part.Text != nil && len(part.FunctionCall) != 0 {
 				return invalidContentError{subkind: invalidContentTextWithFunctionCall}
@@ -507,7 +566,11 @@ func (s *stream) consume(raw []byte) error {
 					return errSSEBounds
 				}
 				retainedBytes += len(*part.Text)
-				parts = append(parts, parsedPart{text: *part.Text, thought: part.Thought != nil && *part.Thought})
+				parsed := streamPart{text: *part.Text, thought: part.Thought != nil && *part.Thought, providerPartID: cloneString(part.ID), candidateIndex: candidateIndex, partIndex: partIndex, signaturePartIndex: partIndex, association: "direct"}
+				if signaturePresent {
+					parsed.signature = signature
+				}
+				parts = append(parts, parsed)
 				continue
 			}
 			if len(part.FunctionCall) != 0 {
@@ -561,7 +624,11 @@ func (s *stream) consume(raw []byte) error {
 				stagedCallIDs[callID] = true
 				itemID := "fc_" + s.responseID + "_" + strconv.Itoa(callIndex)
 				retainedBytes += len(arguments)
-				parts = append(parts, parsedPart{call: call, args: arguments, callID: callID, itemID: itemID})
+				parsed := streamPart{call: call, args: arguments, callID: callID, itemID: itemID, providerPartID: cloneString(part.ID), candidateIndex: candidateIndex, partIndex: partIndex, signaturePartIndex: partIndex, association: "direct"}
+				if signaturePresent {
+					parsed.signature = signature
+				}
+				parts = append(parts, parsed)
 				continue
 			}
 			return errEmptyContent
@@ -592,6 +659,14 @@ func (s *stream) consume(raw []byte) error {
 			s.usedCallIDs[id] = true
 		}
 	}
+	if len(stagedSignatures) != 0 {
+		if s.seenSignatures == nil {
+			s.seenSignatures = make(map[string]bool, len(stagedSignatures))
+		}
+		for signature := range stagedSignatures {
+			s.seenSignatures[signature] = true
+		}
+	}
 	if len(resp.Candidates) == 0 {
 		return nil
 	}
@@ -600,6 +675,12 @@ func (s *stream) consume(raw []byte) error {
 			s.pending = append(s.pending, emitEvent("response.created", map[string]any{"response": map[string]any{"id": s.responseID, "object": "response", "status": "in_progress", "output": []any{}}}, &s.sequence))
 		}
 		if part.thought {
+			if part.signature != nil {
+				s.closeMessage()
+			}
+			if part.signature != nil && s.reasoningStarted {
+				s.closeReasoning()
+			}
 			if !s.reasoningStarted {
 				idx := s.outputIndex
 				s.outputIndex++
@@ -616,12 +697,31 @@ func (s *stream) consume(raw []byte) error {
 			}
 			s.reasoningText.WriteString(part.text)
 			s.pending = append(s.pending, emitEvent("response.reasoning_summary_text.delta", map[string]any{"item_id": s.reasoningID, "output_index": s.reasoningIndex, "summary_index": 0, "delta": part.text}, &s.sequence))
+			if part.signature != nil {
+				carrier, err := s.sealPart(part, s.reasoningID, s.reasoningIndex, nil, nil)
+				if err != nil {
+					return err
+				}
+				s.reasoningEncrypted = carrier
+				s.closeReasoning()
+			}
 			continue
 		}
 		s.closeReasoning()
+		if part.call != nil && part.signature != nil {
+			s.closeMessage()
+		}
 		if part.call == nil {
+			if part.signature != nil {
+				s.closeMessage()
+			}
 			if !s.messageStarted {
-				item := map[string]any{"id": s.messageID, "type": "message", "role": "assistant", "status": "in_progress", "content": []any{map[string]any{"type": "output_text", "text": "", "annotations": []any{}}}}
+				itemID := s.messageID
+				if s.outputIndex != 0 {
+					itemID += "_" + strconv.Itoa(s.outputIndex)
+				}
+				s.currentMessageID = itemID
+				item := map[string]any{"id": itemID, "type": "message", "role": "assistant", "status": "in_progress", "content": []any{map[string]any{"type": "output_text", "text": "", "annotations": []any{}}}}
 				s.outputs = append(s.outputs, item)
 				s.messageIndex = s.outputIndex
 				s.outputIndex++
@@ -631,8 +731,26 @@ func (s *stream) consume(raw []byte) error {
 			s.text.WriteString(part.text)
 			content := s.outputs[s.messageIndex]["content"].([]any)[0].(map[string]any)
 			content["text"] = s.text.String()
-			s.pending = append(s.pending, emitEvent("response.output_text.delta", map[string]any{"item_id": s.messageID, "output_index": s.messageIndex, "content_index": 0, "delta": part.text}, &s.sequence))
+			s.pending = append(s.pending, emitEvent("response.output_text.delta", map[string]any{"item_id": s.currentMessageID, "output_index": s.messageIndex, "content_index": 0, "delta": part.text}, &s.sequence))
+			if part.signature != nil {
+				id := s.currentMessageID
+				s.closeMessage()
+				carrier, err := s.sealPart(part, "rs_"+s.responseID+"_"+strconv.Itoa(s.outputIndex), s.outputIndex, &id, nil)
+				if err != nil {
+					return err
+				}
+				s.addCarrierItem(carrier)
+			}
 			continue
+		}
+		if part.signature != nil {
+			callID := part.callID
+			carrierIndex := s.outputIndex
+			carrier, err := s.sealPart(part, "rs_"+s.responseID+"_"+strconv.Itoa(carrierIndex), carrierIndex, nil, &callID)
+			if err != nil {
+				return err
+			}
+			s.addCarrierItem(carrier)
 		}
 		index := s.outputIndex
 		s.outputIndex++
@@ -749,6 +867,10 @@ func (s *stream) closeReasoning() {
 	item := s.outputs[s.reasoningIndex]
 	item["summary"] = []any{map[string]any{"type": "summary_text", "text": text}}
 	item["status"] = "completed"
+	if s.reasoningEncrypted != "" {
+		item["encrypted_content"] = s.reasoningEncrypted
+		s.reasoningEncrypted = ""
+	}
 	s.pending = append(s.pending,
 		emitEvent("response.reasoning_summary_text.done", map[string]any{"item_id": s.reasoningID, "output_index": s.reasoningIndex, "summary_index": 0, "text": text}, &s.sequence),
 		emitEvent("response.reasoning_summary_part.done", map[string]any{"item_id": s.reasoningID, "output_index": s.reasoningIndex, "summary_index": 0, "part": map[string]any{"type": "summary_text", "text": text}}, &s.sequence),
@@ -757,6 +879,85 @@ func (s *stream) closeReasoning() {
 	s.reasoningStarted = false
 	s.reasoningID = ""
 	s.reasoningText.Reset()
+}
+
+func (s *stream) closeMessage() {
+	if !s.messageStarted {
+		return
+	}
+	item := s.outputs[s.messageIndex]
+	item["status"] = "completed"
+	content := item["content"].([]any)[0].(map[string]any)
+	s.pending = append(s.pending,
+		emitEvent("response.output_text.done", map[string]any{"item_id": s.currentMessageID, "output_index": s.messageIndex, "content_index": 0, "text": content["text"]}, &s.sequence),
+		emitEvent("response.output_item.done", map[string]any{"output_index": s.messageIndex, "item": item}, &s.sequence),
+	)
+	s.messageStarted, s.currentMessageID = false, ""
+	s.text.Reset()
+}
+
+func partSignature(raw json.RawMessage) ([]byte, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	var value string
+	if json.Unmarshal(raw, &value) != nil || value == "" {
+		return nil, false
+	}
+	return []byte(value), true
+}
+
+func (s *stream) sealPart(part streamPart, reasoningID string, outputIndex int, associatedItemID, associatedCallID *string) (string, error) {
+	kind := "text"
+	var content *string
+	var call *reasoningFunctionCall
+	if part.call != nil {
+		kind = "function_call"
+		args := append(json.RawMessage(nil), part.call.Args...)
+		var id *string
+		if part.call.ID != "" {
+			id = &part.call.ID
+		}
+		call = &reasoningFunctionCall{Name: part.call.Name, Args: args, ID: id}
+	} else {
+		value := part.text
+		content = &value
+		if part.thought {
+			kind = "thought"
+		}
+	}
+	issued := s.codec.clock()
+	value := reasoningPlaintext{
+		SchemaVersion: 1,
+		Source:        reasoningSource{CandidateIndex: part.candidateIndex, PartIndex: part.partIndex, PartKind: kind, ProviderPartID: cloneString(part.providerPartID), SignatureBytesB64: base64.StdEncoding.EncodeToString(part.signature), Content: content, FunctionCall: call},
+		Association:   reasoningAssociation{Kind: part.association, SignaturePartIndex: part.signaturePartIndex, SourcePartIndex: part.partIndex},
+		Responses:     reasoningResponses{ReasoningItemID: reasoningID, OutputIndex: outputIndex, AssociatedItemID: associatedItemID, AssociatedCallID: associatedCallID},
+	}
+	raw, err := s.codec.seal(value, s.scope, issued, issued.Add(24*time.Hour))
+	if err != nil || len(raw) > reasoningCarrierLimit-s.carrierBytes {
+		return "", errUnsupportedReasoning
+	}
+	s.carrierBytes += len(raw)
+	return string(raw), nil
+}
+
+func cloneString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func (s *stream) addCarrierItem(carrier string) {
+	idx := s.outputIndex
+	s.outputIndex++
+	id := "rs_" + s.responseID + "_" + strconv.Itoa(idx)
+	item := map[string]any{"id": id, "type": "reasoning", "summary": []any{}, "status": "completed", "encrypted_content": carrier}
+	s.outputs = append(s.outputs, item)
+	s.pending = append(s.pending,
+		emitEvent("response.output_item.added", map[string]any{"output_index": idx, "item": map[string]any{"id": id, "type": "reasoning", "summary": []any{}, "status": "in_progress"}}, &s.sequence),
+		emitEvent("response.output_item.done", map[string]any{"output_index": idx, "item": item}, &s.sequence))
 }
 func emitEvent(name string, payload map[string]any, seq *int) []byte {
 	payload["type"] = name

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -100,7 +101,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if mediaErr != nil || mediaType != "application/json" {
 		return core.ExecutionResponse{}, invalid("invalid_request")
 	}
-	contents, model, tools, toolConfig, e := admit(req.Payload.Body)
+	input, model, tools, toolConfig, includeEncryptedReasoning, e := admit(req.Payload.Body)
 	if e != nil {
 		return core.ExecutionResponse{}, e
 	}
@@ -120,6 +121,11 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	}
 	if !projectPattern.MatchString(creds.ProjectID) {
 		return core.ExecutionResponse{}, unauthenticated()
+	}
+	reasoningScope := reasoningScope{AccountID: scope.AccountID, ProjectID: creds.ProjectID, Model: model}
+	contents, e := translateInputScoped(input, c.reasoning, reasoningScope)
+	if e != nil {
+		return core.ExecutionResponse{}, e
 	}
 	request := map[string]any{"contents": contents}
 	if model == "gemini-2.5-flash" {
@@ -191,7 +197,7 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		logInferenceDiagnostic(services.Logger, resp.StatusCode, "invalid_response", "none", "none")
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "invalid_response", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Antigravity response is invalid"}
 	}
-	return core.ExecutionResponse{Stream: newStream(resp.Body, "resp_"+executionID, "msg_"+executionID, services.Logger)}, nil
+	return core.ExecutionResponse{Stream: newReasoningStream(resp.Body, "resp_"+executionID, "msg_"+executionID, services.Logger, c.reasoning, includeEncryptedReasoning, reasoningScope)}, nil
 }
 
 func logInferenceDiagnostic(logger *slog.Logger, status int, branch, upstream, transport string) {
@@ -239,17 +245,17 @@ func transportErrorClass(err error) string {
 	}
 }
 
-func admit(body []byte) ([]any, string, []any, map[string]any, *core.GatewayError) {
+func admit(body []byte) (json.RawMessage, string, []any, map[string]any, bool, *core.GatewayError) {
 	if len(body) == 0 || len(body) > maxRequestBytes || !uniqueJSON(body) {
-		return nil, "", nil, nil, invalid("invalid_request")
+		return nil, "", nil, nil, false, invalid("invalid_request")
 	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(body, &fields) != nil || fields == nil {
-		return nil, "", nil, nil, invalid("invalid_request")
+		return nil, "", nil, nil, false, invalid("invalid_request")
 	}
 	for k := range fields {
-		if k != "model" && k != "input" && k != "stream" && k != "tools" && k != "tool_choice" {
-			return nil, "", nil, nil, unsupported()
+		if k != "model" && k != "input" && k != "stream" && k != "tools" && k != "tool_choice" && k != "include" {
+			return nil, "", nil, nil, false, unsupported()
 		}
 	}
 	var in struct {
@@ -258,33 +264,44 @@ func admit(body []byte) ([]any, string, []any, map[string]any, *core.GatewayErro
 		Stream     *bool           `json:"stream"`
 		Tools      json.RawMessage `json:"tools"`
 		ToolChoice json.RawMessage `json:"tool_choice"`
+		Include    []string        `json:"include"`
 	}
 	d := json.NewDecoder(bytes.NewReader(body))
 	d.DisallowUnknownFields()
 	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF || in.Stream == nil || !*in.Stream {
-		return nil, "", nil, nil, invalid("invalid_request")
+		return nil, "", nil, nil, false, invalid("invalid_request")
+	}
+	include := false
+	if _, present := fields["include"]; present {
+		if len(in.Include) != 1 || in.Include[0] != "reasoning.encrypted_content" {
+			return nil, "", nil, nil, false, invalid("invalid_request")
+		}
+		include = true
 	}
 	if in.Model != "gemini-2.5-pro" && in.Model != "gemini-2.5-flash" {
-		return nil, "", nil, nil, invalid("invalid_request")
-	}
-	contents, err := translateInput(in.Input)
-	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, "", nil, nil, false, invalid("invalid_request")
 	}
 	tools, names, toolErr := functionTools(in.Tools)
 	if toolErr != nil {
-		return nil, "", nil, nil, invalid("invalid_request")
+		return nil, "", nil, nil, false, invalid("invalid_request")
 	}
 	toolConfig, choiceErr := functionToolChoice(in.ToolChoice, names)
 	if choiceErr != nil {
-		return nil, "", nil, nil, unsupported()
+		return nil, "", nil, nil, false, unsupported()
 	}
-	return contents, in.Model, tools, toolConfig, nil
+	if len(in.Input) == 0 {
+		return nil, "", nil, nil, false, invalid("invalid_request")
+	}
+	return in.Input, in.Model, tools, toolConfig, include, nil
 }
 
 // translateInput maps only the text and function-history subset whose causal
 // relationships can be represented without Core state or invented metadata.
 func translateInput(raw json.RawMessage) ([]any, *core.GatewayError) {
+	return translateInputScoped(raw, nil, reasoningScope{})
+}
+
+func translateInputScoped(raw json.RawMessage, codec *ReasoningCodec, scope reasoningScope) ([]any, *core.GatewayError) {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
 		if strings.TrimSpace(text) == "" {
@@ -297,10 +314,12 @@ func translateInput(raw json.RawMessage) ([]any, *core.GatewayError) {
 		return nil, invalid("invalid_request")
 	}
 	contents := make([]any, 0, len(items))
+	carrierBytes := 0
 	pending := make(map[string]string)
 	seen := make(map[string]bool)
 	resultsPending := false
-	for _, item := range items {
+	for itemIndex := 0; itemIndex < len(items); itemIndex++ {
+		item := items[itemIndex]
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(item, &fields) != nil || fields == nil {
 			return nil, invalid("invalid_request")
@@ -320,6 +339,8 @@ func translateInput(raw json.RawMessage) ([]any, *core.GatewayError) {
 			allowed["id"], allowed["status"], allowed["call_id"], allowed["name"], allowed["arguments"] = true, true, true, true, true
 		case "function_call_output":
 			allowed["id"], allowed["call_id"], allowed["output"] = true, true, true
+		case "reasoning":
+			allowed["id"], allowed["status"], allowed["summary"], allowed["encrypted_content"] = true, true, true, true
 		}
 		for key := range fields {
 			if !allowed[key] {
@@ -384,7 +405,97 @@ func translateInput(raw json.RawMessage) ([]any, *core.GatewayError) {
 			resultsPending = len(pending) != 0
 			contents = appendTurnPart(contents, "user", map[string]any{"functionResponse": map[string]any{"name": name, "id": callID, "response": map[string]json.RawMessage{"output": append(json.RawMessage(nil), output...)}}})
 		case "reasoning":
-			return nil, unsupported()
+			if codec == nil || scope.AccountID == "" {
+				return nil, invalid("invalid_request")
+			}
+			if !sameRawString(fields["status"], "completed") {
+				return nil, invalid("invalid_request")
+			}
+			carrier, ok := rawString(fields["encrypted_content"])
+			if !ok || len(carrier) > reasoningCarrierLimit {
+				return nil, invalid("invalid_request")
+			}
+			if len(carrier) > reasoningCarrierLimit-carrierBytes {
+				return nil, invalid("invalid_request")
+			}
+			carrierBytes += len(carrier)
+			plain, openErr := codec.open([]byte(carrier), scope)
+			if openErr != nil {
+				if errors.Is(openErr, ErrContinuationScopeMismatch) {
+					return nil, continuationScopeMismatch()
+				}
+				return nil, invalid("invalid_request")
+			}
+			if plain.Responses.OutputIndex < 0 {
+				return nil, invalid("invalid_request")
+			}
+			source := plain.Source
+			part := map[string]any{"thoughtSignature": string(mustBase64Decode(source.SignatureBytesB64))}
+			if source.ProviderPartID != nil {
+				part["id"] = *source.ProviderPartID
+			}
+			switch source.PartKind {
+			case "text":
+				var emptySummary []json.RawMessage
+				if !sameRawString(fields["id"], plain.Responses.ReasoningItemID) || json.Unmarshal(fields["summary"], &emptySummary) != nil || len(emptySummary) != 0 {
+					return nil, invalid("invalid_request")
+				}
+				if itemIndex+1 >= len(items) || plain.Responses.AssociatedItemID == nil {
+					return nil, invalid("invalid_request")
+				}
+				var visible map[string]json.RawMessage
+				if json.Unmarshal(items[itemIndex+1], &visible) != nil || !sameRawString(visible["id"], *plain.Responses.AssociatedItemID) {
+					return nil, invalid("invalid_request")
+				}
+				var visibleKind string
+				if json.Unmarshal(visible["type"], &visibleKind) != nil || visibleKind != "message" || !sameRawString(visible["status"], "completed") || !sameRawString(visible["role"], "assistant") {
+					return nil, invalid("invalid_request")
+				}
+				visibleParts, err := messageParts(visible["content"], "assistant")
+				if err != nil || len(visibleParts) != 1 || visibleParts[0].(map[string]string)["text"] != *source.Content {
+					return nil, invalid("invalid_request")
+				}
+				part["text"] = *source.Content
+				contents = appendTurnPart(contents, "model", part)
+				itemIndex++
+			case "thought":
+				var summary []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}
+				if json.Unmarshal(fields["summary"], &summary) != nil || len(summary) != 1 || summary[0].Type != "summary_text" || summary[0].Text != *source.Content || !sameRawString(fields["id"], plain.Responses.ReasoningItemID) {
+					return nil, invalid("invalid_request")
+				}
+				part["text"], part["thought"] = *source.Content, true
+				contents = appendTurnPart(contents, "model", part)
+			case "function_call":
+				if resultsPending {
+					return nil, invalid("invalid_request")
+				}
+				if itemIndex+1 >= len(items) || plain.Responses.AssociatedCallID == nil {
+					return nil, invalid("invalid_request")
+				}
+				var visible map[string]json.RawMessage
+				var name, args, callID string
+				var visibleKind string
+				var emptySummary []json.RawMessage
+				if json.Unmarshal(items[itemIndex+1], &visible) != nil || json.Unmarshal(visible["type"], &visibleKind) != nil || visibleKind != "function_call" || !sameRawString(visible["status"], "completed") || json.Unmarshal(fields["summary"], &emptySummary) != nil || len(emptySummary) != 0 || !sameRawString(fields["id"], plain.Responses.ReasoningItemID) || json.Unmarshal(visible["name"], &name) != nil || name != source.FunctionCall.Name || json.Unmarshal(visible["arguments"], &args) != nil || !jsonEqual(json.RawMessage(args), source.FunctionCall.Args) || json.Unmarshal(visible["call_id"], &callID) != nil || callID != *plain.Responses.AssociatedCallID {
+					return nil, invalid("invalid_request")
+				}
+				if seen[callID] || strings.TrimSpace(callID) == "" {
+					return nil, invalid("invalid_request")
+				}
+				seen[callID], pending[callID] = true, name
+				call := map[string]any{"name": name, "args": append(json.RawMessage(nil), source.FunctionCall.Args...)}
+				if source.FunctionCall.ID != nil {
+					call["id"] = *source.FunctionCall.ID
+				}
+				part["functionCall"] = call
+				contents = appendTurnPart(contents, "model", part)
+				itemIndex++
+			default:
+				return nil, invalid("invalid_request")
+			}
 		default:
 			return nil, unsupported()
 		}
@@ -401,6 +512,25 @@ func rawString(raw json.RawMessage) (string, bool) {
 		return "", false
 	}
 	return value, true
+}
+
+func mustBase64Decode(value string) []byte {
+	b, _ := base64.StdEncoding.Strict().DecodeString(value)
+	return b
+}
+
+func sameRawString(raw json.RawMessage, want string) bool {
+	got, ok := rawString(raw)
+	return ok && got == want
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	var left, right any
+	return uniqueJSON(a) && uniqueJSON(b) && json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && reflect.DeepEqual(left, right)
+}
+
+func continuationScopeMismatch() *core.GatewayError {
+	return &core.GatewayError{Code: "invalid_request", Category: core.CategoryInvalidRequest, RetryDisposition: core.RetryUnsafe, Message: "Antigravity request is invalid: continuation_scope_mismatch"}
 }
 
 func contentTurn(role string, part any) any {

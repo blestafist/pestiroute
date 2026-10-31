@@ -32,7 +32,7 @@ the earlier CURRENT claim that it awaited review was stale.
 
 | Milestone | Branch | First READY / active task | Scope / dependency |
 | --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-042 DRAFT | M10-001–027, M10-029–041 DONE; next M10-042 (translate/reconstruct signed parts); M10-028 BLOCKED at budget 26/1000 |
+| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-028 BLOCKED | M10-001–027, M10-029–042 DONE; M10-028 BLOCKED at budget 26/1000 |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
@@ -58,6 +58,6 @@ M8-008 is also BLOCKED as described above. Antigravity live browser OAuth was co
 
 Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. This cloud host lacks `/proc/<pid>/task/<tid>/children`, so existing process-inspection tests and M6 CLI smoke cannot fully pass locally; use hosted Linux CI for that gate. Parallel worktrees need distinct TMPDIR values as well as package serialization.
 
-M10-027 and M10-029–041 closed DONE. M10-041 closed DONE after reviewer PASS ses_e6caba3fbffeYZOhvqNeF9SkkC (purpose-separated AEAD reasoning codec and constructor composition-root wiring offline). M10-028 BLOCKED at budget 26/1000 after its sole authorized turn; no retry authorized. Agents must not inspect/display/log private database contents, master keys, tokens, or payloads. Tools, multiturn history, and cancellation follow initial smoke readiness.
+M10-027 and M10-029–042 closed DONE. M10-042 closed DONE after reviewer PASS ses_e6c782ea1ffebU0QkzuhpgzIIJ (carrier emission under explicit include, deltas before EOF, root-derived key replay, scope verification). M10-028 BLOCKED at budget 26/1000 after its sole authorized turn; no retry authorized. Agents must not inspect/display/log private database contents, master keys, tokens, or payloads. Tools, multiturn history, and cancellation follow initial smoke readiness.
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema migrations require a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.

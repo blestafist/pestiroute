@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -26,13 +27,14 @@ func TestAntigravityProtectedYAMLStreamsAndCancelsWithRealHTTPClients(t *testing
 	_, dbPath, keyPath := protectedFixture(t)
 	accountID, connectorID, model := "antigravity-account", "antigravity", "gemini-2.5-pro"
 	var upstreamCalls atomic.Int32
+	replayRequest := make(chan []byte, 1)
 	releaseTerminal := make(chan struct{})
 	cancelObserved := make(chan struct{})
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := upstreamCalls.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		if call == 1 {
-			_, _ = io.WriteString(w, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"id\":\"call-cycle-1\",\"args\":{\"q\":\"synthetic\"}}}]}}]}}\n\n")
+			_, _ = io.WriteString(w, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"id\":\"call-cycle-1\",\"args\":{\"q\":\"synthetic\"}},\"thoughtSignature\":\"synthetic-signed-call\"}]}}]}}\n\n")
 			w.(http.Flusher).Flush()
 			select {
 			case <-releaseTerminal:
@@ -43,6 +45,8 @@ func TestAntigravityProtectedYAMLStreamsAndCancelsWithRealHTTPClients(t *testing
 			return
 		}
 		if call == 2 {
+			body, _ := io.ReadAll(r.Body)
+			replayRequest <- body
 			_, _ = io.WriteString(w, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Synthetic gateway final\"}]}}]}}\n\ndata: {\"response\":{\"done\":true}}\n\n")
 			w.(http.Flusher).Flush()
 			return
@@ -209,7 +213,7 @@ policies: {standard: policy-id-a}
 	}
 	checkSmokeDiagnostic(t, rejectedBody, rejected.Header.Get("Content-Type"), "unsupported_feature")
 
-	response, err := post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"input":"synthetic prompt"}`)
+	response, err := post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"include":["reasoning.encrypted_content"],"input":"synthetic prompt"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,10 +228,16 @@ policies: {standard: policy-id-a}
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || !strings.Contains(first+string(remaining), "response.completed") {
+	firstResponse := first + string(remaining)
+	if response.StatusCode != http.StatusOK || !strings.Contains(firstResponse, "response.completed") || !strings.Contains(firstResponse, `"encrypted_content"`) {
 		t.Fatalf("gateway status=%d incomplete stream=%q", response.StatusCode, first+string(remaining))
 	}
-	resultInput := `{"model":"gemini-2.5-pro","stream":true,"input":[{"type":"function_call","call_id":"call-cycle-1","name":"lookup","arguments":"{\"q\":\"synthetic\"}"},{"type":"function_call_output","call_id":"call-cycle-1","output":"synthetic result"}]}`
+	reasoningItem, callItem := gatewayOutputItems(t, firstResponse)
+	resultHistory, err := json.Marshal([]any{reasoningItem, callItem, map[string]any{"type": "function_call_output", "call_id": "call-cycle-1", "output": "synthetic result"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultInput := `{"model":"gemini-2.5-pro","stream":true,"input":` + string(resultHistory) + `}`
 	response, err = post(context.Background(), resultInput)
 	if err != nil {
 		t.Fatal(err)
@@ -236,6 +246,14 @@ policies: {standard: policy-id-a}
 	_ = response.Body.Close()
 	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(finalBytes), "Synthetic gateway final") || !strings.Contains(string(finalBytes), "response.completed") {
 		t.Fatalf("tool result completion status=%d err=%v body=%q", response.StatusCode, err, finalBytes)
+	}
+	select {
+	case replayed := <-replayRequest:
+		if !strings.Contains(string(replayed), "synthetic-signed-call") || !strings.Contains(string(replayed), "functionResponse") || !strings.Contains(string(replayed), "synthetic result") {
+			t.Fatalf("composed connector did not reconstruct authenticated signed tool history: %s", replayed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("composed connector did not dispatch the replay request")
 	}
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
@@ -302,6 +320,35 @@ func checkSmokeDiagnostic(t *testing.T, body []byte, contentType, code string) {
 	if err != nil || !strings.Contains(string(out), "fixed_code="+code+" reason=recognized_code") {
 		t.Fatalf("sanitized diagnostic mismatch: err=%v", err)
 	}
+}
+
+func gatewayOutputItems(t *testing.T, stream string) (map[string]any, map[string]any) {
+	t.Helper()
+	var reasoning, call map[string]any
+	for line := range strings.SplitSeq(stream, "\n") {
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok || data == "[DONE]" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			continue
+		}
+		item, ok := event["item"].(map[string]any)
+		if !ok {
+			continue
+		}
+		switch item["type"] {
+		case "reasoning":
+			reasoning = item
+		case "function_call":
+			call = item
+		}
+	}
+	if reasoning == nil || reasoning["encrypted_content"] == nil || call == nil {
+		t.Fatalf("gateway stream lacks signed tool history: reasoning=%v call=%v", reasoning != nil, call != nil)
+	}
+	return reasoning, call
 }
 
 func readGatewayUntil(t *testing.T, reader *bufio.Reader, marker string) string {
