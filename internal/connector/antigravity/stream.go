@@ -54,6 +54,10 @@ type stream struct {
 	retainedBytes    int
 	messageStarted   bool
 	messageIndex     int
+	reasoningStarted bool
+	reasoningIndex   int
+	reasoningID      string
+	reasoningText    strings.Builder
 	usage            *core.UsageReport
 	reasoningKind    string
 	signatureType    string
@@ -149,6 +153,7 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 		s.outputs = make([]map[string]any, 0)
 	}
 	final := map[string]any{"id": s.responseID, "object": "response", "status": "completed", "output": s.outputs}
+	s.closeReasoning()
 	if s.messageStarted {
 		item := s.outputs[s.messageIndex]
 		item["status"] = "completed"
@@ -158,6 +163,7 @@ func (s *stream) Next(ctx context.Context) (core.StreamFrame, error) {
 			emitEvent("response.output_item.done", map[string]any{"output_index": s.messageIndex, "item": item}, &s.sequence),
 		)
 	}
+	final["output"] = s.outputs
 	if s.usage != nil {
 		u := map[string]int64{}
 		if s.usage.InputTokens != nil {
@@ -379,16 +385,18 @@ func (s *stream) consume(raw []byte) error {
 		return nil
 	}
 	type parsedPart struct {
-		text   string
-		call   *functionCall
-		args   string
-		callID string
-		itemID string
+		text    string
+		thought bool
+		call    *functionCall
+		args    string
+		callID  string
+		itemID  string
 	}
 	var parts []parsedPart
 	finished := false
 	retainedBytes := s.retainedBytes
 	var stagedCallIDs map[string]bool
+	var stagedUsage *core.UsageReport
 	for _, candidate := range resp.Candidates {
 		if candidate.FinishReason != "" {
 			if candidate.FinishReason != "STOP" {
@@ -397,7 +405,7 @@ func (s *stream) consume(raw []byte) error {
 			finished = true
 		}
 		for _, part := range candidate.Content.Parts {
-			if part.Thought != nil && *part.Thought || len(part.ThoughtSignature) != 0 {
+			if len(part.ThoughtSignature) != 0 || part.Thought != nil && *part.Thought && part.Text == nil {
 				thought := part.Thought != nil && *part.Thought
 				signature := len(part.ThoughtSignature) != 0
 				s.reasoningKind = "signature_only"
@@ -420,7 +428,7 @@ func (s *stream) consume(raw []byte) error {
 					return errSSEBounds
 				}
 				retainedBytes += len(*part.Text)
-				parts = append(parts, parsedPart{text: *part.Text})
+				parts = append(parts, parsedPart{text: *part.Text, thought: part.Thought != nil && *part.Thought})
 				continue
 			}
 			if len(part.FunctionCall) != 0 {
@@ -481,9 +489,18 @@ func (s *stream) consume(raw []byte) error {
 		}
 	}
 	if resp.Usage != nil {
-		if err := s.setUsage(resp.Usage); err != nil {
+		var err error
+		stagedUsage, err = parseUsage(resp.Usage)
+		if err != nil {
 			return err
 		}
+	}
+	if len(resp.Candidates) == 0 && resp.Usage == nil {
+		return errEmptyContent
+	}
+	// Commit staged frame state only after every part and usage value validates.
+	if stagedUsage != nil {
+		s.usage = stagedUsage
 	}
 	if finished {
 		s.sawFinish = true
@@ -497,15 +514,32 @@ func (s *stream) consume(raw []byte) error {
 		}
 	}
 	if len(resp.Candidates) == 0 {
-		if resp.Usage != nil {
-			return nil
-		}
-		return errEmptyContent
+		return nil
 	}
 	for _, part := range parts {
 		if s.sequence == 0 {
 			s.pending = append(s.pending, emitEvent("response.created", map[string]any{"response": map[string]any{"id": s.responseID, "object": "response", "status": "in_progress", "output": []any{}}}, &s.sequence))
 		}
+		if part.thought {
+			if !s.reasoningStarted {
+				idx := s.outputIndex
+				s.outputIndex++
+				s.reasoningIndex = idx
+				s.reasoningID = "rs_" + s.responseID + "_" + strconv.Itoa(idx)
+				s.reasoningText.Reset()
+				s.reasoningStarted = true
+				item := map[string]any{"id": s.reasoningID, "type": "reasoning", "summary": []any{}, "status": "in_progress"}
+				s.outputs = append(s.outputs, item)
+				s.pending = append(s.pending,
+					emitEvent("response.output_item.added", map[string]any{"output_index": idx, "item": item}, &s.sequence),
+					emitEvent("response.reasoning_summary_part.added", map[string]any{"item_id": s.reasoningID, "output_index": idx, "summary_index": 0, "part": map[string]any{"type": "summary_text", "text": ""}}, &s.sequence),
+				)
+			}
+			s.reasoningText.WriteString(part.text)
+			s.pending = append(s.pending, emitEvent("response.reasoning_summary_text.delta", map[string]any{"item_id": s.reasoningID, "output_index": s.reasoningIndex, "summary_index": 0, "delta": part.text}, &s.sequence))
+			continue
+		}
+		s.closeReasoning()
 		if part.call == nil {
 			if !s.messageStarted {
 				item := map[string]any{"id": s.messageID, "type": "message", "role": "assistant", "status": "in_progress", "content": []any{map[string]any{"type": "output_text", "text": "", "annotations": []any{}}}}
@@ -572,17 +606,49 @@ func (s *stream) setUsage(usage *struct {
 	Prompt     *int64 `json:"promptTokenCount"`
 	Candidates *int64 `json:"candidatesTokenCount"`
 }) error {
+	report, err := parseUsage(usage)
+	if err != nil {
+		return err
+	}
+	if report != nil {
+		s.usage = report
+	}
+	return nil
+}
+
+func parseUsage(usage *struct {
+	Prompt     *int64 `json:"promptTokenCount"`
+	Candidates *int64 `json:"candidatesTokenCount"`
+}) (*core.UsageReport, error) {
 	if (usage.Prompt != nil && *usage.Prompt < 0) || (usage.Candidates != nil && *usage.Candidates < 0) {
-		return errInvalidUsage
+		return nil, errInvalidUsage
 	}
 	if usage.Prompt != nil || usage.Candidates != nil {
 		completeness := core.UsagePartial
 		if usage.Prompt != nil && usage.Candidates != nil {
 			completeness = core.UsageComplete
 		}
-		s.usage = &core.UsageReport{InputTokens: usage.Prompt, OutputTokens: usage.Candidates, Source: core.UsageProvider, Completeness: completeness}
+		return &core.UsageReport{InputTokens: usage.Prompt, OutputTokens: usage.Candidates, Source: core.UsageProvider, Completeness: completeness}, nil
 	}
-	return nil
+	return nil, nil
+}
+
+func (s *stream) closeReasoning() {
+	if !s.reasoningStarted {
+		return
+	}
+	text := s.reasoningText.String()
+	item := s.outputs[s.reasoningIndex]
+	item["summary"] = []any{map[string]any{"type": "summary_text", "text": text}}
+	item["status"] = "completed"
+	s.pending = append(s.pending,
+		emitEvent("response.reasoning_summary_text.done", map[string]any{"item_id": s.reasoningID, "output_index": s.reasoningIndex, "summary_index": 0, "text": text}, &s.sequence),
+		emitEvent("response.reasoning_summary_part.done", map[string]any{"item_id": s.reasoningID, "output_index": s.reasoningIndex, "summary_index": 0, "part": map[string]any{"type": "summary_text", "text": text}}, &s.sequence),
+		emitEvent("response.output_item.done", map[string]any{"output_index": s.reasoningIndex, "item": item}, &s.sequence),
+	)
+	s.reasoningStarted = false
+	s.reasoningID = ""
+	s.reasoningText.Reset()
 }
 func emitEvent(name string, payload map[string]any, seq *int) []byte {
 	payload["type"] = name

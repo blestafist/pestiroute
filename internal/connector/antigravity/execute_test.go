@@ -402,7 +402,7 @@ func TestStreamTerminalEvidenceAndReasoningAdmission(t *testing.T) {
 		{"synthetic done", "data: {\"response\":{\"done\":true}}\n\n", true},
 		{"usage alone", "data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":1}}}\n\n", false},
 		{"truncated after STOP", stop + "data: {\"response\":", false},
-		{"thought", "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hidden\",\"thought\":true}]}}]}}\n\n", false},
+		{"thought", "data: {\"response\":{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"hidden\",\"thought\":true}]}}]}}\n\n", true},
 		{"signature", "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hidden\",\"thoughtSignature\":\"sig\"}]}}]}}\n\n", false},
 		{"null signature", "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hidden\",\"thoughtSignature\":null}]}}]}}\n\n", false},
 	} {
@@ -430,7 +430,7 @@ func TestStreamTerminalEvidenceAndReasoningAdmission(t *testing.T) {
 			if completed != tc.ok {
 				t.Fatalf("completed=%v want %v", completed, tc.ok)
 			}
-			if strings.Contains(body.String(), "hidden") || strings.Contains(body.String(), "late") {
+			if !tc.ok && (strings.Contains(body.String(), "hidden") || strings.Contains(body.String(), "late")) {
 				t.Fatalf("rejected content leaked: %s", body.String())
 			}
 		})

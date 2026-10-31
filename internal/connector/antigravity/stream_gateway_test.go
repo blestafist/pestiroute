@@ -1,6 +1,7 @@
 package antigravity
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	chatadapter "github.com/blestafist/pestiroute/internal/adapter/chatcompletions"
 	responsesadapter "github.com/blestafist/pestiroute/internal/adapter/responses"
@@ -173,7 +175,7 @@ func TestStreamDebugFailureClassificationIsSecretSafe(t *testing.T) {
 		{"", "precommit_eof"},
 		{"data: {PRIVATE-BODY}\n\n", "precommit_invalid_json"},
 		{`data: {"response":{"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"PRIVATE-TEXT"}]}}]}}` + "\n\n", "precommit_unsupported_finish"},
-		{`data: {"response":{"candidates":[{"content":{"parts":[{"thought":true,"text":"PRIVATE-REASONING"}]}}]}}` + "\n\n", "precommit_unsupported_reasoning"},
+		{`data: {"response":{"candidates":[{"content":{"parts":[{"thought":true,"text":"PRIVATE-REASONING","thoughtSignature":null}]}}]}}` + "\n\n", "precommit_unsupported_reasoning"},
 		{`data: {"response":{"usageMetadata":{"promptTokenCount":-1}}}` + "\n\n", "precommit_invalid_usage"},
 		{`data: {"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup"}}]}}]}}` + "\n\n", "precommit_invalid_function"},
 		{`data: {"response":{"candidates":[{"content":{"parts":[]}}]}}` + "\n\n", "precommit_empty_content"},
@@ -217,7 +219,7 @@ func TestUnsupportedReasoningDiagnosticMatrix(t *testing.T) {
 				var logs strings.Builder
 				s := newStream(&chunkReadCloser{r: strings.NewReader("")}, "r", "m", slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 				err := s.consume(raw)
-				fails := thought.active || signature.raw != ""
+				fails := signature.raw != ""
 				if !fails {
 					if err != nil {
 						t.Fatalf("unexpected rejection: %v", err)
@@ -284,5 +286,153 @@ func TestSemanticConsumeErrorsHaveFixedCategories(t *testing.T) {
 				t.Fatalf("category or privacy mismatch: %q", logs.String())
 			}
 		})
+	}
+}
+
+func TestUnsignedThoughtSummaryResponsesLifecycleAndOrder(t *testing.T) {
+	wire := strings.Join([]string{
+		`data: {"response":{"candidates":[{"content":{"parts":[{"thought":true,"text":"a"},{"text":"x"}]}}]}}`,
+		`data: {"response":{"candidates":[{"content":{"parts":[{"thought":true,"text":"b"},{"functionCall":{"name":"lookup","args":{}}}]}}]}}`,
+		`data: {"response":{"candidates":[{"finishReason":"STOP","content":{"parts":[{"thought":true,"text":"c"}]}}]}}`,
+	}, "\n\n") + "\n\n"
+	s := newStream(&chunkReadCloser{r: strings.NewReader(wire), chunk: 7}, "resp_test", "msg_test")
+	var got []string
+	var bodies []string
+	for {
+		frame, err := s.Next(context.Background())
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == core.FrameBody {
+			body := string(frame.Body.Data)
+			bodies = append(bodies, body)
+			got = append(got, strings.TrimPrefix(strings.SplitN(body, "\n", 2)[0], "event: "))
+		}
+	}
+	want := []string{
+		"response.created",
+		"response.output_item.added", "response.reasoning_summary_part.added", "response.reasoning_summary_text.delta",
+		"response.reasoning_summary_text.done", "response.reasoning_summary_part.done", "response.output_item.done",
+		"response.output_item.added", "response.output_text.delta",
+		"response.output_item.added", "response.reasoning_summary_part.added", "response.reasoning_summary_text.delta",
+		"response.reasoning_summary_text.done", "response.reasoning_summary_part.done", "response.output_item.done",
+		"response.output_item.added", "response.function_call_arguments.delta", "response.function_call_arguments.done", "response.output_item.done",
+		"response.output_item.added", "response.reasoning_summary_part.added", "response.reasoning_summary_text.delta",
+		"response.reasoning_summary_text.done", "response.reasoning_summary_part.done", "response.output_item.done",
+		"response.output_text.done", "response.output_item.done", "response.completed",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("event order:\n got %v\nwant %v", got, want)
+	}
+	for _, check := range []string{
+		`"item_id":"rs_resp_test_0","output_index":0`,
+		`"item_id":"rs_resp_test_2","output_index":2`,
+		`"item_id":"rs_resp_test_4","output_index":4`,
+		`"output_index":1`, `"output_index":3`,
+		`"text":"c","type":"summary_text"`,
+	} {
+		if !strings.Contains(strings.Join(bodies, ""), check) {
+			t.Errorf("missing %q", check)
+		}
+	}
+}
+
+func TestGatewayDeliversThoughtDeltaBeforeUpstreamCompletes(t *testing.T) {
+	responses := responsesadapter.NewAdapter()
+	if err := responses.Init(context.Background(), core.ComponentConfig{Data: []byte(`{"max_body_bytes":1048576,"max_header_bytes":65536}`)}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = responses.Close(context.Background()) })
+	upstreamReader, upstreamWriter := io.Pipe()
+	t.Cleanup(func() { _ = upstreamReader.Close(); _ = upstreamWriter.Close() })
+	upstream := &fakeDoer{do: func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: upstreamReader}, nil
+	}}
+	result, ge := ready(t).Execute(context.Background(), request(`{"model":"gemini-2.5-pro","input":"synthetic","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, core.InvocationServices{Transport: packageTestDoer(upstream), Credentials: credentials{data: []byte(`{"access_token":"synthetic-token","project_id":"synthetic-project"}`)}})
+	if ge != nil {
+		t.Fatal(ge)
+	}
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = responses.Encode(r.Context(), core.ClientResponse{Transport: responsesadapter.HTTPResponse{Writer: w, Request: r}}, nil, result)
+	})
+	server := httptest.NewServer(h)
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = 3 * time.Second
+	type resultWithError struct {
+		resp *http.Response
+		err  error
+	}
+	responseReady := make(chan resultWithError, 1)
+	go func() { resp, err := client.Get(server.URL); responseReady <- resultWithError{resp, err} }()
+	_, _ = upstreamWriter.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"early\"}]}}]}}\n\n"))
+	resultResponse := <-responseReady
+	if resultResponse.err != nil {
+		t.Fatal(resultResponse.err)
+	}
+	resp := resultResponse.resp
+	var got strings.Builder
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, readErr := reader.ReadString('\n')
+		got.WriteString(line)
+		if strings.Contains(got.String(), `"delta":"early"`) {
+			break
+		}
+		if readErr != nil {
+			_ = resp.Body.Close()
+			t.Fatalf("delta not delivered before upstream completion: %v; body=%q", readErr, got.String())
+		}
+	}
+	_ = upstreamWriter.Close()
+	_ = resp.Body.Close()
+	if !strings.Contains(got.String(), `"delta":"early"`) {
+		t.Fatalf("missing early delta: %q", got.String())
+	}
+}
+
+func TestMixedThoughtSignatureFrameIsAtomic(t *testing.T) {
+	s := newStream(&chunkReadCloser{r: strings.NewReader("")}, "resp_atomic", "msg_atomic")
+	good := []byte(`{"response":{"candidates":[{"content":{"parts":[{"thought":true,"text":"safe"}]}}]}}`)
+	if err := s.consume(good); err != nil {
+		t.Fatal(err)
+	}
+	beforeEvents, beforeOutputs, beforeRetained, beforeIndex := len(s.pending), len(s.outputs), s.retainedBytes, s.outputIndex
+	bad := []byte(`{"response":{"candidates":[{"content":{"parts":[{"thought":true,"text":"not-emitted"},{"text":"signed","thoughtSignature":null}]}}]}}`)
+	if err := s.consume(bad); !errors.Is(err, errUnsupportedReasoning) {
+		t.Fatalf("err=%v", err)
+	}
+	if len(s.pending) != beforeEvents || len(s.outputs) != beforeOutputs || s.retainedBytes != beforeRetained || s.outputIndex != beforeIndex || s.reasoningText.String() != "safe" {
+		t.Fatalf("frame partially committed: pending=%d outputs=%d retained=%d index=%d reasoning=%q", len(s.pending), len(s.outputs), s.retainedBytes, s.outputIndex, s.reasoningText.String())
+	}
+	for _, event := range s.pending {
+		if strings.Contains(string(event), "not-emitted") || strings.Contains(string(event), "signed") {
+			t.Fatal("rejected frame leaked event text")
+		}
+	}
+}
+
+func TestThoughtSummarySharesTerminalRetentionCeiling(t *testing.T) {
+	s := newStream(&chunkReadCloser{r: strings.NewReader("")}, "resp_bound", "msg_bound")
+	text := strings.Repeat("t", maxRequestBytes/2)
+	reasoning := strings.Repeat("r", maxRequestBytes/2)
+	if err := s.consume([]byte(`{"response":{"candidates":[{"content":{"parts":[{"text":"` + text + `"}]}}]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.consume([]byte(`{"response":{"candidates":[{"content":{"parts":[{"thought":true,"text":"` + reasoning + `"}]}}]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if s.retainedBytes != maxRequestBytes {
+		t.Fatalf("retained=%d want %d", s.retainedBytes, maxRequestBytes)
+	}
+	pending, outputs, index := len(s.pending), len(s.outputs), s.outputIndex
+	if err := s.consume([]byte(`{"response":{"candidates":[{"content":{"parts":[{"text":"x"}]}}]}}`)); !errors.Is(err, errSSEBounds) {
+		t.Fatalf("overflow error=%v", err)
+	}
+	if len(s.pending) != pending || len(s.outputs) != outputs || s.outputIndex != index || s.retainedBytes != maxRequestBytes {
+		t.Fatal("over-limit frame partially committed")
 	}
 }

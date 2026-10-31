@@ -132,17 +132,31 @@ either synthetic `response.done: true`, or candidate `finishReason: STOP`,
 optionally followed by one usage-only frame, then clean EOF. After `STOP`, reject
 further candidate content and conflicting finish markers; after the optional
 usage frame, reject all further events. Usage metadata alone is never terminal
-evidence. Truncated or partial SSE framing fails, including after `STOP`. Parts marked `thought: true`
-or carrying `thoughtSignature` are rejected before any content in that frame is
-emitted; presence is rejected even when `thoughtSignature` is JSON `null`. For
+evidence. Truncated or partial SSE framing fails, including after `STOP`. Parts
+marked `thought: true` with non-empty valid UTF-8 text and no
+`thoughtSignature` are translated incrementally into a Responses `reasoning`
+item with a `summary_text` part. The item occupies the next output index in
+actual candidate/part encounter order, including when ordinary text appeared
+first. Its text/part/item done events are emitted exactly once before a later
+message or function call and at terminal finish; item IDs are unique within the
+response and are not reused. The complete provider frame is validated before
+any events or state changes from that frame are committed. Any present
+`thoughtSignature` is rejected atomically, including explicit JSON `null`;
+signature-bearing reasoning and inbound reasoning history/tool continuity
+remain unsupported. Google's public [Gemini thinking documentation](https://ai.google.dev/gemini-api/docs/thinking)
+describes public thought summaries and signatures, but does not establish
+Antigravity support. See [DEC-028](../project/DECISIONS.md#dec-028--translate-unsigned-antigravity-thought-summaries-incrementally)
+for pinned 9router implementation references.
+For
 `gemini-2.5-flash` only, the candidate request envelope sets
 `generationConfig.thinkingConfig.thinkingBudget` to `0` and
 `includeThoughts` to `false`; `gemini-2.5-pro` and other models remain unchanged.
 This is an offline, source-derived compatibility default, not a Google-supported
 Antigravity guarantee. Candidate function calls are complete part values, not inferred
 argument-growth fragments: each JSON object is streamed through the Responses
-added/delta/done item lifecycle, and final output retains text and calls in
-candidate/part order. Retained text and arguments share a 1 MiB bound. The
+added/delta/done item lifecycle, and final output retains text, unsigned
+reasoning summaries, and calls in candidate/part order. Retained text,
+arguments, and summaries share the existing 1 MiB bound. The
 Connector parses incrementally with bounded line/event and retained-state
 buffers; it forwards translated client-protocol bytes as soon as
 validated content is available and must not wait for whole-response EOF. It must

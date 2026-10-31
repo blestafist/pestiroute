@@ -147,6 +147,14 @@ M10-015 and M10-016 implement candidate response and supported history
 translations. Function execution and signature-dependent continuation remain
 unsupported. See the [text/stream binding](M10-BINDING.md).
 
+Unsigned provider thought summaries are a separate output-only case under
+[DEC-028](../project/DECISIONS.md#dec-028--translate-unsigned-antigravity-thought-summaries-incrementally)
+and the [text/stream binding](M10-BINDING.md#transport-opt-in-and-stream-lifecycle).
+They do not relax the rule above: any present `thoughtSignature` (including
+`null`) remains fail-closed, and neither signature-dependent tool continuity nor
+inbound reasoning history is accepted. No signature may be stored, synthesized,
+discarded-and-continued, or replayed.
+
 ## References
 
 - [M10 research and source audit](M10-RESEARCH.md#opencode-plugin-audit-reusable-observations-not-verified-contract)
