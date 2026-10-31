@@ -564,7 +564,7 @@ func handlerWithLifecycle(c config, ready, draining *atomic.Bool, finalize func(
 }
 
 func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult)) (http.Handler, func(context.Context) error, error) {
-	return composeHandlerWithFactory(c, ready, draining, finalize, func(item topologyComponent) core.Component {
+	return composeHandlerWithReasoningFactory(c, ready, draining, finalize, func(item topologyComponent) core.Component {
 		if item.Kind == core.ComponentAdapter {
 			if item.Implementation == chatImplementation {
 				return chatadapter.NewAdapter()
@@ -590,6 +590,16 @@ func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.A
 			return antigravity.NewConnector()
 		}
 		return connector.NewConnector()
+	}, func(master secure.MasterKey) (core.Component, error) {
+		key, err := secure.AntigravityReasoningKey(master)
+		if err != nil {
+			return nil, errors.New("cannot initialize Antigravity reasoning codec")
+		}
+		codec, err := antigravity.NewReasoningCodec(key, nil)
+		if err != nil {
+			return nil, errors.New("cannot initialize Antigravity reasoning codec")
+		}
+		return antigravity.NewConnectorWithReasoningCodec(codec), nil
 	})
 }
 
@@ -615,6 +625,10 @@ type antigravityInit struct {
 }
 
 func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component) (http.Handler, func(context.Context) error, error) {
+	return composeHandlerWithReasoningFactory(c, ready, draining, finalize, construct, nil)
+}
+
+func composeHandlerWithReasoningFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component, reasoningConstruct func(secure.MasterKey) (core.Component, error)) (http.Handler, func(context.Context) error, error) {
 	mux := probes(ready)
 	legacy := len(c.Components) == 0 && c.UpstreamEndpoint != ""
 	if legacy {
@@ -743,7 +757,15 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			}
 			instance = protectedExternalConnector{Supervisor: supervisor}
 		} else {
-			instance = construct(item)
+			if item.Implementation == antigravityImplementation && reasoningConstruct != nil {
+				instance, err = reasoningConstruct(persistentKey)
+				if err != nil {
+					cleanup()
+					return nil, nil, err
+				}
+			} else {
+				instance = construct(item)
+			}
 		}
 		var cfg any
 		if item.Kind == core.ComponentAdapter {

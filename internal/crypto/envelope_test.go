@@ -3,6 +3,8 @@ package crypto
 import (
 	"bytes"
 	"context"
+	"crypto/hkdf"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -94,6 +96,29 @@ func TestEnvelopeNonceUniquenessAndRedaction(t *testing.T) {
 	}
 	if _, err := Seal(key, 0, "v1", "credentials", "id", "account", []byte("private plaintext")); err == nil || bytes.Contains([]byte(err.Error()), []byte("private plaintext")) {
 		t.Fatalf("invalid envelope error leaked data or succeeded: %v", err)
+	}
+}
+
+func TestAntigravityPurposeKeyDerivation(t *testing.T) {
+	if _, err := AntigravityReasoningKey(MasterKey{}); !errors.Is(err, ErrEnvelope) {
+		t.Fatal("zero master key derived a purpose key")
+	}
+	master := MasterKey{value: [KeySize]byte{1, 2, 3}}
+	first, err := AntigravityReasoningKey(master)
+	if err != nil {
+		t.Fatal("purpose derivation failed")
+	}
+	second, err := AntigravityReasoningKey(master)
+	if err != nil || first != second {
+		t.Fatal("purpose derivation is not stable")
+	}
+	rotated, err := AntigravityReasoningKey(MasterKey{value: [KeySize]byte{3, 2, 1}})
+	if err != nil || first == rotated {
+		t.Fatal("master-key rotation did not change purpose key")
+	}
+	credentialPurpose, err := hkdf.Key(sha256.New, master.value[:], nil, "credentials", KeySize)
+	if err != nil || bytes.Equal(first[:], credentialPurpose) {
+		t.Fatal("purpose key is not separated from credentials")
 	}
 }
 

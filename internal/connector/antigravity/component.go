@@ -54,12 +54,13 @@ const (
 )
 
 type Connector struct {
-	mu     sync.Mutex
-	state  core.HealthState
-	closed bool
-	cfg    config
-	client *http.Client
-	doer   *runtimeHTTPDoer
+	mu        sync.Mutex
+	state     core.HealthState
+	closed    bool
+	cfg       config
+	client    *http.Client
+	doer      *runtimeHTTPDoer
+	reasoning *ReasoningCodec
 }
 
 type runtimeHTTPDoer struct{ client *http.Client }
@@ -71,6 +72,11 @@ func (d *runtimeHTTPDoer) Do(request *http.Request) (*http.Response, error) {
 var _ core.Connector = (*Connector)(nil)
 
 func NewConnector() *Connector { return &Connector{state: core.HealthUnavailable} }
+
+// NewConnectorWithReasoningCodec injects only the connector-purpose codec.
+func NewConnectorWithReasoningCodec(codec *ReasoningCodec) *Connector {
+	return &Connector{state: core.HealthUnavailable, reasoning: codec}
+}
 
 func (c *Connector) Descriptor() core.Descriptor {
 	return core.Descriptor{ID: componentID, Kind: core.ComponentConnector, ImplementationVersion: "1.0.0", APIVersions: []core.APIVersion{{Major: 1}}, Protocols: []string{protocol}, Operations: []string{"execute", "authenticate"}, ConnectorType: "api", AuthMethods: []string{"oauth"}}.Clone()

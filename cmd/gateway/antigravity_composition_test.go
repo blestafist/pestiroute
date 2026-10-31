@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/pem"
 	"fmt"
@@ -16,9 +17,6 @@ import (
 	"testing"
 	"time"
 
-	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
-	"github.com/blestafist/pestiroute/internal/connector/antigravity"
-	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
@@ -63,6 +61,9 @@ func TestAntigravityProtectedYAMLStreamsAndCancelsWithRealHTTPClients(t *testing
 	ctx := context.Background()
 	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: connectorID, Enabled: true}); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, bytes.Repeat([]byte{0x31}, secure.KeySize), 0600); err != nil {
+		t.Fatal("cannot prepare synthetic non-zero master key")
 	}
 	key, err := secure.LoadMasterKey(keyPath)
 	if err != nil {
@@ -143,20 +144,28 @@ policies: {standard: policy-id-a}
 		_ = prepared.processLock.Close()
 	})
 
-	var connector *antigravity.Connector
 	var ready, draining atomic.Bool
 	ready.Store(true)
-	h, closeComponents, err := composeHandlerWithFactory(prepared, &ready, &draining, nil, func(item topologyComponent) core.Component {
-		if item.Kind == core.ComponentAdapter {
-			return adapter.NewAdapter()
-		}
-		connector = antigravity.NewConnector()
-		return connector
-	})
+	composeConfig := prepared
+	// Force composition to load the real master key from DatabasePath/MasterKeyFile
+	// rather than accidentally capturing an uninitialized config-copy key.
+	composeConfig.runtimeDB = nil
+	composeConfig.runtimeKey = secure.MasterKey{}
+	h, closeComponents, err := composeHandler(composeConfig, &ready, &draining, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = closeComponents(context.Background()) })
+	zeroKeyPath := filepath.Join(t.TempDir(), "zero-master.key")
+	if err := os.WriteFile(zeroKeyPath, make([]byte, secure.KeySize), 0600); err != nil {
+		t.Fatal("cannot prepare synthetic zero master key")
+	}
+	zeroKeyConfig := composeConfig
+	zeroKeyConfig.MasterKeyFile = zeroKeyPath
+	zeroKeyConfig.processLock = nil
+	if _, _, err := composeHandler(zeroKeyConfig, &ready, &draining, nil); err == nil || !strings.Contains(err.Error(), "cannot initialize Antigravity reasoning codec") {
+		t.Fatal("protected composition did not fail closed for zero master key")
+	}
 	issued, err := sqlite.NewVirtualKeys(prepared.runtimeDB).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
 	if err != nil {
 		t.Fatal(err)
