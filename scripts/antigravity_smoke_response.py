@@ -20,18 +20,46 @@ STREAM_FAILURES = frozenset({
     ("precommit", "precommit_invalid_order"),
     ("postcommit", "postcommit_error"),
 })
+POSTCOMMIT_CAUSES = frozenset("eof bounds_exceeded invalid_json unsupported_finish unsupported_reasoning invalid_usage invalid_function empty_content invalid_content invalid_order framing".split())
 def stream_diagnostics(log_text):
     """Extract only the pairs emitted by stream.go logStreamError."""
     pattern = re.compile(r'msg="Antigravity stream failure" phase="?([a-z_]+)"? category="?([a-z_]+)"?(?=\s|$)')
     reasoning = re.compile(r'\bkind=(?:"(thought_only|signature_only|both)"|(thought_only|signature_only|both))\s+signature_type=(?:"(absent|null|string|other)"|(absent|null|string|other))(?=\s|$)')
     invalid_content = re.compile(r'\bsubkind="?(done_with_candidates|text_with_function_call|invalid_utf8_text)"?(?=\s|$)')
+    cause = re.compile(r'\bcause="?([a-z_]+)"?(?=\s|$)')
     found = []
     for line in log_text.splitlines():
         match = pattern.search(line)
         if match and match.groups() in STREAM_FAILURES:
             phase, category = match.groups()
             result = f"phase={phase} category={category}"
-            if category == "precommit_unsupported_reasoning":
+            if category == "postcommit_error":
+                detail = cause.search(line)
+                if (not detail or detail.group(1) not in POSTCOMMIT_CAUSES
+                        or len(re.findall(r'\bcause=', line)) != 1):
+                    continue
+                failure_cause = detail.group(1)
+                result += f" cause={failure_cause}"
+                if failure_cause == "unsupported_reasoning":
+                    if len(re.findall(r'\bsubkind=', line)):
+                        continue
+                    detail = reasoning.search(line)
+                    if (not detail or len(re.findall(r'\bkind=', line)) != 1
+                            or len(re.findall(r'\bsignature_type=', line)) != 1):
+                        continue
+                    kind = detail.group(1) or detail.group(2)
+                    signature_type = detail.group(3) or detail.group(4)
+                    result += f" kind={kind} signature_type={signature_type}"
+                elif failure_cause == "invalid_content":
+                    if len(re.findall(r'\bkind=', line)) or len(re.findall(r'\bsignature_type=', line)):
+                        continue
+                    detail = invalid_content.search(line)
+                    if (not detail or len(re.findall(r'\bsubkind=', line)) != 1):
+                        continue
+                    result += f" subkind={detail.group(1)}"
+                elif any(re.findall(r'\b' + key + r'=', line) for key in ("kind", "signature_type", "subkind")):
+                    continue
+            elif category == "precommit_unsupported_reasoning":
                 detail = reasoning.search(line)
                 if (not detail or len(re.findall(r'\bkind=', line)) != 1
                         or len(re.findall(r'\bsignature_type=', line)) != 1):

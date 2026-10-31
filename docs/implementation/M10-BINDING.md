@@ -159,6 +159,22 @@ are recorded in [DEC-029](../project/DECISIONS.md#dec-029--ignore-unsigned-empty
 Invalid-content debug logs retain the `precommit_invalid_content` wire category
 and may include only fixed subkinds `done_with_candidates`,
 `text_with_function_call`, or `invalid_utf8_text`.
+Candidate usage metadata accepts only the optional non-negative integer keys
+`promptTokenCount`, `candidatesTokenCount`, and `totalTokenCount`, including in
+the single usage-only trailer. `totalTokenCount` is validated metadata only; it
+does not contribute to Core input/output accounting and is not required to equal
+the prompt/candidate sum, which may omit or include hidden reasoning tokens.
+Other usage keys, non-integers, and negative counts fail closed. Late usage
+continues through the existing stream completion/accounting path exactly once.
+Postcommit failures preserve `phase=postcommit category=postcommit_error` and
+add a fixed `cause` (`eof`, `bounds_exceeded`, `invalid_json`,
+`unsupported_finish`, `unsupported_reasoning`, `invalid_usage`,
+`invalid_function`, `empty_content`, `invalid_content`, `invalid_order`, or
+`framing`). Only the existing safe reasoning (`kind`, `signature_type`) or
+invalid-content (`subkind`) enum details may accompany the cause. No raw errors,
+provider values, token counts, or body content are logged. See
+[DEC-030](../project/DECISIONS.md#dec-030--accept-antigravity-total-token-usage-metadata-and-classify-postcommit-failures);
+this is a source-correctness decision, not a claim about M10-028's cause.
 For
 `gemini-2.5-flash` only, the candidate request envelope sets
 `generationConfig.thinkingConfig.thinkingBudget` to `0` and

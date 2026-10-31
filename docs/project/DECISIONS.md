@@ -580,6 +580,15 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Compatibility / impact:** Narrow Antigravity translated-stream behavior and debug-only diagnostics. No Core, Adapter, public schema, usage contract, or capability change. Neither the pinned plugin nor this correction establishes Antigravity support; live cause and behavior remain unverified.
 - **Verification:** Offline tests cover empty ordinary/thought parts, mixed valid frames, usage/finalization, terminal empty failure, signature/mixed-frame atomic rejection, and strict subkind allowlisting; race-focused connector/gateway checks, zero live calls or budget deduction.
 
+### DEC-030 — Accept Antigravity Total Token Usage Metadata and Classify Postcommit Failures
+
+- **Status:** Accepted for bounded M10-039 offline compatibility correction only; not Google protocol approval or a live cause claim.
+- **Context:** Google's public [Gemini usage metadata](https://ai.google.dev/api/generate-content#UsageMetadata) documents optional integer `totalTokenCount`; the pinned [9router revision `87a74e1bda3677193c6f71a7e2100c90311f0689`](https://github.com/decolua/9router/tree/87a74e1bda3677193c6f71a7e2100c90311f0689) also accepts total token counts in its usage extraction. Neither source establishes Antigravity support. Google total usage may include hidden reasoning tokens, so it need not equal prompt plus candidate counts.
+- **Decision:** Accept optional non-negative integer `totalTokenCount`, strictly allow only `promptTokenCount`, `candidatesTokenCount`, and `totalTokenCount`, including in a usage-only trailer. Validate total but never add it to Core input/output accounting or enforce equality. Preserve existing late-usage/finalization semantics. Keep postcommit wire fields `phase=postcommit category=postcommit_error` and add a fixed `cause` from the M10-039 allowlist; safe reasoning/content subkinds may be included only from existing typed enums. Do not log raw errors, provider values, token counts, or body data.
+- **Alternatives rejected:** Treat total as output or derive a missing prompt/output split (can double-count hidden reasoning); accept unknown usage keys (weakens strict parsing); infer M10-028's provider cause from offline diagnostics (unsupported by evidence).
+- **Compatibility / impact:** Narrow Antigravity stream metadata and debug diagnostics only. No Core accounting/API or public Responses change; M10-028's cause remains unknown. No live calls or budget deduction.
+- **Verification:** Candidate and trailing usage frames, invalid/unknown values, accounting exact-once and late usage, fixed postcommit cause/subkind extraction and canary rejection; focused offline Go race/vet/build/format and standalone Python tests, zero live calls.
+
 ## Questions Before Implementation
 
 | Question | When to Decide | How to Validate |

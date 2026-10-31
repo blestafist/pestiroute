@@ -46,6 +46,12 @@ type invalidContentError struct{ subkind invalidContentSubkind }
 func (e invalidContentError) Error() string        { return errInvalidContent.Error() }
 func (e invalidContentError) Is(target error) bool { return target == errInvalidContent }
 
+type usageMetadata struct {
+	Prompt     *int64 `json:"promptTokenCount"`
+	Candidates *int64 `json:"candidatesTokenCount"`
+	Total      *int64 `json:"totalTokenCount"`
+}
+
 type stream struct {
 	r                *bufio.Reader
 	body             io.ReadCloser
@@ -233,6 +239,22 @@ func (s *stream) logStreamError(err error, precommit bool) {
 		} else if errors.Is(err, errInvalidOrder) {
 			category = "precommit_invalid_order"
 		}
+	} else {
+		cause := postcommitCause(err)
+		if errors.Is(err, errUnsupportedReasoning) {
+			s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "cause", cause, "kind", s.reasoningKind, "signature_type", s.signatureType)
+			return
+		}
+		var invalid invalidContentError
+		if errors.As(err, &invalid) {
+			switch invalid.subkind {
+			case invalidContentDoneWithCandidates, invalidContentTextWithFunctionCall, invalidContentInvalidUTF8Text:
+				s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "cause", cause, "subkind", invalid.subkind)
+				return
+			}
+		}
+		s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "cause", cause)
+		return
 	}
 	if category == "precommit_unsupported_reasoning" {
 		s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "kind", s.reasoningKind, "signature_type", s.signatureType)
@@ -247,6 +269,33 @@ func (s *stream) logStreamError(err error, precommit bool) {
 		}
 	}
 	s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category)
+}
+
+func postcommitCause(err error) string {
+	switch {
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "eof"
+	case errors.Is(err, errSSEBounds):
+		return "bounds_exceeded"
+	case errors.Is(err, errMalformedSSEJSON), errors.Is(err, errMalformedCandidateFrame):
+		return "invalid_json"
+	case errors.Is(err, errUnsupportedFinish):
+		return "unsupported_finish"
+	case errors.Is(err, errUnsupportedReasoning):
+		return "unsupported_reasoning"
+	case errors.Is(err, errInvalidUsage):
+		return "invalid_usage"
+	case errors.Is(err, errInvalidFunction):
+		return "invalid_function"
+	case errors.Is(err, errEmptyContent):
+		return "empty_content"
+	case errors.Is(err, errInvalidContent):
+		return "invalid_content"
+	case errors.Is(err, errInvalidOrder):
+		return "invalid_order"
+	default:
+		return "framing"
+	}
 }
 
 func classifySignature(raw json.RawMessage) string {
@@ -368,25 +417,26 @@ func (s *stream) consume(raw []byte) error {
 					} `json:"parts"`
 				} `json:"content"`
 			} `json:"candidates"`
-			Done  *bool `json:"done"`
-			Usage *struct {
-				Prompt     *int64 `json:"promptTokenCount"`
-				Candidates *int64 `json:"candidatesTokenCount"`
-			} `json:"usageMetadata"`
+			Done  *bool           `json:"done"`
+			Usage json.RawMessage `json:"usageMetadata"`
 		} `json:"response"`
 	}
 	if json.Unmarshal(raw, &outer) != nil {
 		return errMalformedCandidateFrame
 	}
 	resp := outer.Response
+	usage, err := parseUsageMetadata(resp.Usage)
+	if err != nil {
+		return err
+	}
 	if s.terminal {
 		return errInvalidOrder
 	}
 	if s.sawFinish {
-		if s.sawTrailingUsage || resp.Done != nil || len(resp.Candidates) != 0 || resp.Usage == nil || !usageOnlyFrame(raw) {
+		if s.sawTrailingUsage || resp.Done != nil || len(resp.Candidates) != 0 || usage == nil || !usageOnlyFrame(raw) {
 			return errInvalidOrder
 		}
-		if err := s.setUsage(resp.Usage); err != nil {
+		if err := s.setUsage(usage); err != nil {
 			return err
 		}
 		s.sawTrailingUsage = true
@@ -396,16 +446,13 @@ func (s *stream) consume(raw []byte) error {
 		if len(resp.Candidates) > 0 {
 			return invalidContentError{subkind: invalidContentDoneWithCandidates}
 		}
-		if resp.Usage != nil {
-			if (resp.Usage.Prompt != nil && *resp.Usage.Prompt < 0) || (resp.Usage.Candidates != nil && *resp.Usage.Candidates < 0) {
-				return errInvalidUsage
-			}
-			if resp.Usage.Prompt != nil || resp.Usage.Candidates != nil {
+		if usage != nil {
+			if usage.Prompt != nil || usage.Candidates != nil {
 				completeness := core.UsagePartial
-				if resp.Usage.Prompt != nil && resp.Usage.Candidates != nil {
+				if usage.Prompt != nil && usage.Candidates != nil {
 					completeness = core.UsageComplete
 				}
-				s.usage = &core.UsageReport{InputTokens: resp.Usage.Prompt, OutputTokens: resp.Usage.Candidates, Source: core.UsageProvider, Completeness: completeness}
+				s.usage = &core.UsageReport{InputTokens: usage.Prompt, OutputTokens: usage.Candidates, Source: core.UsageProvider, Completeness: completeness}
 			}
 		}
 		s.terminal = true
@@ -522,12 +569,12 @@ func (s *stream) consume(raw []byte) error {
 	}
 	if resp.Usage != nil {
 		var err error
-		stagedUsage, err = parseUsage(resp.Usage)
+		stagedUsage, err = parseUsage(usage)
 		if err != nil {
 			return err
 		}
 	}
-	if len(resp.Candidates) == 0 && resp.Usage == nil {
+	if len(resp.Candidates) == 0 && usage == nil {
 		return errEmptyContent
 	}
 	// Commit staged frame state only after every part and usage value validates.
@@ -599,7 +646,7 @@ func (s *stream) consume(raw []byte) error {
 		)
 	}
 	s.retainedBytes = retainedBytes
-	if len(s.pending) == 0 && !finished && resp.Usage == nil && !sawEmptyText {
+	if len(s.pending) == 0 && !finished && usage == nil && !sawEmptyText {
 		return errEmptyContent
 	}
 	return nil
@@ -627,17 +674,14 @@ func usageOnlyFrame(raw []byte) bool {
 		return false
 	}
 	for key := range usage {
-		if key != "promptTokenCount" && key != "candidatesTokenCount" {
+		if key != "promptTokenCount" && key != "candidatesTokenCount" && key != "totalTokenCount" {
 			return false
 		}
 	}
 	return true
 }
 
-func (s *stream) setUsage(usage *struct {
-	Prompt     *int64 `json:"promptTokenCount"`
-	Candidates *int64 `json:"candidatesTokenCount"`
-}) error {
+func (s *stream) setUsage(usage *usageMetadata) error {
 	report, err := parseUsage(usage)
 	if err != nil {
 		return err
@@ -648,14 +692,46 @@ func (s *stream) setUsage(usage *struct {
 	return nil
 }
 
-func parseUsage(usage *struct {
-	Prompt     *int64 `json:"promptTokenCount"`
-	Candidates *int64 `json:"candidatesTokenCount"`
-}) (*core.UsageReport, error) {
-	if (usage.Prompt != nil && *usage.Prompt < 0) || (usage.Candidates != nil && *usage.Candidates < 0) {
+func parseUsageMetadata(raw json.RawMessage) (*usageMetadata, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
 		return nil, errInvalidUsage
 	}
-	if usage.Prompt != nil || usage.Candidates != nil {
+	for key := range fields {
+		if key != "promptTokenCount" && key != "candidatesTokenCount" && key != "totalTokenCount" {
+			return nil, errInvalidUsage
+		}
+	}
+	var usage usageMetadata
+	for key, value := range fields {
+		count, err := strconv.ParseInt(strings.TrimSpace(string(value)), 10, 64)
+		if err != nil || count < 0 {
+			return nil, errInvalidUsage
+		}
+		countPtr := new(int64)
+		*countPtr = count
+		switch key {
+		case "promptTokenCount":
+			usage.Prompt = countPtr
+		case "candidatesTokenCount":
+			usage.Candidates = countPtr
+		case "totalTokenCount":
+			usage.Total = countPtr
+		}
+	}
+	return &usage, nil
+}
+
+func parseUsage(usage *usageMetadata) (*core.UsageReport, error) {
+	if usage != nil {
+		if (usage.Prompt != nil && *usage.Prompt < 0) || (usage.Candidates != nil && *usage.Candidates < 0) || (usage.Total != nil && *usage.Total < 0) {
+			return nil, errInvalidUsage
+		}
+	}
+	if usage != nil && (usage.Prompt != nil || usage.Candidates != nil) {
 		completeness := core.UsagePartial
 		if usage.Prompt != nil && usage.Candidates != nil {
 			completeness = core.UsageComplete
