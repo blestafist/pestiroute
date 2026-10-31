@@ -190,6 +190,15 @@ unauthenticated development mode, an alternate database, or a silent default
 policy. The master key remains external and is not copied into YAML or SQLite;
 see [M3-STORAGE key handling](M3-STORAGE.md#state-and-schema).
 
+The master key is not a Connector capability. Any future provider-specific
+opaque continuation requires a purpose-separated key/AEAD closure created at
+the composition root, scoped to authenticated account/project/model metadata;
+the Connector must not receive the master key, storage handle, or general
+decrypt operation. The current design uses only fixed `current-master/v1`;
+changing the external master key invalidates its carriers (no keyring or old-key
+fallback). This is a design constraint only, not a new protected YAML field or
+storage record. See [DEC-031](../project/DECISIONS.md#dec-031--scope-antigravity-encrypted-reasoning-continuity).
+
 ## Normalization and retry walkthroughs
 
 These concrete inputs trace the three explicit startup paths (port values are

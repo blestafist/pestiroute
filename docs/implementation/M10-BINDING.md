@@ -21,7 +21,7 @@ deterministic fake-only acceptance tests subject to M10-003 fixture provenance.
 | Component | Private `antigravity.Connector`, implementing the existing `core.Connector` contract; stable descriptor ID `pestiroute.antigravity.v1internal` is a proposed implementation identity, not a provider identity. |
 | Profile | `antigravity-v1internal`, selected only by trusted component configuration. It names this candidate translation, not a supported Google API. |
 | Client protocol | Exactly `openai.responses.v1`; translation mode only. Native mode, other protocol versions, and implicit protocol inference are rejected. |
-| Work in scope | Text prompts or supported text/function-call history, candidate function declarations/tool-choice mapping, and an incrementally translated Responses stream of text and candidate function-call outputs. History translation is stateless per Execute; thought-signature-dependent continuation remains unsupported. One Execute is one attempt for the runtime-selected account. |
+| Work in scope | Text prompts or supported text/function-call history, candidate function declarations/tool-choice mapping, and an incrementally translated Responses stream of text, unsigned thought summaries, and candidate function-call outputs. M10-040 defines a future, explicit-opt-in encrypted continuity candidate; it does not implement it or promote capability. One Execute is one attempt for the runtime-selected account. |
 | Capabilities | `llm.streaming` is `supported` only for `openai.responses.v1` translation, meaning this exact implementation scope is available and deterministically verified. It does not claim remote entitlement or provider support. `auth.oauth`, `usage.exact`, and all other capabilities remain `unknown`. |
 
 The existing `core.Connector.Execute(context, request, attemptScope,
@@ -209,6 +209,132 @@ otherwise Core finalizes the attempt using available partial/unknown usage.
 Never convert a truncated/malformed stream into success. Core/Adapter own commit
 and exactly-once finalization; the Connector does not retry.
 
+### Encrypted continuity candidate (design only; not implemented)
+
+Current code still rejects signature-bearing parts and does not accept the
+`include` field in translated mode; the following is a future implementation
+contract only.
+
+The exact client opt-in is `include: ["reasoning.encrypted_content"]`. This is
+an intentionally stricter gateway privacy policy than current OpenAI Responses
+stateless documentation, which says encrypted reasoning may be returned by
+default and retains `include` for compatibility ([OpenAI reasoning guide](https://platform.openai.com/docs/guides/reasoning#preserve-reasoning-without-stored-responses)). Without that exact opt-in, no
+`encrypted_content` is emitted; signed provider parts remain fail-closed. The
+opt-in alone does not prove that Antigravity accepts a signature or that any
+part is safely continuable.
+
+The parser distinguishes (a) an actual ordered provider part carrying its own
+`thoughtSignature` and (b) a signature-only part in the same complete
+`candidate.content.parts[]` array. `kind=signature_only` is a diagnostic about a
+parsed part; it does not prove a separate frame or trailer. Use source-ordered
+parts only: an immediately adjacent signature-only part may authenticate only
+the single preceding unsigned actual part in that same array, and that association is
+recorded explicitly. Duplicate signatures, non-adjacent parts, cross-frame
+association, or any ambiguity terminate the already-started stream as
+`incomplete`; do not fabricate a signature or provider input. The pinned
+[9router source](https://github.com/decolua/9router/blob/87a74e1bda3677193c6f71a7e2100c90311f0689/open-sse/translator/response/gemini-to-openai.js#L43-L85)
+shows ordered `content.parts[]` and pending-signature behavior, but not official
+Antigravity semantics or a separate-frame claim.
+
+Seal one bounded carrier per signed source part; do not retain or encrypt the
+whole upstream response. The strict version-1 sealed plaintext is this text
+example; all keys are required and nullable values are explicit:
+
+```json
+{"schema_version":1,"source":{"candidate_index":0,"part_index":2,"part_kind":"text","provider_part_id":null,"signature_bytes_b64":"...","content":"...","function_call":null},"association":{"kind":"direct","signature_part_index":2,"source_part_index":2},"responses":{"reasoning_item_id":"rs_...","output_index":1,"associated_item_id":"msg_...","associated_call_id":null}}
+```
+
+`part_kind` is exactly `text`, `thought`, or `function_call`;
+`provider_part_id` is null unless actually supplied by the provider. For
+function calls, `content` is null and `function_call` contains exactly the
+original `name`, JSON `args` value, and nullable `id`; for text/thought,
+`content` is the exact text and `function_call` is null. For an adjacent
+signature-only part, `signature_part_index` is that member and
+`source_part_index` is the immediately preceding unsigned actual part.
+`associated_item_id` is the visible message item ID for signed ordinary text
+and null otherwise. `associated_call_id` is the Responses function-call
+`call_id` for signed tool parts and null otherwise; the nested
+`function_call.id` preserves the original optional provider ID. IDs and indices
+must match visible Responses reasoning/tool-call items on replay. Signatures
+remain opaque bytes encoded as strict base64; do not infer or synthesize them.
+Reject unknown schema keys, unsupported source media, and mismatches.
+
+Signed ordinary text remains visible in its normal message, with a dedicated
+adjacent continuation `reasoning` item carrying the association. Signed
+thought uses its `reasoning` item; a signed function call gets a dedicated
+continuation reasoning item immediately before the exact `function_call` item.
+The opaque `encrypted_content` appears only on the completed reasoning item in
+`response.output_item.done` and `response.completed`, after its carrier and
+association manifest are complete. It never appears in `output_item.added` or
+deltas; existing text/summary deltas remain incremental. On replay, validate
+the authenticated manifest and compare each visible item's canonical supported
+values with the sealed values before reconstructing original provider parts;
+never treat modified client plaintext as authenticated source content.
+
+The composition root derives a 256-bit purpose key from the current external
+master key with HKDF-SHA-256 and fixed
+`pestiroute/antigravity/responses-reasoning/v1` info; use AES-256-GCM, a fresh
+nonce, and canonically length-prefixed AAD. Do not expose general credential
+`Seal`/`Open`, `MasterKey`, storage, or any general decrypt capability to the
+Connector. Bind schema/key version, suite, account, credential project, model,
+timestamps, and exact source/Responses association. An injected clock requires
+`0 < expires_at-issued_at <= 24h`, rejects `issued_at > now+5m`, and rejects at
+`now >= expires_at` with no expiry grace. Each carrier and the aggregate
+per-turn carrier set are at most 1 MiB including envelope overhead, within
+existing ingress/retention limits. Key
+version is fixed `current-master/v1`; there is no keyring or rotation setting.
+Changing the external master key invalidates old carriers; no old-key fallback.
+Wrong account/project/model returns fixed `invalid_request` with safe subtype
+`continuation_scope_mismatch`, before provider HTTP and without route/account
+fallback. No OAuth-derived key, call store, replay cache, or single-use/replay
+protection promise is defined; legitimate resubmission remains valid. Existing
+retry and postcommit fallback rules do not change.
+
+The existing v1 execution boundary supplies the selected account as
+`AttemptScope.AccountID`, the requested model as `ExecutionRequest.Model`, and
+credentials through selected-account-only `InvocationServices.Credentials`;
+Antigravity's validated `project_id` comes from that selected credential. These
+values are sufficient to detect scope drift before dispatch and never select a
+replacement account. The current `InvocationServices` has no continuation-codec
+slot: any future codec transport must be separately specified as a generic,
+invocation-scoped least-authority seal/open capability (not a provider-specific
+Core reasoning API) before implementation. This design does not claim that
+transport API already exists.
+
+OpenAPI unknown-field interoperability is not assumed: the candidate parser
+continues to reject unknown top-level and reasoning-item fields before dispatch;
+whether external clients ignore or strictly reject unknown response fields is
+Unknown. No adapter normalization or opaque native-mode change is specified.
+
+Future synthetic conformance matrix (no live provider):
+
+1. Exact include opt-in emits the opaque carrier only at `output_item.done` and
+   `response.completed`; omitted include omits it. Assert text/summary deltas
+   arrive before carrier completion. Round-trip per-item carriers across two
+   sequential tool turns and compare canonical visible values to sealed values.
+2. Mutate each authenticated field independently (format/key version,
+   cryptosuite, account, project, model, issued-at, expiry/TTL, association) and
+    assert fixed safe rejection with zero fake-provider dispatches and no
+    ciphertext/plaintext/metadata canaries in errors or logs. Use an injected
+    clock for just-before, exact-expiry, and expired boundaries.
+3. Exercise fixed current-master/v1 derivation, old-carrier invalidation after
+   key rotation, wrong keys, authentication-tag tampering, oversized carriers
+   and aggregate request-limit failure; invalid inbound inputs make zero
+   provider calls and never try alternate keys. Use the runtime-selected
+   attempt account/model and its credential project; wrong scope must not start
+   a fallback attempt on another route account.
+4. Distinguish direct-signature parts from signature-only parts in one ordered
+   parts array. Preserve signed ordinary text visibly plus its continuation
+   item; verify thought/call placement and association. Reject ambiguous,
+   non-adjacent or cross-frame signature-only parts as terminal incomplete,
+   with no fabricated provider input.
+5. Resubmit the same valid history twice and require both admissions; do not
+   simulate or assert single-use replay protection. Verify ambiguous dispatch
+   still follows existing unsafe/unknown retry and no-postcommit-fallback rules.
+6. Record external client behavior for the carrier and unknown fields as
+   client/version-specific; do not infer that all clients ignore or reject
+   unknown response fields from the gateway fixture.
+
 ## Error, HTTP, and retry binding
 
 Retryable indicates potential transience; it does not establish safe replay. The
@@ -216,6 +342,7 @@ Connector must set retry disposition explicitly and must never internally replay
 
 | Observation | Result | Retryable / disposition |
 | --- | --- | --- |
+| Malformed, expired, tampered, over-limit, or account/project/model-mismatched encrypted continuation | Fixed safe pre-dispatch `invalid_request` (scope mismatch subtype `continuation_scope_mismatch`); zero provider HTTP calls and no alternate route/account | `false / unsafe`; no route fallback |
 | Invalid protocol/mode/body, unsupported input, invalid project or credential | Pre-dispatch `invalid_request`, `unsupported_feature`, or `unauthenticated` as appropriate | `false / unsafe` |
 | Missing scoped transport or real-transport opt-in unavailable | Pre-dispatch `unavailable` | `false / unknown` |
 | Transport `Do` error, nil response/body, or invalid status after invocation starts | Fail; close any available body. Delivery may be ambiguous. | `false / unknown` |
@@ -244,5 +371,6 @@ EOF, ambiguous `Do` failure, and no replay after commit.
 ## References
 
 - [M10 brief](M10-ANTIGRAVITY.md), [M10 research](M10-RESEARCH.md)
+- [DEC-031](../project/DECISIONS.md#dec-031--scope-antigravity-encrypted-reasoning-continuity)
 - [Internal contract: execution stream](CONTRACT.md#execution-response-and-streamframe), [Connector](CONTRACT.md#connector-contract), [errors](CONTRACT.md#error-model), [scoped services and usage](CONTRACT.md#usage-and-scoped-runtime-services)
 - [M2 language binding](M2-BINDING.md), [M8 lifecycle/error binding pattern](M8-BINDING.md)

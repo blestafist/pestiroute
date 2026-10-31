@@ -39,7 +39,8 @@ assigned Responses `output_index` per output item. Missing IDs receive
 connector-local per-response IDs; duplicate explicit IDs fail closed. This is
 deterministic synthetic translation evidence only; provider acceptance and
 whether a live server emits other shapes remain Unknown. Thought-marked parts or
-any thought signature reject the frame before that frame emits content.
+any thought signature reject the frame before that frame emits content in the
+current implementation. M10-040 defines only a future design candidate.
 
 M10-016 adds the request-history half for text messages and
 `function_call`/`function_call_output` items. It associates each result with its
@@ -73,15 +74,15 @@ protocol guarantee:
   signature recovery, filtering and sentinel paths, including warm-up behavior.
 
 The sentinel's acceptance and safety are **Unknown**; it must not be generated,
-substituted for missing state, or treated as proof of continuity. No compatible
-Responses carrier for a provider thought signature, nor a mechanism to verify its
-origin and account/model/project/conversation scope, has been established. Do not
-assume arbitrary metadata or unknown fields provide either. Signature-dependent
-continuation/replay is therefore **BLOCKED** until evidence establishes a
-compatible carrier and verifies that binding. Never parse, synthesize, normalize,
-truncate, or replay signatures across scope boundaries. Fail closed rather than
-claiming signature preservation or continuity when the carrier or verification
-mechanism is absent. Do not invent a contract field to fill this evidence gap.
+substituted for missing state, or treated as proof of continuity. The OpenAI
+Responses carrier exists, but no mechanism to verify a provider signature's
+origin and account/model/project scope has been established. Do not assume
+arbitrary metadata or unknown fields provide either. M10-040 defines a future,
+locally authenticated opaque carrier gated by exact `include:
+["reasoning.encrypted_content"]`; it does not establish Antigravity support or
+implementation readiness. Never parse, synthesize, normalize, truncate, merge,
+or replay signatures across scope boundaries. Fail closed if the carrier or
+exact part association is absent; do not use a global pending/fallback signature.
 
 The offline connector allowlists `gemini-2.5-pro` and `gemini-2.5-flash`; this
 model allowlist does not classify models as thinking/non-thinking or gate on
@@ -98,11 +99,12 @@ However, this research has not established that Responses history can carry the
 provider signature with verifiable origin and scope. The contract also exposes no
 durable conversation/session state channel. Connector-local caches would invent
 identity, lifetime, and isolation policy. Consequently signature-dependent
-multi-request continuation remains **BLOCKED**: no carrier, state mechanism, or
-Core contract amendment is presumed. If later evidence requires a new cross-call
-state channel, propose an ADR and compatibility review before changing the
-contract. Until carrier and isolation are evidenced, do not implement or claim
-signature-dependent replay. See [contract payload and execution boundaries](CONTRACT.md#execution-request)
+multi-request continuation remains **BLOCKED** for implementation: this local
+carrier design is not evidence of provider support, and no durable session API
+or Core contract amendment is presumed. No replay cache or single-use guarantee
+is defined; legitimate resubmission of authenticated reasoning history must not
+be rejected solely as reuse. See [DEC-031](../project/DECISIONS.md#dec-031--scope-antigravity-encrypted-reasoning-continuity) and
+[contract payload and execution boundaries](CONTRACT.md#execution-request)
 and [M10 identity constraints](M10-ANTIGRAVITY.md#state-and-identity-constraints).
 
 ## Synthetic fixture and offline test specification
@@ -125,13 +127,11 @@ Required offline cases for a future separately scoped implementation:
 3. Accept distinct parallel calls/results without collapsing/reordering; reject
    duplicate, missing, mismatched, or causally orphaned call/result identifiers
    before fake dispatch.
-4. For each of the two rounds, test its own signature association and constraints.
-   Only if an evidence-backed Responses carrier and origin/scope verification
-   mechanism are established may the fixture assert byte-for-byte preservation
-   on that round's associated call. Until then mark signature-dependent replay
-   **BLOCKED** and reject rather than invent a carrier or sentinel. If a later
-   state mechanism is separately authorized, prove no cross-account/model/project/
-   conversation replay or concurrent cache leakage.
+4. For a separately authorized M10-040 implementation, test each round's own
+   locally authenticated carrier and exact signature association. Do not infer
+   provider acceptance from byte-preserving synthetic round trips; reject an
+   ambiguous trailer and prove wrong account/project/model/version isolation.
+   No cache or replay-protection behavior is specified.
 5. Reject unsupported schema/tool-choice/history fields pre-dispatch; malformed
    arguments, truncated history, and invalid signature representation never
    become an apparently valid tool execution.
@@ -150,14 +150,41 @@ unsupported. See the [text/stream binding](M10-BINDING.md).
 Unsigned provider thought summaries are a separate output-only case under
 [DEC-028](../project/DECISIONS.md#dec-028--translate-unsigned-antigravity-thought-summaries-incrementally)
 and the [text/stream binding](M10-BINDING.md#transport-opt-in-and-stream-lifecycle).
-They do not relax the rule above: any present `thoughtSignature` (including
-`null`) remains fail-closed, and neither signature-dependent tool continuity nor
-inbound reasoning history is accepted. No signature may be stored, synthesized,
-discarded-and-continued, or replayed.
+They do not relax current implementation behavior: any present `thoughtSignature`
+(including `null`) remains fail-closed, and neither signature-dependent tool
+continuity nor inbound reasoning history is currently accepted. No signature is
+stored, synthesized, discarded-and-continued, or replayed by current code.
+
+### Encrypted continuity candidate (design only; not implemented)
+
+For a future implementation, each Responses `reasoning` item remains in its
+original input-array position. Its opaque `encrypted_content` carries one exact
+signed source part using the version-1 schema in [M10-BINDING](M10-BINDING.md#encrypted-continuity-candidate-design-only-not-implemented).
+Direct signatures bind to their actual part. A signature-only part is not a
+separate-frame inference: it may bind only to the single immediately preceding
+unsigned actual part in the same complete, source-ordered `content.parts[]`
+array. Ambiguous, duplicate, non-adjacent, or cross-frame association fails
+terminally after commit; do not fabricate signature/provider input. Signed
+ordinary text stays visible with an adjacent continuation reasoning item;
+thought and function-call signatures retain their exact source association and
+ordering. Never copy signatures between calls, merge text/thought/call parts,
+or trust modified visible history instead of authenticated canonical values.
+
+Future tests cover output carrier timing (only completed reasoning item and
+`response.completed`), incremental visible deltas, exact input placement, two
+tool rounds, direct and adjacent signature-only association, visible signed
+text, wrong account/project/model as pre-dispatch `invalid_request` with no
+account fallback, fixed 24h TTL/5m future-clock bound, 1 MiB aggregate cap,
+current-master/v1 derivation and old-carrier invalidation after master-key
+rotation. All failures must have fixed safe diagnostics and zero provider calls
+for invalid inbound carriers. Replaying the same valid history remains allowed;
+no single-use/replay protection is promised and retry/fallback rules do not
+change.
 
 ## References
 
 - [M10 research and source audit](M10-RESEARCH.md#opencode-plugin-audit-reusable-observations-not-verified-contract)
+- [DEC-031](../project/DECISIONS.md#dec-031--scope-antigravity-encrypted-reasoning-continuity), [OpenAI reasoning continuity guidance](https://platform.openai.com/docs/guides/reasoning#preserve-reasoning-without-stored-responses)
 - [M10 text/stream binding](M10-BINDING.md)
 - [M10 brief](M10-ANTIGRAVITY.md#state-and-identity-constraints)
 - [Contract: execution request](CONTRACT.md#execution-request), [Connector](CONTRACT.md#connector-contract)
