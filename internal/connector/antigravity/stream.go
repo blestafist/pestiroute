@@ -15,11 +15,22 @@ import (
 	"github.com/blestafist/pestiroute/internal/core"
 )
 
-const maxSSELine = 1 << 20
+const (
+	maxSSELine   = 1 << 20
+	maxEventSize = 1 << 20
+)
 
 var (
 	errMalformedSSEJSON        = errors.New("malformed SSE JSON")
 	errMalformedCandidateFrame = errors.New("malformed candidate frame")
+	errSSEBounds               = errors.New("SSE bounds exceeded")
+	errUnsupportedFinish       = errors.New("unsupported finish reason")
+	errUnsupportedReasoning    = errors.New("unsupported reasoning signature")
+	errInvalidUsage            = errors.New("invalid usage")
+	errInvalidFunction         = errors.New("invalid function call")
+	errEmptyContent            = errors.New("empty candidate content")
+	errInvalidContent          = errors.New("invalid candidate content")
+	errInvalidOrder            = errors.New("invalid candidate frame order")
 )
 
 type stream struct {
@@ -46,6 +57,7 @@ type stream struct {
 	usage            *core.UsageReport
 	sawFinish        bool
 	sawTrailingUsage bool
+	skipLF           bool
 }
 
 func newStream(body io.ReadCloser, responseID, messageID string, logger ...*slog.Logger) *stream {
@@ -175,8 +187,24 @@ func (s *stream) logStreamError(err error, precommit bool) {
 		phase, category = "precommit", "precommit_framing"
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			category = "precommit_eof"
+		} else if errors.Is(err, errSSEBounds) {
+			category = "precommit_bounds_exceeded"
 		} else if errors.Is(err, errMalformedSSEJSON) || errors.Is(err, errMalformedCandidateFrame) {
 			category = "precommit_invalid_json"
+		} else if errors.Is(err, errUnsupportedFinish) {
+			category = "precommit_unsupported_finish"
+		} else if errors.Is(err, errUnsupportedReasoning) {
+			category = "precommit_unsupported_reasoning"
+		} else if errors.Is(err, errInvalidUsage) {
+			category = "precommit_invalid_usage"
+		} else if errors.Is(err, errInvalidFunction) {
+			category = "precommit_invalid_function"
+		} else if errors.Is(err, errEmptyContent) {
+			category = "precommit_empty_content"
+		} else if errors.Is(err, errInvalidContent) {
+			category = "precommit_invalid_content"
+		} else if errors.Is(err, errInvalidOrder) {
+			category = "precommit_invalid_order"
 		}
 	}
 	s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category)
@@ -188,6 +216,7 @@ func bodyFrame(b []byte) core.StreamFrame {
 func (s *stream) nextEvent(ctx context.Context) ([]byte, error) {
 	var data []byte
 	hasData := false
+	firstLine := true
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -199,7 +228,10 @@ func (s *stream) nextEvent(ctx context.Context) ([]byte, error) {
 			}
 			return nil, err
 		}
-		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		if firstLine {
+			line = strings.TrimPrefix(line, "\xef\xbb\xbf")
+			firstLine = false
+		}
 		if line == "" {
 			if hasData {
 				return data, nil
@@ -211,14 +243,17 @@ func (s *stream) nextEvent(ctx context.Context) ([]byte, error) {
 		}
 		field, value, found := strings.Cut(line, ":")
 		if !found {
-			return nil, errors.New("malformed SSE field")
+			continue
 		}
 		value = strings.TrimPrefix(value, " ")
-		if field != "data" || hasData {
-			return nil, errors.New("unsupported SSE framing")
+		if field != "data" {
+			continue
 		}
-		if len(value) > maxSSELine {
-			return nil, errors.New("SSE event exceeds limit")
+		if hasData {
+			data = append(data, '\n')
+		}
+		if len(data)+len(value) > maxEventSize {
+			return nil, errSSEBounds
 		}
 		data = append(data, value...)
 		hasData = true
@@ -228,21 +263,33 @@ func (s *stream) nextEvent(ctx context.Context) ([]byte, error) {
 func (s *stream) readLine() (string, error) {
 	var line []byte
 	for {
-		part, err := s.r.ReadSlice('\n')
-		if len(line)+len(part) > maxSSELine {
-			return "", errors.New("SSE line exceeds limit")
-		}
-		line = append(line, part...)
-		if err == bufio.ErrBufferFull {
-			continue
-		}
+		b, err := s.r.ReadByte()
 		if err != nil {
 			if errors.Is(err, io.EOF) && len(line) == 0 {
 				return "", io.EOF
 			}
-			return "", io.ErrUnexpectedEOF
+			if errors.Is(err, io.EOF) {
+				return string(line), nil
+			}
+			return "", err
 		}
-		return string(line), nil
+		if s.skipLF {
+			s.skipLF = false
+			if b == '\n' {
+				continue
+			}
+		}
+		if b == '\n' {
+			return string(line), nil
+		}
+		if b == '\r' {
+			s.skipLF = true
+			return string(line), nil
+		}
+		if len(line) >= maxSSELine {
+			return "", errSSEBounds
+		}
+		line = append(line, b)
 	}
 }
 
@@ -280,11 +327,11 @@ func (s *stream) consume(raw []byte) error {
 	}
 	resp := outer.Response
 	if s.terminal {
-		return errors.New("frame after terminal marker")
+		return errInvalidOrder
 	}
 	if s.sawFinish {
 		if s.sawTrailingUsage || resp.Done != nil || len(resp.Candidates) != 0 || resp.Usage == nil || !usageOnlyFrame(raw) {
-			return errors.New("frame after candidate finish reason")
+			return errInvalidOrder
 		}
 		if err := s.setUsage(resp.Usage); err != nil {
 			return err
@@ -294,11 +341,11 @@ func (s *stream) consume(raw []byte) error {
 	}
 	if resp.Done != nil && *resp.Done {
 		if len(resp.Candidates) > 0 {
-			return errors.New("terminal frame contains unsupported candidate content")
+			return errInvalidContent
 		}
 		if resp.Usage != nil {
 			if (resp.Usage.Prompt != nil && *resp.Usage.Prompt < 0) || (resp.Usage.Candidates != nil && *resp.Usage.Candidates < 0) {
-				return errors.New("invalid usage")
+				return errInvalidUsage
 			}
 			if resp.Usage.Prompt != nil || resp.Usage.Candidates != nil {
 				completeness := core.UsagePartial
@@ -325,20 +372,23 @@ func (s *stream) consume(raw []byte) error {
 	for _, candidate := range resp.Candidates {
 		if candidate.FinishReason != "" {
 			if candidate.FinishReason != "STOP" {
-				return errors.New("unsupported candidate finish reason")
+				return errUnsupportedFinish
 			}
 			finished = true
 		}
 		for _, part := range candidate.Content.Parts {
 			if part.Thought != nil && *part.Thought || len(part.ThoughtSignature) != 0 {
-				return errors.New("unsupported reasoning signature")
+				return errUnsupportedReasoning
 			}
 			if part.Text != nil && len(part.FunctionCall) != 0 {
-				return errors.New("candidate part has conflicting content")
+				return errInvalidContent
 			}
 			if part.Text != nil {
-				if *part.Text == "" || !utf8.ValidString(*part.Text) || len(*part.Text) > maxRequestBytes-retainedBytes {
-					return errors.New("invalid or oversized candidate text")
+				if *part.Text == "" || !utf8.ValidString(*part.Text) {
+					return errInvalidContent
+				}
+				if len(*part.Text) > maxRequestBytes-retainedBytes {
+					return errSSEBounds
 				}
 				retainedBytes += len(*part.Text)
 				parts = append(parts, parsedPart{text: *part.Text})
@@ -347,35 +397,38 @@ func (s *stream) consume(raw []byte) error {
 			if len(part.FunctionCall) != 0 {
 				var fields map[string]json.RawMessage
 				if json.Unmarshal(part.FunctionCall, &fields) != nil || fields == nil || fields["name"] == nil || fields["args"] == nil {
-					return errors.New("invalid function call")
+					return errInvalidFunction
 				}
 				for key := range fields {
 					if key != "name" && key != "args" && key != "id" {
-						return errors.New("unsupported function-call field")
+						return errInvalidFunction
 					}
 				}
 				call := new(functionCall)
 				if json.Unmarshal(part.FunctionCall, call) != nil {
-					return errors.New("invalid function call")
+					return errInvalidFunction
 				}
-				if !validFunctionName(call.Name) || len(call.Args) == 0 || !uniqueJSON(call.Args) || !utf8.Valid(call.Args) || len(call.Args) > maxRequestBytes-retainedBytes {
-					return errors.New("invalid or oversized function-call arguments")
+				if len(call.Args) > maxRequestBytes-retainedBytes {
+					return errSSEBounds
+				}
+				if !validFunctionName(call.Name) || len(call.Args) == 0 || !uniqueJSON(call.Args) || !utf8.Valid(call.Args) {
+					return errInvalidFunction
 				}
 				trimmed := strings.TrimSpace(string(call.Args))
 				if len(trimmed) == 0 || trimmed[0] != '{' {
-					return errors.New("function-call arguments must be an object")
+					return errInvalidFunction
 				}
 				var object map[string]json.RawMessage
 				if json.Unmarshal(call.Args, &object) != nil || object == nil {
-					return errors.New("function-call arguments must be an object")
+					return errInvalidFunction
 				}
 				arguments := string(call.Args)
 				if idRaw, present := fields["id"]; present && (json.Unmarshal(idRaw, &call.ID) != nil || call.ID == "") {
-					return errors.New("invalid function-call ID")
+					return errInvalidFunction
 				}
 				if call.ID != "" {
 					if len(call.ID) > 256 || !utf8.ValidString(call.ID) || strings.TrimSpace(call.ID) != call.ID {
-						return errors.New("invalid function-call ID")
+						return errInvalidFunction
 					}
 				}
 				callIndex := len(s.usedCallIDs) + len(stagedCallIDs)
@@ -384,7 +437,7 @@ func (s *stream) consume(raw []byte) error {
 					callID = "call_" + s.responseID + "_" + strconv.Itoa(callIndex)
 				}
 				if s.usedCallIDs[callID] || stagedCallIDs[callID] {
-					return errors.New("duplicate function-call ID")
+					return errInvalidFunction
 				}
 				if stagedCallIDs == nil {
 					stagedCallIDs = make(map[string]bool)
@@ -395,7 +448,7 @@ func (s *stream) consume(raw []byte) error {
 				parts = append(parts, parsedPart{call: call, args: arguments, callID: callID, itemID: itemID})
 				continue
 			}
-			return errors.New("candidate part has no supported content")
+			return errEmptyContent
 		}
 	}
 	if resp.Usage != nil {
@@ -418,7 +471,7 @@ func (s *stream) consume(raw []byte) error {
 		if resp.Usage != nil {
 			return nil
 		}
-		return errors.New("candidate frame has no text")
+		return errEmptyContent
 	}
 	for _, part := range parts {
 		if s.sequence == 0 {
@@ -452,7 +505,7 @@ func (s *stream) consume(raw []byte) error {
 	}
 	s.retainedBytes = retainedBytes
 	if len(s.pending) == 0 && !finished && resp.Usage == nil {
-		return errors.New("candidate frame has no text")
+		return errEmptyContent
 	}
 	return nil
 }
@@ -491,7 +544,7 @@ func (s *stream) setUsage(usage *struct {
 	Candidates *int64 `json:"candidatesTokenCount"`
 }) error {
 	if (usage.Prompt != nil && *usage.Prompt < 0) || (usage.Candidates != nil && *usage.Candidates < 0) {
-		return errors.New("invalid usage")
+		return errInvalidUsage
 	}
 	if usage.Prompt != nil || usage.Candidates != nil {
 		completeness := core.UsagePartial

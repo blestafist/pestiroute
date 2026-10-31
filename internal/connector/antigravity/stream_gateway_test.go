@@ -2,6 +2,7 @@ package antigravity
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -99,10 +100,83 @@ func TestConnectorAdapterLoopbackStreamFailuresAndIncrementality(t *testing.T) {
 	}
 }
 
+type chunkReadCloser struct {
+	r     *strings.Reader
+	chunk int
+}
+
+func (c *chunkReadCloser) Read(p []byte) (int, error) {
+	if len(p) > c.chunk {
+		p = p[:c.chunk]
+	}
+	return c.r.Read(p)
+}
+func (*chunkReadCloser) Close() error { return nil }
+
+func TestSSEStandardsFramingAcrossChunkBoundaries(t *testing.T) {
+	data := `{"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}}`
+	for _, tc := range []struct{ name, wire string }{
+		{"LF+BOM+metadata+multiline", "\xef\xbb\xbf:comment\nevent: message\nid: x\nretry: 1\nunknown: value\ncolonless\ndata: {\ndata: \"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}}\n\n"},
+		{"CR", strings.ReplaceAll("data: "+data+"\n\n", "\n", "\r")},
+		{"CR+BOM", "\xef\xbb\xbf" + strings.ReplaceAll("data: "+data+"\n\n", "\n", "\r")},
+		{"CRLF", "data: " + data + "\r\n\r\n"},
+		{"CRLF+BOM", "\xef\xbb\xbfdata: " + data + "\r\n\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for chunk := 1; chunk <= 7; chunk++ {
+				s := newStream(&chunkReadCloser{r: strings.NewReader(tc.wire), chunk: chunk}, "r", "m")
+				event, err := s.nextEvent(context.Background())
+				if err != nil {
+					t.Fatalf("chunk %d: %v", chunk, err)
+				}
+				if tc.name == "LF+BOM+metadata+multiline" {
+					if string(event) != "{\n"+data[1:] {
+						t.Fatalf("chunk %d event=%q", chunk, event)
+					}
+				} else if string(event) != data {
+					t.Fatalf("chunk %d event=%q", chunk, event)
+				}
+			}
+		})
+	}
+}
+
+func TestSSEUnterminatedFinalDataIsNotDispatched(t *testing.T) {
+	for _, wire := range []string{
+		`data: {"response":{"done":true}}`,
+		"data: {\"response\":{\"done\":true}}\r",
+		"data: {\"response\":{\"done\":true}}\n",
+	} {
+		s := newStream(&chunkReadCloser{r: strings.NewReader(wire), chunk: 1}, "r", "m")
+		if event, err := s.nextEvent(context.Background()); !errors.Is(err, io.ErrUnexpectedEOF) || event != nil {
+			t.Fatalf("unterminated event dispatched: event=%q err=%v", event, err)
+		}
+	}
+}
+
+func TestSSELimitsAreIncremental(t *testing.T) {
+	for name, wire := range map[string]string{
+		"line":  "unknown: " + strings.Repeat("x", maxSSELine),
+		"event": "data: " + strings.Repeat("x", maxEventSize) + "\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newStream(&chunkReadCloser{r: strings.NewReader(wire), chunk: 13}, "r", "m")
+			if _, err := s.nextEvent(context.Background()); !errors.Is(err, errSSEBounds) {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
 func TestStreamDebugFailureClassificationIsSecretSafe(t *testing.T) {
 	for _, tc := range []struct{ wire, category string }{
 		{"", "precommit_eof"},
 		{"data: {PRIVATE-BODY}\n\n", "precommit_invalid_json"},
+		{`data: {"response":{"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"PRIVATE-TEXT"}]}}]}}` + "\n\n", "precommit_unsupported_finish"},
+		{`data: {"response":{"candidates":[{"content":{"parts":[{"thought":true,"text":"PRIVATE-REASONING"}]}}]}}` + "\n\n", "precommit_unsupported_reasoning"},
+		{`data: {"response":{"usageMetadata":{"promptTokenCount":-1}}}` + "\n\n", "precommit_invalid_usage"},
+		{`data: {"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup"}}]}}]}}` + "\n\n", "precommit_invalid_function"},
+		{`data: {"response":{"candidates":[{"content":{"parts":[]}}]}}` + "\n\n", "precommit_empty_content"},
 	} {
 		var logs strings.Builder
 		logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -119,5 +193,44 @@ func TestStreamDebugFailureClassificationIsSecretSafe(t *testing.T) {
 			t.Fatalf("unsafe/missing stream diagnostic: %q", got)
 		}
 		_ = result.Stream.Close()
+	}
+}
+
+func TestSemanticConsumeErrorsHaveFixedCategories(t *testing.T) {
+	const private = "PRIVATE-SEMANTIC-CANARY"
+	tests := []struct {
+		name, raw, category string
+		prepare             func(*stream)
+	}{
+		{"missing function args", `{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup"}}]}}]}}`, "precommit_invalid_function", nil},
+		{"extra function field", `{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{},"extra":"` + private + `"}}]}}]}}`, "precommit_invalid_function", nil},
+		{"scalar function args", `{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":1}}]}}]}}`, "precommit_invalid_function", nil},
+		{"invalid function id", `{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{},"id":" "}}]}}]}}`, "precommit_invalid_function", nil},
+		{"duplicate function ids", `{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{},"id":"same"}},{"functionCall":{"name":"lookup","args":{},"id":"same"}}]}}]}}`, "precommit_invalid_function", nil},
+		{"no candidates", `{"response":{"candidates":[]}}`, "precommit_empty_content", nil},
+		{"empty parts", `{"response":{"candidates":[{"content":{"parts":[]}}]}}`, "precommit_empty_content", nil},
+		{"unsupported part", `{"response":{"candidates":[{"content":{"parts":[{}]}}]}}`, "precommit_empty_content", nil},
+		{"empty text", `{"response":{"candidates":[{"content":{"parts":[{"text":""}]}}]}}`, "precommit_invalid_content", nil},
+		{"terminal candidate content", `{"response":{"done":true,"candidates":[{"content":{"parts":[{"text":"x"}]}}]}}`, "precommit_invalid_content", nil},
+		{"after terminal", `{"response":{"done":true}}`, "precommit_invalid_order", func(s *stream) { s.terminal = true }},
+		{"after finish", `{"response":{"candidates":[{"content":{"parts":[{"text":"x"}]}}]}}`, "precommit_invalid_order", func(s *stream) { s.sawFinish = true }},
+		{"oversized text", `{"response":{"candidates":[{"content":{"parts":[{"text":"` + strings.Repeat("x", maxRequestBytes+1) + `"}]}}]}}`, "precommit_bounds_exceeded", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs strings.Builder
+			s := newStream(&chunkReadCloser{r: strings.NewReader(""), chunk: 1}, "r", "m", slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			if tc.prepare != nil {
+				tc.prepare(s)
+			}
+			err := s.consume([]byte(tc.raw))
+			if err == nil {
+				t.Fatal("expected semantic rejection")
+			}
+			s.logStreamError(err, true)
+			if !strings.Contains(logs.String(), "category="+tc.category) || strings.Contains(logs.String(), private) {
+				t.Fatalf("category or privacy mismatch: %q", logs.String())
+			}
+		})
 	}
 }

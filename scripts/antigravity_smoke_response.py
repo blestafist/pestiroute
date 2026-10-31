@@ -6,6 +6,32 @@ ALLOWED_CODES = frozenset("unsupported_target unsupported_feature unsupported_ca
 DIAGNOSTIC_BRANCHES = frozenset({"http_error", "transport_error", "invalid_response"})
 UPSTREAM_STATUSES = frozenset({"UNAUTHENTICATED", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "INVALID_ARGUMENT", "other", "none"})
 TRANSPORT_CLASSES = frozenset({"timeout", "connection_refused", "dns", "eof", "tls", "other", "none"})
+STREAM_FAILURES = frozenset({
+    ("precommit", "precommit_framing"),
+    ("precommit", "precommit_eof"),
+    ("precommit", "precommit_invalid_json"),
+    ("precommit", "precommit_unsupported_finish"),
+    ("precommit", "precommit_unsupported_reasoning"),
+    ("precommit", "precommit_invalid_usage"),
+    ("precommit", "precommit_invalid_function"),
+    ("precommit", "precommit_empty_content"),
+    ("precommit", "precommit_bounds_exceeded"),
+    ("precommit", "precommit_invalid_content"),
+    ("precommit", "precommit_invalid_order"),
+    ("postcommit", "postcommit_error"),
+})
+
+
+def stream_diagnostics(log_text):
+    """Extract only the pairs emitted by stream.go logStreamError."""
+    pattern = re.compile(r'msg="Antigravity stream failure" phase="?([a-z_]+)"? category="?([a-z_]+)"?(?=\s|$)')
+    found = []
+    for line in log_text.splitlines():
+        match = pattern.search(line)
+        if match and match.groups() in STREAM_FAILURES:
+            phase, category = match.groups()
+            found.append(f"phase={phase} category={category}")
+    return found
 
 
 def inference_diagnostics(log_text):
