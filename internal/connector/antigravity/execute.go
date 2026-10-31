@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/blestafist/pestiroute/internal/core"
@@ -160,9 +165,11 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 		if ctx.Err() != nil {
 			return core.ExecutionResponse{}, contextError(ctx.Err())
 		}
+		logInferenceDiagnostic(services.Logger, 0, "transport_error", "none", transportErrorClass(err))
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "upstream_unavailable", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Antigravity transport failed"}
 	}
 	if resp == nil || resp.Body == nil {
+		logInferenceDiagnostic(services.Logger, 0, "invalid_response", "none", "none")
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "upstream_unavailable", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Antigravity response is invalid"}
 	}
 	if ctx.Err() != nil {
@@ -172,14 +179,61 @@ func (c *Connector) Execute(ctx context.Context, req core.ExecutionRequest, scop
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		_ = resp.Body.Close()
+		logInferenceDiagnostic(services.Logger, resp.StatusCode, "http_error", upstreamStatus(body), "none")
 		return core.ExecutionResponse{}, statusError(resp.StatusCode, body)
 	}
 	mediaType, params, parseErr := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if parseErr != nil || mediaType != "text/event-stream" || (params["charset"] != "" && !strings.EqualFold(params["charset"], "utf-8")) || (resp.Header.Get("Content-Encoding") != "" && !strings.EqualFold(resp.Header.Get("Content-Encoding"), "identity")) {
 		_ = resp.Body.Close()
+		logInferenceDiagnostic(services.Logger, resp.StatusCode, "invalid_response", "none", "none")
 		return core.ExecutionResponse{}, &core.GatewayError{Code: "invalid_response", Category: core.CategoryUnavailable, RetryDisposition: core.RetryUnknown, Message: "Antigravity response is invalid"}
 	}
 	return core.ExecutionResponse{Stream: newStream(resp.Body, "resp_"+executionID, "msg_"+executionID)}, nil
+}
+
+func logInferenceDiagnostic(logger *slog.Logger, status int, branch, upstream, transport string) {
+	if logger != nil {
+		logger.Debug("Antigravity inference diagnostic", "status", status, "branch", branch, "upstream_status", upstream, "transport_error_class", transport)
+	}
+}
+
+func upstreamStatus(body []byte) string {
+	var response struct {
+		Error struct {
+			Status string `json:"status"`
+		} `json:"error"`
+	}
+	if uniqueJSON(body) && json.Unmarshal(body, &response) == nil {
+		switch response.Error.Status {
+		case "UNAUTHENTICATED", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "INVALID_ARGUMENT":
+			return response.Error.Status
+		}
+		if response.Error.Status != "" {
+			return "other"
+		}
+	}
+	return "none"
+}
+
+func transportErrorClass(err error) string {
+	var networkError net.Error
+	var dnsError *net.DNSError
+	var headerError tls.RecordHeaderError
+	var certError *x509.UnknownAuthorityError
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || errors.As(err, &networkError) && networkError.Timeout():
+		return "timeout"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection_refused"
+	case errors.As(err, &dnsError):
+		return "dns"
+	case errors.Is(err, io.EOF):
+		return "eof"
+	case errors.As(err, &headerError), errors.As(err, &certError):
+		return "tls"
+	default:
+		return "other"
+	}
 }
 
 func admit(body []byte) ([]any, string, []any, map[string]any, *core.GatewayError) {

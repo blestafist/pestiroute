@@ -158,6 +158,7 @@ func loadConfig(args []string) (config, time.Duration, error) {
 	format := flags.String("config-format", "json", "configuration format (json or yaml)")
 	listen := flags.String("listen", "", "listener address")
 	timeout := flags.String("shutdown-timeout", "", "graceful shutdown duration")
+	debug := flags.Bool("debug", false, "enable debug diagnostics")
 	if err := flags.Parse(args); err != nil {
 		return config{}, 0, err
 	}
@@ -165,6 +166,9 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		return config{}, 0, fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
 	c := config{Listen: "127.0.0.1:8080", ShutdownTimeout: "5s"}
+	if *debug {
+		c.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
 	if *format != "json" && *format != "yaml" {
 		return config{}, 0, fmt.Errorf("unsupported config format %q (want json or yaml)", *format)
 	}
@@ -932,7 +936,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		}
 	}
 	if legacy {
-		services = fixedLegacyServices{account: c.UpstreamCredentialEnv, credential: []byte(c.credential), transport: transports[c.UpstreamCredentialEnv]}
+		services = fixedLegacyServices{account: c.UpstreamCredentialEnv, credential: []byte(c.credential), transport: transports[c.UpstreamCredentialEnv], logger: c.logger}
 	}
 	var accountingFailed atomic.Bool
 	dispatchers := make(map[string]*core.Dispatcher, len(models))
@@ -1159,6 +1163,7 @@ type fixedLegacyServices struct {
 	account    string
 	credential []byte
 	transport  core.HTTPDoer
+	logger     *slog.Logger
 }
 
 func (s fixedLegacyServices) ForAttempt(scope core.AttemptScope) core.InvocationServices {
@@ -1166,7 +1171,7 @@ func (s fixedLegacyServices) ForAttempt(scope core.AttemptScope) core.Invocation
 	if scope.AccountID != s.account {
 		access = unavailableCredential{}
 	}
-	return core.InvocationServices{Credentials: access, Transport: s.transport}
+	return core.InvocationServices{Credentials: access, Transport: s.transport, Logger: s.logger}
 }
 
 type fixedLegacyCredential []byte

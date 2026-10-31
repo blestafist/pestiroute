@@ -32,7 +32,7 @@ the earlier CURRENT claim that it awaited review was stale.
 
 | Milestone | Branch | First READY / active task | Scope / dependency |
 | --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-028 BLOCKED | M10-030 closed DONE. M10-028 remains frozen in BLOCKED status (budget 9/1000 preserved, zero live retries authorized). |
+| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | M10-028 BLOCKED | M10-029–031 DONE; M10-031 verified secret-safe runtime --debug telemetry and bounded standalone parser; M10-028 frozen/BLOCKED (budget 11/1000 preserved, no retries). |
 | [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
 | [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
 | [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
@@ -52,12 +52,12 @@ features. All new branches start from the same accepted planning baseline.
 | [M5.1-051](tasks/M5.1-051.md) | DRAFT/unrun: own READY assignment, explicit authority and independent review for encrypted-reasoning continuation |
 | [M5.2-025](tasks/M5.2-025.md) | BLOCKED: provisioned compatible GPU/runtime/model and separate operator authority; DEC-013 at-most-3B ceiling remains, historical 8B candidate is not authorization |
 
-M8-008 is also BLOCKED as described above. Antigravity live browser OAuth was completed for this operator; M10-028's corrected, separately authorized request reached one counted provider dispatch but returned fixed `unauthenticated`. Further requests are stopped. Preserve the isolated operator credential store and cumulative request budget. Credentials and private payloads stay out of repository evidence.
+M8-008 is also BLOCKED as described above. Antigravity live browser OAuth was completed for this operator; M10-028's latest authorized refresh succeeded, but its sole subsequent inference returned HTTP 503 `upstream_unavailable` with zero SSE. Further requests are stopped. Preserve the isolated operator credential store and cumulative request budget (11/1000). Credentials and private payloads stay out of repository evidence.
 
 ## Checks and operations
 
 Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. This cloud host lacks `/proc/<pid>/task/<tid>/children`, so existing process-inspection tests and M6 CLI smoke cannot fully pass locally; use hosted Linux CI for that gate. Parallel worktrees need distinct TMPDIR values as well as package serialization.
 
-M10-027, M10-029, and M10-030 closed DONE. M10-030 verified optional credential_id (default oauth) in protected YAML/startup and account scope isolation offline (reviewer PASS ses_e6e50003dffe5TGk9F1zXj2374). Actual operator root cause remains unproven without an in-process probe; M10-028 remains frozen and BLOCKED (budget 9/1000 unchanged, key revoked, no further live request authorized). Agents must not inspect/display/log private database contents, master keys, tokens, or payloads. Normal in-process store loading is permitted for bounded gateway execution.
+M10-027, M10-029–031 closed DONE. M10-028 is BLOCKED after one successful refresh and one failed streaming turn at HEAD d89bbf9 using reviewed gateway-d9e508e. Cumulative budget 11/1000, ceiling <=1000 preserved, never reset; no relogin. M10-031 closed DONE (runtime --debug flag and secret-safe inference telemetry verified offline). Reopening M10-028 requires reviewed diagnosis and separately scoped next execution; do not retry. Agents must not inspect/display/log private database contents, master keys, tokens, or payloads. Normal in-process store/config loading is permitted for bounded gateway execution. Tools, multiturn history, and cancellation follow initial smoke readiness.
 
 [Implementation index](README.md) groups stable specs, bindings, procedures, compatibility matrices and evidence. [LOCAL-M3](LOCAL-M3.md), [LOCAL-M4](LOCAL-M4.md), [LOCAL-M5.1](LOCAL-M5.1.md) and [LOCAL-M5.2](LOCAL-M5.2.md) retain existing operations; protected schema migrations require a stopped gateway, consistent SQLite backup and matching external master key. Do not infer new IPC commands or startup fields from the roadmap.
