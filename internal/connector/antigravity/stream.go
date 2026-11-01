@@ -35,6 +35,60 @@ var (
 	errInvalidOrder            = errors.New("invalid candidate frame order")
 )
 
+type usageSubkind string
+
+const (
+	usageInvalidJSON   usageSubkind = "invalid_json"
+	usageNonObject     usageSubkind = "non_object"
+	usageUnknownField  usageSubkind = "unknown_field"
+	usageInvalidType   usageSubkind = "invalid_type"
+	usageNegativeRange usageSubkind = "negative_range"
+)
+
+type usageKnownField string
+
+const (
+	usageKnownCandidatesTokensDetails usageKnownField = "candidates_tokens_details"
+	usageKnownPromptTokensDetails     usageKnownField = "prompt_tokens_details"
+	usageKnownThoughtsTokenCount      usageKnownField = "thoughts_token_count"
+	usageKnownCachedContentTokenCount usageKnownField = "cached_content_token_count"
+	usageKnownCacheTokenCount         usageKnownField = "cache_token_count"
+	usageKnownOther                   usageKnownField = "other"
+)
+
+type invalidUsageError struct {
+	subkind    usageSubkind
+	knownField usageKnownField
+}
+
+func (e invalidUsageError) Error() string        { return errInvalidUsage.Error() }
+func (e invalidUsageError) Is(target error) bool { return target == errInvalidUsage }
+
+func invalidUsage(subkind usageSubkind, key string) error {
+	e := invalidUsageError{subkind: subkind}
+	if subkind == usageUnknownField {
+		e.knownField = classifyUsageKnownField(key)
+	}
+	return e
+}
+
+func classifyUsageKnownField(key string) usageKnownField {
+	switch key {
+	case "candidates_tokens_details":
+		return usageKnownCandidatesTokensDetails
+	case "prompt_tokens_details":
+		return usageKnownPromptTokensDetails
+	case "thoughts_token_count":
+		return usageKnownThoughtsTokenCount
+	case "cached_content_token_count":
+		return usageKnownCachedContentTokenCount
+	case "cache_token_count":
+		return usageKnownCacheTokenCount
+	default:
+		return usageKnownOther
+	}
+}
+
 type invalidContentSubkind string
 
 const (
@@ -239,6 +293,8 @@ func (s *stream) logStreamError(err error, precommit bool) {
 	if s.logger == nil {
 		return
 	}
+	var usageErr invalidUsageError
+	usageDiagnostic := errors.As(err, &usageErr)
 	phase, category := "postcommit", "postcommit_error"
 	if precommit {
 		phase, category = "precommit", "precommit_framing"
@@ -265,6 +321,14 @@ func (s *stream) logStreamError(err error, precommit bool) {
 		}
 	} else {
 		cause := postcommitCause(err)
+		if usageDiagnostic {
+			if usageErr.knownField != "" {
+				s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "cause", cause, "subkind", usageErr.subkind, "known_field", usageErr.knownField)
+			} else {
+				s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "cause", cause, "subkind", usageErr.subkind)
+			}
+			return
+		}
 		if errors.Is(err, errUnsupportedReasoning) {
 			s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "cause", cause, "kind", s.reasoningKind, "signature_type", s.signatureType)
 			return
@@ -282,6 +346,14 @@ func (s *stream) logStreamError(err error, precommit bool) {
 	}
 	if category == "precommit_unsupported_reasoning" {
 		s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "kind", s.reasoningKind, "signature_type", s.signatureType)
+		return
+	}
+	if category == "precommit_invalid_usage" && usageDiagnostic {
+		if usageErr.knownField != "" {
+			s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "subkind", usageErr.subkind, "known_field", usageErr.knownField)
+		} else {
+			s.logger.Debug("Antigravity stream failure", "phase", phase, "category", category, "subkind", usageErr.subkind)
+		}
 		return
 	}
 	var invalid invalidContentError
@@ -814,20 +886,41 @@ func parseUsageMetadata(raw json.RawMessage) (*usageMetadata, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || fields == nil {
-		return nil, errInvalidUsage
+	if !json.Valid(raw) {
+		return nil, invalidUsage(usageInvalidJSON, "")
 	}
+	if trimmed := strings.TrimSpace(string(raw)); len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, invalidUsage(usageNonObject, "")
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return nil, invalidUsage(usageInvalidJSON, "")
+	}
+	if fields == nil {
+		return nil, invalidUsage(usageNonObject, "")
+	}
+	unknown := ""
 	for key := range fields {
 		if key != "promptTokenCount" && key != "candidatesTokenCount" && key != "totalTokenCount" {
-			return nil, errInvalidUsage
+			if unknown == "" || usageFieldPriority(key) < usageFieldPriority(unknown) {
+				unknown = key
+			}
 		}
 	}
+	if unknown != "" {
+		return nil, invalidUsage(usageUnknownField, unknown)
+	}
 	var usage usageMetadata
+	invalidType, negativeRange := false, false
 	for key, value := range fields {
 		count, err := strconv.ParseInt(strings.TrimSpace(string(value)), 10, 64)
-		if err != nil || count < 0 {
-			return nil, errInvalidUsage
+		if err != nil {
+			invalidType = true
+			continue
+		}
+		if count < 0 {
+			negativeRange = true
+			continue
 		}
 		countPtr := new(int64)
 		*countPtr = count
@@ -840,13 +933,36 @@ func parseUsageMetadata(raw json.RawMessage) (*usageMetadata, error) {
 			usage.Total = countPtr
 		}
 	}
+	if invalidType {
+		return nil, invalidUsage(usageInvalidType, "")
+	}
+	if negativeRange {
+		return nil, invalidUsage(usageNegativeRange, "")
+	}
 	return &usage, nil
+}
+
+func usageFieldPriority(key string) int {
+	switch classifyUsageKnownField(key) {
+	case usageKnownCandidatesTokensDetails:
+		return 0
+	case usageKnownPromptTokensDetails:
+		return 1
+	case usageKnownThoughtsTokenCount:
+		return 2
+	case usageKnownCachedContentTokenCount:
+		return 3
+	case usageKnownCacheTokenCount:
+		return 4
+	default:
+		return 5
+	}
 }
 
 func parseUsage(usage *usageMetadata) (*core.UsageReport, error) {
 	if usage != nil {
 		if (usage.Prompt != nil && *usage.Prompt < 0) || (usage.Candidates != nil && *usage.Candidates < 0) || (usage.Total != nil && *usage.Total < 0) {
-			return nil, errInvalidUsage
+			return nil, invalidUsage(usageNegativeRange, "")
 		}
 	}
 	if usage != nil && (usage.Prompt != nil || usage.Candidates != nil) {

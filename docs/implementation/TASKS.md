@@ -120,7 +120,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M10 — Google Antigravity Connector
 
-[M10 brief](M10-ANTIGRAVITY.md). Branch `dev-m10-antigravity`; exact filter `/next 10 M10`. M10-001–045 DONE; M10-046 BLOCKED; M10-047 READY. Last observed budget 40/1000.
+[M10 brief](M10-ANTIGRAVITY.md). Branch `dev-m10-antigravity`; exact filter `/next 10 M10`. M10-001–045, M10-047 DONE; M10-046 BLOCKED. Last observed budget 40/1000.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -170,7 +170,7 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | [M10-044](tasks/M10-044.md) | DONE | GPT-6 Luna (implementation worker) / ses_e6c0385f2ffe3Z3N4p12aIAyOv (reviewer) / Planner closure | M10-042 | Promote Antigravity llm.tools capability for admitted Responses models and verify gateway tool admission | Scoped llm.tools admission for gemini-2.5-flash/pro, fake-TLS two-turn replay, missing-include 503 fail-closed, and capability matrix verified; reviewer PASS ses_e6c0385f2ffe3Z3N4p12aIAyOv | `cd /tmp/pestiroute-lane.hGmeZS/m044-head55e785-m044 && TMPDIR=/tmp/pestiroute-lane.hGmeZS/m044 GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/... ./cmd/gateway/...` && `git diff --check`; [evidence](tasks/M10-044.md#completion-evidence) |
 | [M10-045](tasks/M10-045.md) | DONE | GPT-6 Luna (worker) / ses_e683e6c37ffeppLbfpGGqtZsjc (reviewer) / Planner closure | M10-032, M10-044 | Extend Antigravity model probe catalog and verify exact Gemini 3.x availability offline and via bounded live probe | Metadata HTTP 200; refresh 36→37 and one metadata reservation 37→38/1000; exact 3.8 high/medium/low available, bare 3.8 and 3.1 Pro IDs unavailable; only verified exact 3.8 IDs admitted, tools/reasoning remain Unknown | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/... ./cmd/gateway/...` && `git diff --check` && `GOFLAGS=-p=1 go vet ./...` && `GOFLAGS=-p=1 go build ./...`; [evidence](tasks/M10-045.md#completion-evidence) |
 | [M10-046](tasks/M10-046.md) | BLOCKED | GPT-6 Luna (live worker) | M10-045 | Execute authorized bounded Antigravity Gemini 3.8 Flash streaming and observable cancellation smoke | Two completion attempts returned HTTP 503 (`precommit_invalid_usage`); budget 38→40/1000; root cause unknown (candidates: fields, shape, type, range); BLOCKED pending M10-047 diagnostics | [Verification](tasks/M10-046.md#verification) |
-| [M10-047](tasks/M10-047.md) | READY | — | M10-045 | Implement offline secret-safe Antigravity usage rejection diagnostics across all branches | Fixed subkind and known field enum diagnostics for usage rejection; deterministic priority; zero payload/token leaks; strictly offline | [Verification](tasks/M10-047.md#verification) |
+| [M10-047](tasks/M10-047.md) | DONE | GPT-6 Luna (M10-047 worker) / ses_e67fd2e29ffeN6vC4aL11G0r6a (reviewer) / Planner closure | M10-045 | Implement offline secret-safe Antigravity usage rejection diagnostics across all branches | Fixed subkind and allowlisted known_field enums, deterministic priority, strict rejection and Core accounting preserved, zero leaks; reviewer PASS ses_e67fd2e29ffeN6vC4aL11G0r6a | `TMPDIR=/tmp/pestiroute-lane.hGmeZS/antigravity GOFLAGS=-p=1 go test -race -count=1 ./internal/connector/antigravity/...` && `git diff --check`; [evidence](tasks/M10-047.md#completion-evidence) |
 
 ## M11 — Administrative HTTP API
 
