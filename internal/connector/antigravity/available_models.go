@@ -23,7 +23,7 @@ var pinnedAvailableModelIDs = []string{
 	"gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.1-flash-image", "gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-3.1-pro-medium", "gemini-3.6-flash-high",
 	"gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.7-flash-high", "gemini-3.7-flash-low", "gemini-3.7-flash-medium",
 	"gemini-3.8-flash", "gemini-3.8-flash-high", "gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-4-argon-high",
-	"gemini-pro-agent", "gpt-oss-120b-medium",
+	"gemini-3.1-pro-low(low)", "gemini-pro-agent", "gpt-oss-120b-medium",
 }
 
 type availableModelsResult struct {

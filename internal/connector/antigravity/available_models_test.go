@@ -53,7 +53,7 @@ func (b *availableModelsBudget) Reserve(_ context.Context, account string) error
 
 func TestFetchAvailableModelsBoundedSingleDispatch(t *testing.T) {
 	budget := &availableModelsBudget{}
-	doer := &availableModelsDoer{status: http.StatusOK, body: `{"models":{"gemini-2.5-pro":{},"gemini-2.5-flash":{},"gemini-3.8-flash-high":{},"gemini-3.8-flash-medium":{},"gemini-3.8-flash-low":{},"private-canary-model":{"quota":"private-canary"}}}`, budget: budget}
+	doer := &availableModelsDoer{status: http.StatusOK, body: `{"models":{"gemini-2.5-pro":{},"gemini-2.5-flash":{},"gemini-3.8-flash-high":{},"gemini-3.8-flash-medium":{},"gemini-3.8-flash-low":{},"gemini-3.1-pro-low(low)":{"quota":"private-canary"},"private-canary-model":{"quota":"private-canary"}}}`, budget: budget}
 	got, err := (&Connector{}).fetchAvailableModels(context.Background(), doer, budget, "synthetic-account", "synthetic-token", "stored-project", time.Now().Add(time.Hour))
 	if err != nil || doer.calls != 1 || budget.reservations != 1 || got.Status != 200 || !got.Models["gemini-2.5-pro"] || !got.Models["gemini-2.5-flash"] || !got.Models["gemini-3.8-flash-high"] || !got.Models["gemini-3.8-flash-medium"] || !got.Models["gemini-3.8-flash-low"] || got.UnknownCount != 1 {
 		t.Fatalf("bounded probe failed: calls=%d status=%d unknown=%d err=%v", doer.calls, got.Status, got.UnknownCount, err)
@@ -63,6 +63,9 @@ func TestFetchAvailableModelsBoundedSingleDispatch(t *testing.T) {
 			t.Fatalf("known but absent model projection=%v present=%v id=%q", available, ok, id)
 		}
 	}
+	if !got.Models["gemini-3.1-pro-low(low)"] || got.Models["gemini-pro-agent"] {
+		t.Fatalf("exact 3.1 Pro candidate projection mismatch: low(low)=%v agent=%v", got.Models["gemini-3.1-pro-low(low)"], got.Models["gemini-pro-agent"])
+	}
 	if _, ok := got.Models["private-canary-model"]; ok {
 		t.Fatal("unknown model ID escaped projection")
 	}
@@ -70,7 +73,6 @@ func TestFetchAvailableModelsBoundedSingleDispatch(t *testing.T) {
 	if err != nil || strings.Contains(string(output), "private-canary") || strings.Contains(string(output), "quota") {
 		t.Fatal("private model metadata escaped projection")
 	}
-	t.Log(string(output))
 	items := make([]string, 201)
 	for i := range items {
 		items[i] = fmt.Sprintf("\"m%d\":{}", i)
