@@ -5,16 +5,17 @@
 This matrix describes the deterministic offline candidate implemented in
 `internal/connector/antigravity`, not a Google-supported API or provider
 compatibility claim. M10-004 exercised only injected fake transport and
-synthetic fixtures. No live endpoint, account, authentication flow, or gateway
-eligibility was tested. See [binding](M10-BINDING.md), [slice decision](M10-SLICE-DECISION.md),
+synthetic fixtures. M10-045 made one read-only metadata request and observed
+availability flags only; it did not test inference, account eligibility, or
+gateway compatibility. See [binding](M10-BINDING.md), [slice decision](M10-SLICE-DECISION.md),
 and [handoff](M10-HANDOFF.md).
 
 | Area | Offline candidate behavior | Evidence ceiling |
 | --- | --- | --- |
 | Client protocol/mode | `openai.responses.v1`, translation mode only | Connector admission; no native mode or other protocol claim |
-| Input | Non-empty text or supported Responses message/function-call history, `stream: true`, model `gemini-2.5-pro` or `gemini-2.5-flash` | Synthetic allowlist and causal validation only; no signature-dependent continuity claim |
+| Input | Non-empty text or supported Responses message/function-call history, `stream: true`; models `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, or `gemini-3.8-flash-low` | 2.5 behavior has synthetic verification; 3.8 IDs are exact metadata-available candidates admitted offline only. Bare 3.8 and probed 3.1 Pro IDs are rejected; no inference compatibility or signature-dependent continuity claim |
 | Backend destination | `POST https://antigravity.synthetic.invalid/v1internal/projects/{project}:generateContent?alt=sse` through injected fake-only transport | Reserved `.invalid` fixture destination; external destinations and redirects rejected; never a production endpoint |
-| Capabilities | `llm.streaming`, `auth.oauth`, `usage.exact` are `Unknown`; other capabilities are not established | Fixture success does not satisfy live capability evidence or route eligibility |
+| Capabilities | `llm.streaming` is a local translation capability; `llm.tools` is `Supported` only on 2.5 models; 3.8 tools/reasoning, `auth.oauth`, and `usage.exact` remain `Unknown` | Metadata availability does not satisfy inference capability evidence or route eligibility |
 | Stream events | The first non-empty candidate text causes one `response.created`, followed by `response.output_text.delta` event(s); later text emits deltas without another created event. The synthetic terminal marker emits `response.completed` whether or not text appeared. A terminal-only upstream stream therefore emits `response.completed` without `response.created` or deltas. | Verified synthetic behavior and Responses encoder acceptance; no claim of complete Responses lifecycle conformance |
 | Event omissions | No `response.output_item.added`, `response.content_part.added`, `response.output_text.done`, `response.content_part.done`, or `response.output_item.done` | Clients requiring item/part lifecycle or text-done events are not established as compatible |
 | Usage | Reads available prompt/candidate token counts from the synthetic terminal frame; missing counts remain unknown | Synthetic mapping only; `usage.exact` remains Unknown |
@@ -36,9 +37,12 @@ These constraints and the exact retry dispositions are specified in the
 No standard Responses carrier with verifiable origin/scope for Gemini thought
 signatures is established. Consequently, fullworking live tool loops on
 signature-enforcing Thinking models remain blocked despite the offline
-history mapping. The connector allowlists only `gemini-2.5-pro` and
-`gemini-2.5-flash`; this is not a thinking/non-thinking classification or
-signature-enforcement gate. Reasoning or signature metadata in submitted
+history mapping. The connector execution allowlist includes exact metadata-
+available `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, and
+`gemini-3.8-flash-low` in addition to `gemini-2.5-pro` and `gemini-2.5-flash`;
+bare `gemini-3.8-flash` and unavailable probed 3.1 Pro IDs remain rejected.
+This is not a thinking/non-thinking classification or signature-enforcement
+gate, nor proof of inference compatibility. Reasoning or signature metadata in submitted
 history is rejected before dispatch; a signature first
 seen in an upstream frame is rejected before that frame is delivered, after the
 request has already been dispatched. Do not describe this as model-wide

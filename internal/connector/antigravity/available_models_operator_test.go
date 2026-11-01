@@ -58,6 +58,7 @@ func TestAntigravityOperatorModelAvailabilityLiveProbe(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&before); err != nil || before < 0 || before >= budgetCeiling {
 		t.Fatal("operator request budget precondition failed")
 	}
+	t.Logf("operator budget before=%d ceiling=%d", before, budgetCeiling)
 	connector := NewConnector()
 	connectorConfig, _ := json.Marshal(config{Profile: profile})
 	if err := connector.Init(ctx, core.ComponentConfig{Data: connectorConfig}); err != nil {
@@ -69,6 +70,7 @@ func TestAntigravityOperatorModelAvailabilityLiveProbe(t *testing.T) {
 	if scanErr := db.QueryRowContext(context.Background(), `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&after); scanErr != nil || after != before+1 || after > budgetCeiling {
 		t.Fatal("operator request budget result invalid")
 	}
+	t.Logf("operator budget after=%d ceiling=%d", after, budgetCeiling)
 	if err != nil {
 		t.Fatalf("model availability probe failed (HTTP %d)", result.Status)
 	}

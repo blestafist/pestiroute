@@ -213,6 +213,39 @@ func TestExecuteThinkingConfigIsFlashOnly(t *testing.T) {
 	}
 }
 
+func TestExecuteAdmitsOnlyVerifiedGemini38IDsWithoutRewriting(t *testing.T) {
+	for _, model := range []string{"gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"} {
+		t.Run(model, func(t *testing.T) {
+			f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
+			out, ge := ready(t).Execute(context.Background(), request(`{"model":"`+model+`","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+			if ge != nil {
+				t.Fatal(ge)
+			}
+			_ = out.Stream.Close()
+			body, err := io.ReadAll(f.request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var envelope struct {
+				Model string `json:"model"`
+			}
+			if err := json.Unmarshal(body, &envelope); err != nil || envelope.Model != model {
+				t.Fatalf("model rewritten: got=%q want=%q err=%v", envelope.Model, model, err)
+			}
+		})
+	}
+
+	for _, model := range []string{"gemini-3.8-flash", "gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-medium", "gemini-3.1-pro-low", "unknown-model"} {
+		t.Run("reject-"+model, func(t *testing.T) {
+			f := &fakeDoer{}
+			_, ge := ready(t).Execute(context.Background(), request(`{"model":"`+model+`","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+			if ge == nil || ge.Code != "invalid_request" || f.calls != 0 {
+				t.Fatalf("unavailable model admitted or dispatched: error=%v calls=%d", ge, f.calls)
+			}
+		})
+	}
+}
+
 func TestSeparateExecutionsUseDistinctResponseAndMessageIDs(t *testing.T) {
 	c := ready(t)
 	type streamIDs struct{ response, message string }
@@ -374,6 +407,9 @@ func TestCapabilitiesAreScopedToVerifiedTranslationAndModels(t *testing.T) {
 	}{
 		{protocol, core.ModeTranslation, "gemini-2.5-pro", core.Supported},
 		{protocol, core.ModeTranslation, "gemini-2.5-flash", core.Supported},
+		{protocol, core.ModeTranslation, "gemini-3.8-flash-medium", core.Unknown},
+		{protocol, core.ModeTranslation, "gemini-3.8-flash-high", core.Unknown},
+		{protocol, core.ModeTranslation, "gemini-3.8-flash-low", core.Unknown},
 		{protocol, core.ModeTranslation, "", core.Unknown},
 		{protocol, core.ModeTranslation, "unknown-model", core.Unknown},
 		{protocol, core.ModeTranslation, "gpt-4o", core.Unknown},

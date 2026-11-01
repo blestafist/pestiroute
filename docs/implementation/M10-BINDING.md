@@ -22,7 +22,7 @@ deterministic fake-only acceptance tests subject to M10-003 fixture provenance.
 | Profile | `antigravity-v1internal`, selected only by trusted component configuration. It names this candidate translation, not a supported Google API. |
 | Client protocol | Exactly `openai.responses.v1`; translation mode only. Native mode, other protocol versions, and implicit protocol inference are rejected. |
 | Work in scope | Text prompts or supported text/function-call history, candidate function declarations/tool-choice mapping, and an incrementally translated Responses stream of text, unsigned thought summaries, and candidate function-call outputs. M10-040 defines a future, explicit-opt-in encrypted continuity candidate; it does not implement it or promote capability. One Execute is one attempt for the runtime-selected account. |
-| Capabilities | `llm.streaming` is `supported` only for `openai.responses.v1` translation, meaning this exact implementation scope is available and deterministically verified. `llm.tools` is also `supported` only for that protocol, translation mode, and the admitted models `gemini-2.5-pro` / `gemini-2.5-flash`; both are local implementation claims, not remote entitlement or provider support. `llm.tools.parallel`, `auth.oauth`, and `usage.exact` remain `unknown`. See [DEC-032](../project/DECISIONS.md#dec-032--scope-antigravity-tool-capability). |
+| Capabilities | `llm.streaming` is `supported` only for `openai.responses.v1` translation, meaning this exact implementation scope is available and deterministically verified. `llm.tools` is also `supported` only for that protocol, translation mode, and the admitted models `gemini-2.5-pro` / `gemini-2.5-flash`; both are local implementation claims, not remote entitlement or provider support. Gemini 3.8 variants do not inherit tool support; their `llm.tools` and reasoning continuity remain `unknown`. `llm.tools.parallel`, `auth.oauth`, and `usage.exact` remain `unknown`. See [DEC-032](../project/DECISIONS.md#dec-032--scope-antigravity-tool-capability). |
 
 The existing `core.Connector.Execute(context, request, attemptScope,
 invocationServices)` is sufficient. Connector-private translation and streaming
@@ -55,7 +55,12 @@ than being silently dropped. This is an offline candidate based on pinned plugin
 source, not a provider guarantee. Thought signatures remain unsupported/Unknown:
 do not synthesize, discard-and-continue, or claim continuity. Model identifiers are accepted only
 from an explicit allowlist; no model rewriting, guessed aliases, or
-provider-model claim is implied.
+provider-model claim is implied. Exact admitted IDs are `gemini-2.5-pro`,
+`gemini-2.5-flash`, and metadata-available `gemini-3.8-flash-high`,
+`gemini-3.8-flash-medium`, and `gemini-3.8-flash-low`. Metadata availability is
+not inference compatibility evidence. Bare `gemini-3.8-flash` and the probed
+`gemini-3.1-pro` variants remain rejected. If policy prefers medium, the caller
+must name `gemini-3.8-flash-medium`; the connector never rewrites the bare ID.
 
 The private backend request is a candidate-only translation based on pinned MIT
 plugin observations: Rahularya01 `opencode-antigravity` revision

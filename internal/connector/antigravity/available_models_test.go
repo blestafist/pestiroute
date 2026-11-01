@@ -53,10 +53,15 @@ func (b *availableModelsBudget) Reserve(_ context.Context, account string) error
 
 func TestFetchAvailableModelsBoundedSingleDispatch(t *testing.T) {
 	budget := &availableModelsBudget{}
-	doer := &availableModelsDoer{status: http.StatusOK, body: `{"models":{"gemini-2.5-pro":{},"gemini-2.5-flash":{},"private-canary-model":{"quota":"private-canary"}}}`, budget: budget}
+	doer := &availableModelsDoer{status: http.StatusOK, body: `{"models":{"gemini-2.5-pro":{},"gemini-2.5-flash":{},"gemini-3.8-flash-high":{},"gemini-3.8-flash-medium":{},"gemini-3.8-flash-low":{},"private-canary-model":{"quota":"private-canary"}}}`, budget: budget}
 	got, err := (&Connector{}).fetchAvailableModels(context.Background(), doer, budget, "synthetic-account", "synthetic-token", "stored-project", time.Now().Add(time.Hour))
-	if err != nil || doer.calls != 1 || budget.reservations != 1 || got.Status != 200 || !got.Models["gemini-2.5-pro"] || !got.Models["gemini-2.5-flash"] || got.UnknownCount != 1 {
+	if err != nil || doer.calls != 1 || budget.reservations != 1 || got.Status != 200 || !got.Models["gemini-2.5-pro"] || !got.Models["gemini-2.5-flash"] || !got.Models["gemini-3.8-flash-high"] || !got.Models["gemini-3.8-flash-medium"] || !got.Models["gemini-3.8-flash-low"] || got.UnknownCount != 1 {
 		t.Fatalf("bounded probe failed: calls=%d status=%d unknown=%d err=%v", doer.calls, got.Status, got.UnknownCount, err)
+	}
+	for _, id := range []string{"gemini-3.8-flash", "gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-medium", "gemini-3.1-pro-low"} {
+		if available, ok := got.Models[id]; !ok || available {
+			t.Fatalf("known but absent model projection=%v present=%v id=%q", available, ok, id)
+		}
 	}
 	if _, ok := got.Models["private-canary-model"]; ok {
 		t.Fatal("unknown model ID escaped projection")

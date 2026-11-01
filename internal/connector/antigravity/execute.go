@@ -278,7 +278,7 @@ func admit(body []byte) (json.RawMessage, string, []any, map[string]any, bool, *
 		}
 		include = true
 	}
-	if in.Model != "gemini-2.5-pro" && in.Model != "gemini-2.5-flash" {
+	if in.Model != "gemini-2.5-pro" && in.Model != "gemini-2.5-flash" && in.Model != "gemini-3.8-flash-high" && in.Model != "gemini-3.8-flash-medium" && in.Model != "gemini-3.8-flash-low" {
 		return nil, "", nil, nil, false, invalid("invalid_request")
 	}
 	tools, names, toolErr := functionTools(in.Tools)

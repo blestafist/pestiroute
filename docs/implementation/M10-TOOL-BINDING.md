@@ -84,9 +84,13 @@ implementation readiness. Never parse, synthesize, normalize, truncate, merge,
 or replay signatures across scope boundaries. Fail closed if the carrier or
 exact part association is absent; do not use a global pending/fallback signature.
 
-The offline connector allowlists `gemini-2.5-pro` and `gemini-2.5-flash`; this
-model allowlist does not classify models as thinking/non-thinking or gate on
-signature enforcement. It rejects reasoning/signature-bearing submitted history
+The connector execution allowlist includes `gemini-2.5-pro`,
+`gemini-2.5-flash`, and exact metadata-available IDs `gemini-3.8-flash-high`,
+`gemini-3.8-flash-medium`, and `gemini-3.8-flash-low`; this model allowlist does
+not classify models as thinking/non-thinking or gate on signature enforcement.
+Metadata availability does not establish inference compatibility. Tool support
+remains scoped to 2.5 models; 3.8 tool and reasoning-continuity capabilities
+are Unknown. The connector rejects reasoning/signature-bearing submitted history
 before dispatch, and rejects an upstream signature-bearing frame before
 delivering that frame; the latter occurs after the request was dispatched. Thus
 signature-dependent tool loops on signature-enforcing models are blocked, but
