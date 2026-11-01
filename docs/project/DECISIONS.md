@@ -31,6 +31,7 @@
 | D22 | Accepted | Antigravity project onboarding remains disabled absent explicit reviewed opt-in and durable request budget | Prevents hidden provisioning and an unbounded cross-process provider-request total; see DEC-025 |
 | D23 | Accepted | Antigravity encrypted reasoning continuity is explicit opt-in and locally scoped | Preserves opaque provider parts without exposing the master key, broad decryption, or provider semantics to Core; see DEC-031 |
 | D24 | Accepted | Antigravity tool capability is a scoped local translation claim | Admits only implemented Responses function translation on the two allowlisted models; does not imply provider support or parallel tools; see DEC-032 |
+| D25 | Accepted | Admit one source-associated Antigravity exact wire ID for offline trial | `gemini-pro-agent` maps to the pinned source's 3.1 Pro high candidate; this is not provider identity or entitlement confirmation; see DEC-034 |
 
 ## Contract ADRs
 
@@ -619,6 +620,15 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Alternatives rejected:** Accept broad arbitrary strings/objects or snake_case fields; accept `trafficType` without public UsageMetadata schema evidence; add supplemental counts to prompt/output usage (risks double counting); change or replace DEC-030's original decision in place.
 - **Compatibility / impact:** Narrow Antigravity usage metadata parser and its diagnostic mapping only. Core `UsageReport`, prompt/candidate counts, accounting/finalization, public protocol contracts, and provider capability claims do not change. This is source-grounded offline compatibility behavior, not Antigravity wire or live support evidence.
 - **Verification:** Offline parser tests for each admitted camelCase field, actual schema shapes/enum values, malformed and negative values, unknown key rejection, usage-only trailers, fixed diagnostic enums, and unchanged Core prompt/output accounting; focused race, vet, build, formatting, and diff/link checks. Zero live calls or budget consumption.
+
+### DEC-034 — Offline Exact-Wire Trial Admission for Antigravity `gemini-pro-agent`
+
+- **Status:** Accepted for M10-050 offline implementation only; not Google/Antigravity protocol approval, provider-confirmed model identity, or account entitlement evidence.
+- **Context:** Pinned `decolua/9router` revision `87a74e1bda3677193c6f71a7e2100c90311f0689`, `open-sse/providers/registry/antigravity.js:48–74`, associates `gemini-pro-agent` with its Gemini 3.1 Pro high candidate. M10-049 observed that this ID was not listed in account endpoint metadata (`false`, with unknown model entries); that observation does not establish entitlement or inference availability.
+- **Decision:** For offline translation execution, admit only the exact caller-supplied wire ID `gemini-pro-agent` alongside existing IDs. Do not alias bare `gemini-3.1-pro`, the speculative literal `gemini-3.1-pro-low(low)`, or other IDs. Keep `llm.tools` and reasoning capabilities Unknown for this model. Preserve DEC-027's `thinkingConfig` exclusively for `gemini-2.5-flash`; do not inject it for `gemini-pro-agent`. This is a source-associated candidate mapping only, not provider identity confirmation.
+- **Alternatives rejected:** Infer entitlement from source mapping or absent metadata; accept public aliases; admit the speculative low ID; promote tools/reasoning; generalize model feature flags.
+- **Compatibility / impact:** Adds one exact model ID to Antigravity translation admission. No public API, Core contract, capability, provider support, or live behavior change. Existing fail-closed behavior remains for all unadmitted IDs.
+- **Verification:** Offline exact-wire payload fixture/test, negative alias/low-ID rejection with zero dispatch, capability Unknown checks, Flash-only thinking-config assertion, race/vet/build and diff/link checks. Zero live calls and budget consumption.
 
 ## Questions Before Implementation
 

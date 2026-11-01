@@ -1,0 +1,15 @@
+{
+  "project": "synthetic-project",
+  "model": "gemini-pro-agent",
+  "request": {
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          { "text": "Synthetic gemini-pro-agent prompt for offline fixture verification." }
+        ]
+      }
+    ]
+  },
+  "userAgent": "antigravity"
+}

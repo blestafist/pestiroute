@@ -56,11 +56,15 @@ source, not a provider guarantee. Thought signatures remain unsupported/Unknown:
 do not synthesize, discard-and-continue, or claim continuity. Model identifiers are accepted only
 from an explicit allowlist; no model rewriting, guessed aliases, or
 provider-model claim is implied. Exact admitted IDs are `gemini-2.5-pro`,
-`gemini-2.5-flash`, and metadata-available `gemini-3.8-flash-high`,
-`gemini-3.8-flash-medium`, and `gemini-3.8-flash-low`. Metadata availability is
-not inference compatibility evidence. Bare `gemini-3.8-flash` and the probed
-`gemini-3.1-pro` variants remain rejected. If policy prefers medium, the caller
-must name `gemini-3.8-flash-medium`; the connector never rewrites the bare ID.
+`gemini-2.5-flash`, metadata-available `gemini-3.8-flash-high`,
+`gemini-3.8-flash-medium`, `gemini-3.8-flash-low`, and exact wire ID
+`gemini-pro-agent` under [DEC-034](../project/DECISIONS.md#dec-034--offline-exact-wire-trial-admission-for-antigravity-gemini-pro-agent).
+Metadata availability is not inference compatibility evidence. Pinned 9router
+source associates `gemini-pro-agent` with its Gemini 3.1 Pro high candidate;
+this does not confirm provider model identity or account entitlement. Bare
+`gemini-3.1-pro`, literal `gemini-3.1-pro-low(low)`, and all other unadmitted
+IDs remain rejected. If policy prefers medium, the caller must name
+`gemini-3.8-flash-medium`; the connector never rewrites the bare ID.
 
 The private backend request is a candidate-only translation based on pinned MIT
 plugin observations: Rahularya01 `opencode-antigravity` revision
