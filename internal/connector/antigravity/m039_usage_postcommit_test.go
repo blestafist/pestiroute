@@ -27,7 +27,7 @@ func TestM039TotalUsageValidationAndAccounting(t *testing.T) {
 		{"fractional", `"totalTokenCount":1.5`},
 		{"null", `"totalTokenCount":null`},
 		{"string", `"totalTokenCount":"2"`},
-		{"unknown", `"totalTokenCount":2,"thoughtsTokenCount":1`},
+		{"unknown", `"totalTokenCount":2,"trafficType":"standard"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStream(io.NopCloser(strings.NewReader("")), "r", "m")

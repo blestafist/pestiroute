@@ -48,11 +48,17 @@ const (
 type usageKnownField string
 
 const (
+	usageKnownPromptTokenCount        usageKnownField = "prompt_token_count"
+	usageKnownCandidatesTokenCount    usageKnownField = "candidates_token_count"
+	usageKnownTotalTokenCount         usageKnownField = "total_token_count"
 	usageKnownCandidatesTokensDetails usageKnownField = "candidates_tokens_details"
+	usageKnownCacheTokensDetails      usageKnownField = "cache_tokens_details"
+	usageKnownToolUsePromptTokens     usageKnownField = "tool_use_prompt_tokens_details"
 	usageKnownPromptTokensDetails     usageKnownField = "prompt_tokens_details"
 	usageKnownThoughtsTokenCount      usageKnownField = "thoughts_token_count"
 	usageKnownCachedContentTokenCount usageKnownField = "cached_content_token_count"
-	usageKnownCacheTokenCount         usageKnownField = "cache_token_count"
+	usageKnownToolUsePromptTokenCount usageKnownField = "tool_use_prompt_token_count"
+	usageKnownServiceTier             usageKnownField = "service_tier"
 	usageKnownOther                   usageKnownField = "other"
 )
 
@@ -74,6 +80,28 @@ func invalidUsage(subkind usageSubkind, key string) error {
 
 func classifyUsageKnownField(key string) usageKnownField {
 	switch key {
+	case "cachedContentTokenCount":
+		return usageKnownCachedContentTokenCount
+	case "promptTokenCount":
+		return usageKnownPromptTokenCount
+	case "candidatesTokenCount":
+		return usageKnownCandidatesTokenCount
+	case "totalTokenCount":
+		return usageKnownTotalTokenCount
+	case "thoughtsTokenCount":
+		return usageKnownThoughtsTokenCount
+	case "toolUsePromptTokenCount":
+		return usageKnownToolUsePromptTokenCount
+	case "promptTokensDetails":
+		return usageKnownPromptTokensDetails
+	case "cacheTokensDetails":
+		return usageKnownCacheTokensDetails
+	case "candidatesTokensDetails":
+		return usageKnownCandidatesTokensDetails
+	case "toolUsePromptTokensDetails":
+		return usageKnownToolUsePromptTokens
+	case "serviceTier":
+		return usageKnownServiceTier
 	case "candidates_tokens_details":
 		return usageKnownCandidatesTokensDetails
 	case "prompt_tokens_details":
@@ -82,8 +110,6 @@ func classifyUsageKnownField(key string) usageKnownField {
 		return usageKnownThoughtsTokenCount
 	case "cached_content_token_count":
 		return usageKnownCachedContentTokenCount
-	case "cache_token_count":
-		return usageKnownCacheTokenCount
 	default:
 		return usageKnownOther
 	}
@@ -864,7 +890,7 @@ func usageOnlyFrame(raw []byte) bool {
 		return false
 	}
 	for key := range usage {
-		if key != "promptTokenCount" && key != "candidatesTokenCount" && key != "totalTokenCount" {
+		if !knownUsageMetadataField(key) {
 			return false
 		}
 	}
@@ -901,7 +927,7 @@ func parseUsageMetadata(raw json.RawMessage) (*usageMetadata, error) {
 	}
 	unknown := ""
 	for key := range fields {
-		if key != "promptTokenCount" && key != "candidatesTokenCount" && key != "totalTokenCount" {
+		if !knownUsageMetadataField(key) {
 			if unknown == "" || usageFieldPriority(key) < usageFieldPriority(unknown) {
 				unknown = key
 			}
@@ -910,9 +936,23 @@ func parseUsageMetadata(raw json.RawMessage) (*usageMetadata, error) {
 	if unknown != "" {
 		return nil, invalidUsage(usageUnknownField, unknown)
 	}
+	for _, key := range []string{
+		"cachedContentTokenCount", "thoughtsTokenCount", "toolUsePromptTokenCount",
+		"promptTokensDetails", "cacheTokensDetails", "candidatesTokensDetails",
+		"toolUsePromptTokensDetails", "serviceTier",
+	} {
+		if value, ok := fields[key]; ok {
+			if err := validateSupplementalUsageField(key, value); err != nil {
+				return nil, err
+			}
+		}
+	}
 	var usage usageMetadata
 	invalidType, negativeRange := false, false
 	for key, value := range fields {
+		if key != "promptTokenCount" && key != "candidatesTokenCount" && key != "totalTokenCount" {
+			continue
+		}
 		count, err := strconv.ParseInt(strings.TrimSpace(string(value)), 10, 64)
 		if err != nil {
 			invalidType = true
@@ -952,11 +992,81 @@ func usageFieldPriority(key string) int {
 		return 2
 	case usageKnownCachedContentTokenCount:
 		return 3
-	case usageKnownCacheTokenCount:
+	case usageKnownToolUsePromptTokenCount:
 		return 4
-	default:
+	case usageKnownCacheTokensDetails:
 		return 5
+	case usageKnownToolUsePromptTokens:
+		return 6
+	case usageKnownServiceTier:
+		return 7
+	default:
+		return 8
 	}
+}
+
+func knownUsageMetadataField(key string) bool {
+	switch key {
+	case "promptTokenCount", "candidatesTokenCount", "totalTokenCount",
+		"cachedContentTokenCount", "thoughtsTokenCount", "toolUsePromptTokenCount",
+		"promptTokensDetails", "cacheTokensDetails", "candidatesTokensDetails",
+		"toolUsePromptTokensDetails", "serviceTier":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateSupplementalUsageField(key string, raw json.RawMessage) error {
+	invalidType := func() error { return invalidUsage(usageInvalidType, "") }
+	switch key {
+	case "cachedContentTokenCount", "thoughtsTokenCount", "toolUsePromptTokenCount":
+		count, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 32)
+		if err != nil {
+			return invalidType()
+		}
+		if count < 0 {
+			return invalidUsage(usageNegativeRange, "")
+		}
+	case "promptTokensDetails", "cacheTokensDetails", "candidatesTokensDetails", "toolUsePromptTokensDetails":
+		var details []json.RawMessage
+		if json.Unmarshal(raw, &details) != nil || details == nil {
+			return invalidType()
+		}
+		for _, rawDetail := range details {
+			var detail map[string]json.RawMessage
+			if json.Unmarshal(rawDetail, &detail) != nil || len(detail) != 2 {
+				return invalidType()
+			}
+			var modality string
+			if json.Unmarshal(detail["modality"], &modality) != nil {
+				return invalidType()
+			}
+			switch modality {
+			case "MODALITY_UNSPECIFIED", "TEXT", "IMAGE", "VIDEO", "AUDIO", "DOCUMENT":
+			default:
+				return invalidType()
+			}
+			count, err := strconv.ParseInt(strings.TrimSpace(string(detail["tokenCount"])), 10, 32)
+			if err != nil {
+				return invalidType()
+			}
+			if count < 0 {
+				return invalidUsage(usageNegativeRange, "")
+			}
+		}
+	case "serviceTier":
+		var tier string
+		if json.Unmarshal(raw, &tier) != nil {
+			return invalidType()
+		}
+		switch tier {
+		case "unspecified", "standard", "flex", "priority":
+		default:
+			return invalidType()
+		}
+	}
+	return nil
 }
 
 func parseUsage(usage *usageMetadata) (*core.UsageReport, error) {

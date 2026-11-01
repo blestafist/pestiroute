@@ -180,6 +180,20 @@ invalid-content (`subkind`) enum details may accompany the cause. No raw errors,
 provider values, token counts, or body content are logged. See
 [DEC-030](../project/DECISIONS.md#dec-030--accept-antigravity-total-token-usage-metadata-and-classify-postcommit-failures);
 this is a source-correctness decision, not a claim about M10-028's cause.
+Under [DEC-033](../project/DECISIONS.md#dec-033--validate-documented-supplemental-antigravity-usage-metadata),
+the parser additionally validates and ignores the documented supplemental
+`cachedContentTokenCount`, `thoughtsTokenCount`, and
+`toolUsePromptTokenCount` integer counts; `promptTokensDetails`,
+`cacheTokensDetails`, `candidatesTokensDetails`, and
+`toolUsePromptTokensDetails` arrays of `{modality, tokenCount}` objects; and
+`serviceTier`. Detail modalities are restricted to the documented `TEXT`,
+`MODALITY_UNSPECIFIED`, `IMAGE`, `VIDEO`, `AUDIO`, and `DOCUMENT` enum values;
+service tiers to
+`unspecified`, `standard`, `flex`, and `priority`. Counts are non-negative
+integers. Supplemental values never affect Core accounting. These exact
+camelCase keys are also recognized by safe diagnostics and usage-only trailers.
+Snake_case aliases and `trafficType` are not admitted: they are not documented
+by the public UsageMetadata JSON schema. All unlisted keys still fail closed.
 For
 `gemini-2.5-flash` only, the candidate request envelope sets
 `generationConfig.thinkingConfig.thinkingBudget` to `0` and
