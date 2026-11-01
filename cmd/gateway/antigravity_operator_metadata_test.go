@@ -15,11 +15,11 @@ import (
 
 const (
 	antigravityLiveRequestDeadline = 90 * time.Second
-	antigravityLiveExpiryMargin    = time.Minute
+	antigravityLiveExpiryMargin    = 150 * time.Second
 )
 
 func antigravityLiveLifetimeSufficient(remaining time.Duration) bool {
-	return remaining >= 2*antigravityLiveRequestDeadline+antigravityLiveExpiryMargin
+	return remaining >= 3*antigravityLiveRequestDeadline+antigravityLiveExpiryMargin
 }
 
 // Explicitly opt-in, read-only, zero HTTP; emit flags, never credential values.
@@ -68,14 +68,14 @@ func TestAntigravityOperatorMetadataProbe(t *testing.T) {
 	}
 	unexpired := remaining > 0
 	lifetimeSufficient := antigravityLiveLifetimeSufficient(remaining)
-	t.Logf("reference_valid=true tokens_present=%t project_valid=%t unexpired=%t lifetime_sufficient=%t", valid, project, unexpired, lifetimeSufficient)
+	t.Logf("reference_valid=true tokens_present=%t project_valid=%t unexpired=%t lifetime_sufficient=%t runway_seconds=%d", valid, project, unexpired, lifetimeSufficient, int64(remaining.Seconds()))
 	if !valid || !project || !unexpired || !lifetimeSufficient {
 		t.Fatal("metadata readiness failed")
 	}
 }
 
 func TestAntigravityLiveLifetimeMarginBoundary(t *testing.T) {
-	minimum := 2*antigravityLiveRequestDeadline + antigravityLiveExpiryMargin
+	minimum := 3*antigravityLiveRequestDeadline + antigravityLiveExpiryMargin
 	for _, tc := range []struct {
 		name      string
 		remaining time.Duration

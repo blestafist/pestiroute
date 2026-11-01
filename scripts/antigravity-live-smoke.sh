@@ -6,12 +6,95 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 : "${PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT:?set the authorized persistent operator root}"
 : "${PESTIROUTE_ANTIGRAVITY_PROJECT:?set the authorized project identifier}"
-: "${PESTIROUTE_ANTIGRAVITY_MODEL:?set an explicitly admitted Antigravity model}"
 : "${GATEWAY_BIN:?set the built gateway binary path}"
+if [[ ${PESTIROUTE_ANTIGRAVITY_M053_BATCH:-false} == true ]]; then
+  # Fixed exact-model sequence; each child gets one request and failures do not
+  # suppress later independent trials. The read-only counter guards each step.
+  : "${PESTIROUTE_ANTIGRAVITY_M053_BASELINE:?set attested starting counter (47 or 48)}"
+  runway=${PESTIROUTE_ANTIGRAVITY_M053_RUNWAY_SECONDS:-0}
+  [[ $runway =~ ^[0-9]{1,5}$ && $runway -ge 420 && $runway -le 86400 ]] || { echo 'fresh zero-HTTP preflight must attest 420–86400 seconds of token runway' >&2; exit 2; }
+  preflight_epoch=${PESTIROUTE_ANTIGRAVITY_M053_PREFLIGHT_UNIX:-0}
+  now=$(date +%s)
+  [[ $preflight_epoch =~ ^[0-9]{10}$ && $((now - preflight_epoch)) -ge 0 && $((now - preflight_epoch)) -le 60 ]] || { echo 'zero-HTTP token preflight is missing or stale' >&2; exit 2; }
+  start=$PESTIROUTE_ANTIGRAVITY_M053_BASELINE
+  attested=${PESTIROUTE_ANTIGRAVITY_NATURAL_REFRESH_PERFORMED:-false}
+  if [[ $start == 47 && $attested == false ]]; then :
+  elif [[ $start == 48 && $attested == true ]]; then :
+  else echo 'invalid M10-053 budget baseline or refresh attestation' >&2; exit 2
+  fi
+  db=$PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT/gateway.db
+  test -r "$db" && test -x "$GATEWAY_BIN"
+  read_budget() {
+    python3 - "$db" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+db.execute("PRAGMA query_only=ON")
+row = db.execute("SELECT ceiling, consumed FROM operator_request_budgets WHERE account_id='m10-antigravity-authorized-account'").fetchone()
+db.close()
+if row is None or not (0 <= row[1] <= row[0] <= 1000): raise SystemExit("budget metadata unavailable")
+print(row[0], row[1])
+PY
+  }
+  budget_row=$(read_budget) || { echo 'M10-053 starting budget metadata unavailable' >&2; exit 2; }
+  read -r ceiling consumed <<<"$budget_row"
+  if [[ $consumed != "$start" || $ceiling -lt 51 || $ceiling -gt 1000 ]]; then
+    echo 'M10-053 starting budget mismatch or insufficient authorized ceiling' >&2; exit 2
+  fi
+  result=0
+  dispatched=0
+  # Arm before the first child: it can enable the policy before any return to
+  # this shell, including when termination arrives while that child is running.
+  cleanup_needed=true
+  cleanup_batch_policy() {
+    [[ $cleanup_needed == true ]] || return 0
+    local policy_meta revision
+    if ! policy_meta=$("$GATEWAY_BIN" admin --db "$db" --master-key "$PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT/master.key" policy get m10-053-live-smoke 2>/dev/null); then
+      echo 'M10-053 policy cleanup unavailable' >&2; return 1
+    fi
+    revision=$(sed -n 's/.*revision=\([0-9][0-9]*\).*/\1/p' <<<"$policy_meta")
+    if [[ $policy_meta != *'enabled=true'*'models=["claude-sonnet-4-6","claude-opus-4-6-thinking","gpt-oss-120b-medium"]'* || ! $revision =~ ^[0-9]+$ ]]; then
+      echo 'M10-053 policy cleanup metadata mismatch' >&2; return 1
+    fi
+    if ! "$GATEWAY_BIN" admin --db "$db" --master-key "$PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT/master.key" policy update m10-053-live-smoke --expected-revision "$revision" --disabled >/dev/null 2>&1; then
+      echo 'M10-053 policy cleanup failed' >&2; return 1
+    fi
+    echo 'm10_053_policy_disabled=true'
+  }
+  cleanup_on_exit() {
+    local rc=$?
+    trap - EXIT INT TERM
+    if ! cleanup_batch_policy; then rc=1; fi
+    exit "$rc"
+  }
+  trap cleanup_on_exit EXIT INT TERM
+  for model in claude-sonnet-4-6 claude-opus-4-6-thinking gpt-oss-120b-medium; do
+    budget_row=$(read_budget) || { echo "M10-053 budget metadata unavailable model=$model" >&2; exit 2; }
+    read -r ceiling consumed <<<"$budget_row"
+    if [[ $consumed -gt 51 || $consumed -ne $((start + dispatched)) || $dispatched -gt 3 ]]; then
+      echo "M10-053 budget invariant failed model=$model" >&2; exit 2
+    fi
+    before=$consumed
+    if env PESTIROUTE_ANTIGRAVITY_M053_BATCH=false \
+      PESTIROUTE_ANTIGRAVITY_MODEL="$model" \
+      PESTIROUTE_ANTIGRAVITY_M053_EXPECTED_START="$before" \
+      bash "$0"; then model_rc=0; else model_rc=$?; result=1; fi
+    budget_row=$(read_budget) || { echo "M10-053 post-model budget metadata unavailable model=$model" >&2; exit 2; }
+    read -r ceiling after <<<"$budget_row"
+    delta=$((after - before))
+    if [[ $delta -lt 0 || $delta -gt 1 || $after -gt 51 || $ceiling -gt 1000 ]]; then
+      echo "M10-053 post-model budget invariant failed model=$model" >&2; exit 2
+    fi
+    dispatched=$((dispatched + delta))
+    echo "model=$model runner_exit=$model_rc budget_before=$before budget_after=$after dispatches=$delta max_consumed=51 ceiling=$ceiling"
+  done
+  exit "$result"
+fi
+: "${PESTIROUTE_ANTIGRAVITY_MODEL:?set an explicitly admitted Antigravity model}"
 case "$PESTIROUTE_ANTIGRAVITY_MODEL" in
   gemini-2.5-pro|gemini-2.5-flash) POLICY_ID=m10-028-live-smoke; POLICY_MODELS='gemini-2.5-pro,gemini-2.5-flash'; POLICY_META_MODELS='["gemini-2.5-pro","gemini-2.5-flash"]'; REQUESTS=1; EXPECTED_DELTA=0; MAX_CONSUMED=1000 ;;
   gemini-3.8-flash-medium) POLICY_ID=m10-046-live-smoke; POLICY_MODELS=gemini-3.8-flash-medium; POLICY_META_MODELS='["gemini-3.8-flash-medium"]'; REQUESTS=2; EXPECTED_DELTA=0; MAX_CONSUMED=45 ;;
   gemini-pro-agent) POLICY_ID=m10-051-live-smoke; POLICY_MODELS=gemini-pro-agent; POLICY_META_MODELS='["gemini-pro-agent"]'; REQUESTS=1; EXPECTED_DELTA=1; MAX_CONSUMED=47 ;;
+  claude-sonnet-4-6|claude-opus-4-6-thinking|gpt-oss-120b-medium) POLICY_ID=m10-053-live-smoke; POLICY_MODELS='claude-sonnet-4-6,claude-opus-4-6-thinking,gpt-oss-120b-medium'; POLICY_META_MODELS='["claude-sonnet-4-6","claude-opus-4-6-thinking","gpt-oss-120b-medium"]'; REQUESTS=1; EXPECTED_DELTA=1; MAX_CONSUMED=51 ;;
   *) echo 'unsupported model selection' >&2; exit 2 ;;
 esac
 [[ $PESTIROUTE_ANTIGRAVITY_PROJECT =~ ^[A-Za-z0-9._:-]+$ ]] || { echo 'invalid project identifier' >&2; exit 2; }
@@ -103,6 +186,9 @@ PY
 }
 budget "$REQUESTS" >/dev/null
 budget_start=$(budget 0)
+if [[ $PESTIROUTE_ANTIGRAVITY_MODEL == claude-sonnet-4-6 || $PESTIROUTE_ANTIGRAVITY_MODEL == claude-opus-4-6-thinking || $PESTIROUTE_ANTIGRAVITY_MODEL == gpt-oss-120b-medium ]]; then
+  [[ $budget_start == "${PESTIROUTE_ANTIGRAVITY_M053_EXPECTED_START:-}" && $budget_start -le 50 ]] || { echo 'unexpected M10-053 pre-dispatch budget counter' >&2; exit 1; }
+fi
 if [[ $PESTIROUTE_ANTIGRAVITY_MODEL == gemini-3.8-flash-medium && $budget_start != 42 && $budget_start != 43 ]]; then echo 'unexpected M10-046 budget baseline' >&2; exit 1; fi
 if [[ $PESTIROUTE_ANTIGRAVITY_MODEL == gemini-pro-agent ]]; then
   natural_refresh_performed=${PESTIROUTE_ANTIGRAVITY_NATURAL_REFRESH_PERFORMED:-false}
