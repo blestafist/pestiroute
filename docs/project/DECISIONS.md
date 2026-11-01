@@ -32,6 +32,7 @@
 | D23 | Accepted | Antigravity encrypted reasoning continuity is explicit opt-in and locally scoped | Preserves opaque provider parts without exposing the master key, broad decryption, or provider semantics to Core; see DEC-031 |
 | D24 | Accepted | Antigravity tool capability is a scoped local translation claim | Admits only implemented Responses function translation on the two allowlisted models; does not imply provider support or parallel tools; see DEC-032 |
 | D25 | Accepted | Admit one source-associated Antigravity exact wire ID for offline trial | `gemini-pro-agent` maps to the pinned source's 3.1 Pro high candidate; this is not provider identity or entitlement confirmation; see DEC-034 |
+| D26 | Accepted | Admit three source-listed Antigravity model IDs for offline translation fixtures | Exact wire IDs only; Gemini-wire candidate execution, no Anthropic API claim, capability promotion, or live evidence; see DEC-035 |
 
 ## Contract ADRs
 
@@ -629,6 +630,15 @@ These accepted ADRs explain the existing constraints and establish the internal 
 - **Alternatives rejected:** Infer entitlement from source mapping or absent metadata; accept public aliases; admit the speculative low ID; promote tools/reasoning; generalize model feature flags.
 - **Compatibility / impact:** Adds one exact model ID to Antigravity translation admission. No public API, Core contract, capability, provider support, or live behavior change. Existing fail-closed behavior remains for all unadmitted IDs.
 - **Verification:** Offline exact-wire payload fixture/test, negative alias/low-ID rejection with zero dispatch, capability Unknown checks, Flash-only thinking-config assertion, race/vet/build and diff/link checks. Zero live calls and budget consumption.
+
+### DEC-035 — Offline Exact-Wire Admission for Antigravity Claude and GPT-OSS IDs
+
+- **Status:** Accepted for M10-052 offline implementation and fixture coverage only; not provider protocol approval, model identity/entitlement evidence, or live compatibility.
+- **Context:** Pinned `decolua/9router` revision `87a74e1bda3677193c6f71a7e2100c90311f0689`, `open-sse/providers/registry/antigravity.js:48–74`, lists exact IDs `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, and `gpt-oss-120b-medium` in its Antigravity model registry. M10-032 observed these IDs advertised as available in an account metadata probe, which does not establish inference compatibility or entitlement. They are Antigravity/Gemini-wire candidate IDs, not Anthropic Messages or OpenAI Chat API routes.
+- **Decision:** Admit only those exact caller-supplied IDs for offline Antigravity translation. Preserve the existing Google Gemini-wire `request.contents` envelope and model string; do not alias, rewrite, or route to another provider API. Keep `llm.tools` and reasoning capabilities Unknown for all three. Preserve DEC-027's Flash-only `thinkingConfig` injection; do not add it for any of these IDs, including `claude-opus-4-6-thinking`.
+- **Alternatives rejected:** Interpret Claude-named IDs as Anthropic Messages, GPT-OSS as OpenAI Chat, infer support from names or metadata, accept aliases, inject or remove thinking behavior based on the name, or promote capabilities without verified scope evidence.
+- **Compatibility / impact:** Additive offline admission of three exact Antigravity translation model strings only. No connector protocol/API, Core behavior, capability, endpoint, routing, authentication, provider support, or live behavior changes. Unknown/unadmitted names continue to fail closed before dispatch.
+- **Verification:** Synthetic request fixtures must be produced by the real connector request encoder and assert exact ID plus Gemini-wire `request.contents`, absence of Flash `thinkingConfig`, exact-only rejection with zero dispatch, Unknown capability results, SHA-256 manifest integrity, and offline connector/gateway race, vet, build, and diff/link checks. Zero live/provider/metadata calls and no budget change.
 
 ## Questions Before Implementation
 

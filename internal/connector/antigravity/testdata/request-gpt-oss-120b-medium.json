@@ -1,0 +1,15 @@
+{
+  "project": "synthetic-project",
+  "model": "gpt-oss-120b-medium",
+  "request": {
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          { "text": "Synthetic gpt-oss-120b-medium prompt for offline fixture verification." }
+        ]
+      }
+    ]
+  },
+  "userAgent": "antigravity"
+}

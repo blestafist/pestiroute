@@ -59,6 +59,14 @@ provider-model claim is implied. Exact admitted IDs are `gemini-2.5-pro`,
 `gemini-2.5-flash`, metadata-available `gemini-3.8-flash-high`,
 `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`, and exact wire ID
 `gemini-pro-agent` under [DEC-034](../project/DECISIONS.md#dec-034--offline-exact-wire-trial-admission-for-antigravity-gemini-pro-agent).
+The exact IDs `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, and
+`gpt-oss-120b-medium` are additionally admitted for offline translation fixtures
+under [DEC-035](../project/DECISIONS.md#dec-035--offline-exact-wire-admission-for-antigravity-claude-and-gpt-oss-ids).
+These remain Antigravity/Gemini-wire candidate IDs: the connector sends the
+same `request.contents` envelope, never Anthropic Messages or OpenAI Chat
+format, and does not alias or rewrite model IDs. Their tools and reasoning
+capabilities remain Unknown. DEC-027's Flash-only thinking configuration does
+not apply to these IDs, including the `-thinking` model name.
 Metadata availability is not inference compatibility evidence. Pinned 9router
 source associates `gemini-pro-agent` with its Gemini 3.1 Pro high candidate;
 this does not confirm provider model identity or account entitlement. Bare

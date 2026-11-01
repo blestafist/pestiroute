@@ -178,6 +178,9 @@ func TestExecuteThinkingConfigIsFlashOnly(t *testing.T) {
 		{"gemini-2.5-flash", true},
 		{"gemini-2.5-pro", false},
 		{"gemini-pro-agent", false},
+		{"claude-sonnet-4-6", false},
+		{"claude-opus-4-6-thinking", false},
+		{"gpt-oss-120b-medium", false},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
 			f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
@@ -215,8 +218,8 @@ func TestExecuteThinkingConfigIsFlashOnly(t *testing.T) {
 	}
 }
 
-func TestExecuteAdmitsExactGeminiWireIDsWithoutRewriting(t *testing.T) {
-	for _, model := range []string{"gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-pro-agent"} {
+func TestExecuteAdmitsExactModelIDsWithoutRewriting(t *testing.T) {
+	for _, model := range []string{"gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-pro-agent", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"} {
 		t.Run(model, func(t *testing.T) {
 			f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
 			out, ge := ready(t).Execute(context.Background(), request(`{"model":"`+model+`","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
@@ -237,12 +240,56 @@ func TestExecuteAdmitsExactGeminiWireIDsWithoutRewriting(t *testing.T) {
 		})
 	}
 
-	for _, model := range []string{"gemini-3.8-flash", "gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-medium", "gemini-3.1-pro-low", "gemini-3.1-pro-low(low)", "unknown-model"} {
+	for _, model := range []string{"gemini-3.8-flash", "gemini-3.1-pro", "gemini-3.1-pro-high", "gemini-3.1-pro-medium", "gemini-3.1-pro-low", "gemini-3.1-pro-low(low)", "claude-sonnet", "claude-opus-4-6", "claude-opus", "gpt-oss-120b", "unknown-model"} {
 		t.Run("reject-"+model, func(t *testing.T) {
 			f := &fakeDoer{}
 			_, ge := ready(t).Execute(context.Background(), request(`{"model":"`+model+`","input":"x","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
 			if ge == nil || ge.Code != "invalid_request" || f.calls != 0 {
 				t.Fatalf("unavailable model admitted or dispatched: error=%v calls=%d", ge, f.calls)
+			}
+		})
+	}
+}
+
+func TestExecuteNewModelsMatchSyntheticCandidateFixtures(t *testing.T) {
+	for _, tc := range []struct {
+		model   string
+		fixture string
+	}{
+		{"claude-sonnet-4-6", "request-claude-sonnet-4-6.json"},
+		{"claude-opus-4-6-thinking", "request-claude-opus-4-6-thinking.json"},
+		{"gpt-oss-120b-medium", "request-gpt-oss-120b-medium.json"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			fixture, err := os.ReadFile("testdata/" + tc.fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want map[string]any
+			if err := json.Unmarshal(fixture, &want); err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeDoer{response: response(http.StatusOK, "data: {\"response\":{\"done\":true}}\n\n")}
+			out, ge := ready(t).Execute(context.Background(), request(`{"model":"`+tc.model+`","input":"Synthetic `+tc.model+` prompt for offline fixture verification.","stream":true}`), core.AttemptScope{Mode: core.ModeTranslation}, services(f))
+			if ge != nil {
+				t.Fatal(ge)
+			}
+			_ = out.Stream.Close()
+			body, err := io.ReadAll(f.request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			delete(got, "requestId")
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("candidate differs from synthetic fixture:\ngot:  %s\nwant: %s", body, fixture)
+			}
+			requestBody := got["request"].(map[string]any)
+			if _, exists := requestBody["generationConfig"]; exists {
+				t.Fatalf("non-Flash model received thinkingConfig: %s", body)
 			}
 		})
 	}
@@ -442,6 +489,9 @@ func TestCapabilitiesAreScopedToVerifiedTranslationAndModels(t *testing.T) {
 		{protocol, core.ModeTranslation, "gemini-3.8-flash-high", core.Unknown},
 		{protocol, core.ModeTranslation, "gemini-3.8-flash-low", core.Unknown},
 		{protocol, core.ModeTranslation, "gemini-pro-agent", core.Unknown},
+		{protocol, core.ModeTranslation, "claude-sonnet-4-6", core.Unknown},
+		{protocol, core.ModeTranslation, "claude-opus-4-6-thinking", core.Unknown},
+		{protocol, core.ModeTranslation, "gpt-oss-120b-medium", core.Unknown},
 		{protocol, core.ModeTranslation, "", core.Unknown},
 		{protocol, core.ModeTranslation, "unknown-model", core.Unknown},
 		{protocol, core.ModeTranslation, "gpt-4o", core.Unknown},
@@ -455,11 +505,10 @@ func TestCapabilitiesAreScopedToVerifiedTranslationAndModels(t *testing.T) {
 		if tc.protocol == protocol && tc.mode == core.ModeTranslation && result.Values["llm.streaming"] != core.Supported {
 			t.Errorf("scope %+v streaming=%v want supported", tc, result.Values["llm.streaming"])
 		}
-		if tc.model == "gemini-pro-agent" && result.Values["llm.tools"] == core.Supported {
-			t.Errorf("gemini-pro-agent unexpectedly supports tools")
-		}
-		if tc.model == "gemini-pro-agent" && result.Values["llm.reasoning"] == core.Supported {
-			t.Errorf("gemini-pro-agent unexpectedly supports reasoning")
+		if tc.model == "gemini-pro-agent" || tc.model == "claude-sonnet-4-6" || tc.model == "claude-opus-4-6-thinking" || tc.model == "gpt-oss-120b-medium" {
+			if result.Values["llm.tools"] == core.Supported || result.Values["llm.reasoning"] == core.Supported {
+				t.Errorf("%s tools/reasoning capabilities=%v/%v unexpectedly promoted", tc.model, result.Values["llm.tools"], result.Values["llm.reasoning"])
+			}
 		}
 		if result.Values["llm.tools.parallel"] == core.Supported {
 			t.Errorf("scope %+v unexpectedly supports parallel tools", tc)

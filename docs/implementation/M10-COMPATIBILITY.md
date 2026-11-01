@@ -13,9 +13,9 @@ and [handoff](M10-HANDOFF.md).
 | Area | Offline candidate behavior | Evidence ceiling |
 | --- | --- | --- |
 | Client protocol/mode | `openai.responses.v1`, translation mode only | Connector admission; no native mode or other protocol claim |
-| Input | Non-empty text or supported Responses message/function-call history, `stream: true`; models `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, or `gemini-3.8-flash-low` | 2.5 behavior has synthetic verification; 3.8 IDs are exact metadata-available candidates admitted offline only. Bare 3.8 and probed 3.1 Pro IDs are rejected; no inference compatibility or signature-dependent continuity claim |
+| Input | Non-empty text or supported Responses message/function-call history, `stream: true`; models `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`, `gemini-pro-agent`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, or `gpt-oss-120b-medium` | 2.5 behavior has synthetic verification; other listed IDs are exact source-listed or metadata-available candidates admitted offline only. Bare aliases and unadmitted IDs are rejected; no inference compatibility or signature-dependent continuity claim |
 | Backend destination | `POST https://antigravity.synthetic.invalid/v1internal/projects/{project}:generateContent?alt=sse` through injected fake-only transport | Reserved `.invalid` fixture destination; external destinations and redirects rejected; never a production endpoint |
-| Capabilities | `llm.streaming` is a local translation capability; `llm.tools` is `Supported` only on 2.5 models; 3.8 tools/reasoning, `auth.oauth`, and `usage.exact` remain `Unknown` | Metadata availability does not satisfy inference capability evidence or route eligibility |
+| Capabilities | `llm.streaming` is a local translation capability; `llm.tools` is `Supported` only on 2.5 models; other models' tools/reasoning, `auth.oauth`, and `usage.exact` remain `Unknown` | Metadata availability does not satisfy inference capability evidence or route eligibility |
 | Stream events | The first non-empty candidate text causes one `response.created`, followed by `response.output_text.delta` event(s); later text emits deltas without another created event. The synthetic terminal marker emits `response.completed` whether or not text appeared. A terminal-only upstream stream therefore emits `response.completed` without `response.created` or deltas. | Verified synthetic behavior and Responses encoder acceptance; no claim of complete Responses lifecycle conformance |
 | Event omissions | No `response.output_item.added`, `response.content_part.added`, `response.output_text.done`, `response.content_part.done`, or `response.output_item.done` | Clients requiring item/part lifecycle or text-done events are not established as compatible |
 | Usage | Reads available prompt/candidate token counts from the synthetic terminal frame; missing counts remain unknown | Synthetic mapping only; `usage.exact` remains Unknown |
@@ -49,6 +49,13 @@ request has already been dispatched. Do not describe this as model-wide
 pre-dispatch detection. Offline follow-up may research carrier mapping or
 `skip_thought_signature_validator`; neither behavior is implemented, authorized,
 or treated as a safe bypass.
+
+Under [DEC-035](../project/DECISIONS.md#dec-035--offline-exact-wire-admission-for-antigravity-claude-and-gpt-oss-ids),
+the exact source-listed IDs `claude-sonnet-4-6`,
+`claude-opus-4-6-thinking`, and `gpt-oss-120b-medium` are also admitted for
+offline translation only. They use the same Gemini-wire envelope, not Anthropic
+Messages or OpenAI Chat, do not inherit Flash thinking configuration, and have
+Unknown tools/reasoning capabilities. No alias or rewriting is performed.
 
 ## Verification references
 
