@@ -13,6 +13,15 @@ import (
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
 
+const (
+	antigravityLiveRequestDeadline = 90 * time.Second
+	antigravityLiveExpiryMargin    = time.Minute
+)
+
+func antigravityLiveLifetimeSufficient(remaining time.Duration) bool {
+	return remaining >= 2*antigravityLiveRequestDeadline+antigravityLiveExpiryMargin
+}
+
 // Explicitly opt-in, read-only, zero HTTP; emit flags, never credential values.
 func TestAntigravityOperatorMetadataProbe(t *testing.T) {
 	root := os.Getenv("PESTIROUTE_ANTIGRAVITY_METADATA_PROBE_ROOT")
@@ -53,9 +62,35 @@ func TestAntigravityOperatorMetadataProbe(t *testing.T) {
 	}
 	valid := bundle.AccessToken != "" && bundle.RefreshToken != ""
 	project := strings.TrimSpace(bundle.ProjectID) != ""
-	unexpired := row.ExpiresAt != nil && row.ExpiresAt.After(time.Now())
-	t.Logf("reference_valid=true tokens_present=%t project_valid=%t unexpired=%t", valid, project, unexpired)
-	if !valid || !project || !unexpired {
+	remaining := time.Duration(0)
+	if row.ExpiresAt != nil {
+		remaining = time.Until(*row.ExpiresAt)
+	}
+	unexpired := remaining > 0
+	lifetimeSufficient := antigravityLiveLifetimeSufficient(remaining)
+	t.Logf("reference_valid=true tokens_present=%t project_valid=%t unexpired=%t lifetime_sufficient=%t", valid, project, unexpired, lifetimeSufficient)
+	if !valid || !project || !unexpired || !lifetimeSufficient {
 		t.Fatal("metadata readiness failed")
+	}
+}
+
+func TestAntigravityLiveLifetimeMarginBoundary(t *testing.T) {
+	minimum := 2*antigravityLiveRequestDeadline + antigravityLiveExpiryMargin
+	for _, tc := range []struct {
+		name      string
+		remaining time.Duration
+		want      bool
+	}{
+		{name: "below threshold", remaining: minimum - time.Nanosecond, want: false},
+		{name: "exact threshold", remaining: minimum, want: true},
+		{name: "above threshold", remaining: minimum + time.Nanosecond, want: true},
+		{name: "zero", remaining: 0, want: false},
+		{name: "expired", remaining: -time.Nanosecond, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := antigravityLiveLifetimeSufficient(tc.remaining); got != tc.want {
+				t.Fatalf("sufficient(%s)=%t, want %t", tc.remaining, got, tc.want)
+			}
+		})
 	}
 }

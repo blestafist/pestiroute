@@ -20,12 +20,15 @@ STREAM_FAILURES = frozenset({
     ("precommit", "precommit_invalid_order"),
     ("postcommit", "postcommit_error"),
 })
+USAGE_SUBKINDS = frozenset("invalid_json non_object unknown_field invalid_type negative_range".split())
+USAGE_KNOWN_FIELDS = frozenset("prompt_token_count candidates_token_count total_token_count candidates_tokens_details cache_tokens_details tool_use_prompt_tokens_details prompt_tokens_details thoughts_token_count cached_content_token_count tool_use_prompt_token_count service_tier other".split())
 POSTCOMMIT_CAUSES = frozenset("eof bounds_exceeded invalid_json unsupported_finish unsupported_reasoning invalid_usage invalid_function empty_content invalid_content invalid_order framing".split())
 def stream_diagnostics(log_text):
     """Extract only the pairs emitted by stream.go logStreamError."""
     pattern = re.compile(r'msg="Antigravity stream failure" phase="?([a-z_]+)"? category="?([a-z_]+)"?(?=\s|$)')
     reasoning = re.compile(r'\bkind=(?:"(thought_only|signature_only|both)"|(thought_only|signature_only|both))\s+signature_type=(?:"(absent|null|string|other)"|(absent|null|string|other))(?=\s|$)')
     invalid_content = re.compile(r'\bsubkind="?(done_with_candidates|text_with_function_call|invalid_utf8_text)"?(?=\s|$)')
+    usage = re.compile(r'\bsubkind="?([a-z_]+)"?(?:\s+known_field="?([a-z_]+)"?)?(?=\s|$)')
     cause = re.compile(r'\bcause="?([a-z_]+)"?(?=\s|$)')
     found = []
     for line in log_text.splitlines():
@@ -73,6 +76,23 @@ def stream_diagnostics(log_text):
                     if len(re.findall(r'\bsubkind=', line)) != 1:
                         continue
                     result += f" subkind={detail.group(1)}"
+            elif category == "precommit_invalid_usage":
+                detail = usage.search(line)
+                if (not detail or len(re.findall(r'\bsubkind=', line)) != 1
+                        or len(re.findall(r'\bknown_field=', line)) > 1):
+                    continue
+                subkind, known_field = detail.groups()
+                if subkind not in USAGE_SUBKINDS:
+                    continue
+                has_field = len(re.findall(r'\bknown_field=', line)) == 1
+                if has_field != (subkind == "unknown_field"):
+                    continue
+                if has_field:
+                    if known_field not in USAGE_KNOWN_FIELDS:
+                        continue
+                    result += f" subkind={subkind} known_field={known_field}"
+                else:
+                    result += f" subkind={subkind}"
             found.append(result)
     return found
 

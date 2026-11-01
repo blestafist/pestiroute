@@ -26,6 +26,12 @@ class DiagnosticsTest(unittest.TestCase):
                     ])
                     self.assertEqual(stream_diagnostics(detail + ' cause=eof'), [])
                     self.assertEqual(stream_diagnostics(line + ' cause=private'), [])
+                elif category == "precommit_invalid_usage":
+                    self.assertEqual(stream_diagnostics(line), [])
+                    detail = line + ' subkind=unknown_field known_field=other'
+                    self.assertEqual(stream_diagnostics(detail), [
+                        f"phase={phase} category={category} subkind=unknown_field known_field=other"
+                    ])
                 else:
                     self.assertEqual(stream_diagnostics(line), [f"phase={phase} category={category}"])
         for phase, category in (("PRIVATE", "precommit_eof"), ("precommit", "PRIVATE"), ("postcommit", "precommit_eof"), ("precommit", "postcommit_error"), ("precommit", "precommit_eofPRIVATE")):

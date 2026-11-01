@@ -16,9 +16,40 @@ def carrier(value):
 
 
 class RunnerTest(unittest.TestCase):
+    def test_usage_diagnostic_extraction_is_enum_only(self):
+        from antigravity_smoke_response import stream_diagnostics
+
+        prefix = 'msg="Antigravity stream failure" phase=precommit category=precommit_invalid_usage '
+        extended_fields = (
+            "prompt_token_count", "candidates_token_count", "total_token_count",
+            "candidates_tokens_details", "cache_tokens_details",
+            "tool_use_prompt_tokens_details", "prompt_tokens_details",
+            "thoughts_token_count", "cached_content_token_count",
+            "tool_use_prompt_token_count", "service_tier", "other",
+        )
+        for field in extended_fields:
+            with self.subTest(field=field):
+                self.assertEqual(
+                    stream_diagnostics(prefix + f'subkind=unknown_field known_field={field} raw=PRIVATE-CANARY tokens=907'),
+                    [f"phase=precommit category=precommit_invalid_usage subkind=unknown_field known_field={field}"],
+                )
+        self.assertEqual(
+            stream_diagnostics(prefix + 'subkind=invalid_type raw=PRIVATE-CANARY'),
+            ["phase=precommit category=precommit_invalid_usage subkind=invalid_type"],
+        )
+        for malformed in (
+            prefix + 'subkind=unknown_field known_field=PRIVATE-CANARY',
+            prefix + 'subkind=PRIVATE-CANARY',
+            prefix + 'subkind=invalid_type known_field=other',
+            prefix + 'subkind=unknown_field known_field=other known_field=other',
+        ):
+            with self.subTest(malformed=malformed):
+                self.assertEqual(stream_diagnostics(malformed), [])
+
     def test_production_error_shapes_and_corrected_request(self):
-        for status, media, body, expected, returncode in (
+        for tc in (
             (400, "application/json", '{"error":{"message":"PRIVATE","type":"unsupported_feature","code":"unsupported_feature"}}', "fixed_code=unsupported_feature", 1),
+            (503, "application/json", '{"error":{"code":"missing_or_unlisted_code"}}', "reason=missing_or_unlisted_code", 1, "gemini-3.8-flash-medium"),
             (400, "text/event-stream", 'event: response.failed\ndata: {"response":{"error":{"code":"unsupported_feature","message":"PRIVATE"}}}\n\n', "fixed_code=unsupported_feature", 1),
             (400, "text/plain", "PRIVATE", "reason=non_json_or_malformed", 1),
             (200, "text/event-stream", 'event: response.reasoning_summary_text.delta\ndata: {"delta":"PRIVATE"}\n\nevent: response.completed\ndata: {}\n\n', "nonempty=false terminal=true completed=true", 1),
@@ -35,42 +66,58 @@ class RunnerTest(unittest.TestCase):
             (400, "application/json", '{"error":{"message":"' + CANARY + '","code":"invalid_request"}}', "fixed_code=invalid_request", 1),
             (400, "text/plain", CANARY, "reason=non_json_or_malformed", 1),
             (0, "text/plain", CANARY, "reason=transport_or_parse_failed", 1),
+            (200, "text/event-stream", ANSWER + COMPLETE, "nonempty=true terminal=true completed=true", 0, "gemini-3.8-flash-medium"),
         ):
+            model = tc[5] if len(tc) > 5 else "gemini-2.5-flash"
+            status, media, body, expected, returncode = tc[:5]
             with self.subTest(media=media), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root / "runner-temp").mkdir()
                 (root / "master.key").write_text("synthetic fixture only")
                 db = sqlite3.connect(root / "gateway.db")
                 db.execute("CREATE TABLE operator_request_budgets (account_id TEXT, ceiling INT, consumed INT)")
-                db.execute("INSERT INTO operator_request_budgets VALUES ('m10-antigravity-authorized-account',1000,8)")
+                db.execute("INSERT INTO operator_request_budgets VALUES ('m10-antigravity-authorized-account',1000,?)", (42 if model == "gemini-3.8-flash-medium" else 8,))
                 db.commit()
                 db.close()
                 gateway = root / "gateway"
                 gateway.write_text(r'''#!/usr/bin/env python3
-import http.server, json, os, re, sys
+import http.server, json, os, re, sqlite3, sys
 if sys.argv[1] == 'admin':
     args = sys.argv
     if 'account' in args: print('id=antigravity-local connector=antigravity enabled=true fixture')
-    elif 'policy' in args: print('enabled=true models=["gemini-2.5-pro","gemini-2.5-flash"] connectors=["antigravity"] rpm=10 tpm=10000')
+    elif 'policy' in args:
+        model = os.environ['FIXTURE_MODEL']
+        models = '["gemini-3.8-flash-medium"]' if model == 'gemini-3.8-flash-medium' else '["gemini-2.5-pro","gemini-2.5-flash"]'
+        print(f'enabled=true models={models} connectors=["antigravity"] rpm=10 tpm=10000')
     elif 'create' in args: print('secret=SYNTHETIC_TEST_KEY id=fixture-key')
     elif 'revoke' in args: pass
     else: sys.exit(2)
     sys.exit(0)
 config = open(sys.argv[sys.argv.index('--config')+1]).read()
 port = int(re.search(r'127.0.0.1:(\d+)', config)[1])
-assert 'model: "gemini-2.5-flash"' in config
-assert config.count('model: "gemini-2.5-flash"') == 2
+model = os.environ['FIXTURE_MODEL']
+assert f'model: "{model}"' in config
+assert config.count(f'model: "{model}"') == 2
 class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
     def log_message(self, *args): pass
     def do_GET(self): self.send_error(404)
     def do_POST(self):
         with open(os.environ['FIXTURE_POSTS'], 'a') as f: f.write('post\n')
+        if os.environ['FIXTURE_MODEL'] == 'gemini-3.8-flash-medium':
+            db = sqlite3.connect(os.path.join(os.environ['PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT'], 'gateway.db'))
+            db.execute("UPDATE operator_request_budgets SET consumed=consumed+1 WHERE account_id='m10-antigravity-authorized-account'")
+            db.commit()
+            db.close()
         obj = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         assert set(obj) == {'model','stream','input','include'}
         assert obj['include'] == ['reasoning.encrypted_content']
-        assert obj['model'] == 'gemini-2.5-flash' and obj['stream'] is True
+        assert obj['model'] == os.environ['FIXTURE_MODEL'] and obj['stream'] is True
         assert obj['input'] == 'Write one short sentence about a sailboat crossing a calm blue lake.'
-        print('level=DEBUG msg="Antigravity stream failure" phase=precommit category=precommit_unsupported_reasoning kind=signature_only signature_type=string private=PRIVATE', flush=True)
+        if model == 'gemini-3.8-flash-medium' and os.environ['FIXTURE_STATUS'] != '200':
+            print('level=DEBUG msg="Antigravity stream failure" phase=precommit category=precommit_invalid_usage subkind=unknown_field known_field=service_tier tokens=907 raw_field=PRIVATE-CANARY private=PRIVATE', flush=True)
+        else:
+            print('level=DEBUG msg="Antigravity stream failure" phase=precommit category=precommit_unsupported_reasoning kind=signature_only signature_type=string private=PRIVATE', flush=True)
         print('level=DEBUG msg="Antigravity inference diagnostic" status=503 branch=http_error upstream_status=other transport_error_class=none private=PRIVATE', flush=True)
         data = os.environ['FIXTURE_BODY'].encode()
         if os.environ['FIXTURE_STATUS'] == '0':
@@ -86,20 +133,30 @@ http.server.HTTPServer(('127.0.0.1',port),Handler).serve_forever()
                 gateway.chmod(0o700)
                 env = dict(os.environ, PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT=tmp,
                            PESTIROUTE_ANTIGRAVITY_PROJECT="antigravity-local",
-                           PESTIROUTE_ANTIGRAVITY_MODEL="gemini-2.5-flash",
+                           PESTIROUTE_ANTIGRAVITY_MODEL=model, FIXTURE_MODEL=model,
                              GATEWAY_BIN=str(gateway), FIXTURE_BODY=body, FIXTURE_MEDIA=media, FIXTURE_STATUS=str(status))
                 env.update(TMPDIR=str(root / "runner-temp"), FIXTURE_POSTS=str(root / "posts"), PYTHONDONTWRITEBYTECODE="1")
                 result = subprocess.run(["bash", str(Path(__file__).with_name("antigravity-live-smoke.sh"))], env=env, capture_output=True, text=True, timeout=20)
                 self.assertEqual(result.returncode, returncode)
                 self.assertIn(expected, result.stdout)
                 self.assertIn("ephemeral_key_revoked=true", result.stdout)
-                self.assertIn("gateway stream phase=precommit category=precommit_unsupported_reasoning kind=signature_only signature_type=string", result.stdout)
+                if model == "gemini-3.8-flash-medium" and status != 200:
+                    self.assertIn("gateway stream phase=precommit category=precommit_invalid_usage subkind=unknown_field known_field=service_tier", result.stdout)
+                    self.assertNotIn("raw_field", result.stdout)
+                else:
+                    self.assertIn("gateway stream phase=precommit category=precommit_unsupported_reasoning kind=signature_only signature_type=string", result.stdout)
                 self.assertIn("gateway inference status=503 branch=http_error upstream_status=other transport_error_class=none", result.stdout)
                 self.assertNotIn("PRIVATE", result.stdout + result.stderr)
                 self.assertNotIn("SYNTHETIC_TEST_KEY", result.stdout + result.stderr)
                 self.assertNotIn(CANARY, result.stdout + result.stderr)
                 self.assertNotIn("Traceback", result.stdout + result.stderr)
-                self.assertEqual((root / "posts").read_text(), "post\n")
+                expected_posts = 2 if model == "gemini-3.8-flash-medium" and status == 200 else 1
+                self.assertEqual((root / "posts").read_text(), "post\n" * expected_posts)
+                db = sqlite3.connect(root / "gateway.db")
+                consumed = db.execute("SELECT consumed FROM operator_request_budgets").fetchone()[0]
+                db.close()
+                expected_consumed = (42 if model == "gemini-3.8-flash-medium" else 8) + (expected_posts if model == "gemini-3.8-flash-medium" else 0)
+                self.assertEqual(consumed, expected_consumed)
                 self.assertEqual(list((root / "runner-temp").iterdir()), [])
                 self.assertNotIn("bytes=", result.stdout)
                 self.assertIn("gateway_stopped=true", result.stdout)
@@ -114,17 +171,22 @@ http.server.HTTPServer(('127.0.0.1',port),Handler).serve_forever()
         from unittest.mock import patch
         runner = Path(__file__).with_name("antigravity-live-smoke.sh").read_text()
         program = runner.split('cat >"$WORK/request.py" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
-        for phase in ("request", "getresponse", "iterate", "read", "close"):
+        for phase in ("request", "getresponse", "iterate", "read", "timeout", "close"):
             class Response:
                 status = 400 if phase == "read" else 200
-                def __iter__(self):
-                    if phase == "close": return iter(())
+                def readline(self):
+                    if phase == "close": return b""
                     raise RuntimeError(CANARY)
                 def read(self, *args):
                     raise RuntimeError(CANARY)
+            class Socket:
+                def settimeout(self, _timeout):
+                    if phase == "timeout": raise RuntimeError(CANARY)
             class Connection:
                 requests = 0
                 closed = False
+                sock = Socket()
+                def connect(self): pass
                 def request(self, *args):
                     self.requests += 1
                     if phase == "request": raise RuntimeError(CANARY)
@@ -143,8 +205,47 @@ http.server.HTTPServer(('127.0.0.1',port),Handler).serve_forever()
             self.assertIn("request reason=transport_or_parse_failed\n", output.getvalue())
             self.assertNotIn(CANARY, output.getvalue())
             self.assertNotIn("Traceback", output.getvalue())
-            self.assertEqual(conn.requests, 1)
+            self.assertEqual(conn.requests, 0 if phase == "timeout" else 1)
             self.assertTrue(conn.closed)
+
+    def test_cancellation_client_aborts_after_first_text_delta(self):
+        import contextlib
+        import http.client
+        import io
+        import sys
+        from unittest.mock import patch
+        runner = Path(__file__).with_name("antigravity-live-smoke.sh").read_text()
+        self.assertIn("gemini-3.8-flash-medium) POLICY_ID=m10-046-live-smoke", runner)
+        self.assertIn("REQUESTS=2; EXPECTED_DELTA=0; MAX_CONSUMED=45", runner)
+        self.assertIn("$budget_start != 42 && $budget_start != 43", runner)
+        self.assertIn("REQUEST_DEADLINE_SECONDS = 90", runner)
+        program = runner.split('cat >"$WORK/request.py" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
+        class Response:
+            status = 200
+            closed = False
+            lines = [b'event: response.output_text.delta\n', b'data: {"delta":"synthetic"}\n', b'\n', b'event: response.completed\n', b'data: {}\n\n']
+            def readline(self): return self.lines.pop(0) if self.lines else b""
+            def close(self): self.closed = True
+        class Socket:
+            def settimeout(self, _timeout): pass
+        response = Response()
+        class Connection:
+            closed = False
+            sock = Socket()
+            def connect(self): pass
+            def request(self, *args): pass
+            def getresponse(self): return response
+            def close(self): self.closed = True
+        conn = Connection()
+        output = io.StringIO()
+        with patch.object(http.client, "HTTPConnection", return_value=conn), patch.object(sys, "argv", ["request", "1", "gemini-3.8-flash-medium", "cancel"]), patch.object(sys, "stdin", io.StringIO("SYNTHETIC_TEST_KEY\n")), contextlib.redirect_stdout(output):
+            with self.assertRaises(SystemExit) as exit:
+                exec(compile(program, "<offline-cancellation-runner>", "exec"), {})
+        self.assertEqual(exit.exception.code, 0)
+        self.assertIn("client_abort=true first_text_delta=true terminal=false", output.getvalue())
+        self.assertTrue(response.closed)
+        self.assertTrue(conn.closed)
+        self.assertNotIn("SYNTHETIC_TEST_KEY", output.getvalue())
 
 
 if __name__ == "__main__":
