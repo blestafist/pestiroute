@@ -11,6 +11,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 case "$PESTIROUTE_ANTIGRAVITY_MODEL" in
   gemini-2.5-pro|gemini-2.5-flash) POLICY_ID=m10-028-live-smoke; POLICY_MODELS='gemini-2.5-pro,gemini-2.5-flash'; POLICY_META_MODELS='["gemini-2.5-pro","gemini-2.5-flash"]'; REQUESTS=1; EXPECTED_DELTA=0; MAX_CONSUMED=1000 ;;
   gemini-3.8-flash-medium) POLICY_ID=m10-046-live-smoke; POLICY_MODELS=gemini-3.8-flash-medium; POLICY_META_MODELS='["gemini-3.8-flash-medium"]'; REQUESTS=2; EXPECTED_DELTA=0; MAX_CONSUMED=45 ;;
+  gemini-pro-agent) POLICY_ID=m10-051-live-smoke; POLICY_MODELS=gemini-pro-agent; POLICY_META_MODELS='["gemini-pro-agent"]'; REQUESTS=1; EXPECTED_DELTA=1; MAX_CONSUMED=47 ;;
   *) echo 'unsupported model selection' >&2; exit 2 ;;
 esac
 [[ $PESTIROUTE_ANTIGRAVITY_PROJECT =~ ^[A-Za-z0-9._:-]+$ ]] || { echo 'invalid project identifier' >&2; exit 2; }
@@ -103,6 +104,18 @@ PY
 budget "$REQUESTS" >/dev/null
 budget_start=$(budget 0)
 if [[ $PESTIROUTE_ANTIGRAVITY_MODEL == gemini-3.8-flash-medium && $budget_start != 42 && $budget_start != 43 ]]; then echo 'unexpected M10-046 budget baseline' >&2; exit 1; fi
+if [[ $PESTIROUTE_ANTIGRAVITY_MODEL == gemini-pro-agent ]]; then
+  natural_refresh_performed=${PESTIROUTE_ANTIGRAVITY_NATURAL_REFRESH_PERFORMED:-false}
+  if [[ $natural_refresh_performed != true && $natural_refresh_performed != false ]]; then echo 'invalid natural refresh attestation' >&2; exit 1; fi
+  if [[ $budget_start == 45 && $natural_refresh_performed == false ]]; then
+    : # No refresh was needed; baseline remains 45.
+  elif [[ $budget_start == 46 && $natural_refresh_performed == true ]]; then
+    : # Operator attests the durable natural 45→46 refresh completed.
+  else
+    echo 'unexpected M10-051 budget baseline or refresh attestation' >&2
+    exit 1
+  fi
+fi
 echo "budget start=$budget_start ceiling<=1000"
 "$GATEWAY_BIN" --debug --config "$WORK/gateway.yaml" --config-format yaml >"$WORK/gateway.log" 2>&1 &
 gateway_pid=$!

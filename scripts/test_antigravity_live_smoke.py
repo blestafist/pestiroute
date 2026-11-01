@@ -67,16 +67,25 @@ class RunnerTest(unittest.TestCase):
             (400, "text/plain", CANARY, "reason=non_json_or_malformed", 1),
             (0, "text/plain", CANARY, "reason=transport_or_parse_failed", 1),
             (200, "text/event-stream", ANSWER + COMPLETE, "nonempty=true terminal=true completed=true", 0, "gemini-3.8-flash-medium"),
+            (200, "text/event-stream", ANSWER + COMPLETE, "nonempty=true terminal=true completed=true", 0, "gemini-pro-agent"),
+            (503, "application/json", '{"error":{"code":"missing_or_unlisted_code"}}', "fixed_code=none reason=missing_or_unlisted_code", 1, "gemini-pro-agent"),
+            (-1, "text/plain", "", "unexpected M10-051 budget baseline or refresh attestation", 1, "gemini-pro-agent", 44),
+            (-1, "text/plain", "", "unexpected M10-051 budget baseline or refresh attestation", 1, "gemini-pro-agent", 47),
+            (-1, "text/plain", "", "unexpected M10-051 budget baseline or refresh attestation", 1, "gemini-pro-agent", 46),
+            (200, "text/event-stream", ANSWER + COMPLETE, "nonempty=true terminal=true completed=true", 0, "gemini-pro-agent", 46, "true"),
         ):
             model = tc[5] if len(tc) > 5 else "gemini-2.5-flash"
             status, media, body, expected, returncode = tc[:5]
+            initial_consumed = tc[6] if len(tc) > 6 else 42 if model == "gemini-3.8-flash-medium" else 45 if model == "gemini-pro-agent" else 8
+            refresh_attestation = tc[7] if len(tc) > 7 else None
+            baseline_rejected = status == -1
             with self.subTest(media=media), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root / "runner-temp").mkdir()
                 (root / "master.key").write_text("synthetic fixture only")
                 db = sqlite3.connect(root / "gateway.db")
                 db.execute("CREATE TABLE operator_request_budgets (account_id TEXT, ceiling INT, consumed INT)")
-                db.execute("INSERT INTO operator_request_budgets VALUES ('m10-antigravity-authorized-account',1000,?)", (42 if model == "gemini-3.8-flash-medium" else 8,))
+                db.execute("INSERT INTO operator_request_budgets VALUES ('m10-antigravity-authorized-account',1000,?)", (initial_consumed,))
                 db.commit()
                 db.close()
                 gateway = root / "gateway"
@@ -87,7 +96,7 @@ if sys.argv[1] == 'admin':
     if 'account' in args: print('id=antigravity-local connector=antigravity enabled=true fixture')
     elif 'policy' in args:
         model = os.environ['FIXTURE_MODEL']
-        models = '["gemini-3.8-flash-medium"]' if model == 'gemini-3.8-flash-medium' else '["gemini-2.5-pro","gemini-2.5-flash"]'
+        models = '["gemini-3.8-flash-medium"]' if model == 'gemini-3.8-flash-medium' else '["gemini-pro-agent"]' if model == 'gemini-pro-agent' else '["gemini-2.5-pro","gemini-2.5-flash"]'
         print(f'enabled=true models={models} connectors=["antigravity"] rpm=10 tpm=10000')
     elif 'create' in args: print('secret=SYNTHETIC_TEST_KEY id=fixture-key')
     elif 'revoke' in args: pass
@@ -104,7 +113,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self): self.send_error(404)
     def do_POST(self):
         with open(os.environ['FIXTURE_POSTS'], 'a') as f: f.write('post\n')
-        if os.environ['FIXTURE_MODEL'] == 'gemini-3.8-flash-medium':
+        if os.environ['FIXTURE_MODEL'] in ('gemini-3.8-flash-medium', 'gemini-pro-agent'):
             db = sqlite3.connect(os.path.join(os.environ['PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT'], 'gateway.db'))
             db.execute("UPDATE operator_request_budgets SET consumed=consumed+1 WHERE account_id='m10-antigravity-authorized-account'")
             db.commit()
@@ -134,32 +143,42 @@ http.server.HTTPServer(('127.0.0.1',port),Handler).serve_forever()
                 env = dict(os.environ, PESTIROUTE_ANTIGRAVITY_OPERATOR_ROOT=tmp,
                            PESTIROUTE_ANTIGRAVITY_PROJECT="antigravity-local",
                            PESTIROUTE_ANTIGRAVITY_MODEL=model, FIXTURE_MODEL=model,
-                             GATEWAY_BIN=str(gateway), FIXTURE_BODY=body, FIXTURE_MEDIA=media, FIXTURE_STATUS=str(status))
+                              GATEWAY_BIN=str(gateway), FIXTURE_BODY=body, FIXTURE_MEDIA=media, FIXTURE_STATUS=str(status))
+                env.pop("PESTIROUTE_ANTIGRAVITY_NATURAL_REFRESH_PERFORMED", None)
+                if refresh_attestation is not None:
+                    env["PESTIROUTE_ANTIGRAVITY_NATURAL_REFRESH_PERFORMED"] = refresh_attestation
                 env.update(TMPDIR=str(root / "runner-temp"), FIXTURE_POSTS=str(root / "posts"), PYTHONDONTWRITEBYTECODE="1")
                 result = subprocess.run(["bash", str(Path(__file__).with_name("antigravity-live-smoke.sh"))], env=env, capture_output=True, text=True, timeout=20)
                 self.assertEqual(result.returncode, returncode)
-                self.assertIn(expected, result.stdout)
+                self.assertIn(expected, result.stdout + result.stderr)
                 self.assertIn("ephemeral_key_revoked=true", result.stdout)
-                if model == "gemini-3.8-flash-medium" and status != 200:
+                if baseline_rejected:
+                    self.assertNotIn("gateway_stopped=true", result.stdout)
+                elif model == "gemini-3.8-flash-medium" and status != 200:
                     self.assertIn("gateway stream phase=precommit category=precommit_invalid_usage subkind=unknown_field known_field=service_tier", result.stdout)
                     self.assertNotIn("raw_field", result.stdout)
                 else:
                     self.assertIn("gateway stream phase=precommit category=precommit_unsupported_reasoning kind=signature_only signature_type=string", result.stdout)
-                self.assertIn("gateway inference status=503 branch=http_error upstream_status=other transport_error_class=none", result.stdout)
+                if not baseline_rejected:
+                    self.assertIn("gateway inference status=503 branch=http_error upstream_status=other transport_error_class=none", result.stdout)
                 self.assertNotIn("PRIVATE", result.stdout + result.stderr)
                 self.assertNotIn("SYNTHETIC_TEST_KEY", result.stdout + result.stderr)
                 self.assertNotIn(CANARY, result.stdout + result.stderr)
                 self.assertNotIn("Traceback", result.stdout + result.stderr)
-                expected_posts = 2 if model == "gemini-3.8-flash-medium" and status == 200 else 1
-                self.assertEqual((root / "posts").read_text(), "post\n" * expected_posts)
+                expected_posts = 0 if baseline_rejected else 2 if model == "gemini-3.8-flash-medium" and status == 200 else 1
+                if expected_posts:
+                    self.assertEqual((root / "posts").read_text(), "post\n" * expected_posts)
+                else:
+                    self.assertFalse((root / "posts").exists())
                 db = sqlite3.connect(root / "gateway.db")
                 consumed = db.execute("SELECT consumed FROM operator_request_budgets").fetchone()[0]
                 db.close()
-                expected_consumed = (42 if model == "gemini-3.8-flash-medium" else 8) + (expected_posts if model == "gemini-3.8-flash-medium" else 0)
+                expected_consumed = initial_consumed + (expected_posts if model in ("gemini-3.8-flash-medium", "gemini-pro-agent") else 0)
                 self.assertEqual(consumed, expected_consumed)
                 self.assertEqual(list((root / "runner-temp").iterdir()), [])
                 self.assertNotIn("bytes=", result.stdout)
-                self.assertIn("gateway_stopped=true", result.stdout)
+                if not baseline_rejected:
+                    self.assertIn("gateway_stopped=true", result.stdout)
                 self.assertIn("temporary_runner_files_removed=true", result.stdout)
 
     def test_request_exception_paths_never_emit_private_exception(self):
@@ -246,7 +265,6 @@ http.server.HTTPServer(('127.0.0.1',port),Handler).serve_forever()
         self.assertTrue(response.closed)
         self.assertTrue(conn.closed)
         self.assertNotIn("SYNTHETIC_TEST_KEY", output.getvalue())
-
 
 if __name__ == "__main__":
     unittest.main()
