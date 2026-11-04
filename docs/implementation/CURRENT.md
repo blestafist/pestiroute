@@ -28,19 +28,32 @@ local-runtime profiles and external processes retain their individual evidence
 ceilings and existing tests. M9 branch reconciliation is merged in PR #18;
 the earlier CURRENT claim that it awaited review was stale.
 
-## Next independent lanes
+## Operator console integration and next work
 
-| Milestone | Branch | First READY / active task | Scope / dependency |
-| --- | --- | --- | --- |
-| [M10](M10-ANTIGRAVITY.md) | `dev-m10-antigravity` | [M10-053](tasks/M10-053.md) DONE | Authorized 3-model smoke closed DONE (Sonnet/Opus 200 streams; GPT-OSS precommit_empty_content negative trial; 47→51/1000 budget); M10-001–053 all DONE; tracked pending none; no unsupported capability promotion |
-| [M11](M11-ADMIN-API.md) | `dev-m11-admin-api` | M11-001 | Management contract → protected API; owns shared gateway composition |
-| [M12](M12-WEBUI.md) | `dev-m12-webui` | M12-001 | UX and fixture UI now; real integration waits for M11-007 on main |
-| [M13](M13-OPERATIONS.md) | `dev-m13-operations` | M13-001 | Packaging and backup/restore; no provider or UI prerequisite for initial slice |
+M11 Admin API, M13 Operations and the fixture UI are merged through PRs
+[#20](https://github.com/blestafist/pestiroute/pull/20),
+[#21](https://github.com/blestafist/pestiroute/pull/21) and
+[#22](https://github.com/blestafist/pestiroute/pull/22); accepted main baseline
+`831f2d4`. Their integration CI, Operations and WebUI runs passed on `87b5694`.
 
-Each has a dedicated worktree and `/next 10 M10` (or M11/M12/M13) filter.
-See [PARALLEL](PARALLEL.md) before starting; later cards are DRAFT until their
-dependencies and concrete checks are settled. Plans/branches are not implemented
-features. All new branches start from the same accepted planning baseline.
+The follow-up integration includes `dev-m12-webui` through `c573113`:
+M12-005 real Admin API/authentication and M12-006 embedding/browser workflow.
+Source evidence is in [M12-HANDOFF](M12-HANDOFF.md) and task cards; integration
+acceptance requires green CI, Operations and WebUI on the new PR revision.
+The WebUI workflow now also builds the embedded binary and runs Chromium
+against the real local gateway/SQLite fixture. Packaging uses Node 24, matching CI.
+
+The live console is a functional baseline, not the full UX outcome: Usage still
+loads only its first 50 rows and lacks the fixture view's filtering/pagination.
+Next execute M12-007 shell/themes, M12-008 management workflows, M12-011 live
+ledger controls, M12-009 data/diagnostics presentation, then M12-010 visual and
+browser acceptance. M12-011 is a bounded functional task, not cosmetic work.
+See [TASKS](TASKS.md#m12--webui) and [parallel ownership](PARALLEL.md).
+
+M10-001–053 are complete on the Antigravity integration branch; see
+[M10-053](tasks/M10-053.md) for the scoped live results and limitations.
+Integration into main is pending the PR and its checks. M11/M13 need no
+separate new worker session for their already merged scope.
 
 ## Open gates carried forward
 
@@ -56,7 +69,15 @@ M8-008 is also BLOCKED as described above. Antigravity live browser OAuth was co
 
 ## Checks and operations
 
-Pinned Go 1.27.1: `./scripts/check.sh` performs formatting, vet, unit/race tests and offline build. Note: uncached whole-tree test sweeps (`go test ./...`) require `GOFLAGS=-p=1` to prevent cross-package snapshot interference from concurrent child socket directories in `/tmp` (`GOFLAGS=-p=1 ./scripts/check.sh`). Hosted M7 CI passed this exact command. This cloud host lacks `/proc/<pid>/task/<tid>/children`, so existing process-inspection tests and M6 CLI smoke cannot fully pass locally; use hosted Linux CI for that gate. Parallel worktrees need distinct TMPDIR values as well as package serialization.
+Pinned Go 1.27.1: `GOFLAGS=-p=1 ./scripts/check.sh` performs formatting,
+vet, unit/race tests and offline build. Use a short unique TMPDIR for process
+socket probes. UI checks use Node 24, `npm --prefix web ci`, typecheck,
+`typecheck:e2e`, tests and build. Full UI release and browser commands are in
+[M12-HANDOFF](M12-HANDOFF.md). No provider access is needed.
+
+Source task evidence is historical; current integration evidence must come from
+its CI revision. The planning host has no Go executable; no local Go or packaged
+browser run is claimed. New verification is recorded in the integration PR.
 
 M10-001–048 closed DONE. M10-046 closed DONE following reviewer PASS `ses_e67d848deffedx3YyQoZc2CTdP`: clean `gateway-3e72d9d8` verified; fresh zero-HTTP preflight passed all flags; exact Flash-medium completion succeeded (HTTP 200, 7 SSE events, 2 text deltas, terminal and completed true); success-gated cancellation returned HTTP 200 with `client_abort=true first_text_delta=true terminal=false`. Budget 42→44/1000 (0 refreshes, ceiling 1000 unchanged); cleanup confirmed key revoked, gateway stopped, temporary files removed. Proves local client abort only; upstream closure verified by offline connector tests; remote compute cancellation is not claimed. M10-049 closed DONE following reviewer PASS `ses_e67cbc185ffePLHXFsg852N4qK`: single metadata probe found candidate IDs not listed in account endpoint metadata (`gemini-pro-agent=false`, literal `gemini-3.1-pro-low(low)=false`, `unknown_count=10`; entitlement and inference availability undetermined); budget 44→45/1000 (no refresh); zero wire admission in `execute.go`, zero live inference. M10-050 closed DONE following reviewer PASS `ses_e67b8817bffeRWQ1hHrDEcEXRm`: exact wire ID `gemini-pro-agent` admitted offline under DEC-034 with synthetic request fixture and SHA256 integrity; Flash thinking injection is not applied; capabilities remain Unknown; bare `gemini-3.1-pro` and `gemini-3.1-pro-low(low)` fail closed; 869 connector/gateway race pass, vet/build clean, budget 45/1000 unchanged, zero live calls. M10-051 closed DONE following reviewer PASS `ses_e67ac67b5ffeAb3pLZs4S4d0Ju`: exact wire ID `gemini-pro-agent` single live trial returned upstream HTTP 404 (`status=404 branch=http_error upstream_status=other transport_error_class=none`, mapped to gateway 503 `upstream_unavailable`); zero SSE events; model not validated; entitlement/identity undetermined (source association only under DEC-034, not confirmed provider identity; no inference of user access); budget 45→47/1000 (1 refresh + 1 inference); cleanup confirmed; no further Pro work planned per user correction. M10-052 closed DONE following reviewer PASS `ses_e674932d9ffexQIChSTE2lFgmZ`: exact wire IDs `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, and `gpt-oss-120b-medium` admitted offline under DEC-035 with synthetic request fixtures and SHA256 integrity; Gemini-wire envelope preserved; Flash thinking injection is not applied (thinking not disabled for `claude-opus-4-6-thinking`); capabilities remain Unknown; bare aliases fail closed; 883 connector/gateway race pass, vet/build clean, budget 47/1000 unchanged, zero live calls. M10-053 closed DONE following reviewer PASS `ses_e67346755ffegvmg1UlLcf4Zk5`: authorized 3-model bounded smoke completed; exact `claude-sonnet-4-6` succeeded (HTTP 200, 18 events, 13 deltas, complete); exact `claude-opus-4-6-thinking` succeeded (HTTP 200, 16 events, 11 deltas, complete, no thinking-disable configuration injected; reasoning output and continuity unvalidated, 0 carriers); exact `gpt-oss-120b-medium` returned gateway 503 (0 events, precommit_empty_content, upstream status unavailable; provider 503 or unsupported entitlement not inferred); budget 47→48 (1 natural refresh) →49→50→51/1000; all ephemeral keys revoked, gateways stopped, temp files removed, smoke policy disabled. M10-001–053 all DONE; tracked pending none; no unsupported capability promotion. Objective STOP reached. M10-047 closed DONE following reviewer PASS `ses_e67fd2e29ffeN6vC4aL11G0r6a`: offline usage rejection diagnostics across all parseUsage/parseUsageMetadata branches (fixed subkind and allowlisted known_field enums, deterministic priority, strict rejection and Core accounting preserved, zero token/payload leaks; 260 connector race tests pass, vet/build clean, budget 40/1000 unchanged, zero live calls). M10-048 closed DONE following reviewer PASS `ses_e67e54a2effe1rc3RIgdmHl153`: validated camelCase public UsageMetadata supplemental fields (int32 counts, details enums, serviceTier) accepted under DEC-033 while DEC-030 is preserved; trafficType and snake_case rejected; Core accounting unchanged; 287 connector race tests pass, vet/build clean, budget 42/1000 unchanged, zero live calls. M10-042 offline carrier/replay evidence retains its own scope; M10-028 verifies only one live Flash text stream. M10-044 enabled scoped llm.tools for Responses on gemini-2.5-pro/flash. M10-043 live two-turn tool calling closed DONE. M10-045 closed DONE following reviewer PASS `ses_e683e6c37ffeppLbfpGGqtZsjc`: exact metadata probe verified `gemini-3.8-flash-{high,medium,low}` are available (`true`), while bare `gemini-3.8-flash` and all probed `gemini-3.1-pro` variants are not listed (`false`, unknown_count=10; entitlement and inference availability undetermined). Bounded recovery consumed budget 36→38/1000 (one natural refresh 36→37, one metadata dispatch 37→38; ceiling 1000 unchanged). Connector offline translation admits exact 3.8 Flash variants; unadmitted IDs reject HTTP 400; no silent aliasing; tools and reasoning continuity remain Unknown on 3.8. Connector/gateway race 822 passed, vet/build clean. Agents must not inspect/display/log private database contents, master keys, tokens, or payloads; see [M10-045 evidence](tasks/M10-045.md#completion-evidence).
 

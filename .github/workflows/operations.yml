@@ -1,0 +1,40 @@
+name: Operations
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  offline-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOFLAGS: -p=1
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # Recovery builds the recorded schema-v5 baseline.
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Prepare offline acceptance dependencies
+        run: |
+          go mod download
+          if ! command -v sqlite3 >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y sqlite3
+          fi
+          acceptance_tmp=$(mktemp -d /tmp/p13.XXXXXX)
+          echo "TMPDIR=$acceptance_tmp" >> "$GITHUB_ENV"
+      - name: Build packaged gateway
+        run: ./scripts/release-build.sh
+      - name: Verify packaging and permissions
+        run: ./scripts/verify-packaging.sh
+      - name: Verify backup, restore and upgrade recovery
+        run: ./scripts/verify-recovery.sh
+      - name: Verify protected offline release
+        run: ./scripts/verify-release.sh

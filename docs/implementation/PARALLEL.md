@@ -6,35 +6,35 @@ conflicting designs or make another lane's DONE dependency integrated.
 
 ## Active lane map
 
-| Filter | Branch | First READY | Exclusive source ownership |
+| Filter | Branch | Next work | Exclusive source ownership |
 | --- | --- | --- | --- |
-| M10 | dev-m10-antigravity | M10-001 | `internal/connector/antigravity/**`, dedicated fixtures and M10 docs/cards |
-| M11 | dev-m11-admin-api | M11-001 | Management Go packages, `docs/api/**`, shared gateway/admin composition and config |
-| M12 | dev-m12-webui | M12-001 | `web/**`, UI embedding package and dedicated browser tests |
-| M13 | dev-m13-operations | M13-001 | Deployment/release/backup artifacts and packaging CI sequencing |
+| M10 | dev-m10-antigravity | Paused for this integration; existing worker owns progress | Antigravity connector, fixtures and M10 docs |
+| M12 | dev-m12-webui | M12-007, 008, 011, 009, 010 in dependency order | `web/**`, UI embedding, browser tests and M12 docs |
 
-Every lane owns only its registry rows/cards and CURRENT section. Core contracts,
-SQLite schema, shared docs and test helpers need a named owner and serial review
-window before changes. M10 requests M11's gateway window for connector wiring.
-M12 consumes M11's static mount seam instead of concurrently editing startup.
-M13 coordinates packaging CI with M12; preserve existing full Go/M6 checks.
+M11 Admin API and M13 Operations are integrated. Do not relaunch their completed
+queues. M12 owns the serial shared-file window for `.github/workflows/webui.yml`,
+`scripts/release-build.sh`, `cmd/gateway/main.go` UI wiring and its own task/docs
+updates during this follow-up integration. Core contracts and SQLite remain
+outside scope. Antigravity is explicitly excluded and does not block WebUI.
 
-M8's offline slice is integrated; M8-008/009 retain live/enablement gates and are
-not a parallel implementation queue until ready. M9's implementation is on main.
-Do not reuse or reset these branches as new lanes.
+M8 offline and M9 implementation are already on main; provider live gates remain
+in their existing cards. Do not reset or reuse their branches.
 
-## Setup from the published planning baseline
+## Updating existing worktrees
 
-The remote lane branches are already created; do not create them again from an
-older main. From a clean main checkout, inspect `git worktree list` first:
+In the existing idle M12 worktree, inspect status and worktrees, then fetch and
+merge the accepted main baseline without rewriting branch history:
 
 ```sh
+git status --short
+git worktree list
 git fetch origin
-git worktree add --track -b dev-m10-antigravity ../pestiroute-m10 origin/dev-m10-antigravity
-git worktree add --track -b dev-m11-admin-api ../pestiroute-m11 origin/dev-m11-admin-api
-git worktree add --track -b dev-m12-webui ../pestiroute-m12 origin/dev-m12-webui
-git worktree add --track -b dev-m13-operations ../pestiroute-m13 origin/dev-m13-operations
+git merge --ff-only origin/dev-m12-webui
+git merge origin/main
 ```
+
+Stop to preserve local edits or resolve actual divergence; never reset an active
+worker. These commands assume the current branch is `dev-m12-webui`.
 
 If a local branch or path exists, inspect and reuse its correct worktree; never
 reset/delete/force-add it or switch a branch beneath an active session. Confirm
@@ -46,20 +46,10 @@ export GOFLAGS=-p=1
 opencode
 ```
 
-Then run exactly `/next 10 M10`, `/next 10 M11`, `/next 10 M12` or `/next 10 M13`
-in its matching worktree. Each process gets a distinct TMPDIR; do not share the
-example directory between terminals. N is a maximum accepted task count; do not
-invent tasks to fill it. A lane can prepare its next DRAFT card once dependencies
-and check readiness are proved, and stops when no eligible work remains.
-
-## Real independence and dependency handoffs
-
-M10 research, M11 binding/API, M12 UX/mock screens and M13 packaging can start
-now. M12-005 needs M11-007 integrated onto main and then merged into the UI lane;
-M11 being DONE on another branch is insufficient. After integration, recheck the
-API contract against fixtures/client. Antigravity cannot silently expand the
-shared contract or block UI on Google access. Provider account/hardware/live
-gates stay in their existing tasks and do not block offline lanes.
+Then run `/next 10 M12` in that worktree. N is a maximum accepted count;
+execute only eligible tasks in dependency order. M12-008/011/009/010 remain DRAFT
+until their prerequisites are accepted and the planner checks their cards.
+Do not run two sessions editing the shared `App.tsx` simultaneously.
 
 ## Review, pushes and integration
 

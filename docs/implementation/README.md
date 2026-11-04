@@ -7,7 +7,9 @@ Start with [CURRENT](CURRENT.md), then one selected row in [TASKS](TASKS.md) and
 | Active planning | [M10 Antigravity](M10-ANTIGRAVITY.md), [M11 Admin API](M11-ADMIN-API.md), [M12 WebUI](M12-WEBUI.md), [M13 Operations](M13-OPERATIONS.md), [M8 offline handoff](M8-HANDOFF.md), [M9 Chat Completions](M9-CHAT-COMPLETIONS.md), [parallel OpenCode](PARALLEL.md), [ROADMAP](ROADMAP.md), [TASKS](TASKS.md), [card template](tasks/TEMPLATE.md) |
 | Shared specifications | [CONTRACT](CONTRACT.md), [CONFIGURATION](CONFIGURATION.md), [TESTING](TESTING.md), [STACK](STACK.md), [REFERENCES](REFERENCES.md), [TOOLING](TOOLING.md) |
 | Native/component bindings | [M1](M1-BINDING.md), [M2](M2-BINDING.md) |
+| Administrative API binding | [M11 HTTP binding](M11-BINDING.md), [OpenAPI description](../api/admin.openapi.yaml) |
 | Protected runtime/storage | [M3 runtime](M3-RUNTIME.md), [storage](M3-STORAGE.md), [auth](M3-AUTH.md), [config](M3-CONFIG.md) |
+| Deployment and recovery | [M13 binding](M13-BINDING.md), [M13 operations](M13-OPERATIONS.md) |
 | Connector implementation briefs | [M4 translation](M4-TRANSLATION.md), [M4 binding](M4-BINDING.md), [M5.1 Codex](M5.1-CODEX.md), [M5.1 binding](M5.1-BINDING.md), [M5.2 local](M5.2-LOCAL.md) |
 | Evidence-scoped support | [M4 matrix](M4-COMPATIBILITY.md), [Codex matrix](M5.1-COMPATIBILITY.md), [local-runtime matrix](M5.2-COMPATIBILITY.md), [Chat Completions matrix](M9-COMPATIBILITY.md) |
 | Offline operations | [M1](LOCAL-M1.md), [M2](LOCAL-M2.md), [M3](LOCAL-M3.md), [M4](LOCAL-M4.md), [M5.1](LOCAL-M5.1.md), [M5.2](LOCAL-M5.2.md), [M6](LOCAL-M6.md), [M9 Chat Completions](LOCAL-M9.md), [M10 Antigravity](LOCAL-M10.md) |
