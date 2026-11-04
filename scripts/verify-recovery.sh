@@ -206,9 +206,11 @@ check_foreign_keys "$V5_BACKUP"
 [[ $(sqlite3 "$V5_BACKUP" 'SELECT count(*) FROM virtual_keys WHERE revoked=1;') == 1 ]]
 V5_USAGE=$(sqlite3 "$V5_BACKUP" 'SELECT count(*) FROM usage_records;')
 [[ "$V5_USAGE" -ge 1 ]]
-# The current packaged binary performs the stopped v5→v6 migration.
+# The current packaged binary performs the stopped v5→v7 migration.
 "$binary" admin --db "$DB" --master-key "$KEY" migrate >/dev/null
-[[ $(sqlite3 "$DB" 'SELECT max(version) FROM schema_migrations;') == 6 ]]
+[[ $(sqlite3 "$DB" 'SELECT max(version) FROM schema_migrations;') == 7 ]]
+[[ $(sqlite3 "$DB" "SELECT ceiling || ':' || consumed FROM operator_request_budgets WHERE account_id='m10-antigravity-authorized-account';") == 1000:0 ]]
+sqlite3 "$DB" "UPDATE operator_request_budgets SET consumed=3 WHERE account_id='m10-antigravity-authorized-account';"
 [[ $(sqlite3 "$DB" 'SELECT count(*) FROM usage_records;') == "$V5_USAGE" ]]
 UNMIGRATED="$work/unmigrated-v5.db"
 restore_database "$V5_BACKUP" "$UNMIGRATED" 5
@@ -224,11 +226,11 @@ request "$key_secret" before-backup
 # The gateway is still open (and WAL mode is active): .backup invokes SQLite's
 # online backup API, including committed content not necessarily checkpointed.
 [[ $(sqlite3 "$DB" 'PRAGMA journal_mode;') == wal ]]
-BACKUP="$work/online-v6.db"
+BACKUP="$work/online-v7.db"
 sqlite3 "$DB" ".backup '$BACKUP'"
 [[ $(sqlite3 "$BACKUP" 'PRAGMA integrity_check;') == ok ]]
 check_foreign_keys "$BACKUP"
-[[ $(sqlite3 "$BACKUP" 'SELECT max(version) FROM schema_migrations;') == 6 ]]
+[[ $(sqlite3 "$BACKUP" 'SELECT max(version) FROM schema_migrations;') == 7 ]]
 [[ $(sqlite3 "$BACKUP" "SELECT count(*) FROM accounts WHERE id='recovery-account';") == 1 ]]
 [[ $(sqlite3 "$BACKUP" "SELECT count(*) FROM credentials WHERE account_id='recovery-account';") == 1 ]]
 [[ $(sqlite3 "$BACKUP" "SELECT count(*) FROM key_policies WHERE id='recovery-policy';") -ge 1 ]]
@@ -239,22 +241,23 @@ check_foreign_keys "$BACKUP"
 # Distinct-path restore; admin checks preserve metadata, and the protected
 # request below proves the original key decrypts the encrypted credential.
 RESTORED="$work/restored.db"
-restore_database "$BACKUP" "$RESTORED" 6
+restore_database "$BACKUP" "$RESTORED" 7
 [[ "$RESTORED" != "$DB" && "$RESTORED" != "$BACKUP" ]]
+[[ $(sqlite3 "$RESTORED" "SELECT ceiling || ':' || consumed FROM operator_request_budgets WHERE account_id='m10-antigravity-authorized-account';") == 1000:3 ]]
 [[ $(sqlite3 "$RESTORED" 'SELECT count(*) FROM usage_records;') == $(sqlite3 "$DB" 'SELECT count(*) FROM usage_records;') ]]
 # Failed restore, corrupt source, and repeated restore attempts must never
 # overwrite a valid destination or leave a partial file at a fresh destination.
 RESTORED_HASH=$(sha256sum "$RESTORED" | awk '{print $1}')
 CORRUPT_BACKUP="$work/corrupt.db"
 printf 'not a sqlite database\n' >"$CORRUPT_BACKUP"
-if restore_database "$CORRUPT_BACKUP" "$RESTORED" 6; then
+if restore_database "$CORRUPT_BACKUP" "$RESTORED" 7; then
   echo "verify-recovery: corrupt restore unexpectedly replaced existing DB" >&2; exit 1
 fi
-if restore_database "$BACKUP" "$RESTORED" 6; then
+if restore_database "$BACKUP" "$RESTORED" 7; then
   echo "verify-recovery: repeated restore unexpectedly replaced existing DB" >&2; exit 1
 fi
 CORRUPT_RESTORE="$work/corrupt-restore.db"
-if restore_database "$CORRUPT_BACKUP" "$CORRUPT_RESTORE" 6; then
+if restore_database "$CORRUPT_BACKUP" "$CORRUPT_RESTORE" 7; then
   echo "verify-recovery: corrupt backup unexpectedly restored" >&2; exit 1
 fi
 [[ ! -e "$CORRUPT_RESTORE" ]]
@@ -335,9 +338,9 @@ grep -q '"error"' "$work/wrong-key-response.json"
 [[ $(wc -l <"$work/upstream-requests") == "$requests_before" ]]
 kill -TERM "$gateway_pid"; wait "$gateway_pid"; gateway_pid=
 
-# The historical v5 binary must reject the actual migrated v6 database.
+# The historical v5 binary must reject the actual migrated v7 database.
 if "$legacy_binary" admin --db "$DB" --master-key "$KEY" status >"$work/legacy-newer-status.log" 2>&1; then
-  echo "verify-recovery: v5 binary accepted actual v6 database" >&2; exit 1
+  echo "verify-recovery: v5 binary accepted actual v7 database" >&2; exit 1
 fi
 grep -q 'unsupported or unreadable schema' "$work/legacy-newer-status.log"
 
@@ -363,4 +366,4 @@ kill -TERM "$gateway_pid"; wait "$gateway_pid"; gateway_pid=
 if grep -E 'recovery-fake-credential|wrong-key-material' "$work"/*.log; then
   echo "verify-recovery: credential material found in logs" >&2; exit 1
 fi
-echo "verify-recovery: PASS (online v6 backup and fresh safe restore, no-overwrite/corrupt restore failures, v5 migration and post-upgrade state, restored key revocation, wrong-key delivery denial, historical-v5 rejection and rollback)"
+echo "verify-recovery: PASS (online v7 backup and fresh safe restore, no-overwrite/corrupt restore failures, v5 migration and post-upgrade state, restored key revocation, wrong-key delivery denial, historical-v5 rejection and rollback)"
