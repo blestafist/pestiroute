@@ -52,8 +52,9 @@ See [TASKS](TASKS.md#m12--webui) and [parallel ownership](PARALLEL.md).
 
 M10-001–053 are complete on the Antigravity integration branch; see
 [M10-053](tasks/M10-053.md) for the scoped live results and limitations.
-Integration into main is pending the PR and its checks. M11/M13 need no
-separate new worker session for their already merged scope.
+See [PR #25](https://github.com/blestafist/pestiroute/pull/25) for the
+integration and its checks. M11/M13 need no separate new worker session for
+their already merged scope.
 
 ## Open gates carried forward
 

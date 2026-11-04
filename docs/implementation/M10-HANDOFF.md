@@ -1,5 +1,10 @@
 # M10 Antigravity Connector Handoff
 
+> Historical M10-005 handoff: the candidate and live-auth statements below
+> describe that stage, not the final M10 status. Later tasks, including
+> [M10-053](tasks/M10-053.md), record live evidence and its limits; use
+> [CURRENT](CURRENT.md) and the task cards for the latest state.
+
 ## Disposition
 
 M10-001–004 delivered the reviewed offline candidate: provenance-labelled
