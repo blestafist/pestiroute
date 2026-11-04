@@ -33,6 +33,13 @@ Protected YAML describes the listener, connector instances, routes, per-route es
 
 The detailed entity keys, relations, migrations, durable accounting boundary, and crash recovery policy are specified in [M3-STORAGE.md](M3-STORAGE.md).
 
+Antigravity encrypted reasoning continuity is not implemented and adds no YAML,
+SQLite, or CLI setting. Its future design is client-request opt-in only and
+requires a composition-root purpose-separated AEAD codec; the master key and
+general storage/decryption access must never reach a Connector. See
+[DEC-031](../project/DECISIONS.md#dec-031--scope-antigravity-encrypted-reasoning-continuity)
+and [M10 binding](M10-BINDING.md#encrypted-continuity-candidate-design-only-not-implemented).
+
 The Codex Connector's existing `componentConfig.Profile` accepts the standard
 `codex-responses-http-sse-v1` profile by default. The opt-in
 `codex-responses-http-sse-lite-v1` profile is specified only for configured

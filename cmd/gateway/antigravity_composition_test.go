@@ -1,0 +1,371 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	secure "github.com/blestafist/pestiroute/internal/crypto"
+	"github.com/blestafist/pestiroute/internal/storage/sqlite"
+)
+
+func TestAntigravityProtectedYAMLStreamsAndCancelsWithRealHTTPClients(t *testing.T) {
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "1")
+	_, dbPath, keyPath := protectedFixture(t)
+	accountID, connectorID, model := "antigravity-account", "antigravity", "gemini-2.5-pro"
+	var upstreamCalls atomic.Int32
+	replayRequest := make(chan []byte, 1)
+	releaseTerminal := make(chan struct{})
+	cancelObserved := make(chan struct{})
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := upstreamCalls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if call == 1 {
+			_, _ = io.WriteString(w, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"id\":\"call-cycle-1\",\"args\":{\"q\":\"synthetic\"}},\"thoughtSignature\":\"synthetic-signed-call\"}]}}]}}\n\n")
+			w.(http.Flusher).Flush()
+			select {
+			case <-releaseTerminal:
+				_, _ = io.WriteString(w, "data: {\"response\":{\"done\":true}}\n\n")
+				w.(http.Flusher).Flush()
+			case <-r.Context().Done():
+			}
+			return
+		}
+		if call == 2 {
+			body, _ := io.ReadAll(r.Body)
+			replayRequest <- body
+			_, _ = io.WriteString(w, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Synthetic gateway final\"}]}}]}}\n\ndata: {\"response\":{\"done\":true}}\n\n")
+			w.(http.Flusher).Flush()
+			return
+		}
+		_, _ = io.WriteString(w, "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Synthetic gateway output\"}]}}]}}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+		close(cancelObserved)
+	}))
+	t.Cleanup(upstream.Close)
+
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: connectorID, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, bytes.Repeat([]byte{0x31}, secure.KeySize), 0600); err != nil {
+		t.Fatal("cannot prepare synthetic non-zero master key")
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := secure.Seal(key, 1, "test-v1", "credentials", "oauth", accountID, []byte(`{"access_token":"SYNTHETIC_ACCESS_TOKEN","project_id":"synthetic-project"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: "oauth", AccountID: accountID, FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	policies := sqlite.NewKeyPolicies(db)
+	policy, err := policies.GetLatest(ctx, "policy-id-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err = policies.Update(ctx, policy.ID, policy.Revision, sqlite.UpdateKeyPolicyParams{Enabled: true, Models: []string{model}, Connectors: []string{connectorID}, RPM: 20, TPM: 100000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "gateway.yaml")
+	yaml := fmt.Sprintf(`version: 1
+server: {listen: "127.0.0.1:0", max_request_bytes: 1048576, shutdown_timeout: 1s}
+storage: {driver: sqlite, path: %q}
+secrets: {master_key_file: %q}
+connectors:
+  - id: antigravity
+    kind: connector
+    implementation: pestiroute.antigravity.v1internal
+    protocols: [openai.responses.v1]
+    settings: {project: synthetic-project, model: %q, account_id: %q, endpoint: %s}
+routes:
+  - id: antigravity-route
+    protocol: openai.responses.v1
+    mode: translation
+    model: %q
+    adapter: pestiroute.responses.native
+    policy: standard
+    budget: {unknown_estimate: reserve, conservative_tokens: 4096}
+    targets: [{connector: antigravity, account: %q}]
+policies: {standard: policy-id-a}
+`, dbPath, keyPath, model, accountID, upstream.URL, model, accountID)
+	for _, invalidYAML := range []string{
+		strings.Replace(yaml, "project: synthetic-project, ", "", 1),
+		strings.Replace(yaml, "endpoint: "+upstream.URL, "endpoint: http://antigravity.synthetic.invalid", 1),
+	} {
+		if err := os.WriteFile(configPath, []byte(invalidYAML), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadProtectedYAML(configPath); err == nil {
+			t.Fatal("invalid Antigravity YAML accepted")
+		}
+	}
+	if err := os.WriteFile(configPath, []byte(yaml), 0600); err != nil {
+		t.Fatal(err)
+	}
+	protected, err := loadProtectedYAML(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certBundle := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw})
+	certPath := filepath.Join(t.TempDir(), "test-roots.pem")
+	if err := os.WriteFile(certPath, certBundle, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", certPath)
+	prepared, err := prepareProtectedConfig(ctx, config{protected: &protected, DatabasePath: dbPath, MasterKeyFile: keyPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = prepared.runtimeDB.Close()
+		_ = prepared.processLock.Close()
+	})
+
+	var ready, draining atomic.Bool
+	ready.Store(true)
+	composeConfig := prepared
+	// Force composition to load the real master key from DatabasePath/MasterKeyFile
+	// rather than accidentally capturing an uninitialized config-copy key.
+	composeConfig.runtimeDB = nil
+	composeConfig.runtimeKey = secure.MasterKey{}
+	h, closeComponents, err := composeHandler(composeConfig, &ready, &draining, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeComponents(context.Background()) })
+	zeroKeyPath := filepath.Join(t.TempDir(), "zero-master.key")
+	if err := os.WriteFile(zeroKeyPath, make([]byte, secure.KeySize), 0600); err != nil {
+		t.Fatal("cannot prepare synthetic zero master key")
+	}
+	zeroKeyConfig := composeConfig
+	zeroKeyConfig.MasterKeyFile = zeroKeyPath
+	zeroKeyConfig.processLock = nil
+	if _, _, err := composeHandler(zeroKeyConfig, &ready, &draining, nil); err == nil || !strings.Contains(err.Error(), "cannot initialize Antigravity reasoning codec") {
+		t.Fatal("protected composition did not fail closed for zero master key")
+	}
+	issued, err := sqlite.NewVirtualKeys(prepared.runtimeDB).Create(ctx, sqlite.CreateVirtualKeyParams{PolicyID: policy.ID, PolicyRevision: policy.Revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := httptest.NewServer(h)
+	t.Cleanup(gateway.Close)
+	post := func(ctx context.Context, input string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(input))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+issued.Secret)
+		req.Header.Set("Content-Type", "application/json")
+		return gateway.Client().Do(req)
+	}
+
+	// Dispatch requires a generated route for the exact requested model; connector
+	// allowlisting alone is insufficient. Keep the fixed pre-dispatch code visible
+	// in this local-only regression without ever reaching the provider transport.
+	unsupported, err := post(context.Background(), `{"model":"gemini-2.5-flash","stream":true,"input":"synthetic prompt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupportedBody, err := io.ReadAll(unsupported.Body)
+	_ = unsupported.Body.Close()
+	if err != nil || unsupported.StatusCode != http.StatusBadRequest || !strings.Contains(string(unsupportedBody), `"code":"unsupported_target"`) || upstreamCalls.Load() != 0 {
+		t.Fatalf("unrouted model status=%d err=%v upstream calls=%d", unsupported.StatusCode, err, upstreamCalls.Load())
+	}
+	checkSmokeDiagnostic(t, unsupportedBody, unsupported.Header.Get("Content-Type"), "unsupported_target")
+
+	// The old live runner included store:false. Admission rejects even a false
+	// value because store is outside the connector's supported field subset.
+	rejected, err := post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"store":false,"input":"synthetic prompt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectedBody, err := io.ReadAll(rejected.Body)
+	_ = rejected.Body.Close()
+	if err != nil || rejected.StatusCode != http.StatusBadRequest || upstreamCalls.Load() != 0 {
+		t.Fatalf("store field status=%d err=%v upstream calls=%d", rejected.StatusCode, err, upstreamCalls.Load())
+	}
+	checkSmokeDiagnostic(t, rejectedBody, rejected.Header.Get("Content-Type"), "unsupported_feature")
+
+	response, err := post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"include":["reasoning.encrypted_content"],"input":"synthetic prompt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(response.Body)
+	first := readGatewayUntil(t, reader, "lookup")
+	if strings.Contains(first, "response.completed") {
+		t.Fatal("gateway exposed completion before controlled upstream released its terminal frame")
+	}
+	close(releaseTerminal)
+	remaining, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	firstResponse := first + string(remaining)
+	if response.StatusCode != http.StatusOK || !strings.Contains(firstResponse, "response.completed") || !strings.Contains(firstResponse, `"encrypted_content"`) {
+		t.Fatalf("gateway status=%d incomplete stream=%q", response.StatusCode, first+string(remaining))
+	}
+	reasoningItem, callItem := gatewayOutputItems(t, firstResponse)
+	resultHistory, err := json.Marshal([]any{reasoningItem, callItem, map[string]any{"type": "function_call_output", "call_id": "call-cycle-1", "output": "synthetic result"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultInput := `{"model":"gemini-2.5-pro","stream":true,"input":` + string(resultHistory) + `}`
+	response, err = post(context.Background(), resultInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalBytes, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(finalBytes), "Synthetic gateway final") || !strings.Contains(string(finalBytes), "response.completed") {
+		t.Fatalf("tool result completion status=%d err=%v body=%q", response.StatusCode, err, finalBytes)
+	}
+	select {
+	case replayed := <-replayRequest:
+		if !strings.Contains(string(replayed), "synthetic-signed-call") || !strings.Contains(string(replayed), "functionResponse") || !strings.Contains(string(replayed), "synthetic result") {
+			t.Fatalf("composed connector did not reconstruct authenticated signed tool history: %s", replayed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("composed connector did not dispatch the replay request")
+	}
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	response, err = post(cancelCtx, `{"model":"gemini-2.5-pro","stream":true,"input":"synthetic prompt"}`)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cancelReader := bufio.NewReader(response.Body)
+	_ = readGatewayUntil(t, cancelReader, "Synthetic gateway output")
+	cancel()
+	_ = response.Body.Close()
+	select {
+	case <-cancelObserved:
+	case <-time.After(3 * time.Second):
+		t.Fatal("downstream cancellation did not cancel the controlled upstream request")
+	}
+	if upstreamCalls.Load() != 3 {
+		t.Fatalf("upstream calls=%d want 3", upstreamCalls.Load())
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	verifyBudgetDB, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var consumed int
+	if err := verifyBudgetDB.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&consumed); err != nil || consumed != 3 {
+		t.Fatalf("reopened budget consumed=%d err=%v; want 3", consumed, err)
+	}
+	if _, err := prepared.runtimeDB.ExecContext(ctx, `UPDATE operator_request_budgets SET consumed=ceiling WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID); err != nil {
+		t.Fatal(err)
+	}
+	denied, err := post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"input":"budget exhausted"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedBody, _ := io.ReadAll(denied.Body)
+	_ = denied.Body.Close()
+	if !strings.Contains(string(deniedBody), "request_budget_exceeded") || upstreamCalls.Load() != 3 {
+		t.Fatalf("exhausted response=%q upstream calls=%d", deniedBody, upstreamCalls.Load())
+	}
+	if _, err := prepared.runtimeDB.ExecContext(ctx, `DROP TABLE operator_request_budgets`); err != nil {
+		t.Fatal(err)
+	}
+	denied, err = post(context.Background(), `{"model":"gemini-2.5-pro","stream":true,"input":"budget store unavailable"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedBody, _ = io.ReadAll(denied.Body)
+	_ = denied.Body.Close()
+	if !strings.Contains(string(deniedBody), "request_budget_exceeded") || upstreamCalls.Load() != 3 {
+		t.Fatalf("store failure response=%q upstream calls=%d", deniedBody, upstreamCalls.Load())
+	}
+	_ = verifyBudgetDB.Close()
+}
+
+func checkSmokeDiagnostic(t *testing.T, body []byte, contentType, code string) {
+	t.Helper()
+	cmd := exec.Command("python3", "-c", `import sys; sys.path.insert(0, '../../scripts'); from antigravity_smoke_response import diagnostic; print(diagnostic(sys.stdin.buffer.read(), sys.argv[1]))`, contentType)
+	cmd.Stdin = strings.NewReader(string(body))
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "fixed_code="+code+" reason=recognized_code") {
+		t.Fatalf("sanitized diagnostic mismatch: err=%v", err)
+	}
+}
+
+func gatewayOutputItems(t *testing.T, stream string) (map[string]any, map[string]any) {
+	t.Helper()
+	var reasoning, call map[string]any
+	for line := range strings.SplitSeq(stream, "\n") {
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok || data == "[DONE]" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			continue
+		}
+		item, ok := event["item"].(map[string]any)
+		if !ok {
+			continue
+		}
+		switch item["type"] {
+		case "reasoning":
+			reasoning = item
+		case "function_call":
+			call = item
+		}
+	}
+	if reasoning == nil || reasoning["encrypted_content"] == nil || call == nil {
+		t.Fatalf("gateway stream lacks signed tool history: reasoning=%v call=%v", reasoning != nil, call != nil)
+	}
+	return reasoning, call
+}
+
+func readGatewayUntil(t *testing.T, reader *bufio.Reader, marker string) string {
+	t.Helper()
+	var collected strings.Builder
+	deadline := time.After(5 * time.Second)
+	for !strings.Contains(collected.String(), marker) {
+		select {
+		case <-deadline:
+			t.Fatalf("stream did not deliver %q; received %q", marker, collected.String())
+		default:
+		}
+		line, err := reader.ReadString('\n')
+		collected.WriteString(line)
+		if err != nil {
+			t.Fatalf("stream ended before %q: %v (%q)", marker, err, collected.String())
+		}
+	}
+	return collected.String()
+}

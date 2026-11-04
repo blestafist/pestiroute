@@ -1,0 +1,3 @@
+data: {"response":{"candidates":[{"content":{"parts":[{"text":"Synthetic answer."}]}}]}}
+
+data: {"response":{"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":4},"done":true}}

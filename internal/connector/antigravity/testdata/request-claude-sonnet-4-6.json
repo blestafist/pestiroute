@@ -1,0 +1,15 @@
+{
+  "project": "synthetic-project",
+  "model": "claude-sonnet-4-6",
+  "request": {
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          { "text": "Synthetic claude-sonnet-4-6 prompt for offline fixture verification." }
+        ]
+      }
+    ]
+  },
+  "userAgent": "antigravity"
+}

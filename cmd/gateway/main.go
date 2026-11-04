@@ -25,6 +25,7 @@ import (
 	adapter "github.com/blestafist/pestiroute/internal/adapter/responses"
 	adminhttp "github.com/blestafist/pestiroute/internal/admin"
 	anthropic "github.com/blestafist/pestiroute/internal/connector/anthropic"
+	"github.com/blestafist/pestiroute/internal/connector/antigravity"
 	chatconnector "github.com/blestafist/pestiroute/internal/connector/chatcompletions"
 	"github.com/blestafist/pestiroute/internal/connector/claudecode"
 	"github.com/blestafist/pestiroute/internal/connector/codex"
@@ -89,6 +90,7 @@ type topologyComponent struct {
 	RuntimeProfile string                  `json:"-"`
 	Capabilities   map[string]string       `json:"-"`
 	Process        *external.ProcessConfig `json:"-"`
+	Project        string                  `json:"-"`
 }
 
 type topologyRoute struct {
@@ -115,6 +117,7 @@ const responsesProtocol = "openai.responses.v1"
 const chatProtocol = "openai.chat-completions.v1"
 const responsesImplementation = "pestiroute.responses.native"
 const chatImplementation = "pestiroute.chat-completions.native"
+const antigravityImplementation = "pestiroute.antigravity.v1internal"
 
 // externalProcessCleanupTimeout matches the binding's 30s close/drain plus 5s
 // terminate/reap bound, with an orchestration margin shared by supervisors.
@@ -161,6 +164,7 @@ func loadConfig(args []string) (config, time.Duration, error) {
 	format := flags.String("config-format", "json", "configuration format (json or yaml)")
 	listen := flags.String("listen", "", "listener address")
 	timeout := flags.String("shutdown-timeout", "", "graceful shutdown duration")
+	debug := flags.Bool("debug", false, "enable debug diagnostics")
 	if err := flags.Parse(args); err != nil {
 		return config{}, 0, err
 	}
@@ -168,6 +172,9 @@ func loadConfig(args []string) (config, time.Duration, error) {
 		return config{}, 0, fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
 	c := config{Listen: "127.0.0.1:8080", ShutdownTimeout: "5s"}
+	if *debug {
+		c.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
 	if *format != "json" && *format != "yaml" {
 		return config{}, 0, fmt.Errorf("unsupported config format %q (want json or yaml)", *format)
 	}
@@ -573,7 +580,7 @@ func handlerWithLifecycle(c config, ready, draining *atomic.Bool, finalize func(
 }
 
 func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult)) (http.Handler, func(context.Context) error, error) {
-	return composeHandlerWithFactory(c, ready, draining, finalize, func(item topologyComponent) core.Component {
+	return composeHandlerWithReasoningFactory(c, ready, draining, finalize, func(item topologyComponent) core.Component {
 		if item.Kind == core.ComponentAdapter {
 			if item.Implementation == chatImplementation {
 				return chatadapter.NewAdapter()
@@ -595,7 +602,20 @@ func composeHandler(c config, ready, draining *atomic.Bool, finalize func(core.A
 		if item.Implementation == "pestiroute.responses.local" {
 			return connector.NewLocalConnector(item.AuthMode)
 		}
+		if item.Implementation == antigravityImplementation {
+			return antigravity.NewConnector()
+		}
 		return connector.NewConnector()
+	}, func(master secure.MasterKey) (core.Component, error) {
+		key, err := secure.AntigravityReasoningKey(master)
+		if err != nil {
+			return nil, errors.New("cannot initialize Antigravity reasoning codec")
+		}
+		codec, err := antigravity.NewReasoningCodec(key, nil)
+		if err != nil {
+			return nil, errors.New("cannot initialize Antigravity reasoning codec")
+		}
+		return antigravity.NewConnectorWithReasoningCodec(codec), nil
 	})
 }
 
@@ -614,7 +634,17 @@ type claudecodeInit struct {
 	Profile string `json:"profile"`
 }
 
+type antigravityInit struct {
+	Profile  string `json:"profile"`
+	Project  string `json:"project"`
+	Endpoint string `json:"endpoint,omitempty"`
+}
+
 func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component) (http.Handler, func(context.Context) error, error) {
+	return composeHandlerWithReasoningFactory(c, ready, draining, finalize, construct, nil)
+}
+
+func composeHandlerWithReasoningFactory(c config, ready, draining *atomic.Bool, finalize func(core.AttemptResult), construct func(topologyComponent) core.Component, reasoningConstruct func(secure.MasterKey) (core.Component, error)) (http.Handler, func(context.Context) error, error) {
 	mux := probes(ready)
 	legacy := len(c.Components) == 0 && c.UpstreamEndpoint != ""
 	if legacy {
@@ -752,7 +782,15 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			}
 			instance = protectedExternalConnector{Supervisor: supervisor}
 		} else {
-			instance = construct(item)
+			if item.Implementation == antigravityImplementation && reasoningConstruct != nil {
+				instance, err = reasoningConstruct(persistentKey)
+				if err != nil {
+					cleanup()
+					return nil, nil, err
+				}
+			} else {
+				instance = construct(item)
+			}
 		}
 		var cfg any
 		if item.Kind == core.ComponentAdapter {
@@ -785,6 +823,8 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 				profile = "claude-code-messages-v1"
 			}
 			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(claudecodeInit{Profile: profile})}
+		} else if item.Implementation == antigravityImplementation {
+			componentConfigs[item.ID] = core.ComponentConfig{Data: mustJSON(antigravityInit{Profile: "antigravity-v1internal", Project: item.Project, Endpoint: item.Endpoint})}
 		} else {
 			connect, _ := time.ParseDuration(item.ConnectTimeout)
 			tlsHandshake, _ := time.ParseDuration(item.TLSTimeout)
@@ -824,7 +864,11 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		}
 		limits := connectorLimits[item.Connector]
 		routes = append(routes, core.Route{Identity: core.RouteIdentity{RouteLookupKey: core.RouteLookupKey{Protocol: item.Protocol, Mode: item.Mode, Model: item.Model}, AccountID: item.Account}, Adapter: item.Adapter, Connector: item.Connector, CandidateGroup: item.CandidateGroup, MaxBodyBytes: limits.MaxBodyBytes, MaxHeaderBytes: limits.MaxHeaderBytes, Requirements: item.Requirements})
-		credentials[item.Account] = map[string]string{"bearer": credentialEnv(c, item.Connector)}
+		credentialName := "bearer"
+		if connectorUsesOAuth(c, item.Connector) {
+			credentialName = "oauth"
+		}
+		credentials[item.Account] = map[string]string{credentialName: credentialEnv(c, item.Connector)}
 	}
 	table, err := core.NewRouteTable(routes, registry)
 	if err != nil {
@@ -876,7 +920,23 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 			cleanup()
 			return nil, nil, fmt.Errorf("connector %q has no scoped transport", route.Connector)
 		}
-		transports[route.Account] = managed.HTTPDoer()
+		doer := managed.HTTPDoer()
+		for _, item := range c.Components {
+			if item.ID != route.Connector || item.Implementation != antigravityImplementation || os.Getenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT") != "1" {
+				continue
+			}
+			if persistentDB == nil {
+				cleanup()
+				return nil, nil, errors.New("Antigravity request budget requires persistent storage")
+			}
+			budgets := sqlite.NewOperatorRequestBudgets(persistentDB)
+			if err := budgets.VerifyCeiling(context.Background(), sqlite.AntigravityOperatorBudgetID, 1000); err != nil {
+				cleanup()
+				return nil, nil, errors.New("Antigravity request budget unavailable")
+			}
+			doer = core.BudgetedHTTPDoer{Next: doer, Budget: budgets, Account: sqlite.AntigravityOperatorBudgetID}
+		}
+		transports[route.Account] = doer
 	}
 	var services interface {
 		ForAttempt(core.AttemptScope) core.InvocationServices
@@ -926,7 +986,7 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 		}
 	}
 	if legacy {
-		services = fixedLegacyServices{account: c.UpstreamCredentialEnv, credential: []byte(c.credential), transport: transports[c.UpstreamCredentialEnv]}
+		services = fixedLegacyServices{account: c.UpstreamCredentialEnv, credential: []byte(c.credential), transport: transports[c.UpstreamCredentialEnv], logger: c.logger}
 	}
 	var accountingFailed atomic.Bool
 	dispatchers := make(map[string]*core.Dispatcher, len(models))
@@ -963,10 +1023,18 @@ func composeHandlerWithFactory(c config, ready, draining *atomic.Bool, finalize 
 				return
 			}
 			encode := func(pa core.ProtocolAdapter, gatewayErr *core.GatewayError, response core.ExecutionResponse) {
+				var err error
+				tracked := newCommitTrackingWriter(w)
 				if protocol == chatProtocol {
-					_ = pa.Encode(r.Context(), core.ClientResponse{Transport: chatadapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, response)
+					err = pa.Encode(r.Context(), core.ClientResponse{Transport: chatadapter.HTTPResponse{Writer: tracked.writer, Request: r}}, gatewayErr, response)
 				} else {
-					_ = pa.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: w, Request: r}}, gatewayErr, response)
+					err = pa.Encode(r.Context(), core.ClientResponse{Transport: adapter.HTTPResponse{Writer: tracked.writer, Request: r}}, gatewayErr, response)
+				}
+				if err != nil && c.logger != nil {
+					c.logger.Debug("protocol response encoding failed", "phase", "response_encode", "category", "adapter_encode")
+				}
+				if err != nil && !tracked.committed && r.Context().Err() == nil {
+					tracked.writeSafeFailure()
 				}
 			}
 			if accountingFailed.Load() {
@@ -1034,6 +1102,44 @@ func validateDispatcherRouteGroups(routes []topologyRoute) error {
 	return nil
 }
 
+type commitTrackingWriter struct {
+	http.ResponseWriter
+	committed bool
+	writer    http.ResponseWriter
+}
+
+type commitTrackingFlusher struct{ *commitTrackingWriter }
+
+func newCommitTrackingWriter(w http.ResponseWriter) *commitTrackingWriter {
+	tracked := &commitTrackingWriter{ResponseWriter: w}
+	tracked.writer = tracked
+	if _, ok := w.(http.Flusher); ok {
+		tracked.writer = commitTrackingFlusher{tracked}
+	}
+	return tracked
+}
+
+func (w *commitTrackingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+func (w *commitTrackingWriter) WriteHeader(status int) {
+	if !w.committed {
+		w.committed = true
+		w.ResponseWriter.WriteHeader(status)
+	}
+}
+func (w *commitTrackingWriter) Write(p []byte) (int, error) {
+	w.committed = true
+	return w.ResponseWriter.Write(p)
+}
+func (w commitTrackingFlusher) Flush() {
+	w.committed = true
+	w.ResponseWriter.(http.Flusher).Flush()
+}
+func (w *commitTrackingWriter) writeSafeFailure() {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = io.WriteString(w, `{"error":{"message":"Response encoding failed","type":"unavailable","code":"adapter_encode_error"}}`)
+}
+
 type sqliteVirtualKeyStore struct{ keys *sqlite.VirtualKeys }
 
 func (s sqliteVirtualKeyStore) Verify(ctx context.Context, token string) (core.TrustedPrincipal, error) {
@@ -1085,7 +1191,7 @@ func configuredCredentialRefs(c config) (map[string]map[string]string, error) {
 				continue
 			}
 			name := "bearer"
-			if component.Implementation == "pestiroute.codex.responses" || component.Implementation == "pestiroute.claudecode.messages" {
+			if component.Implementation == "pestiroute.codex.responses" || component.Implementation == "pestiroute.claudecode.messages" || component.Implementation == antigravityImplementation {
 				name = "oauth"
 			}
 			refsByConnector[component.ID] = credentialRef{name: name, id: component.CredentialEnv}
@@ -1153,6 +1259,7 @@ type fixedLegacyServices struct {
 	account    string
 	credential []byte
 	transport  core.HTTPDoer
+	logger     *slog.Logger
 }
 
 func (s fixedLegacyServices) ForAttempt(scope core.AttemptScope) core.InvocationServices {
@@ -1160,7 +1267,7 @@ func (s fixedLegacyServices) ForAttempt(scope core.AttemptScope) core.Invocation
 	if scope.AccountID != s.account {
 		access = unavailableCredential{}
 	}
-	return core.InvocationServices{Credentials: access, Transport: s.transport}
+	return core.InvocationServices{Credentials: access, Transport: s.transport, Logger: s.logger}
 }
 
 type fixedLegacyCredential []byte
@@ -1257,6 +1364,15 @@ func credentialEnv(c config, id core.InstanceID) string {
 		}
 	}
 	return ""
+}
+
+func connectorUsesOAuth(c config, id core.InstanceID) bool {
+	for _, item := range c.Components {
+		if item.ID == id {
+			return item.Implementation == "pestiroute.codex.responses" || item.Implementation == "pestiroute.claudecode.messages" || item.Implementation == antigravityImplementation
+		}
+	}
+	return false
 }
 
 func run(ctx context.Context, args []string) error {

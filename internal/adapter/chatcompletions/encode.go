@@ -29,9 +29,8 @@ func Encode(w http.ResponseWriter, r *http.Request, resp core.ExecutionResponse,
 		}
 		f, err := resp.Stream.Next(r.Context())
 		if err != nil {
-			var ge *core.GatewayError
-			if !committed && r.Context().Err() == nil && errors.As(err, &ge) {
-				return writeError(w, ge)
+			if !committed && r.Context().Err() == nil {
+				return writeStreamFailure(w, err)
 			}
 			if errors.Is(err, io.EOF) {
 				return core.ErrStreamContract
@@ -82,6 +81,14 @@ func Encode(w http.ResponseWriter, r *http.Request, resp core.ExecutionResponse,
 			return core.ErrStreamContract
 		}
 	}
+}
+
+func writeStreamFailure(w http.ResponseWriter, err error) error {
+	var gatewayErr *core.GatewayError
+	if errors.As(err, &gatewayErr) {
+		return writeError(w, gatewayErr)
+	}
+	return writeError(w, &core.GatewayError{Code: "upstream_stream_error", Category: core.CategoryUnavailable, Message: "Upstream stream failed"})
 }
 func copyHeaders(dst http.Header, src map[string][]string) {
 	blocked := map[string]bool{"connection": true, "keep-alive": true, "proxy-connection": true, "proxy-authenticate": true, "proxy-authorization": true, "te": true, "trailer": true, "transfer-encoding": true, "upgrade": true, "set-cookie": true, "authorization": true}

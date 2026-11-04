@@ -1,0 +1,142 @@
+"""Sanitized smoke diagnostics. Never return server messages or unlisted values."""
+import json
+import re
+
+ALLOWED_CODES = frozenset("unsupported_target unsupported_feature unsupported_capability unsupported_protocol_or_mode invalid_request invalid_api_key authentication_unavailable accounting_unavailable permission_denied rate_limit_exceeded rate_limited request_budget_exceeded upstream_error upstream_unavailable connector_unavailable unauthenticated invalid_response request_timeout request_cancelled".split())
+DIAGNOSTIC_BRANCHES = frozenset({"http_error", "transport_error", "invalid_response"})
+UPSTREAM_STATUSES = frozenset({"UNAUTHENTICATED", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "INVALID_ARGUMENT", "other", "none"})
+TRANSPORT_CLASSES = frozenset({"timeout", "connection_refused", "dns", "eof", "tls", "other", "none"})
+STREAM_FAILURES = frozenset({
+    ("precommit", "precommit_framing"),
+    ("precommit", "precommit_eof"),
+    ("precommit", "precommit_invalid_json"),
+    ("precommit", "precommit_unsupported_finish"),
+    ("precommit", "precommit_unsupported_reasoning"),
+    ("precommit", "precommit_invalid_usage"),
+    ("precommit", "precommit_invalid_function"),
+    ("precommit", "precommit_empty_content"),
+    ("precommit", "precommit_bounds_exceeded"),
+    ("precommit", "precommit_invalid_content"),
+    ("precommit", "precommit_invalid_order"),
+    ("postcommit", "postcommit_error"),
+})
+USAGE_SUBKINDS = frozenset("invalid_json non_object unknown_field invalid_type negative_range".split())
+USAGE_KNOWN_FIELDS = frozenset("prompt_token_count candidates_token_count total_token_count candidates_tokens_details cache_tokens_details tool_use_prompt_tokens_details prompt_tokens_details thoughts_token_count cached_content_token_count tool_use_prompt_token_count service_tier other".split())
+POSTCOMMIT_CAUSES = frozenset("eof bounds_exceeded invalid_json unsupported_finish unsupported_reasoning invalid_usage invalid_function empty_content invalid_content invalid_order framing".split())
+def stream_diagnostics(log_text):
+    """Extract only the pairs emitted by stream.go logStreamError."""
+    pattern = re.compile(r'msg="Antigravity stream failure" phase="?([a-z_]+)"? category="?([a-z_]+)"?(?=\s|$)')
+    reasoning = re.compile(r'\bkind=(?:"(thought_only|signature_only|both)"|(thought_only|signature_only|both))\s+signature_type=(?:"(absent|null|string|other)"|(absent|null|string|other))(?=\s|$)')
+    invalid_content = re.compile(r'\bsubkind="?(done_with_candidates|text_with_function_call|invalid_utf8_text)"?(?=\s|$)')
+    usage = re.compile(r'\bsubkind="?([a-z_]+)"?(?:\s+known_field="?([a-z_]+)"?)?(?=\s|$)')
+    cause = re.compile(r'\bcause="?([a-z_]+)"?(?=\s|$)')
+    found = []
+    for line in log_text.splitlines():
+        match = pattern.search(line)
+        if match and match.groups() in STREAM_FAILURES:
+            phase, category = match.groups()
+            result = f"phase={phase} category={category}"
+            if category == "postcommit_error":
+                detail = cause.search(line)
+                if (not detail or detail.group(1) not in POSTCOMMIT_CAUSES
+                        or len(re.findall(r'\bcause=', line)) != 1):
+                    continue
+                failure_cause = detail.group(1)
+                result += f" cause={failure_cause}"
+                if failure_cause == "unsupported_reasoning":
+                    if len(re.findall(r'\bsubkind=', line)):
+                        continue
+                    detail = reasoning.search(line)
+                    if (not detail or len(re.findall(r'\bkind=', line)) != 1
+                            or len(re.findall(r'\bsignature_type=', line)) != 1):
+                        continue
+                    kind = detail.group(1) or detail.group(2)
+                    signature_type = detail.group(3) or detail.group(4)
+                    result += f" kind={kind} signature_type={signature_type}"
+                elif failure_cause == "invalid_content":
+                    if len(re.findall(r'\bkind=', line)) or len(re.findall(r'\bsignature_type=', line)):
+                        continue
+                    detail = invalid_content.search(line)
+                    if (not detail or len(re.findall(r'\bsubkind=', line)) != 1):
+                        continue
+                    result += f" subkind={detail.group(1)}"
+                elif any(re.findall(r'\b' + key + r'=', line) for key in ("kind", "signature_type", "subkind")):
+                    continue
+            elif category == "precommit_unsupported_reasoning":
+                detail = reasoning.search(line)
+                if (not detail or len(re.findall(r'\bkind=', line)) != 1
+                        or len(re.findall(r'\bsignature_type=', line)) != 1):
+                    continue
+                kind = detail.group(1) or detail.group(2)
+                signature_type = detail.group(3) or detail.group(4)
+                result += f" kind={kind} signature_type={signature_type}"
+            elif category == "precommit_invalid_content":
+                detail = invalid_content.search(line)
+                if detail:
+                    if len(re.findall(r'\bsubkind=', line)) != 1:
+                        continue
+                    result += f" subkind={detail.group(1)}"
+            elif category == "precommit_invalid_usage":
+                detail = usage.search(line)
+                if (not detail or len(re.findall(r'\bsubkind=', line)) != 1
+                        or len(re.findall(r'\bknown_field=', line)) > 1):
+                    continue
+                subkind, known_field = detail.groups()
+                if subkind not in USAGE_SUBKINDS:
+                    continue
+                has_field = len(re.findall(r'\bknown_field=', line)) == 1
+                if has_field != (subkind == "unknown_field"):
+                    continue
+                if has_field:
+                    if known_field not in USAGE_KNOWN_FIELDS:
+                        continue
+                    result += f" subkind={subkind} known_field={known_field}"
+                else:
+                    result += f" subkind={subkind}"
+            found.append(result)
+    return found
+
+
+def inference_diagnostics(log_text):
+    """Return only fixed-schema Antigravity inference diagnostic fields."""
+    found = []
+    pattern = re.compile(r'msg="Antigravity inference diagnostic" status=(\d+) branch="?([a-z_]+)"? upstream_status="?([A-Z_]+|other|none)"? transport_error_class="?([a-z_]+)"?')
+    for line in log_text.splitlines():
+        match = pattern.search(line)
+        if not match:
+            continue
+        status, branch, upstream, transport = match.groups()
+        if int(status) > 599 or branch not in DIAGNOSTIC_BRANCHES or upstream not in UPSTREAM_STATUSES or transport not in TRANSPORT_CLASSES:
+            continue
+        found.append(f"status={status} branch={branch} upstream_status={upstream} transport_error_class={transport}")
+    return found
+
+
+def diagnostic(body, content_type):
+    media = content_type.split(";", 1)[0].strip().lower()
+    safe_media = media if media in {"application/json", "text/event-stream", "text/plain", "text/html"} else "other"
+    objects = []
+    try:
+        if media == "text/event-stream":
+            for block in body.decode("utf-8").replace("\r\n", "\n").split("\n\n"):
+                data = "\n".join(line[5:].lstrip() for line in block.splitlines() if line.startswith("data:"))
+                if data and data != "[DONE]":
+                    objects.append(json.loads(data))
+        else:
+            objects.append(json.loads(body))
+    except (ValueError, UnicodeError):
+        return f"fixed_code=none reason=non_json_or_malformed content_type={safe_media} bytes={len(body)}"
+    # Traverse structure, not strings: never interpret a message as a code.
+    def codes(value):
+        if isinstance(value, dict):
+            code = value.get("code")
+            if isinstance(code, str) and code in ALLOWED_CODES:
+                yield code
+            for name, child in value.items():
+                if name != "message":
+                    yield from codes(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from codes(child)
+    code = next((code for obj in objects for code in codes(obj)), None)
+    return f"fixed_code={code or 'none'} reason={'recognized_code' if code else 'missing_or_unlisted_code'} content_type={safe_media} bytes={len(body)}"

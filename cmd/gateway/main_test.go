@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -229,6 +230,21 @@ func TestNativeBaseline(t *testing.T) {
 			runtime.ReadMemStats(&after)
 			t.Logf("after %s cancellation/fixture teardown n=%d whole_process_heap_delta=%dB client_goroutines=0 upstream_cancel_observations=%d process_goroutines=%d stable_pre_fixture=%d", map[bool]string{false: "direct", true: "gateway"}[proxiedPath], streams, int64(after.HeapAlloc)-int64(before.HeapAlloc), len(captures), runtime.NumGoroutine(), stableGoroutines)
 		}
+	}
+}
+
+func TestGatewayDebugFlagConfiguresRuntimeLogger(t *testing.T) {
+	quiet, _, err := loadConfig(nil)
+	if err != nil || quiet.logger != nil {
+		t.Fatalf("default gateway should be quiet: logger=%v err=%v", quiet.logger, err)
+	}
+	debug, _, err := loadConfig([]string{"--debug"})
+	if err != nil || debug.logger == nil || !debug.logger.Enabled(context.Background(), slog.LevelDebug) {
+		t.Fatalf("--debug did not enable debug logger: logger=%v err=%v", debug.logger, err)
+	}
+	services := core.NewEnvironmentServices(nil, nil, debug.logger).ForAttempt(core.AttemptScope{})
+	if services.Logger == nil || !services.Logger.Enabled(context.Background(), slog.LevelDebug) {
+		t.Fatal("runtime InvocationServices did not receive the debug logger")
 	}
 }
 

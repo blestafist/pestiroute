@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "provenance": "Synthetic fixtures authored for PestiRoute from documented candidate-only observations, including google-gemini/gemini-cli@cd1b45c2db0a5ea7b7fc3b67c1ba5879601d6005 for onboarding and decolua/9router@87a74e1bda3677193c6f71a7e2100c90311f0689 open-sse/providers/registry/antigravity.js:48-74 for exact model IDs and candidate envelope; SYNTHETIC_ONLY_NOT_PROVIDER_CAPTURE; no live provider captures, credentials, or production claims.",
+  "source_observation": "Rahularya01/opencode-antigravity@874ef4d6cc44f852401e6298790c6b34804e2978",
+  "provider_capture": false,
+  "license": "MIT",
+  "files": {
+    "request-positive.json": "89374b8b3d567794ef502a3c2a3292f43c303ba7248311e5e9db713456cf8edb",
+    "request-gemini-pro-agent.json": "837e463079b4f793c1371396a38076e5c5fea200633b904321929ca2c441b2b0",
+    "request-claude-sonnet-4-6.json": "b2c616dbd1e3341e757ba42e341e14392e808f8314589216b804b8d7bf13559c",
+    "request-claude-opus-4-6-thinking.json": "b6cfea9a3f58fab6d40a1cadf29e88e954f0fb5d56cfabe273dd0391182cf144",
+    "request-gpt-oss-120b-medium.json": "526ef3184f6b40fb95531c1bdaf1e7bc5194cebd261abdb9b810b1f919d0ef38",
+    "stream-text.sse": "2ad77818d1e375f81be33f8406766eb311e51c3eb9230b645e40e7463c87d39b",
+    "stream-usage.sse": "86987f879004fb27adadba76c2bb9a89c3ca64dce31839a0a367a0891e47e70b",
+    "stream-premature-eof.sse": "e514e0dddd6af1062c772480caca7c560776115e7925520a8cc20f5bd3118bd4",
+    "stream-malformed.sse": "c7ec8e3a07218385bc98637d1e0513f93e3c789451daa25782baaa903a281880",
+    "stream-function-calls.sse": "e9ce41a7d9afa4573ddf7f2fe8f6c918b07c321a54200cb37b4403401b22c705",
+    "http-401.json": "5efdcc98e7afd23182db3e387b211cbceff7f567f9232064f67bd9989c3b011c",
+    "http-403.json": "9e445960f82c6d4b9696e3430ade63aa90840984c4e89eeb048c8736beff2228",
+    "http-429.json": "b0c52657329236c9f8beab2777f3f9692fa62e9624f74e360c9054ebd4120f67",
+    "http-500.json": "1995e69d3d0e5906cb99c5e4a7202398d99e104a42e0d88925e8bbbc64a7bdc7",
+    "oauth-refresh-rotated.json": "b23a1f3a11cd2ac841af9c18e7e83caedc9db92eb14f42af18edffa7e98fc725",
+    "onboard-load-eligible-free-tier.json": "038a76687a07bd1e7b654bbdc8c08a30b94c3544bc2f609c6942162e45af17c1",
+    "onboard-load-rejected-current-tier.json": "7519bb0f148bbeb422875f0e22e1e4e060a56771c15af6a04f740584c3a77aa1",
+    "onboard-load-rejected-paid-tier.json": "259c2a545b0f0fa2d2b0c6040a074e2847b8076a87339cf7950f9006d8f2c317",
+    "onboard-load-rejected-terms-false.json": "bebec8ed18a71ea283a82d88ca8f07bd135cdb5e5d3e576ece30df8d73b2f68e",
+    "onboard-load-rejected-user-project.json": "4adf43d553fbde04ac5d57a4538932fe438b55790f38ce75cbf8f180198a2098",
+    "onboard-poll-terminal-success.json": "a13fb8f3f2301191ebd69e5610308d2f0a8dbfc8a67d915b9091dc38080cb9d4",
+    "onboard-response-lro-progress.json": "4c80b88fb4bc59be8b0f57c3340701a200f037f5f9baf946753a80222780de5d"
+  }
+}

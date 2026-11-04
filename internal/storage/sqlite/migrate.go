@@ -166,6 +166,16 @@ var schemaMigrations = []migration{{
 			session_id TEXT PRIMARY KEY REFERENCES auth_sessions(id) ON DELETE RESTRICT,
 			started_at INTEGER NOT NULL
 		)`},
+}, {
+	version: 7,
+	statements: []string{`CREATE TABLE operator_request_budgets (
+			account_id TEXT PRIMARY KEY,
+			ceiling INTEGER NOT NULL CHECK (ceiling >= 0),
+			consumed INTEGER NOT NULL DEFAULT 0 CHECK (consumed >= 0),
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			CHECK (consumed <= ceiling)
+		)`, `INSERT INTO operator_request_budgets(account_id,ceiling,consumed,created_at,updated_at) VALUES('m10-antigravity-authorized-account',1000,0,CAST(strftime('%s','now') AS INTEGER)*1000,CAST(strftime('%s','now') AS INTEGER)*1000)`},
 }}
 
 // CurrentSchemaVersion is the newest schema version supported by this binary.

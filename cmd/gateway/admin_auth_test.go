@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,10 +20,616 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blestafist/pestiroute/internal/connector/antigravity"
 	"github.com/blestafist/pestiroute/internal/core"
 	secure "github.com/blestafist/pestiroute/internal/crypto"
 	"github.com/blestafist/pestiroute/internal/storage/sqlite"
 )
+
+type antigravityAuthDoer struct {
+	calls            int
+	request          *http.Request
+	tokenRequestBody string
+	err              error
+	onDo             func()
+}
+
+func (d *antigravityAuthDoer) Do(req *http.Request) (*http.Response, error) {
+	d.calls++
+	d.request = req
+	if d.onDo != nil {
+		d.onDo()
+	}
+	if d.err != nil {
+		return nil, d.err
+	}
+	if req.URL.Path == "/v1internal:loadCodeAssist" {
+		if req.Header.Get("Authorization") != "Bearer SYNTHETIC_LOGIN_ACCESS" {
+			return nil, errors.New("discovery did not use the exchanged access token")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"cloudaicompanionProject":{"id":"synthetic-project"}}`)), Request: req}, nil
+	}
+	if req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		d.tokenRequestBody = string(body)
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"access_token":"SYNTHETIC_LOGIN_ACCESS","refresh_token":"SYNTHETIC_LOGIN_REFRESH","expires_in":3600,"token_type":"Bearer"}`)), Request: req}, nil
+}
+
+func TestAdminAuthAntigravityEncryptedBrowserLifecycleAndExecuteReload(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "")
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const accountID = "antigravity-auth-account"
+	if _, err = sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: "antigravity", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := secure.Seal(key, 1, "v1", "credentials", "antigravity-oauth", accountID, []byte(`{"access_token":"SYNTHETIC_OLD_ACCESS"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: "antigravity-oauth", AccountID: accountID, FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_CLIENT_ID", "synthetic-gateway-client")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_AUTH_ENDPOINT", "https://auth.synthetic.invalid/authorize")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_TOKEN_ENDPOINT", "https://oauth.synthetic.invalid/token")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REDIRECT_URI", "http://localhost:8080/callback")
+	transport := &antigravityAuthDoer{}
+	services := adminAuthServicesFunc(func(core.AttemptScope) core.InvocationServices { return core.InvocationServices{Transport: transport} })
+	run := func(input string, args ...string) string {
+		t.Helper()
+		var out, stderr bytes.Buffer
+		all := append([]string{"--db", dbPath, "--master-key", keyPath}, args...)
+		if err := runAdmin(adminEnvironment{ctx: ctx, args: all, stdin: strings.NewReader(input), stdout: &out, stderr: &stderr, authServices: services}); err != nil {
+			t.Fatalf("run %v: %v (%s)", args, err, stderr.String())
+		}
+		text := out.String() + stderr.String()
+		for _, secret := range []string{"SYNTHETIC_LOGIN_ACCESS", "SYNTHETIC_LOGIN_REFRESH", "synthetic-local-code"} {
+			if strings.Contains(text, secret) {
+				t.Fatalf("authentication output leaked secret %q", secret)
+			}
+		}
+		return out.String()
+	}
+	started := run("", "auth", "start", "--account", accountID)
+	_, verifyText, found := strings.Cut(started, "verification_uri=\"")
+	if !found {
+		t.Fatalf("verification URL missing: %q", started)
+	}
+	verifyText, _, _ = strings.Cut(verifyText, "\"")
+	verify, err := url.Parse(verifyText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := verify.Query().Get("state")
+	session := adminSessionID(started)
+	if state == "" || session == "" || transport.calls != 0 {
+		t.Fatal("start did not remain offline or omit state/session")
+	}
+	debugStart := run("", "auth", "start", "--account", accountID)
+	debugSession := adminSessionID(debugStart)
+	const callbackCanary = "http://localhost:8080/callback?code=CODE_CANARY&state=STATE_CANARY&scope=SCOPE_CANARY&authuser=AUTHUSER_CANARY&prompt=PROMPT_CANARY&hd=HD_CANARY&iss=ISS_CANARY&error=ERROR_CANARY&provider=PROVIDER_CANARY"
+	var debugOut, debugErr bytes.Buffer
+	debugArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "--debug", "continue", "--session", debugSession, "--callback-stdin"}
+	debugCallErr := runAdmin(adminEnvironment{ctx: ctx, args: debugArgs, stdin: strings.NewReader(callbackCanary + "\n"), stdout: &debugOut, stderr: &debugErr, authServices: services})
+	debugText := debugOut.String() + debugErr.String()
+	wantClass := fmt.Sprintf("kind=callback_url length=%d", len(callbackCanary))
+	if debugCallErr == nil || transport.calls != 0 || !strings.Contains(debugText, wantClass) || !strings.Contains(debugText, "reason=callback_error_param") {
+		t.Fatalf("debug callback classification/reason missing: err=%v calls=%d class=%t reason=%t output=%q", debugCallErr, transport.calls, strings.Contains(debugText, wantClass), strings.Contains(debugText, "reason=callback_error_param"), debugText)
+	}
+	for _, canary := range []string{"CODE_CANARY", "STATE_CANARY", "SCOPE_CANARY", "AUTHUSER_CANARY", "PROMPT_CANARY", "HD_CANARY", "ISS_CANARY", "ERROR_CANARY", "PROVIDER_CANARY", callbackCanary} {
+		if strings.Contains(debugText+debugCallErr.Error(), canary) {
+			t.Fatalf("debug auth output leaked callback canary %q: %q", canary, debugText)
+		}
+	}
+	issuerStart := run("", "auth", "start", "--account", accountID)
+	issuerSession, issuerState := adminAuthSessionAndState(t, issuerStart)
+	issuerCallback := "http://localhost:8080/callback?code=ISSUER_CODE_CANARY&state=" + url.QueryEscape(issuerState) + "&iss=ISSUER_VALUE_CANARY"
+	var issuerOut, issuerErr bytes.Buffer
+	issuerArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "--debug", "continue", "--session", issuerSession, "--callback-stdin"}
+	issuerCallErr := runAdmin(adminEnvironment{ctx: ctx, args: issuerArgs, stdin: strings.NewReader(issuerCallback + "\n"), stdout: &issuerOut, stderr: &issuerErr, authServices: services})
+	issuerText := issuerOut.String() + issuerErr.String() + errorString(issuerCallErr)
+	if issuerCallErr == nil || transport.calls != 0 || !strings.Contains(issuerText, "reason=callback_iss_mismatch") {
+		t.Fatalf("issuer diagnostic missing: calls=%d output=%q", transport.calls, issuerText)
+	}
+	for _, canary := range []string{"ISSUER_CODE_CANARY", "ISSUER_VALUE_CANARY", issuerCallback} {
+		if strings.Contains(issuerText, canary) {
+			t.Fatalf("issuer callback leaked canary %q", canary)
+		}
+	}
+	completed := run("synthetic-local-code\n", "auth", "continue", "--session", session, "--callback-stdin")
+	if !strings.Contains(completed, "authentication complete") || transport.calls != 2 {
+		t.Fatalf("continue=%q calls=%d", completed, transport.calls)
+	}
+	var duplicateOutput, duplicateError bytes.Buffer
+	duplicateArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session, "--callback-stdin"}
+	if err := runAdmin(adminEnvironment{ctx: ctx, args: duplicateArgs, stdin: strings.NewReader("http://localhost:8080/callback?code=synthetic-local-code&state=" + url.QueryEscape(state) + "\n"), stdout: &duplicateOutput, stderr: &duplicateError, authServices: services}); err == nil || transport.calls != 2 {
+		t.Fatalf("consumed continuation replay dispatched: err=%v calls=%d", err, transport.calls)
+	}
+	form, err := url.ParseQuery(transport.tokenRequestBody)
+	if err != nil || form.Get("grant_type") != "authorization_code" || form.Get("client_id") != "synthetic-gateway-client" {
+		t.Fatalf("exchange form=%v error=%v", form, err)
+	}
+	start2 := run("", "auth", "start", "--account", accountID)
+	session2, state2 := adminAuthSessionAndState(t, start2)
+	transport.err = errors.New("synthetic ambiguous exchange")
+	ambiguousArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session2, "--callback-stdin"}
+	callback2 := "http://localhost:8080/callback?code=ambiguous-code&state=" + url.QueryEscape(state2) + "\n"
+	var ambiguousOut, ambiguousErr bytes.Buffer
+	if err := runAdmin(adminEnvironment{ctx: ctx, args: ambiguousArgs, stdin: strings.NewReader(callback2), stdout: &ambiguousOut, stderr: &ambiguousErr, authServices: services}); err == nil || transport.calls != 3 {
+		t.Fatalf("ambiguous exchange result=%v calls=%d", err, transport.calls)
+	}
+	var replayOut, replayErr bytes.Buffer
+	if err := runAdmin(adminEnvironment{ctx: ctx, args: ambiguousArgs, stdin: strings.NewReader(callback2), stdout: &replayOut, stderr: &replayErr, authServices: services}); err == nil || transport.calls != 3 {
+		t.Fatalf("ambiguous continuation replay dispatched: err=%v calls=%d", err, transport.calls)
+	}
+	transport.err = nil
+	start3 := run("", "auth", "start", "--account", accountID)
+	session3, state3 := adminAuthSessionAndState(t, start3)
+	cancelCtx, cancel := context.WithCancel(ctx)
+	transport.onDo = cancel
+	cancelArgs := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session3, "--callback-stdin"}
+	var cancelOut, cancelErr bytes.Buffer
+	if err := runAdmin(adminEnvironment{ctx: cancelCtx, args: cancelArgs, stdin: strings.NewReader("http://localhost:8080/callback?code=cancel-code&state=" + url.QueryEscape(state3) + "\n"), stdout: &cancelOut, stderr: &cancelErr, authServices: services}); err == nil || transport.calls != 4 {
+		t.Fatalf("cancelled exchange result=%v calls=%d", err, transport.calls)
+	}
+	transport.onDo = nil
+	cancel()
+	verifyDB := mustOpenAdminDB(t, dbPath)
+	stored, err := sqlite.NewCredentials(verifyDB).Get(ctx, accountID, "antigravity-oauth")
+	if err != nil || stored.Revision != 2 || stored.ExpiresAt == nil {
+		t.Fatalf("credential persistence revision=%d err=%v", stored.Revision, err)
+	}
+	plain, err := secure.Open(key, secure.Envelope{FormatVersion: stored.FormatVersion, KeyVersion: stored.KeyVersion, Nonce: stored.Nonce, Ciphertext: stored.Ciphertext}, "credentials", stored.ID, stored.AccountID)
+	if err != nil || !strings.Contains(string(plain), "SYNTHETIC_LOGIN_ACCESS") || !strings.Contains(string(plain), "synthetic-project") || bytes.Contains(stored.Ciphertext, []byte("SYNTHETIC_LOGIN_ACCESS")) {
+		t.Fatal("credential was not encrypted and reloadable")
+	}
+	connector := antigravity.NewConnector()
+	if err := connector.Init(ctx, core.ComponentConfig{Data: []byte(`{"profile":"antigravity-v1internal","project":"synthetic-project","endpoint":"https://antigravity.synthetic.invalid"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	execTransport, err := antigravity.NewOfflineTestTransport(antigravity.OfflineTestResponse{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}}\n\ndata: {\"response\":{\"done\":true}}\n\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, ge := connector.Execute(ctx, core.ExecutionRequest{Payload: core.RawPayload{Protocol: "openai.responses.v1", ContentType: "application/json", Body: []byte(`{"model":"gemini-2.5-pro","input":"synthetic","stream":true}`)}}, core.AttemptScope{Mode: core.ModeTranslation}, core.InvocationServices{Transport: execTransport, Credentials: adminTestCredential{plain}})
+	if ge != nil {
+		t.Fatalf("execute after decrypt/reload: %v", ge)
+	}
+	_ = response.Stream.Close()
+}
+
+func adminAuthSessionAndState(t *testing.T, output string) (string, string) {
+	t.Helper()
+	_, uriText, found := strings.Cut(output, "verification_uri=\"")
+	if !found {
+		t.Fatalf("verification URL missing: %q", output)
+	}
+	uriText, _, _ = strings.Cut(uriText, "\"")
+	verify, err := url.Parse(uriText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, state := adminSessionID(output), verify.Query().Get("state")
+	if session == "" || state == "" {
+		t.Fatalf("session/state missing: %q", output)
+	}
+	return session, state
+}
+
+func TestAdminAuthAntigravityDefaultTransportRequiresOptIn(t *testing.T) {
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "")
+	if useDefaultAdminAuthTransport("antigravity") {
+		t.Fatal("Antigravity real transport enabled by default")
+	}
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "1")
+	if !useDefaultAdminAuthTransport("pestiroute.antigravity.v1internal") {
+		t.Fatal("explicit Antigravity transport opt-in ignored")
+	}
+}
+
+func TestAdminAuthAntigravityBudgetCompositionAndNonRefund(t *testing.T) {
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "1")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET", "SYNTHETIC_CLIENT_SECRET")
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	ctx := context.Background()
+	const accountID = "synthetic-budget-auth-account"
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: accountID, Connector: "antigravity", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := secure.Seal(key, 1, "v1", "credentials", "synthetic-oauth", accountID, []byte(`{"access_token":"SYNTHETIC_OLD_ACCESS","refresh_token":"SYNTHETIC_OLD_REFRESH"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: "synthetic-oauth", AccountID: accountID, FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	doer := &antigravityAuthDoer{}
+	services := adminAuthServicesFunc(func(core.AttemptScope) core.InvocationServices { return core.InvocationServices{Transport: doer} })
+	run := func(callCtx context.Context) error {
+		var out, stderr bytes.Buffer
+		return runAdmin(adminEnvironment{ctx: callCtx, args: []string{"--db", dbPath, "--master-key", keyPath, "auth", "refresh", "--account", accountID}, stdout: &out, stderr: &stderr, authServices: services})
+	}
+	if err := run(ctx); err != nil || doer.calls != 1 {
+		t.Fatalf("refresh err=%v dispatches=%d", err, doer.calls)
+	}
+	checkConsumed := func(want int) {
+		t.Helper()
+		db, err := sqlite.Open(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var consumed int
+		if err := db.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&consumed); err != nil || consumed != want {
+			t.Fatalf("persisted auth budget=%d err=%v want=%d", consumed, err, want)
+		}
+	}
+	checkConsumed(1)
+	cancelCtx, cancel := context.WithCancel(ctx)
+	doer.onDo = cancel
+	doer.err = errors.New("synthetic timeout after dispatch")
+	if err := run(cancelCtx); err == nil || doer.calls != 2 {
+		t.Fatalf("cancelled refresh err=%v dispatches=%d", err, doer.calls)
+	}
+	cancel()
+	doer.onDo, doer.err = nil, nil
+	checkConsumed(2)
+	db, err = sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE operator_request_budgets SET consumed=ceiling WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(ctx); err == nil || doer.calls != 2 {
+		t.Fatalf("exhausted refresh err=%v dispatches=%d", err, doer.calls)
+	}
+	db, err = sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE operator_request_budgets`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(ctx); err == nil || doer.calls != 2 {
+		t.Fatalf("store failure refresh err=%v dispatches=%d", err, doer.calls)
+	}
+}
+
+type adminOnboardDoer struct {
+	calls      int
+	postCalls  int
+	postTierID string
+	mode       string
+	cancel     context.CancelFunc
+}
+
+func (d *adminOnboardDoer) Do(req *http.Request) (*http.Response, error) {
+	d.calls++
+	status, body := http.StatusOK, `{"access_token":"SYNTHETIC_ONBOARD_ACCESS","refresh_token":"SYNTHETIC_ONBOARD_REFRESH","expires_in":3600,"token_type":"Bearer"}`
+	switch req.URL.Path {
+	case "/v1internal:loadCodeAssist":
+		requestBody, _ := io.ReadAll(req.Body)
+		if string(requestBody) != `{"metadata":{"ideType":9,"platform":3,"pluginType":2}}` || req.Header.Get("User-Agent") != "antigravity/ide/2.22.0 darwin/arm64" || req.Header.Get("X-Request-Source") != "local" {
+			return nil, errors.New("discovery identity did not match pinned Antigravity request")
+		}
+		body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"currentTier":null,"paidTier":null}`
+		switch d.mode {
+		case "existing":
+			body = `{"cloudaicompanionProject":{"id":"synthetic-existing-project"},"allowedTiers":[]}`
+		case "standard":
+			body = `{"allowedTiers":[{"id":"standard-tier","isDefault":true,"privacyNotice":{"showNotice":null}}],"currentTier":null,"paidTier":null}`
+		case "standard-nondefault":
+			body = `{"allowedTiers":[{"id":"standard-tier","isDefault":false}]}`
+		case "legacy":
+			body = `{"allowedTiers":[{"id":"legacy-tier","isDefault":true}]}`
+		case "standard-invalid-default":
+			body = `{"allowedTiers":[{"id":"standard-tier","isDefault":"true"}]}`
+		case "standard-invalid-project":
+			body = `{"allowedTiers":[{"id":"standard-tier","isDefault":true,"userDefinedCloudaicompanionProject":"false"}]}`
+		case "ineligible":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"currentTier":null,"paidTier":{"id":"PAID_ID_CANARY"}}`
+		case "candidate-missing":
+			body = `{"allowedTiers":[{"id":"UNKNOWN_ID_CANARY"}]}`
+		case "ambiguous":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true},{"id":"standard-tier","isDefault":true}]}`
+		case "userprojectrequired":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true,"userDefinedCloudaicompanionProject":true}]}`
+		case "terms":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true,"hasAcceptedTos":false}]}`
+		case "privacy":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true,"privacyNotice":{"showNotice":true}}]}`
+		case "providerineligible":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"OTHER_CANARY"}]}`
+		case "validationrequired":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"VALIDATION_REQUIRED"}]}`
+		case "unsupportedclient":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"UNSUPPORTED_CLIENT"}]}`
+		case "schema-invalid":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true,"hasAcceptedTos":"BAD_TYPE_CANARY"}]}`
+		case "schema-unrelated":
+			body = `{"allowedTiers":[{"id":"free-tier","isDefault":true},{"id":"UNKNOWN_SCHEMA_ID_CANARY","isDefault":"BAD_TYPE_CANARY"}]}`
+		}
+	case "/v1internal:onboardUser":
+		d.postCalls++
+		if req.Method != http.MethodPost {
+			return nil, errors.New("onboarding was not POST")
+		}
+		if req.Header.Get("User-Agent") != "antigravity/ide/2.22.0 darwin/arm64" || req.Header.Get("X-Request-Source") != "local" {
+			return nil, errors.New("onboarding headers did not match pinned Antigravity identity")
+		}
+		var payload map[string]json.RawMessage
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			return nil, err
+		}
+		if _, ok := payload["cloudaicompanionProject"]; ok {
+			return nil, errors.New("project hint was not omitted")
+		}
+		var tierID string
+		if json.Unmarshal(payload["tierId"], &tierID) != nil {
+			return nil, errors.New("tierId missing from onboarding POST")
+		}
+		var metadata map[string]int
+		if len(payload) != 2 || json.Unmarshal(payload["metadata"], &metadata) != nil || metadata["ideType"] != 9 || metadata["platform"] != 3 || metadata["pluginType"] != 2 {
+			return nil, errors.New("onboarding POST shape was not the bounded metadata form")
+		}
+		d.postTierID = tierID
+		if d.mode == "error" {
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("private provider response canary")), Request: req}, nil
+		}
+		if d.mode == "cancel" && d.cancel != nil {
+			d.cancel()
+		}
+		body = `{"name":"v1internal/operations/admin-synthetic-op","done":false}`
+	case "/v1internal/operations/admin-synthetic-op":
+		if req.Method != http.MethodGet {
+			return nil, errors.New("operation was not GET")
+		}
+		body = `{"done":true,"response":{"cloudaicompanionProject":{"id":"synthetic-managed-project"}}}`
+	default:
+		if req.URL.Host == "oauth.synthetic.invalid" {
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+		}
+		return nil, errors.New("unexpected synthetic path")
+	}
+	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+}
+
+func TestAdminAuthOnboardingOptInAndDurableBudget(t *testing.T) {
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT", "1")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD", "")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_CLIENT_ID", "synthetic-onboard-client")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET", "SYNTHETIC_CLIENT_SECRET")
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_TOKEN_ENDPOINT", "https://oauth.synthetic.invalid/token")
+	dbPath, keyPath := adminTestFiles(t, t.TempDir())
+	ctx := context.Background()
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := secure.LoadMasterKey(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"onboard-happy", "onboard-standard", "onboard-existing", "onboard-default", "onboard-ineligible", "onboard-error", "onboard-cancel", "onboard-budget"}
+	for _, mode := range []string{"candidate-missing", "standard-nondefault", "legacy", "standard-invalid-default", "standard-invalid-project", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "unsupportedclient", "schema-invalid", "schema-unrelated"} {
+		ids = append(ids, "diag-"+mode)
+	}
+	for _, id := range ids {
+		if _, err = sqlite.NewAccounts(db).Create(ctx, sqlite.Account{ID: id, Connector: "antigravity", Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		sealed, sealErr := secure.Seal(key, 1, "v1", "credentials", id+"-oauth", id, []byte(`{"access_token":"SYNTHETIC_OLD_ACCESS"}`))
+		if sealErr != nil {
+			t.Fatal(sealErr)
+		}
+		if _, err = sqlite.NewCredentials(db).Create(ctx, sqlite.Credential{ID: id + "-oauth", AccountID: id, FormatVersion: sealed.FormatVersion, KeyVersion: sealed.KeyVersion, Nonce: sealed.Nonce, Ciphertext: sealed.Ciphertext}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	doer := &adminOnboardDoer{}
+	services := adminAuthServicesFunc(func(core.AttemptScope) core.InvocationServices { return core.InvocationServices{Transport: doer} })
+	runStart := func(account string) string {
+		var out, stderr bytes.Buffer
+		err := runAdmin(adminEnvironment{ctx: ctx, args: []string{"--db", dbPath, "--master-key", keyPath, "auth", "start", "--account", account}, stdout: &out, stderr: &stderr, authServices: services})
+		if err != nil {
+			t.Fatalf("start: %v %s", err, stderr.String())
+		}
+		return out.String()
+	}
+	runContinue := func(account, extra string, contexts ...context.Context) error {
+		callCtx := ctx
+		if len(contexts) != 0 {
+			callCtx = contexts[0]
+		}
+		started := runStart(account)
+		session := adminSessionID(started)
+		var out, stderr bytes.Buffer
+		args := []string{"--db", dbPath, "--master-key", keyPath, "auth", "continue", "--session", session, "--callback-stdin"}
+		if extra != "" {
+			if strings.Contains(extra, "--debug") {
+				args = append(args[:5], append([]string{"--debug"}, args[5:]...)...)
+			}
+			for _, flag := range strings.Fields(extra) {
+				if flag != "--debug" {
+					args = append(args, flag)
+				}
+			}
+		}
+		err := runAdmin(adminEnvironment{ctx: callCtx, args: args, stdin: strings.NewReader("SYNTHETIC_CALLBACK_CODE\n"), stdout: &out, stderr: &stderr, authServices: services})
+		text := out.String() + stderr.String() + errorString(err)
+		if strings.Contains(extra, "--debug") {
+			code := map[string]string{"ineligible": "paid_present", "candidate-missing": "candidate_missing", "standard-nondefault": "candidate_missing", "legacy": "candidate_missing", "standard-invalid-default": "schema_invalid", "standard-invalid-project": "schema_invalid", "ambiguous": "ambiguous", "userprojectrequired": "userprojectrequired", "terms": "terms", "privacy": "privacy", "providerineligible": "providerineligible", "validationrequired": "validationrequired", "unsupportedclient": "unsupportedclient", "schema-invalid": "schema_invalid", "schema-unrelated": "schema_invalid"}[doer.mode]
+			if code != "" && !strings.Contains(text, "reason=auth_tier_"+code) {
+				t.Fatalf("debug diagnostic missing fixed reason for %q: %q", doer.mode, text)
+			}
+			if doer.mode == "standard" && !strings.Contains(text, "reason=auth_onboarding_started") {
+				t.Fatalf("debug onboarding stage missing for standard candidate: %q", text)
+			}
+		}
+		for _, canary := range []string{"SYNTHETIC_ONBOARD_ACCESS", "SYNTHETIC_ONBOARD_REFRESH", "admin-synthetic-op", "synthetic-managed-project", "private provider response canary", "SYNTHETIC_CALLBACK_CODE", "PAID_ID_CANARY", "UNKNOWN_ID_CANARY", "OTHER_CANARY", "UNSUPPORTED_CLIENT", "BAD_TYPE_CANARY", "UNKNOWN_SCHEMA_ID_CANARY"} {
+			if strings.Contains(text, canary) {
+				t.Fatalf("auth output leaked canary %q", canary)
+			}
+		}
+		return err
+	}
+	before, beforePosts := doer.calls, doer.postCalls
+	if err = runContinue("onboard-happy", "--allow-onboard"); err != nil {
+		t.Fatalf("opt-in onboarding: %v", err)
+	}
+	if doer.calls != 4 || doer.postCalls-beforePosts != 1 || doer.postTierID != "free-tier" {
+		t.Fatalf("successful dispatch count=%d want=4", doer.calls)
+	}
+	doer.mode = "existing"
+	before, beforePosts = doer.calls, doer.postCalls
+	if err = runContinue("onboard-existing", "--debug"); err != nil {
+		t.Fatalf("existing-project discovery: %v", err)
+	}
+	if doer.calls-before != 2 || doer.postCalls != beforePosts {
+		t.Fatalf("existing project dispatches=%d POSTs=%d", doer.calls-before, doer.postCalls-beforePosts)
+	}
+	doer.mode = "standard"
+	before, beforePosts = doer.calls, doer.postCalls
+	if err = runContinue("onboard-standard", "--allow-onboard --debug"); err != nil {
+		t.Fatalf("standard-tier opt-in onboarding: %v", err)
+	}
+	if doer.calls-before != 4 || doer.postCalls-beforePosts != 1 || doer.postTierID != "standard-tier" {
+		t.Fatalf("standard dispatches=%d POSTs=%d tier=%q", doer.calls-before, doer.postCalls-beforePosts, doer.postTierID)
+	}
+	doer.mode = ""
+	verify := mustOpenAdminDB(t, dbPath)
+	var budget int
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 10 {
+		t.Fatalf("budget=%d err=%v", budget, err)
+	}
+	stored, err := sqlite.NewCredentials(verify).Get(ctx, "onboard-happy", "onboard-happy-oauth")
+	if err != nil || stored.Revision != 2 {
+		t.Fatalf("credential revision=%d err=%v", stored.Revision, err)
+	}
+	plain, err := secure.Open(key, secure.Envelope{FormatVersion: stored.FormatVersion, KeyVersion: stored.KeyVersion, Nonce: stored.Nonce, Ciphertext: stored.Ciphertext}, "credentials", stored.ID, stored.AccountID)
+	if err != nil || !strings.Contains(string(plain), "synthetic-managed-project") {
+		t.Fatalf("confirmed project not persisted: %v", err)
+	}
+	doer.mode = "ineligible"
+	before = doer.calls
+	if err = runContinue("onboard-ineligible", "--allow-onboard --debug"); err == nil {
+		t.Fatal("ineligible tier unexpectedly succeeded")
+	}
+	if doer.calls-before != 2 {
+		t.Fatalf("ineligible dispatches=%d want 2", doer.calls-before)
+	}
+	if stored, err = sqlite.NewCredentials(verify).Get(ctx, "onboard-ineligible", "onboard-ineligible-oauth"); err != nil || stored.Revision != 1 {
+		t.Fatalf("ineligible credential revision=%d err=%v", stored.Revision, err)
+	}
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 12 {
+		t.Fatalf("ineligible budget=%d err=%v", budget, err)
+	}
+	for _, mode := range []string{"candidate-missing", "standard-nondefault", "legacy", "standard-invalid-default", "standard-invalid-project", "ambiguous", "userprojectrequired", "terms", "privacy", "providerineligible", "validationrequired", "unsupportedclient", "schema-invalid", "schema-unrelated"} {
+		doer.mode = mode
+		before = doer.calls
+		if err = runContinue("diag-"+mode, "--allow-onboard --debug"); err == nil || doer.calls-before != 2 {
+			t.Fatalf("%s err=%v requests=%d", mode, err, doer.calls-before)
+		}
+	}
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 40 {
+		t.Fatalf("diagnostic budget=%d err=%v", budget, err)
+	}
+	for _, scenario := range []struct{ name, mode string }{{"onboard-error", "error"}, {"onboard-cancel", "cancel"}} {
+		doer.mode = scenario.mode
+		before = doer.calls
+		callCtx, cancel := context.WithCancel(ctx)
+		if scenario.mode == "cancel" {
+			doer.cancel = cancel
+		}
+		err = runContinue(scenario.name, "--allow-onboard", callCtx)
+		cancel()
+		doer.cancel = nil
+		if err == nil || doer.calls-before != 3 {
+			t.Fatalf("%s err=%v calls=%d", scenario.name, err, doer.calls-before)
+		}
+		stored, getErr := sqlite.NewCredentials(verify).Get(ctx, scenario.name, scenario.name+"-oauth")
+		if getErr != nil || stored.Revision != 1 {
+			t.Fatalf("%s credential revision=%d err=%v", scenario.name, stored.Revision, getErr)
+		}
+	}
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 46 {
+		t.Fatalf("failure/cancel budget=%d err=%v", budget, err)
+	}
+	doer.mode = ""
+	before = doer.calls
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD", "1")
+	if err = runContinue("onboard-default", ""); err == nil {
+		t.Fatal("default mode unexpectedly onboarded")
+	}
+	t.Setenv("PESTIROUTE_ANTIGRAVITY_ALLOW_ONBOARD", "")
+	if doer.calls-before != 2 {
+		t.Fatalf("default mode requests=%d want 2", doer.calls-before)
+	}
+	stored, err = sqlite.NewCredentials(verify).Get(ctx, "onboard-default", "onboard-default-oauth")
+	if err != nil || stored.Revision != 1 {
+		t.Fatalf("default mutated credentials revision=%d err=%v", stored.Revision, err)
+	}
+	if _, err = verify.ExecContext(ctx, `UPDATE operator_request_budgets SET consumed=999 WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID); err != nil {
+		t.Fatal(err)
+	}
+	before = doer.calls
+	if err = runContinue("onboard-budget", "--allow-onboard"); err == nil {
+		t.Fatal("budget exhaustion unexpectedly succeeded")
+	}
+	if doer.calls-before != 1 {
+		t.Fatalf("budget exhaustion dispatched %d requests after final available reservation", doer.calls-before)
+	}
+	if err = verify.QueryRowContext(ctx, `SELECT consumed FROM operator_request_budgets WHERE account_id=?`, sqlite.AntigravityOperatorBudgetID).Scan(&budget); err != nil || budget != 1000 {
+		t.Fatalf("exhausted budget=%d err=%v", budget, err)
+	}
+	stored, err = sqlite.NewCredentials(verify).Get(ctx, "onboard-budget", "onboard-budget-oauth")
+	if err != nil || stored.Revision != 1 {
+		t.Fatalf("budget failure mutated credentials revision=%d err=%v", stored.Revision, err)
+	}
+	if err = verify.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type adminTestCredential struct{ value []byte }
+
+func (c adminTestCredential) Get(context.Context, string) ([]byte, error) {
+	return append([]byte(nil), c.value...), nil
+}
 
 func TestAdminAuthScriptedCLIAndRestart(t *testing.T) {
 	ctx := context.Background()
@@ -507,7 +1114,7 @@ func TestAdminAuthClaudeCodeAccountAliases(t *testing.T) {
 		if _, err := accounts.Create(context.Background(), sqlite.Account{ID: accountID, Connector: connectorID, Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
-		registry, err := defaultAdminAuthRegistry(context.Background(), accounts, db, accountID, false, "")
+		registry, err := defaultAdminAuthRegistry(context.Background(), accounts, db, accountID, false, "", false)
 		if err != nil {
 			t.Fatalf("connector %q rejected: %v", connectorID, err)
 		}

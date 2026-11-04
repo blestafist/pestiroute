@@ -1,0 +1,15 @@
+{
+  "project": "synthetic-project",
+  "model": "claude-opus-4-6-thinking",
+  "request": {
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          { "text": "Synthetic claude-opus-4-6-thinking prompt for offline fixture verification." }
+        ]
+      }
+    ]
+  },
+  "userAgent": "antigravity"
+}

@@ -4,13 +4,17 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/blestafist/pestiroute/internal/connector/antigravity"
 	"github.com/blestafist/pestiroute/internal/connector/claudecode"
 	"github.com/blestafist/pestiroute/internal/connector/codex"
 	"github.com/blestafist/pestiroute/internal/connector/responses"
@@ -26,7 +30,7 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 		args = args[1:]
 	}
 	if len(args) == 0 || isHelp(args[0]) {
-		_, _ = io.WriteString(env.stdout, "usage: gateway admin [--db PATH] [--master-key PATH] auth [--debug] <start --account ID|continue --session ID [--callback-stdin]|refresh --account ID>\n")
+		_, _ = io.WriteString(env.stdout, "usage: gateway admin [--db PATH] [--master-key PATH] auth [--debug] <start --account ID|continue --session ID [--callback-stdin] [--allow-onboard]|refresh --account ID>\n  --callback-stdin reads a pasted authorization code or callback URL without echoing it\n  --allow-onboard opts in to experimental Antigravity managed-project onboarding\n")
 		return nil
 	}
 	if args[0] != "start" && args[0] != "continue" && args[0] != "refresh" {
@@ -34,11 +38,12 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	}
 	fs := adminFlags("auth " + args[0])
 	accountID, sessionID := fs.String("account", "", "account ID"), fs.String("session", "", "opaque continuation handle")
-	callbackStdin := fs.Bool("callback-stdin", false, "read a pasted callback URL from stdin")
+	callbackStdin := fs.Bool("callback-stdin", false, "read a pasted authorization code or callback URL from stdin")
+	allowOnboard := fs.Bool("allow-onboard", false, "allow experimental Antigravity managed-project onboarding")
 	if err := parseAdminFlags(fs, args[1:]); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || args[0] == "continue" && (*sessionID == "" || *accountID != "") || args[0] != "continue" && (*accountID == "" || *sessionID != "") || args[0] != "continue" && *callbackStdin {
+	if fs.NArg() != 0 || args[0] == "continue" && (*sessionID == "" || *accountID != "") || args[0] != "continue" && (*accountID == "" || *sessionID != "") || args[0] != "continue" && (*callbackStdin || *allowOnboard) {
 		return errors.New("admin: invalid auth command arguments")
 	}
 	var callbackInput string
@@ -55,12 +60,19 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 		if len(callbackInput) > 4096 {
 			return errors.New("admin: invalid callback input")
 		}
+		if debug {
+			kind := "raw_code"
+			if strings.Contains(callbackInput, "://") {
+				kind = "callback_url"
+			}
+			_, _ = fmt.Fprintf(env.stderr, "authentication input: kind=%s length=%d\n", kind, len(callbackInput))
+		}
 	}
 	accounts, credentials := sqlite.NewAccounts(db), sqlite.NewCredentials(db)
 	registry := env.authRegistry
 	if registry == nil {
 		var err error
-		registry, err = defaultAdminAuthRegistry(env.ctx, accounts, db, *accountID, args[0] == "continue", *sessionID)
+		registry, err = defaultAdminAuthRegistry(env.ctx, accounts, db, *accountID, args[0] == "continue", *sessionID, *allowOnboard)
 		if err != nil {
 			return err
 		}
@@ -80,9 +92,12 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 		if err := db.QueryRowContext(env.ctx, `SELECT connector FROM accounts WHERE id=? AND enabled=1`, targetAccountID).Scan(&connectorID); err != nil {
 			return errors.New("admin: authentication connector is not configured")
 		}
-		if isClaudeCodeAuthConnector(connectorID) {
+		if !useDefaultAdminAuthTransport(connectorID) {
 			useDefaultTransport = false
 		}
+	}
+	if *allowOnboard && (!isAntigravityAuthConnector(connectorID) || args[0] != "continue") {
+		return errors.New("admin: onboarding opt-in is only valid for Antigravity continue")
 	}
 	var transport core.HTTPDoer
 	if useDefaultTransport {
@@ -95,8 +110,19 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 			transport = testServices.Transport
 		}
 	}
+	if isAntigravityAuthConnector(connectorID) && os.Getenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT") == "1" {
+		budgets := sqlite.NewOperatorRequestBudgets(db)
+		if err := budgets.VerifyCeiling(env.ctx, sqlite.AntigravityOperatorBudgetID, 1000); err != nil {
+			return errors.New("admin: request budget unavailable")
+		}
+		transport = core.BudgetedHTTPDoer{Next: transport, Budget: budgets, Account: sqlite.AntigravityOperatorBudgetID}
+	}
+	var authLogger *slog.Logger
+	if debug {
+		authLogger = slog.New(slog.NewTextHandler(env.stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
 	services := adminAuthServicesFunc(func(scope core.AttemptScope) core.InvocationServices {
-		return core.InvocationServices{Transport: transport, Credentials: adminAuthCredentialAccess{store: store, accountID: scope.AccountID}}
+		return core.InvocationServices{Transport: transport, Credentials: adminAuthCredentialAccess{store: store, accountID: scope.AccountID}, Logger: authLogger}
 	})
 	coordinator, err := core.NewAuthCoordinator(registry, store, services, 10*time.Minute)
 	if err != nil {
@@ -171,14 +197,14 @@ func runAuthAdmin(env adminEnvironment, db *sql.DB, key secure.MasterKey, args [
 	return nil
 }
 
-func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db *sql.DB, accountID string, continuing bool, sessionID string) (*core.Registry, error) {
+func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db *sql.DB, accountID string, continuing bool, sessionID string, allowOnboard bool) (*core.Registry, error) {
 	if continuing {
 		if err := db.QueryRowContext(ctx, `SELECT account_id FROM auth_sessions WHERE id=? AND kind='interactive' AND lifecycle='active' AND expires_at>?`, sessionID, time.Now().UnixMilli()).Scan(&accountID); err != nil {
 			return nil, errors.New("admin: authentication session unavailable")
 		}
 	}
 	account, err := accounts.Get(ctx, accountID)
-	if err != nil || !account.Enabled || account.ID != accountID || (account.Connector != "responses" && account.Connector != "codex" && !isClaudeCodeAuthConnector(account.Connector)) {
+	if err != nil || !account.Enabled || account.ID != accountID || (account.Connector != "responses" && account.Connector != "codex" && !isClaudeCodeAuthConnector(account.Connector) && !isAntigravityAuthConnector(account.Connector)) {
 		return nil, errors.New("admin: authentication connector is not configured")
 	}
 	registry, err := core.NewRegistry(map[core.ComponentKind]core.APIVersion{core.ComponentConnector: {Major: 1}}, nil)
@@ -193,6 +219,22 @@ func defaultAdminAuthRegistry(ctx context.Context, accounts *sqlite.Accounts, db
 	} else if isClaudeCodeAuthConnector(account.Connector) {
 		connector = claudecode.NewConnector()
 		config = []byte(`{"profile":"claude-code-messages-v1","oauth":{"authorization_endpoint":"https://auth.synthetic.invalid/oauth/authorize","token_endpoint":"https://token.synthetic.invalid/oauth/token","redirect_uri":"http://127.0.0.1:9999/callback","client_id":"synthetic-client","scope":"synthetic:offline"}}`)
+	} else if isAntigravityAuthConnector(account.Connector) {
+		connector = antigravity.NewConnector()
+		oauth := map[string]any{}
+		for key, envName := range map[string]string{"client_id": "PESTIROUTE_ANTIGRAVITY_CLIENT_ID", "client_secret": "PESTIROUTE_ANTIGRAVITY_CLIENT_SECRET", "auth_endpoint": "PESTIROUTE_ANTIGRAVITY_AUTH_ENDPOINT", "token_endpoint": "PESTIROUTE_ANTIGRAVITY_TOKEN_ENDPOINT", "redirect_uri": "PESTIROUTE_ANTIGRAVITY_REDIRECT_URI"} {
+			if value := os.Getenv(envName); value != "" {
+				oauth[key] = value
+			}
+		}
+		if scopes := strings.Fields(os.Getenv("PESTIROUTE_ANTIGRAVITY_SCOPES")); len(scopes) > 0 {
+			oauth["scopes"] = scopes
+		}
+		cfg := map[string]any{"profile": "antigravity-v1internal", "project": "admin-auth", "allow_onboard": allowOnboard}
+		if len(oauth) > 0 {
+			cfg["oauth"] = oauth
+		}
+		config, _ = json.Marshal(cfg)
 	} else {
 		connector = responses.NewConnector()
 		// The built-in native Connector's authentication operation is unsupported;
@@ -250,7 +292,7 @@ func authCredentialRefs(ctx context.Context, db *sql.DB, accountID string, conti
 	if err := db.QueryRowContext(ctx, `SELECT connector FROM accounts WHERE id=? AND enabled=1`, accountID).Scan(&connector); err != nil {
 		return nil, errors.New("admin: authentication connector is not configured")
 	}
-	if connector == "codex" || isClaudeCodeAuthConnector(connector) {
+	if connector == "codex" || isClaudeCodeAuthConnector(connector) || isAntigravityAuthConnector(connector) {
 		credentialName = "oauth"
 	}
 	rows, err := db.QueryContext(ctx, `SELECT id FROM credentials WHERE account_id=? ORDER BY id`, accountID)
@@ -274,4 +316,18 @@ func authCredentialRefs(ctx context.Context, db *sql.DB, accountID string, conti
 
 func isClaudeCodeAuthConnector(connector string) bool {
 	return connector == "claudecode" || connector == "pestiroute.claudecode.messages"
+}
+
+func isAntigravityAuthConnector(connector string) bool {
+	return connector == "antigravity" || connector == "pestiroute.antigravity.v1internal"
+}
+
+func useDefaultAdminAuthTransport(connector string) bool {
+	if isClaudeCodeAuthConnector(connector) {
+		return false
+	}
+	if isAntigravityAuthConnector(connector) {
+		return os.Getenv("PESTIROUTE_ANTIGRAVITY_REAL_TRANSPORT") == "1"
+	}
+	return true
 }

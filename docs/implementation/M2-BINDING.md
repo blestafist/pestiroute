@@ -120,16 +120,19 @@ type AuthRequest struct { AccountID string; Action string; State []byte; Callbac
 type AuthResult struct { Supported bool; State string; NextAction string; Credentials map[string][]byte }
 ```
 
-`CallbackInput` is an additive, transient client callback URL for an explicit
-`continue`; it is bounded to 1–4096 printable ASCII bytes when non-empty, is
-separate from runtime-loaded opaque `State`, and is never logged or persisted.
-It is empty on `start`/`refresh`. The generic Connector alone parses it under
-the strict redirect/query/state rules in [DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input)
-and [CONTRACT](CONTRACT.md#connector-contract). The generic Core/coordinator
-field, admin input, and IPC transport plumbing are implemented by
-[M7-016](tasks/M7-016.md). Offline Connector OAuth PKCE implementation is complete
-in [M7-010](tasks/M7-010.md); it remains uncomposed, with capabilities `unknown`
-and no live or production support implied.
+`CallbackInput` is an additive, transient client input for explicit `continue`;
+it is bounded to 1–4096 printable ASCII bytes, separate from runtime-loaded
+opaque `State`, and never logged or persisted. It is empty on `start`/`refresh`.
+The Connector alone interprets continuation input: callback URLs retain
+DEC-019's exact raw redirect/path/query/state rules; DEC-022 documents
+Antigravity's connector-local raw-code mode as a trimmed 1–512 visible-ASCII
+code without whitespace or URL/query delimiters. No generic runtime parsing or
+provider branch is added. See [CONTRACT](CONTRACT.md#connector-contract),
+[DEC-019](../project/DECISIONS.md#dec-019--accept-manual-pasted-oauth-callback-input),
+and [DEC-022](../project/DECISIONS.md#dec-022--accept-antigravity-connector-local-manual-oauth-code-input).
+The existing Core/coordinator/admin/IPC string plumbing is unchanged. Existing
+callback-URL peers remain compatible; offline support does not promote
+capabilities or imply live/production support.
 
 Missing capability entries mean `unknown`; only explicit `supported` satisfies
 a request, and matching is exact across Adapter and selected Connector scope.

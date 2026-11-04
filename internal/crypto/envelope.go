@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -22,6 +24,22 @@ var (
 	ErrEnvelope       = errors.New("invalid credential envelope")
 	ErrAuthentication = errors.New("credential envelope authentication failed")
 )
+
+const antigravityReasoningInfo = "pestiroute/antigravity/responses-reasoning/v1"
+
+// AntigravityReasoningKey derives only the fixed reasoning-continuity subkey.
+func AntigravityReasoningKey(key MasterKey) ([KeySize]byte, error) {
+	var out [KeySize]byte
+	if key == (MasterKey{}) {
+		return out, ErrEnvelope
+	}
+	reader, err := hkdf.Key(sha256.New, key.value[:], nil, antigravityReasoningInfo, KeySize)
+	if err != nil {
+		return out, ErrEnvelope
+	}
+	copy(out[:], reader)
+	return out, nil
+}
 
 // MasterKey keeps key bytes private so ordinary formatting cannot disclose them.
 type MasterKey struct{ value [KeySize]byte }
