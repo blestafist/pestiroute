@@ -223,10 +223,9 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 
 ## M14 — Antigravity Operator Workflow
 
-Planning lane: `plan/m14-antigravity-operator`. Start only after the M10 integration
-is merged and the audit's prerequisites are rechecked. M12 continues independently;
+Planning lane: `plan/m14-antigravity-operator`. M10 integration merged in PR #25; recheck the audit's prerequisites before execution. M12 continues independently;
 coordinate changes to shared UI files. Later implementation cards follow the audit.
 
 | ID | Status | Owner | Depends | Scope | Result | Check |
 | --- | --- | --- | --- | --- | --- | --- |
-| [M14-001](tasks/M14-001.md) | DRAFT | — | M10-053, M11-007, M12-006 | Audit the actual Antigravity operator workflow and identify bounded offline gaps | — | [Audit verification](tasks/M14-001.md#verification) |
+| [M14-001](tasks/M14-001.md) | READY | — | M10-053, M11-007, M12-006 | Audit the actual Antigravity operator workflow and identify bounded offline gaps | — | [Audit verification](tasks/M14-001.md#verification) |

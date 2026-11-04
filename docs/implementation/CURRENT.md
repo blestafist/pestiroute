@@ -56,6 +56,13 @@ See [PR #25](https://github.com/blestafist/pestiroute/pull/25) for the
 integration and its checks. M11/M13 need no separate new worker session for
 their already merged scope.
 
+## M14 planning lane
+
+PR [#25](https://github.com/blestafist/pestiroute/pull/25) merged M10 into main.
+In `plan/m14-antigravity-operator`, [M14-001](tasks/M14-001.md) is READY: audit
+the existing operator workflow and plan only confirmed gaps. Use `/next 10 M14`
+in a separate worktree and coordinate shared WebUI files with the M12 lane.
+
 ## Open gates carried forward
 
 | Task | Status and unblock condition |
