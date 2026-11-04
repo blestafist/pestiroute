@@ -220,3 +220,13 @@ before implementation readiness. See [parallel ownership](PARALLEL.md).
 | [M13-002](tasks/M13-002.md) | DONE | GPT-6 Luna (M13-002 worker) / ses_eb51a5672ffe3MEvN6OrFdVaDV (reviewer) / Planner closure | M13-001 | Package reproducible single-node startup | Packaged reproducible static Linux/amd64 build, unprivileged Dockerfile, systemd service unit, deployment guide, and packaging smoke verification with live WAL/SHM600 and Docker CLI smoke; reviewer PASS ses_eb51a5672ffe3MEvN6OrFdVaDV | [Verification](tasks/M13-002.md#verification) |
 | [M13-003](tasks/M13-003.md) | DONE | GPT-6 Luna (M13-003 worker) / ses_eb4cfa82fffenIQ2VutUNjSF4p (reviewer) / Planner closure | M13-001, M13-002 | Prove consistent backup restore and upgrade recovery | Verified online SQLite backup, distinct-path restore, checked integrity/FK validation, preserved account/key/credential/usage state, fail-closed key handling, stopped v5→v6 migration, and untouched-backup rollback recovery; reviewer PASS ses_eb4cfa82fffenIQ2VutUNjSF4p | [Verification](tasks/M13-003.md#verification) |
 | [M13-004](tasks/M13-004.md) | DONE | GPT-6 Luna (M13-004 worker) / ses_eb4a14701ffejxyXJdynVUxFi5 (reviewer) / Planner closure | M13-002, M13-003 | Run packaged offline release acceptance and publish operations handoff | Byte-exact payloads and stable usage history verified across restart/restore; local M6 gates and full checks pass; hosted baseline 39047526958 verified read-only; reviewer PASS ses_eb4a14701ffejxyXJdynVUxFi5 | [Verification](tasks/M13-004.md#verification) |
+
+## M14 — Antigravity Operator Workflow
+
+Planning lane: `plan/m14-antigravity-operator`. Start only after the M10 integration
+is merged and the audit's prerequisites are rechecked. M12 continues independently;
+coordinate changes to shared UI files. Later implementation cards follow the audit.
+
+| ID | Status | Owner | Depends | Scope | Result | Check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [M14-001](tasks/M14-001.md) | DRAFT | — | M10-053, M11-007, M12-006 | Audit the actual Antigravity operator workflow and identify bounded offline gaps | — | [Audit verification](tasks/M14-001.md#verification) |

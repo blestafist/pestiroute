@@ -21,6 +21,7 @@ Work progresses from transparent request path to managed runtime under the [proj
 | M11 | Local authenticated administrative HTTP API | Contract first; reuse CLI/store/coordinator behavior |
 | M12 | Complete operator WebUI | Parallel fixture UI, then accepted API and bundled E2E |
 | M13 | Reproducible deployment and recovery | Independent build/start/backup/restore acceptance |
+| M14 | Antigravity operator workflow | Audit integration, then scoped offline workflow and acceptance |
 
 M3 completes a minimally viable native version for standalone use. M4 validates the core architectural assumption about translation. Support for external third-party plugins appears after M6.
 
@@ -186,6 +187,20 @@ consistent backups, upgrade/rollback and restored encrypted state. **Done when:*
 a fresh Linux/amd64 installation passes bounded offline release acceptance and
 backup/restore evidence, with tested tooling and honest platform/provider limits.
 UI packaging is integrated after M12, without blocking the earlier Go-only slice.
+
+## M14 · Antigravity Operator Workflow
+
+Make the existing Antigravity integration operable through the authenticated
+admin API and bundled WebUI. Start by auditing the actual merged paths for
+account creation, OAuth session and callback handling, configuration, model
+eligibility, credential redaction and error states. Plan only confirmed gaps.
+M12 owns general UI redesign; coordinate any shared screen changes with its lane.
+
+**Done when:** a documented, deterministic offline workflow using local fake
+transport covers operator setup, authentication lifecycle, one protected
+Responses request, usage and actionable failures, without exposing credentials;
+the supported scope and remaining live limitations are explicit. No provider
+calls or capability promotion are implied by offline acceptance.
 
 ## Subsequent roadmap outcomes
 
